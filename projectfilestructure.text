@@ -1,4 +1,5 @@
 cat-6.1/
+<<<<<<< HEAD
 ├── Ai Intregration/
 │   ├── client/
 │   │   ├── components/
@@ -34,10 +35,48 @@ cat-6.1/
 ├── SERVER_SETUP.md
 ├── public/
 │   ├── AIvoicepractice/
+=======
+├── AI Intregration/
+│   ├── client/
+│   │   ├── components/live/
+│   │   │   ├── JitsiEmbed.js
+│   │   │   ├── LiveClassShell.js
+│   │   │   ├── SlidePanel.js
+│   │   │   └── SlideUploader.js
+│   │   ├── pages/LiveClassPage.js
+│   │   └── styles/live-class.css
+│   ├── server/
+│   │   ├── config/jitsi.js
+│   │   ├── db/migrations/
+│   │   │   ├── 20260226_create_live_classes.sql
+│   │   │   ├── 20260226_create_slide_decks.sql
+│   │   │   └── 20260226_create_slide_state.sql
+│   │   ├── routes/
+│   │   │   ├── live.js
+│   │   │   └── liveSchedule.js
+│   │   ├── services/
+│   │   │   ├── jitsiTokenService.js
+│   │   │   ├── liveClass.service.js
+│   │   │   ├── liveRoomService.js
+│   │   │   ├── pdfSync.service.js
+│   │   │   └── slideState.service.js
+│   │   └── utils/authMiddleware.js
+│   ├── server.js (placeholder)
+│   └── README (implicit docs)
+├── DESIGN_TOKENS.md
+├── SERVER_SETUP.md
+├── public/
+│   ├── live.js
+│   ├── index.html
+│   ├── app.js
+│   ├── styles.refactor.css
+│   ├── styles.refactor.css
+>>>>>>> b5cb78b (add screenshort folder)
 │   ├── Announcements/
 │   │   ├── announcements.css
 │   │   └── announcements.js
 │   ├── Grammar/
+<<<<<<< HEAD
 │   ├── Privacy/
 │   ├── Privacy & Rules.css
 │   ├── assets/
@@ -78,10 +117,25 @@ cat-6.1/
 │   ├── package.json
 │   ├── package-lock.json
 │   └── node_modules/
+=======
+│   └── assets/
+├── server/
+│   ├── env.js
+│   ├── ffmpeg.js
+│   ├── config/
+│   │   └── ... (existing config files)
+│   ├── routes/
+│   │   └── ... (existing routes)
+│   ├── services/
+│   │   └── ... (existing services)
+│   └── secrets/
+├── uploads/
+>>>>>>> b5cb78b (add screenshort folder)
 ├── node_modules/
 ├── package.json
 ├── package-lock.json
 ├── server.js
+<<<<<<< HEAD
 ├── emailSender.js
 ├── imap-test.js
 ├── translator.py
@@ -94,3 +148,22 @@ cat-6.1/
 ├── .env.example
 ├── projectfilestructure.text
 ├── command.text
+=======
+└── other top-level scripts (emailSender.js, translator.py, twilio-otp/ etc.)
+
+
+Multi-tenant SaaS
+Role-based system (student, teacher, admin, super_admin)
+Chat + tasks + attendance
+AI voice practice with budget caps
+AI billing engine (token + runtime tracking)
+Admin control plane
+School approval workflow
+Invoice + payment tracking
+Audit logging
+Live classes (Jitsi + slide sync)
+Translation system
+OTP + email flows
+Security logging
+CSRF + JWT refresh
+>>>>>>> b5cb78b (add screenshort folder)
