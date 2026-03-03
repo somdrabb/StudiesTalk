@@ -200,9 +200,6 @@ Language schools can manage email directly inside the platform:
 ---
 ## 📷 Screenshots
 
-### School Email Settings (Preview)
-![School Email Settings Preview](screenshots/email-settings-preview.png)
-
 ### Inbox
 ![Inbox](screenshots/email-inbox.png)
 
