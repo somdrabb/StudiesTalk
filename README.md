@@ -166,7 +166,38 @@ Infrastructure:
 - Audit logs for admin actions
 
 ---
+## ✉️ School Email Settings (Built-in Email Client + Templates)
 
+Language schools can manage email directly inside the platform:
+
+### Inbox + Email Client
+- Inbox view with search, refresh, mark-all-read
+- Read email with attachment previews
+- Reply/forward inside the dashboard
+- Email history tracking (sent messages)
+
+### Email Templates System
+- Template gallery with enable/disable switches
+- Token-based templates (e.g. `{{user_name}}`, `{{otp_code}}`, `{{reset_link}}`)
+- Live preview rendering
+- Test-send to a target email
+- Templates included:
+  - Welcome email
+  - Student invite (set password)
+  - Teacher invite (set password)
+  - Password reset
+  - Live session invite
+  - OTP / 2FA code
+  - Invoice email
+  - Payment success
+  - Course end reminder
+  - New course offer
+  - Class absence notice
+  - Course completion congratulations
+  - Exam registration success
+  - Exam date notice
+    
+---
 ## 📦 Installation
 
 ```bash
