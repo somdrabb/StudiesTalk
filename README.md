@@ -198,6 +198,31 @@ Language schools can manage email directly inside the platform:
   - Exam date notice
     
 ---
+## 📷 Screenshots
+
+### School Email Settings (Preview)
+![School Email Settings Preview](screenshots/email-settings-preview.png)
+
+### Inbox
+![Inbox](screenshots/email-inbox.png)
+
+### Message Viewer + Attachments
+![Message Viewer](screenshots/email-viewer.png)
+
+### Reply Composer
+![Reply Composer](screenshots/email-reply.png)
+
+### Templates Gallery
+![Templates Gallery](screenshots/email-templates.png)
+
+### Template Editor (OTP / 2FA)
+![Template Editor OTP](screenshots/email-template-editor-otp.png)
+
+### History
+![Email History](screenshots/email-history.png)
+
+### Compose
+![Compose](screenshots/email-compose.png)
 ## 📦 Installation
 
 ```bash
