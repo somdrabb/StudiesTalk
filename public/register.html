@@ -1,0 +1,690 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>School Registration</title>
+
+  <link rel="stylesheet" href="/styles.refactor.css" />
+
+  <style>
+    body { display:flex; align-items:center; justify-content:center; min-height:100vh; font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial; background:#f1f5f9; margin:0; padding:0; }
+    .register-card { max-width:480px; height:50vh; overflow:auto; padding:24px; background:#fff; border-radius:18px; box-shadow:0 24px 50px rgba(15,23,42,0.15); }
+    .register-card h1 { margin:0 0 8px; font-size:24px; }
+    .register-card p { margin:0 0 16px; color:#64748b; }
+    .form-field { display:flex; flex-direction:column; gap:4px; margin-bottom:12px; }
+    .form-row { display:flex; gap:12px; }
+    .form-row > .form-field { flex:1; }
+    .form-field input, .form-field select { padding:10px 12px; border-radius:10px; border:1px solid #cbd5f5; font-size:14px; background:#fff; color:#0f172a; }
+    html[data-theme="dark"] .form-field input,
+    html[data-theme="dark"] .form-field select { background:#fff; color:#0f172a; border-color:#cbd5f5; }
+    .form-field label { font-weight:600; font-size:13px; color:#0f172a; }
+    .register-footer { display:flex; justify-content:space-between; align-items:center; margin-top:6px; }
+    .register-footer button { padding:10px 16px; border-radius:10px; border:none; background:linear-gradient(135deg,#0ea5e9,#6366f1); color:#fff; font-weight:600; cursor:pointer; }
+    .register-footer button[disabled] { opacity:.6; cursor:not-allowed; }
+    .register-error { color:#ef4444; min-height:20px; margin-bottom:12px; white-space:pre-line; }
+    .input-error { border: 1px solid #ef4444 !important; box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15); }
+    .available-days-row { margin-bottom:12px; }
+    .day-chip-row { display:flex; gap:6px; flex-wrap:wrap; }
+    .day-chip { display:flex; align-items:center; gap:4px; padding:6px 10px; border-radius:999px; border:1px solid #cbd5f5; background:#f8fafc; font-size:12px; cursor:pointer; }
+    .day-chip input { margin:0; }
+  </style>
+</head>
+
+<body>
+  <div class="register-card">
+    <h1>Complete Registration</h1>
+    <p id="registerSubtitle">Preparing form…</p>
+
+    <div class="register-error" id="registerError"></div>
+
+    <div class="form-field">
+      <label for="registerSalutation">Salutation</label>
+      <select id="registerSalutation">
+        <option value="">Select</option>
+        <option value="Herr">Herr</option>
+        <option value="Frau">Frau</option>
+      </select>
+    </div>
+
+    <div class="form-field">
+      <label for="registerFirstName">First name</label>
+      <input id="registerFirstName" type="text" autocomplete="given-name" />
+    </div>
+
+    <div class="form-field">
+      <label for="registerLastName">Last name</label>
+      <input id="registerLastName" type="text" autocomplete="family-name" />
+    </div>
+
+    <div class="form-field">
+      <label for="registerDob">Date of birth</label>
+      <input id="registerDob" type="date" />
+    </div>
+
+    <div class="form-field">
+      <label for="registerEmail">Email</label>
+      <input id="registerEmail" type="email" disabled />
+    </div>
+
+    <div class="form-field">
+      <label for="registerCourseLevel">Course level</label>
+      <input id="registerCourseLevel" type="text" disabled />
+    </div>
+
+    <div class="form-row">
+      <div class="form-field">
+        <label for="registerCourseStart">Course start</label>
+        <input id="registerCourseStart" type="date" />
+      </div>
+      <div class="form-field">
+        <label for="registerCourseEnd">Course end</label>
+        <input id="registerCourseEnd" type="date" />
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-field">
+        <label for="registerPhoneCountry">Phone country</label>
+        <select id="registerPhoneCountry">
+          <option value="+49">Germany (+49)</option>
+          <option value="+44">UK (+44)</option>
+          <option value="+1">USA (+1)</option>
+          <option value="+33">France (+33)</option>
+          <option value="+34">Spain (+34)</option>
+          <option value="+39">Italy (+39)</option>
+          <option value="+7">Russia (+7)</option>
+          <option value="+81">Japan (+81)</option>
+          <option value="+86">China (+86)</option>
+          <option value="+91">India (+91)</option>
+        </select>
+      </div>
+      <div class="form-field">
+        <label for="registerPhoneNumber">Phone number</label>
+        <input id="registerPhoneNumber" type="tel" placeholder="e.g. 1512345678" autocomplete="tel-national" />
+      </div>
+    </div>
+
+    <div class="form-field">
+      <label for="registerNativeLanguage">Native language</label>
+      <select id="registerNativeLanguage">
+        <option value="">Select language</option>
+        <option value="de">Deutsch</option>
+        <option value="en">English</option>
+        <option value="fr">Français</option>
+        <option value="es">Español</option>
+        <option value="ar">العربية</option>
+        <option value="zh">中文</option>
+        <option value="ja">日本語</option>
+        <option value="ru">Русский</option>
+        <option value="pt">Português</option>
+        <option value="it">Italiano</option>
+        <option value="nl">Nederlands</option>
+        <option value="sv">Svenska</option>
+        <option value="tr">Türkçe</option>
+        <option value="hi">हिन्दी</option>
+        <option value="pl">Polski</option>
+        <option value="cs">Čeština</option>
+        <option value="el">Ελληνικά</option>
+        <option value="ko">한국어</option>
+        <option value="vi">Tiếng Việt</option>
+        <option value="uk">Українська</option>
+        <option value="ro">Română</option>
+        <option value="bg">Български</option>
+        <option value="hu">Magyar</option>
+        <option value="sl">Slovenščina</option>
+        <option value="sk">Slovenčina</option>
+        <option value="hr">Hrvatski</option>
+        <option value="sr">Српски</option>
+        <option value="lv">Latviešu</option>
+        <option value="lt">Lietuvių</option>
+        <option value="et">Eesti</option>
+        <option value="fa">فارسی</option>
+        <option value="ku">Kurdî</option>
+        <option value="ur">اردو</option>
+        <option value="bn">বাংলা</option>
+        <option value="pa">ਪੰਜਾਬੀ</option>
+        <option value="th">ไทย</option>
+        <option value="id">Bahasa Indonesia</option>
+        <option value="ms">Bahasa Melayu</option>
+        <option value="tl">Tagalog</option>
+        <option value="sw">Swahili</option>
+        <option value="am">Amharic</option>
+      </select>
+    </div>
+
+    <div class="form-field">
+      <label for="registerLearningGoal">Learning goal</label>
+      <select id="registerLearningGoal">
+        <option value="">Select goal</option>
+        <option value="study">Study</option>
+        <option value="job">Job</option>
+        <option value="living">Living</option>
+        <option value="hobbies">Hobbies</option>
+        <option value="others">Others</option>
+      </select>
+    </div>
+
+    <div class="form-field available-days-row">
+      <label>Available days</label>
+      <div class="day-chip-row">
+        <label class="day-chip"><input type="checkbox" value="monday" />Mon</label>
+        <label class="day-chip"><input type="checkbox" value="tuesday" />Tue</label>
+        <label class="day-chip"><input type="checkbox" value="wednesday" />Wed</label>
+        <label class="day-chip"><input type="checkbox" value="thursday" />Thu</label>
+        <label class="day-chip"><input type="checkbox" value="friday" />Fri</label>
+      </div>
+    </div>
+
+    <div class="form-field">
+      <label for="registerEmergencyName">Emergency contact person</label>
+      <input id="registerEmergencyName" type="text" placeholder="Name" />
+    </div>
+
+    <div class="form-row">
+      <div class="form-field">
+        <label for="registerEmergencyPhone">Emergency phone</label>
+        <input id="registerEmergencyPhone" type="tel" placeholder="+49 170 ..." />
+      </div>
+      <div class="form-field">
+        <label for="registerEmergencyRelation">Relation</label>
+        <select id="registerEmergencyRelation">
+          <option value="life-partner">Life partner</option>
+          <option value="relative">Relative</option>
+          <option value="cousin">Cousin</option>
+          <option value="brother">Brother</option>
+          <option value="sister">Sister</option>
+          <option value="parents">Parents</option>
+          <option value="others">Others</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="form-field">
+      <label for="registerPassword">Password</label>
+      <input id="registerPassword" type="password" autocomplete="new-password" />
+    </div>
+
+    <div class="form-field">
+      <label for="registerConfirmPassword">Confirm password</label>
+      <input id="registerConfirmPassword" type="password" autocomplete="new-password" />
+    </div>
+
+  <div class="register-footer">
+    <button id="registerSubmit" type="button">Submit</button>
+    <span id="registerStatus" style="font-size:12px;color:#94a3b8"></span>
+  </div>
+  <div id="registerActions" style="display:none;margin-top:16px;padding:12px;border:1px solid #e5e7eb;border-radius:12px;background:#f9fafb">
+    <p id="registerActionMessage" style="margin:0 0 12px;font-weight:600;color:#0f172a"></p>
+    <div class="register-action-buttons" style="display:flex;gap:8px">
+      <button id="registerLoginBtn" type="button" style="flex:1;padding:10px 14px;border:1px solid #4f46e5;border-radius:8px;background:#4f46e5;color:#fff;font-weight:600">Login</button>
+      <button id="registerForgotBtn" type="button" style="flex:1;padding:10px 14px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#1d4ed8;font-weight:600">Forgot password</button>
+    </div>
+  </div>
+  <div id="inviteHelpBox" class="alert" style="display:none; margin-top:12px; border:1px solid #fed7aa; border-radius:12px; padding:12px; background:linear-gradient(135deg,#fff7ed,#fefce8);">
+    <div style="font-weight:800; margin-bottom:6px;">Invite link problem</div>
+    <div id="inviteHelpText" style="margin-bottom:10px;">
+      This invite link is invalid or expired.
+    </div>
+    <div style="display:flex; gap:10px; flex-wrap:wrap;">
+      <button type="button" id="btnInviteTryLogin" class="btn btn-primary" style="padding:10px 14px;border-radius:12px;border:none;background:#2563eb;color:#fff;font-weight:700;">Try login</button>
+      <a href="/reset-password.html" class="btn btn-ghost" style="text-decoration:none; display:inline-flex; align-items:center; padding:10px 14px;border-radius:12px;border:1px solid #e2e8f0;background:#fff;color:#0f172a;font-weight:700;">
+        Forgot password
+      </a>
+      <button type="button" id="btnInviteContact" class="btn btn-ghost" style="padding:10px 14px;border-radius:12px;border:1px solid #e2e8f0;background:#fff;color:#0f172a;font-weight:700;">
+        Contact school admin
+      </button>
+      <button type="button" id="btnRequestResend" style="padding:10px 14px;border-radius:12px;border:1px solid #f97316;background:#f97316;color:#fff;font-weight:700;">
+        Request new invite
+      </button>
+    </div>
+  </div>
+  <div id="alreadyRegisteredBox" class="alert" style="display:none; margin-top:12px;">
+    <div style="font-weight:700; margin-bottom:6px;">This email is already registered</div>
+    <div style="margin-bottom:10px;">
+      Please login with your existing account or reset your password.
+    </div>
+    <div style="display:flex; gap:10px; flex-wrap:wrap;">
+      <button type="button" id="btnGoLogin" class="btn btn-primary">Go to Login</button>
+      <button type="button" id="btnGoForgot" class="btn btn-ghost">Forgot Password</button>
+    </div>
+  </div>
+</div>
+
+  <script>
+    // ---- utils ----
+    const $ = (id) => document.getElementById(id);
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("token");
+
+    async function readJsonSafe(res) {
+      try {
+        return await res.json();
+      } catch {
+        return {};
+      }
+    }
+
+    const subtitle = $("registerSubtitle");
+    const errorEl = $("registerError");
+    const statusEl = $("registerStatus");
+    const submitBtn = $("registerSubmit");
+
+    const salutationSelect = $("registerSalutation");
+    const firstNameInput = $("registerFirstName");
+    const lastNameInput = $("registerLastName");
+    const dobInput = $("registerDob");
+
+    const emailInput = $("registerEmail");
+    const courseLevelInput = $("registerCourseLevel");
+    const courseStartInput = $("registerCourseStart");
+    const courseEndInput = $("registerCourseEnd");
+
+    const phoneCountrySelect = $("registerPhoneCountry");
+    const phoneNumberInput = $("registerPhoneNumber");
+
+    const nativeLanguageSelect = $("registerNativeLanguage");
+    const learningGoalSelect = $("registerLearningGoal");
+    const availableDayInputs = Array.from(document.querySelectorAll(".available-days-row input[type='checkbox']"));
+
+    const emergencyNameInput = $("registerEmergencyName");
+    const emergencyPhoneInput = $("registerEmergencyPhone");
+    const emergencyRelationSelect = $("registerEmergencyRelation");
+
+    const passwordInput = $("registerPassword");
+    const confirmPasswordInput = $("registerConfirmPassword");
+
+    const inputs = Array.from(document.querySelectorAll(".form-field input, .form-field select"));
+    const actionContainer = $("registerActions");
+    const actionMessage = $("registerActionMessage");
+    const loginBtn = $("registerLoginBtn");
+    const forgotBtn = $("registerForgotBtn");
+
+    function setError(message) {
+      errorEl.textContent = message || "";
+    }
+
+    function markError(input, message) {
+      input.classList.add("input-error");
+      if (message) setError(message);
+      throw new Error("validation");
+    }
+
+    function hideActionButtons() {
+      if (actionContainer) {
+        actionContainer.style.display = "none";
+      }
+    }
+
+    function showActionButtons(workspaceId) {
+      if (!actionContainer || !actionMessage) return;
+      actionMessage.textContent = "This email already has an account. Please login.";
+      actionContainer.style.display = "block";
+      if (loginBtn) loginBtn.dataset.workspace = workspaceId || "";
+      if (forgotBtn) forgotBtn.dataset.workspace = workspaceId || "";
+    }
+
+    function showInviteHelp({ message = "This invite link is invalid or expired. Please ask your school admin to resend it.", emailPrefill = "" } = {}) {
+      const box = $("inviteHelpBox");
+      const text = $("inviteHelpText");
+      const btnLogin = $("btnInviteTryLogin");
+      const btnContact = $("btnInviteContact");
+
+      if (text) text.textContent = message;
+      if (box) box.style.display = "block";
+
+      if (btnLogin) {
+        btnLogin.onclick = () => {
+          if (window.openLoginModal) {
+            window.openLoginModal({ emailPrefill });
+          } else {
+            window.location.href = "/#login";
+          }
+        };
+      }
+
+      if (btnContact) {
+        btnContact.onclick = () => {
+          alert("Please contact your school admin to send a new invite link.");
+        };
+      }
+
+      if (box) {
+        box.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    }
+
+    window.showInviteHelp = showInviteHelp;
+
+    async function loadInviteInfo(token) {
+      try {
+        const res = await fetch(`/api/register/invite-info?token=${encodeURIComponent(token)}`);
+        const data = await readJsonSafe(res);
+        if (!res.ok) return null;
+        return data;
+      } catch {
+        return null;
+      }
+    }
+
+    async function showInviteHelpWithAdmin({ token, emailPrefill = "" } = {}) {
+      const info = token ? await loadInviteInfo(token) : null;
+        const adminLine = info?.adminEmail
+          ? `Please contact: ${info.adminEmail}`
+          : "Please contact your school admin to resend it.";
+
+      showInviteHelp({
+        message: `This invite link is invalid or expired. ${adminLine}`,
+        emailPrefill
+      });
+
+      const btnContact = $("btnInviteContact");
+      if (btnContact) {
+        btnContact.onclick = () => {
+          if (info?.adminEmail) {
+            const subject = encodeURIComponent("Request new invite link");
+            const workspaceName = info.workspaceName || "your workspace";
+            const body = encodeURIComponent(
+              `Hi, I tried to join ${workspaceName} but the invite link is invalid or expired. Please help.`
+            );
+            window.location.href = `mailto:${info.adminEmail}?subject=${subject}&body=${body}`;
+          } else {
+            alert("Please contact your school admin to resend a new invite link.");
+          }
+        };
+      }
+    }
+
+    const resendBtn = $("btnRequestResend");
+    if (resendBtn) {
+      resendBtn.onclick = async () => {
+        try {
+          const res = await fetch("/api/register/request-resend", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-csrf-token": getCsrfToken()
+            },
+            credentials: "include",
+            body: JSON.stringify({ token })
+          });
+          if (!res.ok) throw new Error();
+          alert("Your school admin has been notified.");
+        } catch {
+          alert("Unable to send resend request.");
+        }
+      };
+    }
+
+    function getCsrfToken() {
+      const match = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);
+      return match ? decodeURIComponent(match[1]) : "";
+    }
+
+    async function fetchJSON(url, options = {}) {
+      const method = (options.method || "GET").toUpperCase();
+      const headers = {
+        ...(options.headers || {})
+      };
+      if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+        headers["x-csrf-token"] = getCsrfToken();
+        if (!Object.keys(headers).some((key) => key.toLowerCase() === "content-type")) {
+          headers["Content-Type"] = "application/json";
+        }
+      }
+
+      const res = await fetch(url, {
+        cache: "no-store",
+        credentials: "include",
+        ...options,
+        method,
+        headers
+      });
+
+      const text = await res.text().catch(() => "");
+      let payload = null;
+      try {
+        payload = text ? JSON.parse(text) : null;
+      } catch (_e) {}
+
+      if (!res.ok) {
+        const msg = payload?.error || res.statusText || "Request failed";
+        const err = new Error(msg);
+        err.payload = payload;
+        err.status = res.status;
+        throw err;
+      }
+      return payload;
+    }
+
+    function applyPrefill(data) {
+      const roleLabel = data.role === "teacher" ? "Teacher" : "Student";
+      if (subtitle) {
+        subtitle.textContent = "";
+        const prefix = document.createTextNode("You are joining ");
+        const strong = document.createElement("strong");
+        strong.textContent = data.workspaceName || "a workspace";
+        const mid = document.createTextNode(" as ");
+        const roleStrong = document.createElement("strong");
+        roleStrong.textContent = roleLabel;
+        const suffix = document.createTextNode(". Complete registration to continue.");
+        const detail = document.createElement("span");
+        detail.style.color = "#64748b";
+        detail.append(prefix, strong, mid, roleStrong, suffix);
+        subtitle.appendChild(detail);
+        if (data.expiresAt) {
+          const expDate = new Date(Number(data.expiresAt));
+          const info = document.createElement("p");
+          info.style.margin = "6px 0 0";
+          info.style.fontSize = "12px";
+          info.style.color = "#64748b";
+          info.textContent = `This invite expires on ${expDate.toLocaleString()}.`;
+          subtitle.appendChild(info);
+        }
+      }
+
+      // Pre-filled from admin modal (if sent)
+      salutationSelect.value = data.salutation || "";
+      firstNameInput.value = data.firstName || "";
+      lastNameInput.value = data.lastName || "";
+      dobInput.value = data.dateOfBirth || "";
+
+      // Lock fields that came from admin (optional: comment out if you want user to edit)
+      if (data.firstName) firstNameInput.readOnly = true;
+      if (data.lastName) lastNameInput.readOnly = true;
+      if (data.dateOfBirth) dobInput.readOnly = true;
+
+      emailInput.value = data.email || "";
+      courseLevelInput.value = data.courseLevel || "";
+
+      courseStartInput.value = data.courseStart || "";
+      courseEndInput.value = data.courseEnd || "";
+
+      phoneCountrySelect.value = data.phoneCountry || phoneCountrySelect.value;
+      phoneNumberInput.value = data.phoneNumber || "";
+
+      nativeLanguageSelect.value = data.nativeLanguage || "";
+      learningGoalSelect.value = data.learningGoal || "";
+
+      availableDayInputs.forEach((input) => {
+        input.checked = (data.availableDays || []).includes(input.value);
+      });
+
+      emergencyNameInput.value = data.emergencyName || "";
+      emergencyPhoneInput.value = data.emergencyPhone || "";
+      emergencyRelationSelect.value = data.emergencyRelation || "life-partner";
+    }
+
+    function buildLoginUrl(workspaceId, extras = {}) {
+      const params = new URLSearchParams();
+      if (workspaceId) params.set("workspace", workspaceId);
+      if (extras.show) params.set("show", extras.show);
+      if (extras.message) params.set("message", extras.message);
+      const query = params.toString();
+      return `/login${query ? `?${query}` : ""}`;
+    }
+
+    if (loginBtn) {
+      loginBtn.addEventListener("click", () => {
+        const workspaceId = loginBtn.dataset.workspace || "";
+        window.location.href = buildLoginUrl(workspaceId, { message: "This email already has an account. Please login." });
+      });
+    }
+
+    if (forgotBtn) {
+      forgotBtn.addEventListener("click", () => {
+        const workspaceId = forgotBtn.dataset.workspace || "";
+        window.location.href = buildLoginUrl(workspaceId, { show: "forgot" });
+      });
+    }
+
+    async function init() {
+      if (!token) {
+        subtitle.textContent = "Invalid or missing link.";
+        submitBtn.disabled = true;
+        return;
+      }
+
+      try {
+        const data = await fetchJSON(`/api/register/link/${encodeURIComponent(token)}`);
+        applyPrefill(data);
+      } catch (err) {
+        subtitle.textContent = "This registration link is no longer valid.";
+        setError(`This registration link is no longer valid.\n${err.message || "Could not load registration data."}`);
+        submitBtn.disabled = true;
+        await showInviteHelpWithAdmin({ token, emailPrefill: emailInput?.value.trim() || "" });
+      }
+    }
+
+    submitBtn.addEventListener("click", async () => {
+      setError("");
+      statusEl.textContent = "";
+      hideActionButtons();
+      inputs.forEach((el) => el.classList.remove("input-error"));
+
+      try {
+        if (!salutationSelect.value) markError(salutationSelect);
+        if (!firstNameInput.value.trim()) markError(firstNameInput);
+        if (!lastNameInput.value.trim()) markError(lastNameInput);
+        if (!dobInput.value) markError(dobInput);
+
+        if (!passwordInput.value) markError(passwordInput);
+        if (passwordInput.value !== confirmPasswordInput.value) {
+          confirmPasswordInput.classList.add("input-error");
+          setError("Passwords do not match");
+          return;
+        }
+
+        const selectedAvailableDays = availableDayInputs
+          .filter((i) => i.checked)
+          .map((i) => i.value);
+
+        submitBtn.disabled = true;
+        statusEl.textContent = "Submitting...";
+
+        const payload = {
+          token,
+          firstName: firstNameInput.value.trim(),
+          lastName: lastNameInput.value.trim(),
+          dateOfBirth: dobInput.value,
+          password: passwordInput.value,
+          salutation: salutationSelect.value,
+          courseStart: courseStartInput.value,
+          courseEnd: courseEndInput.value,
+          phoneCountry: phoneCountrySelect.value,
+          phoneNumber: phoneNumberInput.value.trim(),
+          nativeLanguage: nativeLanguageSelect.value,
+          learningGoal: learningGoalSelect.value,
+          availableDays: selectedAvailableDays,
+          emergencyName: emergencyNameInput.value.trim(),
+          emergencyPhone: emergencyPhoneInput.value.trim(),
+          emergencyRelation: emergencyRelationSelect.value
+        };
+        payload.email = emailInput?.value.trim() || "";
+
+        const res = await fetch("/api/register/complete", {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            "x-csrf-token": getCsrfToken()
+          },
+          body: JSON.stringify(payload)
+        });
+        const data = await readJsonSafe(res);
+        const responseMessage = data?.error || res.statusText || "Could not complete registration";
+
+        if (!res.ok) {
+          if (res.status === 400 && /invalid|expired|token/i.test(responseMessage)) {
+            hideActionButtons();
+            await showInviteHelpWithAdmin({
+              token,
+              emailPrefill: payload.email || ""
+            });
+            submitBtn.disabled = false;
+            statusEl.textContent = "";
+            return;
+          }
+
+          if (res.status === 409 && data?.action === "login_or_reset") {
+            setError("");
+            showActionButtons(data?.workspaceId);
+            actionContainer?.scrollIntoView({ behavior: "smooth", block: "center" });
+            setTimeout(() => {
+              loginBtn?.focus();
+            }, 100);
+            if (window.openLoginModal) {
+              window.openLoginModal({ emailPrefill: payload.email || "" });
+            }
+            submitBtn.disabled = false;
+            statusEl.textContent = "";
+            return;
+          }
+
+          hideActionButtons();
+          setError(responseMessage);
+          submitBtn.disabled = false;
+          statusEl.textContent = "";
+          return;
+        }
+
+        statusEl.textContent = "Registration complete. Please login.";
+        setTimeout(() => {
+          window.location.href =
+            `/login?workspace=${encodeURIComponent(data.workspaceId)}&message=${encodeURIComponent("Registration successful")}`;
+        }, 900);
+      } catch (err) {
+        hideActionButtons();
+        setError(err?.message || "Could not complete registration");
+        submitBtn.disabled = false;
+        statusEl.textContent = "";
+      }
+    });
+
+    init();
+  </script>
+  <script>
+    (function () {
+      const box = document.getElementById("alreadyRegisteredBox");
+      const btnLogin = document.getElementById("btnGoLogin");
+      const btnForgot = document.getElementById("btnGoForgot");
+
+      if (btnLogin) {
+        btnLogin.addEventListener("click", () => {
+          window.location.href = "/#login";
+        });
+      }
+
+      if (btnForgot) {
+        btnForgot.addEventListener("click", () => {
+          window.location.href = "/reset-password.html";
+        });
+      }
+
+      window.__showAlreadyRegistered = function () {
+        if (box) box.style.display = "block";
+      };
+    })();
+  </script>
+</body>
+</html>

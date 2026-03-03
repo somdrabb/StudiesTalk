@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Grammar Layout</title>
+  <link rel="stylesheet" href="/Grammar/grammar.css" />
+</head>
+<body>
+  <div class="grammar-shell">
+    <main class="page">
+    <!-- SECTION 1 -->
+    <section class="card card--yellow" id="section-conjugation">
+      <h1 class="title title--green" id="conjTitle"></h1>
+
+      <div class="conj-grid" id="conjGrid">
+        <!-- built by JS -->
+      </div>
+    </section>
+
+    <!-- SECTION 2 -->
+    <section class="card card--yellow" id="section-wordorder">
+      <h1 class="title title--green" id="woTitle"></h1>
+
+      <div class="wo-layout" id="woLayout">
+        <!-- built by JS -->
+      </div>
+    </section>
+    <!-- SECTION 6: HABEN/SEIN + SUBJEKT + AKKUSATIV -->
+    <section class="card card--yellow" id="section-habesein">
+      <h1 class="title title--green" id="hsTitle"></h1>
+
+      <div class="hs-table" id="hsTable"></div>
+
+      <div class="hs-block">
+        <h2 class="hs-h2" id="hsSubjTitle"></h2>
+        <p class="hs-p" id="hsSubjText1"></p>
+
+        <div class="hs-examples" id="hsExamples"></div>
+
+        <p class="hs-p hs-p--end" id="hsSubjText2"></p>
+      </div>
+
+      <div class="hs-block">
+        <h2 class="hs-h2" id="hsAccTitle"></h2>
+        <div class="hs-acc" id="hsAcc"></div>
+      </div>
+    </section>
+  </main>
+  </div>
+
+    <script src="/Grammar/grammar.js"></script>
+
+</body>
+</html>

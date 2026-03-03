@@ -1,0 +1,143 @@
+/* Privacy & Rules (compact, Apple-like typography) */
+.privacy-rules{
+  --bg:rgba(255,255,255,.92);--bd:rgba(15,23,42,.12);--dv:rgba(15,23,42,.08);
+  --t:#0f172a;--m:#6b7280;--b:#111827;
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  background:var(--bg);border:1px solid var(--bd);border-radius:16px;
+  padding:18px 20px 26px;max-width:960px;margin:0 auto;color:var(--b);
+  line-height:1.65;font-size:15px;box-shadow:0 14px 34px rgba(15,23,42,.08)
+}
+html[data-theme="dark"] .privacy-rules{
+  --bg:rgba(15,23,42,.78);--bd:rgba(148,163,184,.24);--dv:rgba(148,163,184,.16);
+  --t:#f8fafc;--m:rgba(226,232,240,.72);--b:#e5e7eb;
+  box-shadow:0 20px 50px rgba(0,0,0,.35)
+}
+
+/* Sticky header */
+.policy-header{
+  position:sticky;top:0;z-index:30;border:1px solid var(--bd);border-radius:14px;
+  background:rgba(248,250,252,.96);
+  padding:14px 16px;margin:0 0 14px
+}
+html[data-theme="dark"] .policy-header{background:rgba(15,23,42,.80)}
+@supports (backdrop-filter: blur(10px)) or (-webkit-backdrop-filter: blur(10px)) {
+  .policy-header{
+    background:rgba(248,250,252,.82);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+  html[data-theme="dark"] .policy-header{
+    background:rgba(15,23,42,.62);
+  }
+}
+.policy-header-top{display:flex;justify-content:space-between;gap:14px;align-items:flex-start}
+.policy-header-title{display:flex;gap:10px;align-items:flex-start}
+.policy-icon{color:#2563eb;margin-top:2px}
+html[data-theme="dark"] .policy-icon{color:#7dd3fc}
+.policy-title{margin:0;font-size:18px;font-weight:800;color:var(--t);line-height:1.2}
+.policy-subtitle{margin:4px 0 0;font-size:13px;color:var(--m);display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.policy-dot{opacity:.65}
+.policy-header-actions{display:flex;flex-direction:column;align-items:flex-end;gap:10px}
+.policy-badge{
+  font-size:12px;font-weight:800;padding:3px 10px;border-radius:999px;
+  background:rgba(16,185,129,.14);color:#16a34a
+}
+.policy-action-group{display:flex;gap:8px;flex-wrap:wrap}
+.privacy-quick-btn{
+  padding:6px 10px;border-radius:10px;border:1px solid rgba(15,23,42,.14);
+  background:rgba(255,255,255,.95);font-size:13px;font-weight:700;cursor:pointer
+}
+html[data-theme="dark"] .privacy-quick-btn{background:rgba(15,23,42,.25);border-color:rgba(148,163,184,.28);color:var(--b)}
+.privacy-quick-btn:hover{background:rgba(59,130,246,.12);border-color:rgba(59,130,246,.38)}
+.privacy-quick-btn.danger{border-color:rgba(239,68,68,.35);color:#dc2626}
+.privacy-quick-btn.danger:hover{background:rgba(239,68,68,.12);border-color:rgba(239,68,68,.45)}
+.policy-header-bottom{margin-top:10px;padding-top:10px;border-top:1px solid var(--dv)}
+.policy-chips{display:flex;gap:6px;flex-wrap:wrap;margin:0}
+.policy-chip{
+  font-size:12px;padding:4px 10px;border-radius:999px;
+  border:1px solid rgba(59,130,246,.22);background:rgba(59,130,246,.08);color:var(--t)
+}
+
+/* Summary + TOC */
+.privacy-summary,.privacy-toc{
+  background:rgba(255,255,255,.82);border:1px solid rgba(15,23,42,.12);border-radius:14px
+}
+html[data-theme="dark"] .privacy-summary,html[data-theme="dark"] .privacy-toc{
+  background:rgba(2,6,23,.18);border-color:rgba(148,163,184,.18)
+}
+.privacy-summary{padding:12px 14px;margin:0 0 12px}
+.privacy-summary-title{display:flex;gap:8px;align-items:center;margin:0 0 8px;font-size:12px;font-weight:900;letter-spacing:.16em;text-transform:uppercase;color:var(--t)}
+.privacy-summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:6px 12px}
+.privacy-summary-item{font-size:13px;color:var(--m)}
+.privacy-toc{padding:12px 14px;margin:0 0 14px}
+.privacy-toc-label{font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--m);margin:0 0 8px}
+.privacy-toc-chips{display:flex;flex-wrap:wrap;gap:8px}
+.privacy-toc-chip{
+  padding:6px 12px;border-radius:999px;border:1px solid rgba(15,23,42,.14);
+  background:rgba(255,255,255,.9);color:var(--t);text-decoration:none;font-size:13px;font-weight:700
+}
+html[data-theme="dark"] .privacy-toc-chip{background:rgba(15,23,42,.18);border-color:rgba(148,163,184,.22)}
+.privacy-toc-chip:hover{border-color:rgba(59,130,246,.45);background:rgba(59,130,246,.10)}
+
+/* Sections */
+.policy-section{margin-top:24px;padding-top:18px;border-top:1px solid var(--dv)}
+.policy-section:first-of-type{margin-top:10px;padding-top:0;border-top:none}
+.section-heading{display:grid;grid-template-columns:44px 1fr;gap:12px;align-items:start;margin-bottom:10px}
+.section-icon{
+  width:40px;height:40px;border-radius:50%;
+  background:rgba(37,99,235,.10);display:flex;align-items:center;justify-content:center;
+  color:#2563eb;font-size:16px
+}
+html[data-theme="dark"] .section-icon{background:rgba(125,211,252,.12);color:#7dd3fc}
+.section-title{font-size:17px;font-weight:850;color:var(--t)}
+.section-summary{margin-top:2px;font-size:13px;color:var(--m)}
+.intro{margin:0 0 8px;color:var(--m)}
+.section-list{margin:0;padding-left:18px;line-height:1.7}
+.section-list li{margin:0 0 6px}
+
+/* Controller block */
+.controller-name{margin:.25rem 0}
+.controller-address{margin:.35rem 0 .85rem;line-height:1.45;color:var(--t)}
+.controller-address p{margin:0} /* keeps your current HTML */
+.controller-address.muted{opacity:.75;font-style:italic}
+
+/* Roles */
+.roles-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.role-card{
+  border:1px solid rgba(15,23,42,.12);border-radius:14px;padding:12px 14px;
+  background:rgba(255,255,255,.82)
+}
+html[data-theme="dark"] .role-card{background:rgba(2,6,23,.18);border-color:rgba(148,163,184,.18)}
+.role-badge{
+  display:inline-flex;gap:6px;align-items:center;
+  font-size:11px;font-weight:900;letter-spacing:.14em;text-transform:uppercase;
+  padding:4px 10px;border-radius:999px;background:rgba(15,23,42,.06);color:var(--t)
+}
+.role-summary{margin:8px 0;font-size:13px;color:var(--m)}
+.role-card ul{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:8px;font-size:13px}
+.role-card ul li{display:flex;gap:8px;align-items:flex-start;color:var(--b)}
+.role-card ul i{opacity:.65;margin-top:2px}
+
+/* Notes + Contact */
+.note{margin-top:10px;font-style:italic;color:#b45309}
+html[data-theme="dark"] .note{color:#fca5a5}
+.support-block{display:flex;flex-direction:column;gap:6px;font-size:13px}
+.support-block a{color:#2563eb;text-decoration:none}
+.support-block a:hover{text-decoration:underline}
+.policy-footer{margin-top:16px;font-size:13px;color:var(--m);text-align:center}
+
+/* Sticky section titles (optional): keep your existing h2 if present */
+.privacy-rules .policy-section h2{
+  margin:0;color:var(--t);font-size:16px;font-weight:850;padding:8px 0;
+  position:sticky;top:116px;background:var(--bg);border-bottom:1px solid var(--dv);z-index:5
+}
+
+/* Mobile */
+@media (max-width:720px){
+  .privacy-rules{padding:14px;border-radius:12px}
+  .policy-header{padding:12px}
+  .policy-title{font-size:17px}
+}
+#privacyChannelHeader{
+  display:none!important;
+}

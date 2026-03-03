@@ -1,0 +1,461 @@
+:root{
+  --g-pad:16px;
+  --g-gap:28px;
+
+  --text:#0f172a;
+  --muted:rgba(15,23,42,.65);
+  --border:rgba(15,23,42,.14);
+  --border-strong:rgba(15,23,42,.22);
+
+  --accent:#dc2626;
+
+  --fs-cell:20px;
+  --fs-head:18px;
+}
+
+/* Shell */
+.grammar-shell{
+  width:100%;
+  min-height:calc(100vh - 30px);
+  display:flex;
+  justify-content:center;
+  align-items:flex-start;
+  padding:10px 0 26px;
+  overflow-y:auto;
+  max-height:100vh;
+}
+.grammar-shell .page{
+  counter-reset:grammar-section;
+  width:100%;
+  max-width:1400px;
+  margin:0 auto;
+  padding:16px 24px 28px;
+  display:grid;
+  gap:var(--g-gap);
+  background:transparent;
+  color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Inter",system-ui,sans-serif;
+}
+
+/* Cards */
+.grammar-shell .card{
+  background:#fff;
+  padding:var(--g-pad);
+  border-radius:22px;
+  border:1px solid var(--border);
+  box-shadow:0 10px 24px rgba(15,23,42,.06);
+  position:relative;
+}
+.grammar-shell .card::before{
+  counter-increment:grammar-section;
+  content:counter(grammar-section);
+  position:absolute;
+  top:14px;
+  left:14px;
+  font-size:16px;
+  font-weight:900;
+  color:var(--accent);
+}
+
+.card--yellow{
+  background:
+    linear-gradient(0deg,#fff,#fff),
+    radial-gradient(1200px 240px at 18% 0%, rgba(244,239,147,.9), transparent 60%);
+}
+
+.card--pink{
+  background:
+    linear-gradient(0deg,#fff,#fff),
+    radial-gradient(1200px 240px at 18% 0%, rgba(255,231,241,.95), transparent 60%);
+}
+
+.mini-head,.mini-row{
+  display:grid;
+  grid-template-columns:220px 220px 1fr;
+  gap:16px;
+  align-items:end;
+}
+
+.mini-h--rest{
+  background:transparent;
+  padding:0;
+}
+/* Card tint */
+.gram-card{
+  background:linear-gradient(0deg,#fff,#fff),
+    radial-gradient(1200px 240px at 18% 0%, rgba(244,239,147,.9), transparent 60%);
+}
+
+/* Title / subtitle */
+.grammar-shell .title{
+  margin:0 0 10px;
+  font-weight:850;
+  letter-spacing:-.3px;
+  font-size:26px;
+  line-height:1.15;
+  color:var(--text);
+}
+.grammar-shell .title--green{color:var(--text)}
+.subtitle{
+  margin:-2px 0 14px;
+  font-size:15px;
+  color:var(--muted);
+  font-weight:650;
+}
+
+/* Common underline */
+.rule,.art-underline,.pos-underline,.con-line{
+  height:4px;
+  width:100%;
+  border-radius:999px;
+  background:var(--border-strong);
+  margin:0;
+}
+
+/* Accent */
+.ending,.art-text .art{color:var(--accent);font-weight:900}
+
+/* =========================
+   CONJUGATION
+========================= */
+.conj-grid{display:grid;gap:8px}
+.conj-row{
+  display:grid;
+  grid-template-columns:200px repeat(5,minmax(0,1fr));
+  gap:18px;
+  align-items:end;
+}
+.conj-cell{display:grid;gap:8px}
+.conj-cell--pronoun{padding-left:2px}
+.conj-cell--header{align-items:start}
+
+.verb-head{font-size:24px;font-weight:850;color:var(--text)}
+.pronoun{font-size:var(--fs-cell);font-weight:750;color:var(--text)}
+.word{font-size:22px;font-weight:750;color:var(--text);white-space:nowrap}
+
+/* =========================
+   WORD ORDER
+========================= */
+.wo-layout{display:grid;gap:8px}
+.wo-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.wo-row--gap{margin-top:4px}
+.wo-col{display:grid;gap:10px}
+
+.wo-subtitle{font-size:18px;font-weight:850;color:var(--text);margin:0 0 6px}
+
+.mini{display:grid;gap:6px}
+.mini-head,.mini-row{
+  display:grid;
+  grid-template-columns:160px 160px 1fr;
+  gap:8px;
+  align-items:end;
+}
+.mini-h{
+  padding:6px 8px;
+  font-size:16px;
+  font-weight:850;
+  border-radius:10px;
+  background:rgba(15,23,42,.08);
+}
+.mini-h--pos2{background:rgba(15,23,42,.14)}
+.mini-h--rest{background:transparent;padding:0}
+
+.mini-c{display:grid;gap:8px;padding:6px 2px}
+.mini-c--pos2{
+  background:rgba(15,23,42,.08);
+  border-radius:12px;
+  padding:8px 10px;
+}
+.mini-text{font-size:20px;font-weight:720;color:var(--text);white-space:nowrap}
+
+/* =========================
+   ARTICLES (underline table)
+========================= */
+.art-table{
+  display:grid;
+  gap:10px;
+}
+.art-head,.art-row{
+  display:grid;
+  grid-template-columns:160px repeat(4,minmax(0,1fr));
+  gap:16px;
+  align-items:end;
+}
+.art-hlabel{font-weight:900;font-size:18px;color:var(--text)}
+.art-col{display:grid;gap:6px}
+.art-top{font-weight:900;font-size:18px;color:var(--text)}
+.art-rlabel{font-weight:850;font-size:18px;color:var(--text);align-self:center}
+
+.art-cell{display:grid;gap:8px}
+.art-text{font-size:20px;font-weight:750;color:var(--text);white-space:nowrap}
+
+/* =========================
+   POSSESSIVES (fix broken layout)
+========================= */
+.pos-table{display:grid;gap:10px}
+.pos-head,.pos-row{
+  display:grid;
+  grid-template-columns:160px repeat(4,minmax(0,1fr));
+  gap:16px;
+  align-items:end;
+}
+.pos-hlabel{font-weight:900;font-size:18px;color:var(--text)}
+.pos-col{display:grid;gap:4px}
+.pos-top{font-weight:900;font-size:18px;color:var(--text)}
+.pos-ex{font-size:14px;font-weight:650;color:var(--muted)}
+
+.pos-rlabel{font-weight:850;font-size:18px;color:var(--text);align-self:center}
+.pos-cell{display:grid;gap:8px}
+.pos-text{font-size:20px;line-height:1.2;font-weight:750;color:var(--text);white-space:nowrap}
+
+/* =========================
+   CONNECTORS (fix broken layout)
+========================= */
+.con-wrap{display:block}
+.con-grid{
+  display:grid;
+  grid-template-columns:1fr 1.05fr;
+  gap:12px;
+  align-items:start;
+}
+.con-table{display:grid;gap:10px}
+.con-body{display:grid;gap:14px}
+
+.con-side:first-child .con-head,
+.con-side:first-child .con-row{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:16px;
+  align-items:end;
+}
+.con-side:last-child .con-head,
+.con-side:last-child .con-row{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:16px;
+  align-items:end;
+}
+
+.con-h{display:grid;gap:8px}
+.con-htext{font-size:18px;font-weight:850;color:var(--text)}
+
+.con-cell{display:grid;gap:6px}
+.con-text{font-size:18px;font-weight:700;color:var(--text);white-space:normal}
+
+/* subtle highlight for Pos.0 column on right table */
+.con-side:last-child .con-h:first-child .con-htext,
+.con-side:last-child .con-row .con-cell:first-child .con-text{
+  background:rgba(15,23,42,.08);
+  border-radius:12px;
+  padding:8px 10px;
+  display:inline-block;
+}
+
+/* =========================
+   RESPONSIVE
+========================= */
+@media (max-width:980px){
+  .grammar-shell .page{padding:18px}
+  .conj-row{grid-template-columns:170px repeat(5,minmax(0,1fr));gap:14px}
+
+  .mini-head,.mini-row{grid-template-columns:190px 190px 1fr;gap:14px}
+
+  .art-head,.art-row,
+  .pos-head,.pos-row{grid-template-columns:140px repeat(4,minmax(0,1fr));gap:14px}
+
+  .con-grid{grid-template-columns:1fr;gap:16px}
+  .con-text{font-size:19px}
+}
+@media (max-width:780px){
+  .wo-row{grid-template-columns:1fr}
+  .mini-head,.mini-row{grid-template-columns:1fr 1fr}
+  .mini-h--rest{display:none}
+  .mini-c--rest{grid-column:1/-1}
+  .mini-text{white-space:normal}
+
+  .conj-row{grid-template-columns:1fr;gap:10px}
+  .conj-cell--header{display:none}
+  .word{white-space:normal}
+}
+@media (max-width:720px){
+  .pos-head,.art-head{display:none}
+
+  .pos-row,.art-row{
+    grid-template-columns:1fr;
+    gap:10px;
+    padding:10px 0;
+    border-top:1px solid var(--border);
+  }
+  .pos-text,.art-text{white-space:normal}
+
+  .con-text{white-space:normal}
+}
+/* ===== HABEN/SEIN PACK ===== */
+.hs-table{display:grid;gap:10px;margin-top:4px}
+.hs-row{
+  display:grid;
+  grid-template-columns:200px repeat(4,minmax(0,1fr));
+  gap:16px;
+  align-items:end;
+}
+.hs-cell{display:grid;gap:8px}
+.hs-cell--p{padding-left:2px}
+.hs-gh{font-size:22px;font-weight:850;color:var(--text)}
+.hs-h{font-size:18px;font-weight:850;color:var(--text)}
+.hs-pn{font-size:20px;font-weight:750;color:var(--text)}
+.hs-v{font-size:20px;font-weight:750;color:var(--text)}
+.hs-line{height:4px;border-radius:999px;background:var(--border-strong)}
+.hs-t{font-weight:750}
+.hs-accent{color:var(--accent);font-weight:900}
+
+.hs-block{margin-top:18px;display:grid;gap:10px}
+.hs-h2{margin:0;font-size:20px;font-weight:900;color:var(--text)}
+.hs-p{margin:0;color:var(--text);font-size:16px;line-height:1.65}
+.hs-p--end{margin-top:4px}
+
+.hs-examples{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:18px;
+}
+.hs-excol{display:grid;gap:8px}
+.hs-exline{font-size:16px;line-height:1.7;color:var(--text)}
+
+.hs-acc{display:grid;gap:10px}
+.hs-acc-head,.hs-acc-row{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:16px;
+  align-items:end;
+}
+.hs-acc-h,.hs-acc-c{display:grid;gap:8px}
+.hs-acc-ht{font-size:16px;font-weight:900;color:var(--text)}
+.hs-acc-t{font-size:18px;font-weight:750;color:var(--text)}
+
+/* Responsive */
+@media (max-width:980px){
+  .hs-row{grid-template-columns:170px repeat(4,minmax(0,1fr));gap:14px}
+  .hs-examples{grid-template-columns:1fr}
+}
+@media (max-width:780px){
+  .hs-row{grid-template-columns:1fr;gap:10px}
+  .hs-row--h1,.hs-row--h2{display:none}
+}
+/* ===== MODAL VERBS (FIXED) ===== */
+#section-modal .md-top{
+  margin:0 0 6px;
+  font-size:16px;
+  font-weight:700;
+  color:var(--muted);
+}
+
+#section-modal .md-table{display:grid;gap:10px;margin-top:6px}
+#section-modal .md-row{
+  display:grid;
+  grid-template-columns:180px repeat(6,minmax(0,1fr));
+  gap:14px;
+  align-items:end;
+}
+#section-modal .md-cell{display:grid;gap:8px}
+#section-modal .md-cell--p{padding-left:2px}
+#section-modal .md-h{font-size:18px;font-weight:900;color:var(--text)}
+#section-modal .md-pn{font-size:18px;font-weight:800;color:var(--text)}
+#section-modal .md-v{font-size:18px;font-weight:750;color:var(--text)}
+#section-modal .md-line{height:4px;border-radius:999px;background:var(--border-strong)}
+#section-modal .md-accent{color:var(--accent);font-weight:900}
+
+#section-modal .md-note{
+  margin:14px 0 6px;
+  font-size:15px;
+  line-height:1.65;
+  color:var(--muted);
+}
+
+#section-modal .md-block{margin-top:16px;display:grid;gap:10px}
+#section-modal .md-h2{margin:0;font-size:20px;font-weight:900;color:var(--text)}
+
+/* Word order table (4 cols) */
+#section-modal .md-wo{display:grid;gap:10px}
+#section-modal .md-wo-head,
+#section-modal .md-wo-row{
+  display:grid;
+  grid-template-columns:220px 160px 1fr 220px;
+  gap:14px;
+  align-items:end;
+}
+#section-modal .md-wo-h,
+#section-modal .md-wo-c{display:grid;gap:8px}
+#section-modal .md-wo-ht{font-size:16px;font-weight:900;color:var(--text)}
+#section-modal .md-wo-t{font-size:16px;font-weight:750;color:var(--text);white-space:nowrap}
+
+/* Highlight column */
+#section-modal .md-wo-hl{
+  background:rgba(15,23,42,.08);
+  border-radius:12px;
+  padding:8px 10px;
+}
+
+/* Denn block */
+#section-modal .md-denn-grid{
+  display:grid;
+  grid-template-columns:1fr 1.35fr;
+  gap:14px;
+  align-items:start;
+}
+#section-modal .md-denn-side{display:grid;gap:10px}
+#section-modal .md-denn-top{font-size:16px;font-weight:900;color:var(--text)}
+
+/* LEFT (3 cols) */
+#section-modal .md-denn-table--l .md-denn-head,
+#section-modal .md-denn-table--l .md-denn-row{
+  display:grid;
+  grid-template-columns:220px 120px 1fr;
+  gap:14px;
+  align-items:end;
+}
+
+/* RIGHT (5 cols) */
+#section-modal .md-denn-table--r .md-denn-head,
+#section-modal .md-denn-table--r .md-denn-row{
+  display:grid;
+  grid-template-columns:110px 110px 120px 1fr 120px;
+  gap:14px;
+  align-items:end;
+}
+
+#section-modal .md-denn-h,
+#section-modal .md-denn-c{display:grid;gap:8px}
+#section-modal .md-denn-ht{font-size:16px;font-weight:900;color:var(--text)}
+#section-modal .md-denn-t{font-size:16px;font-weight:750;color:var(--text);white-space:nowrap}
+
+/* Highlight "denn" column */
+#section-modal .md-denn-table--r .md-denn-h.md-wo-hl,
+#section-modal .md-denn-table--r .md-denn-c.md-wo-hl{
+  background:rgba(15,23,42,.08);
+  border-radius:12px;
+  padding:8px 10px;
+}
+
+#section-modal .md-foot{
+  margin:10px 0 0;
+  font-size:15px;
+  font-weight:850;
+  color:var(--text);
+}
+
+/* Responsive */
+@media (max-width:980px){
+  #section-modal .md-row{grid-template-columns:160px repeat(6,minmax(0,1fr));gap:12px}
+  #section-modal .md-wo-head,#section-modal .md-wo-row{grid-template-columns:200px 150px 1fr 200px;gap:12px}
+  #section-modal .md-denn-grid{grid-template-columns:1fr}
+}
+@media (max-width:780px){
+  #section-modal .md-row{grid-template-columns:1fr;gap:10px}
+  #section-modal .md-row--head{display:none}
+  #section-modal .md-wo-head,#section-modal .md-wo-row{grid-template-columns:1fr 1fr}
+  #section-modal .md-wo-t,#section-modal .md-denn-t{white-space:normal}
+  #section-modal .md-denn-table--l .md-denn-head,
+  #section-modal .md-denn-table--l .md-denn-row,
+  #section-modal .md-denn-table--r .md-denn-head,
+  #section-modal .md-denn-table--r .md-denn-row{grid-template-columns:1fr 1fr}
+}

@@ -1,0 +1,16 @@
+# --- Secrets ---
+.env
+command.text
+gcp-translate-key.json
+server/secrets/
+server/secrets/*.json
+**/gcp-translate-key.json
+*.pem
+*.key
+
+# --- Dependencies ---
+node_modules/
+
+# --- Database ---
+worknest.db
+worknest.db-*

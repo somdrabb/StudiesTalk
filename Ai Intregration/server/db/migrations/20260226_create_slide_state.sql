@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS slide_state (
+  live_class_id UUID PRIMARY KEY REFERENCES live_classes(id) ON DELETE CASCADE,
+  page INTEGER NOT NULL DEFAULT 1,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);

@@ -1,0 +1,494 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link rel="icon" href="/favicon.ico" />
+    <!-- Font Awesome for icon sidebar -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+    <!-- Admin theme -->
+    <link rel="stylesheet" href="/admin/admin.css" />
+  </head>
+  <body>
+    <div class="admin-layout">
+      <aside class="sidebar sidebar-icons is-collapsed" id="adminSidebar" aria-label="Admin navigation">
+        <div class="sidebar-top">
+          <button class="sidebar-toggle btn btn-ghost btn-icon" id="sidebarToggle" type="button" aria-label="Toggle sidebar">
+            <i class="fa-solid fa-bars" aria-hidden="true"></i>
+          </button>
+        </div>
+
+        <nav class="nav nav-icons" aria-label="Sections">
+          <button class="tab nav-item is-active" type="button" data-tab="overview" aria-label="Overview" data-tooltip="Overview">
+            <i class="fa-solid fa-chart-line" aria-hidden="true"></i>
+            <span class="nav-label">Overview</span>
+          </button>
+
+          <button class="tab nav-item" type="button" data-tab="schools" aria-label="Schools" data-tooltip="Schools">
+            <i class="fa-solid fa-school" aria-hidden="true"></i>
+            <span class="nav-label">Schools</span>
+          </button>
+
+          <button class="tab nav-item" type="button" data-tab="users" aria-label="Users" data-tooltip="Users">
+            <i class="fa-solid fa-users" aria-hidden="true"></i>
+            <span class="nav-label">Users</span>
+          </button>
+
+          <button class="tab nav-item" type="button" data-tab="billing" aria-label="Billing" data-tooltip="Billing">
+            <i class="fa-solid fa-receipt" aria-hidden="true"></i>
+            <span class="nav-label">Billing</span>
+          </button>
+
+          <button class="tab nav-item" type="button" data-tab="settings" aria-label="Settings" data-tooltip="Settings">
+            <i class="fa-solid fa-gear" aria-hidden="true"></i>
+            <span class="nav-label">Settings</span>
+          </button>
+
+          <button class="tab nav-item" type="button" data-tab="audit" aria-label="Audit Log" data-tooltip="Audit Log">
+            <i class="fa-solid fa-clipboard-list" aria-hidden="true"></i>
+            <span class="nav-label">Audit Log</span>
+          </button>
+
+          <button class="tab nav-item" type="button" data-tab="school-requests" aria-label="School Requests" data-tooltip="School Requests">
+            <i class="fa-solid fa-inbox" aria-hidden="true"></i>
+            <span class="nav-badge nav-badge-tab" id="reqPendingBadge" hidden>0</span>
+            <span class="nav-label">School Requests</span>
+          </button>
+        </nav>
+
+        <div class="nav-sep" aria-hidden="true"></div>
+
+        <nav class="nav nav-icons nav-tools" aria-label="Tools">
+          <button class="nav-tool" type="button" aria-label="Reports" data-tooltip="Reports">
+            <i class="fa-solid fa-chart-pie" aria-hidden="true"></i>
+            <span class="nav-label">Reports</span>
+          </button>
+          <button class="nav-tool" type="button" aria-label="Notifications" data-tooltip="Notifications">
+            <i class="fa-solid fa-bell" aria-hidden="true"></i>
+            <span class="nav-badge" id="notifBadge" hidden>0</span>
+            <span class="nav-label">Notifications</span>
+          </button>
+          <button class="nav-tool" type="button" aria-label="Messages" data-tooltip="Messages">
+            <i class="fa-solid fa-envelope" aria-hidden="true"></i>
+            <span class="nav-label">Messages</span>
+          </button>
+        </nav>
+        <div class="sidebar-footer">
+          <button class="btn btn-ghost btn-icon sidebar-admin" type="button" aria-label="Admin profile">
+            <i class="fa-solid fa-user-shield" aria-hidden="true"></i>
+          </button>
+          <button class="btn btn-ghost btn-icon sidebar-logout" type="button" id="btnLogout" aria-label="Logout" hidden>
+            <i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i>
+          </button>
+        </div>
+      </aside>
+
+      <main class="main" role="main">
+        <header class="topbar" role="banner">
+          <div class="topbar-left">
+            <div class="page-title">Welcome to Admin Dashboard</div>
+            <div class="page-subtitle">Manage schools, users, billing and settings</div>
+          </div>
+
+          <div class="topbar-right">
+            <div class="workspace-tools" id="workspaceTools" hidden>
+              <div class="workspace-meta">
+                <select class="input" id="workspaceSelect" aria-label="Select workspace">
+                  <option value="all">All workspaces</option>
+                </select>
+                <div class="mini muted" id="workspaceMeta"></div>
+              </div>
+
+              <div class="workspace-actions">
+                <button class="btn btn-ghost" type="button" id="btnRefresh">Refresh</button>
+                <button class="btn btn-secondary" type="button" id="btnCreateInvoice">Create invoice</button>
+                <button class="btn btn-secondary" type="button" id="btnUpsertWorkspace">Add/Update school</button>
+              </div>
+            </div>
+
+            <button class="btn btn-ghost btn-icon" type="button" id="mobileNavBtn" aria-label="Open menu">
+              <i class="fa-solid fa-bars" aria-hidden="true"></i>
+            </button>
+
+            <div class="user-badge" id="adminUserBadge" hidden>
+              <div class="user-meta">
+                <div class="user-name" id="adminUserName"></div>
+              </div>
+            </div>
+
+          </div>
+        </header>
+        <div class="sidebar-backdrop" id="sidebarBackdrop" hidden></div>
+
+        <section class="content" aria-label="Admin content">
+          <section id="loginCard">
+            <div class="card card-lg">
+              <div class="card-head">
+                <h1>Sign in</h1>
+                <p class="muted">
+                  Enter your <b>User ID</b> (or email) that exists in the database.
+                  This portal requires <b>super_admin</b>.
+                </p>
+              </div>
+
+              <div class="form">
+                <div class="field">
+                  <label class="label" for="loginUserId">User ID / Email</label>
+                  <input class="input" id="loginUserId" placeholder="admin@school.com" autocomplete="username" />
+                </div>
+
+                <div class="field">
+                  <label class="label" for="loginPassword">Password</label>
+                  <input class="input" type="password" id="loginPassword" placeholder="••••••••" autocomplete="current-password" />
+                </div>
+
+                <div class="row">
+                  <button class="btn btn-primary" type="button" id="btnLogin">Continue</button>
+                </div>
+
+                <div class="alert" id="loginError" hidden></div>
+              </div>
+            </div>
+          </section>
+
+          <section id="adminApp" hidden>
+            <div class="alert" id="globalError" hidden></div>
+
+            <div class="panel" id="panel-overview">
+              <div class="panel-head">
+                <div>
+                  <h2>Overview</h2>
+                  <p class="muted">Key stats across your platform.</p>
+                </div>
+              </div>
+
+              <div class="kpi-grid">
+                <div class="kpi" data-target="schools">
+                  <div class="kpi-label">Schools</div>
+                  <div class="kpi-value">
+                    <span id="kpiSchools">—</span>
+                    <span class="kpi-delta" id="kpiSchoolsDelta">—</span>
+                  </div>
+                </div>
+                <div class="kpi" data-target="users">
+                  <div class="kpi-label">Users</div>
+                  <div class="kpi-value">
+                    <span id="kpiUsers">—</span>
+                    <span class="kpi-delta" id="kpiUsersDelta">—</span>
+                  </div>
+                </div>
+                <div class="kpi" data-target="overview">
+                  <div class="kpi-label">Active subscriptions</div>
+                  <div class="kpi-value">
+                    <span id="kpiSubs">—</span>
+                    <span class="kpi-delta" id="kpiSubsDelta">—</span>
+                  </div>
+                </div>
+                <div class="kpi" data-target="billing">
+                  <div class="kpi-label">Open invoices</div>
+                  <div class="kpi-value">
+                    <span id="kpiOpenInvoices">—</span>
+                    <span class="kpi-delta" id="kpiOpenInvoicesDelta">—</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card">
+                <div class="card-head small">
+                  <h3>Recent activity</h3>
+                  <div class="muted">Latest admin actions</div>
+                </div>
+                <div class="table" id="overviewAudit"></div>
+              </div>
+            </div>
+
+            <div class="panel" id="panel-schools" hidden>
+              <div class="panel-head">
+                <div>
+                  <h2>Schools</h2>
+                  <p class="muted">All registered workspaces/schools.</p>
+                </div>
+                <div class="panel-actions">
+                  <input class="input input-search" id="schoolSearch" placeholder="Search by name / code…" />
+                </div>
+              </div>
+
+              <div class="card">
+                <div class="card-head small">
+                  <h3>All schools</h3>
+                  <div class="muted">Workspaces and status</div>
+                </div>
+                <div class="table-wrap">
+                  <div class="table" id="schoolsTable"></div>
+                </div>
+              </div>
+
+              <div class="card card-muted">
+                <div class="card-head small">
+                  <h3>Approved requests</h3>
+                  <div class="muted">Approved, but workspace not created yet</div>
+                </div>
+                <div class="table-wrap">
+                  <div class="table" id="approvedMissingTable"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel" id="panel-users" hidden>
+              <div class="panel-head">
+                <div>
+                  <h2>Users</h2>
+                  <p class="muted">Search users and update roles.</p>
+                </div>
+                <div class="panel-actions">
+                  <input class="input input-search" id="userSearch" placeholder="Search by name / email / username…" />
+                </div>
+              </div>
+
+              <div class="card">
+                <div class="table" id="usersTable"></div>
+              </div>
+            </div>
+
+            <div class="panel" id="panel-billing" hidden>
+              <div class="panel-head">
+                <div>
+                  <h2>Billing</h2>
+                  <p class="muted">Invoices and payment history.</p>
+                </div>
+              </div>
+
+              <div class="split">
+                <div class="card">
+                  <div class="card-head small">
+                    <h3>Invoices</h3>
+                    <div class="muted">Open and paid</div>
+                  </div>
+                  <div class="table" id="invoicesTable"></div>
+                </div>
+
+                <div class="card">
+                  <div class="card-head small">
+                    <h3>Payments</h3>
+                    <div class="muted">Recorded transactions</div>
+                  </div>
+                  <div class="table" id="paymentsTable"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel" id="panel-settings" hidden>
+              <div class="panel-head">
+                <div>
+                  <h2>School Settings</h2>
+                  <p class="muted">Stored as JSON per workspace.</p>
+                </div>
+              </div>
+
+              <div class="card">
+                <div class="form">
+                  <div class="field">
+                    <label class="label" for="settingsJson">Settings JSON</label>
+                    <textarea class="input textarea" id="settingsJson" spellcheck="false"></textarea>
+                  </div>
+
+                  <div class="row">
+                    <button class="btn btn-primary" type="button" id="btnSaveSettings">Save settings</button>
+                  </div>
+
+                  <div class="alert" id="settingsMsg" hidden></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel" id="panel-audit" hidden>
+              <div class="panel-head">
+                <div>
+                  <h2>Audit Log</h2>
+                  <p class="muted">Track changes made by admins.</p>
+                </div>
+              </div>
+
+              <div class="card">
+                <div class="table" id="auditTable"></div>
+              </div>
+            </div>
+
+            <div class="panel" id="panel-school-requests" hidden>
+              <div class="panel-head">
+                <div>
+                  <h2>School requests</h2>
+                  <p class="muted">Pending schools waiting for your review.</p>
+                </div>
+              </div>
+
+              <div class="requests-toolbar">
+                <div class="chips" id="reqChips" aria-label="Request status filters">
+                  <button type="button" class="chip is-active" data-status="pending">
+                    Pending <span class="chip-count" id="c_pending">0</span>
+                  </button>
+                  <button type="button" class="chip" data-status="approved">
+                    Approved <span class="chip-count" id="c_approved">0</span>
+                  </button>
+                  <button type="button" class="chip" data-status="rejected">
+                    Rejected <span class="chip-count" id="c_rejected">0</span>
+                  </button>
+                  <button type="button" class="chip" data-status="flagged">
+                    Flagged <span class="chip-count" id="c_flagged">0</span>
+                  </button>
+                  <button type="button" class="chip" data-status="all">
+                    All <span class="chip-count" id="c_all">0</span>
+                  </button>
+                </div>
+                <div class="panel-actions">
+                  <input class="input input-search" id="reqSearch" placeholder="Search email / school / phone…" />
+                  <select class="input" id="reqSort" aria-label="Sort requests">
+                    <option value="new">Newest</option>
+                    <option value="old">Oldest</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="bulkbar" id="bulkbar" hidden>
+                <div class="bulk-left">
+                  <span class="bulk-title"><span id="bulkCount">0</span> selected</span>
+                  <button class="btn btn-ghost" type="button" id="bulkSelectAll">Select all on page</button>
+                  <button class="btn btn-ghost" type="button" id="bulkClear">Clear</button>
+                </div>
+                <div class="bulk-right">
+                  <button class="btn btn-primary" type="button" id="bulkApprove">Approve</button>
+                  <button class="btn btn-ghost" type="button" id="bulkReject">Reject</button>
+                  <button class="btn btn-ghost" type="button" id="bulkFlag">Flag</button>
+                  <button class="btn btn-ghost" type="button" id="bulkExport">Export CSV</button>
+                </div>
+              </div>
+
+              <div class="card card-table">
+                <div class="table" id="requestsTable"></div>
+              </div>
+              <div class="requests-pagination" id="reqPagination">
+                <div class="pagination-info">
+                  <span id="reqPageInfo">Showing 0 requests</span>
+                  <span class="muted" id="reqPageHint"></span>
+                </div>
+                <div class="pagination-actions">
+                  <button class="btn btn-ghost" type="button" id="reqPrevPage">Previous</button>
+                  <button class="btn btn-primary" type="button" id="reqNextPage">Next</button>
+                </div>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <div class="modal" id="modal" hidden>
+          <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+            <div class="modal-head">
+              <div class="modal-title" id="modalTitle">Modal</div>
+              <button class="btn btn-ghost" type="button" id="modalClose">Close</button>
+            </div>
+            <div class="modal-body" id="modalBody"></div>
+            <div class="modal-foot" id="modalFoot"></div>
+          </div>
+        </div>
+        <section class="panel panel-ai-limits" id="panel-ai-limits" hidden aria-label="AI limit controls">
+          <div class="panel-head">
+            <h2>AI Budget Control</h2>
+            <button class="btn btn-ghost btn-icon" type="button" id="btnAiLimitsClose" aria-label="Close AI limits">
+              <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+            </button>
+          </div>
+          <p class="muted">
+            Set an organization-wide default budget that automatically applies to every school.
+            Override individual workspaces only when necessary.
+          </p>
+          <div class="card">
+            <div class="ai-budget-section">
+              <div class="ai-budget-section-head">
+                <h3>Default monthly cap</h3>
+                <p class="muted">
+                  Applies to every workspace, including new schools that register later.
+                </p>
+              </div>
+              <label class="label" for="aiDefaultCapInput">Default monthly AI budget (EUR)</label>
+              <input id="aiDefaultCapInput" type="number" min="0" step="0.10" placeholder="5.00" />
+
+              <div style="height:10px"></div>
+
+              <div class="row">
+                <button id="aiDefaultCapSaveBtn" class="btn btn-primary" type="button">
+                  Save default
+                </button>
+              </div>
+
+              <div style="height:10px"></div>
+
+              <div class="muted">
+                Current default: <strong id="aiDefaultCapCurrent">€0.00</strong> • Last updated <span id="aiDefaultCapUpdated">—</span>
+              </div>
+            </div>
+
+            <hr />
+
+            <div class="ai-budget-section">
+              <div class="ai-budget-section-head">
+                <h3>Workspace override</h3>
+                <p class="muted">
+                  Select a specific school using the toolbar above to customize its monthly cap.
+                </p>
+              </div>
+              <label class="label" for="aiCapInput">Max monthly spend (EUR)</label>
+              <input id="aiCapInput" type="number" min="0" step="0.10" placeholder="1.00" />
+
+              <div style="height:10px"></div>
+
+              <div class="row">
+                <button id="aiCapSaveBtn" class="btn btn-primary" type="button">
+                  Save override
+                </button>
+                <button id="aiCapResetUsageBtn" class="btn" type="button">
+                  Reset usage (dev)
+                </button>
+              </div>
+
+              <div style="height:10px"></div>
+
+              <div class="muted">
+                Current cap: <strong id="aiCapCurrent">€0.00</strong> •
+                Used: <strong id="aiCapUsed">€0.00</strong>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+      <div class="admin-dashboard-footer-bar" role="toolbar" aria-label="Admin quick settings">
+        <button class="admin-footer-btn" type="button" aria-label="Configure API">
+          <i class="fa-solid fa-code" aria-hidden="true"></i>
+          <span>API</span>
+        </button>
+        <button class="admin-footer-btn" id="btnSpeakingPractice" type="button" aria-label="Open Speaking Practice">
+          <i class="fa-solid fa-microphone-lines" aria-hidden="true"></i>
+          <span>Speaking</span>
+        </button>
+        <button class="admin-footer-btn" type="button" aria-label="Google Translate">
+          <i class="fa-brands fa-google" aria-hidden="true"></i>
+          <span class="sr-only">Google Translate</span>
+        </button>
+        <button class="admin-footer-btn" type="button" aria-label="Mobile OTP configuration">
+          <i class="fa-solid fa-shield-keyhole" aria-hidden="true"></i>
+          <span>Mobile OTP</span>
+        </button>
+        <button class="admin-footer-btn" type="button" aria-label="Email Stamp settings">
+          <span class="admin-footer-icon-stack" aria-hidden="true">
+            <i class="fa-solid fa-envelope"></i>
+            <i class="fa-solid fa-gear admin-footer-icon-overlay"></i>
+          </span>
+          <span class="sr-only">Email Stamp</span>
+        </button>
+        <button class="admin-footer-btn admin-footer-icon-btn" type="button" aria-label="Super admin">
+          <i class="fa-solid fa-shield-halved" aria-hidden="true"></i>
+        </button>
+      </div>
+    </div>
+    <script src="/admin/admin.js"></script>
+  </body>
+</html>

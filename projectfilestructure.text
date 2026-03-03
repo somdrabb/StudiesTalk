@@ -1,0 +1,96 @@
+cat-6.1/
+├── Ai Intregration/
+│   ├── client/
+│   │   ├── components/
+│   │   │   └── live/
+│   │   │       ├── JitsiEmbed.js
+│   │   │       ├── LiveClassShell.js
+│   │   │       ├── SlidePanel.js
+│   │   │       └── SlideUploader.js
+│   │   ├── pages/
+│   │   │   └── LiveClassPage.js
+│   │   └── styles/
+│   │       └── live-class.css
+│   ├── integration.css
+│   ├── integration.js
+│   └── server/
+│       ├── db/
+│       │   └── migrations/
+│       │       ├── 20260226_create_live_classes.sql
+│       │       ├── 20260226_create_slide_decks.sql
+│       │       └── 20260226_create_slide_state.sql
+│       ├── routes/
+│       │   └── liveClasses.routes.js
+│       └── services/
+│           ├── jitsiJwt.service.js
+│           ├── liveClass.service.js
+│           ├── pdfSync.service.js
+│           └── slideState.service.js
+├── admin/
+│   ├── admin.css
+│   ├── admin.js
+│   └── index.html
+├── DESIGN_TOKENS.md
+├── SERVER_SETUP.md
+├── public/
+│   ├── AIvoicepractice/
+│   ├── Announcements/
+│   │   ├── announcements.css
+│   │   └── announcements.js
+│   ├── Grammar/
+│   ├── Privacy/
+│   ├── Privacy & Rules.css
+│   ├── assets/
+│   ├── cdn/
+│   ├── app.js
+│   ├── live.js
+│   ├── loginregister.js
+│   ├── register.html
+│   ├── reset-password.html
+│   ├── favicon.ico
+│   ├── index.html
+│   └── styles.refactor.css
+├── server/
+│   ├── config/
+│   │   └── jitsi.js
+│   ├── env.js
+│   ├── ffmpeg.js
+│   ├── routes/
+│   │   ├── live.js
+│   │   └── liveSchedule.js
+│   ├── services/
+│   │   ├── inboundEmail.service.js
+│   │   ├── jitsiTokenService.js
+│   │   └── liveRoomService.js
+│   ├── utils/
+│   │   └── authMiddleware.js
+│   └── secrets/
+│       ├── README.md
+│       └── gcp-translate-key.json
+├── uploads/ (stores user uploads plus `workspaces` folder)
+├── storage/
+│   └── email_attachments/
+├── twilio-otp/
+│   ├── check_otp.js
+│   ├── create_service.js
+│   ├── send_otp.js
+│   ├── server.js
+│   ├── package.json
+│   ├── package-lock.json
+│   └── node_modules/
+├── node_modules/
+├── package.json
+├── package-lock.json
+├── server.js
+├── emailSender.js
+├── imap-test.js
+├── translator.py
+├── worknest-chat@1.0.0/
+├── worknest.db
+├── worknest.db-shm
+├── worknest.db-wal
+├── node (empty placeholder file)
+├── .env
+├── .env.example
+├── projectfilestructure.text
+├── command.text

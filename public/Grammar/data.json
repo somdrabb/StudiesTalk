@@ -1,0 +1,756 @@
+{
+  "conjugation": {
+    "title": "Regelmäßige Verben im Präsens",
+    "pronouns": [
+      "ich",
+      "du",
+      "er / sie / es",
+      "wir",
+      "ihr",
+      "sie / Sie"
+    ],
+    "verbs": [
+      {
+        "label": "kommen",
+        "forms": [
+          {
+            "base": "komm",
+            "suffix": "e"
+          },
+          {
+            "base": "komm",
+            "suffix": "st"
+          },
+          {
+            "base": "komm",
+            "suffix": "t"
+          },
+          {
+            "base": "komm",
+            "suffix": "en"
+          },
+          {
+            "base": "komm",
+            "suffix": "t"
+          },
+          {
+            "base": "komm",
+            "suffix": "en"
+          }
+        ]
+      },
+      {
+        "label": "wohnen",
+        "forms": [
+          {
+            "base": "wohn",
+            "suffix": "e"
+          },
+          {
+            "base": "wohn",
+            "suffix": "st"
+          },
+          {
+            "base": "wohn",
+            "suffix": "t"
+          },
+          {
+            "base": "wohn",
+            "suffix": "en"
+          },
+          {
+            "base": "wohn",
+            "suffix": "t"
+          },
+          {
+            "base": "wohn",
+            "suffix": "en"
+          }
+        ]
+      },
+      {
+        "label": "heißen",
+        "forms": [
+          {
+            "base": "heiß",
+            "suffix": "e"
+          },
+          {
+            "base": "heiß",
+            "suffix": "t"
+          },
+          {
+            "base": "heiß",
+            "suffix": "t"
+          },
+          {
+            "base": "heiß",
+            "suffix": "en"
+          },
+          {
+            "base": "heiß",
+            "suffix": "t"
+          },
+          {
+            "base": "heiß",
+            "suffix": "en"
+          }
+        ]
+      },
+      {
+        "label": "arbeiten",
+        "forms": [
+          {
+            "base": "arbeit",
+            "suffix": "e"
+          },
+          {
+            "base": "arbeit",
+            "suffix": "est"
+          },
+          {
+            "base": "arbeit",
+            "suffix": "et"
+          },
+          {
+            "base": "arbeit",
+            "suffix": "en"
+          },
+          {
+            "base": "arbeit",
+            "suffix": "et"
+          },
+          {
+            "base": "arbeit",
+            "suffix": "en"
+          }
+        ]
+      },
+      {
+        "label": "sein",
+        "forms": [
+          "bin",
+          "bist",
+          "ist",
+          "sind",
+          "seid",
+          "sind"
+        ]
+      }
+    ]
+  },
+  "wordOrder": {
+    "title": "Wortstellung in Aussagen, W-Fragen und Ja / Nein-Fragen",
+    "blocks": {
+      "leftTop": {
+        "label": "W-Fragen",
+        "table": {
+          "headers": [
+            "Position 1",
+            "Position 2"
+          ],
+          "rows": [
+            [
+              "Woher",
+              "kommen",
+              "Sie?"
+            ],
+            [
+              "Wo",
+              "wohnst",
+              "du?"
+            ]
+          ]
+        }
+      },
+      "rightTop": {
+        "label": "Aussagen / Antworten",
+        "table": {
+          "headers": [
+            "Position 1",
+            "Position 2"
+          ],
+          "rows": [
+            [
+              "Ich",
+              "komme",
+              "aus Marokko."
+            ],
+            [
+              "Ich",
+              "wohne",
+              "in Tübingen."
+            ]
+          ]
+        }
+      },
+      "leftBottom": {
+        "label": "Ja / Nein-Fragen",
+        "table": {
+          "headers": [
+            "Position 1",
+            "Position 2"
+          ],
+          "rows": [
+            [
+              "Kommen",
+              "Sie",
+              "aus Tunesien?"
+            ],
+            [
+              "Wohnst",
+              "du",
+              "in Stuttgart?"
+            ]
+          ]
+        }
+      },
+      "rightBottom": {
+        "label": "Aussagen / Antworten",
+        "table": {
+          "headers": [
+            "Position 1",
+            "Position 2"
+          ],
+          "rows": [
+            [
+              "Nein. Ich",
+              "komme",
+              "aus Marokko."
+            ],
+            [
+              "Nein. Ich",
+              "wohne",
+              "in Tübingen."
+            ]
+          ]
+        }
+      }
+    }
+  },
+  "articles": {
+    "title": "Artikel und Artikelwörter",
+    "subtitle": "Bestimmter Artikel im Nominativ und Akkusativ",
+    "columns": [
+      {
+        "key": "m",
+        "label": "Maskulinum (M)"
+      },
+      {
+        "key": "n",
+        "label": "Neutrum (N)"
+      },
+      {
+        "key": "f",
+        "label": "Femininum (F)"
+      },
+      {
+        "key": "pl",
+        "label": "Plural (M, N, F)"
+      }
+    ],
+    "rows": [
+      {
+        "label": "Nominativ",
+        "values": [
+          {
+            "article": "der",
+            "noun": "Computer"
+          },
+          {
+            "article": "das",
+            "noun": "Telefon"
+          },
+          {
+            "article": "die",
+            "noun": "Kamera"
+          },
+          {
+            "article": "die",
+            "noun": "Kassetten"
+          }
+        ]
+      },
+      {
+        "label": "Akkusativ",
+        "values": [
+          {
+            "article": "den",
+            "noun": "Computer"
+          },
+          {
+            "article": "das",
+            "noun": "Telefon"
+          },
+          {
+            "article": "die",
+            "noun": "Kamera"
+          },
+          {
+            "article": "die",
+            "noun": "Kassetten"
+          }
+        ]
+      },
+      {
+        "label": "Nominativ (2)",
+        "values": [
+          {
+            "article": "der",
+            "noun": "Tisch"
+          },
+          {
+            "article": "das",
+            "noun": "Buch"
+          },
+          {
+            "article": "die",
+            "noun": "Lampe"
+          },
+          {
+            "article": "die",
+            "noun": "Stühle"
+          }
+        ]
+      },
+      {
+        "label": "Akkusativ (2)",
+        "values": [
+          {
+            "article": "den",
+            "noun": "Tisch"
+          },
+          {
+            "article": "das",
+            "noun": "Buch"
+          },
+          {
+            "article": "die",
+            "noun": "Lampe"
+          },
+          {
+            "article": "die",
+            "noun": "Stühle"
+          }
+        ]
+      }
+    ]
+  },
+  "possessives": {
+    "title": "Possessivartikel im Nominativ",
+    "subtitle": "",
+    "columns": [
+      {
+        "key": "m",
+        "label": "Maskulinum (M)",
+        "example": "Sohn"
+      },
+      {
+        "key": "n",
+        "label": "Neutrum (N)",
+        "example": "Kind"
+      },
+      {
+        "key": "f",
+        "label": "Femininum (F)",
+        "example": "Tochter"
+      },
+      {
+        "key": "pl",
+        "label": "Plural (M, N, F)",
+        "example": "Söhne, Töchter, Kinder"
+      }
+    ],
+    "rows": [
+      {
+        "label": "ich",
+        "values": [
+          "mein",
+          "mein",
+          {
+            "base": "mein",
+            "suffix": "e"
+          },
+          {
+            "base": "mein",
+            "suffix": "e"
+          }
+        ]
+      },
+      {
+        "label": "du",
+        "values": [
+          "dein",
+          "dein",
+          {
+            "base": "dein",
+            "suffix": "e"
+          },
+          {
+            "base": "dein",
+            "suffix": "e"
+          }
+        ]
+      },
+      {
+        "label": "er + es / sie",
+        "values": [
+          "sein / ihr",
+          "sein / ihr",
+          "seine / ihre",
+          "seine / ihre"
+        ]
+      },
+      {
+        "label": "wir",
+        "values": [
+          "unser",
+          "unser",
+          {
+            "base": "unser",
+            "suffix": "e"
+          },
+          {
+            "base": "unser",
+            "suffix": "e"
+          }
+        ]
+      },
+      {
+        "label": "ihr",
+        "values": [
+          "euer",
+          "euer",
+          {
+            "base": "eur",
+            "suffix": "e"
+          },
+          {
+            "base": "eur",
+            "suffix": "e"
+          }
+        ]
+      },
+      {
+        "label": "sie / Sie",
+        "values": [
+          "ihr / Ihr",
+          "ihr / Ihr",
+          "ihre / Ihre",
+          "ihre / Ihre"
+        ]
+      }
+    ]
+  },
+  "connectors": {
+    "title": "Konnektoren „aber“, „oder“, „und“",
+    "subtitle": "",
+    "left": {
+      "columns": [
+        "Pos. 1",
+        "Pos. 2",
+        ""
+      ],
+      "rows": [
+        [
+          "Das",
+          "ist",
+          "die normale Kleinfamilie,"
+        ],
+        [
+          "Man",
+          "bekommt",
+          "Kinder,"
+        ],
+        [
+          "Meine Mutter",
+          "ist",
+          "nicht verheiratet"
+        ],
+        [
+          "Sie",
+          "heiraten",
+          "noch einmal"
+        ]
+      ]
+    },
+    "right": {
+      "columns": [
+        "Pos. 0",
+        "Pos. 1",
+        "Pos. 2",
+        ""
+      ],
+      "rows": [
+        [
+          "aber",
+          "sie",
+          "ist",
+          "heute nicht mehr die Regel."
+        ],
+        [
+          "aber",
+          "man",
+          "heiratet",
+          "nicht immer."
+        ],
+        [
+          "und",
+          "sie",
+          "erzieht",
+          "meinen Bruder und mich allein."
+        ],
+        [
+          "oder",
+          "sie",
+          "leben",
+          "ohne Trauschein."
+        ]
+      ]
+    }
+  }
+  ,
+  "habeSeinPack": {
+    "title": "Verben: \u201chaben\u201d und \u201csein\u201d im Pr\u00e4sens und Pr\u00e4teritum",
+    "table": {
+      "groups": [
+        {
+          "label": "haben",
+          "cols": [
+            "Pr\u00e4sens",
+            "Pr\u00e4teritum"
+          ]
+        },
+        {
+          "label": "sein",
+          "cols": [
+            "Pr\u00e4sens",
+            "Pr\u00e4teritum"
+          ]
+        }
+      ],
+      "rows": [
+        {
+          "p": "ich",
+          "haben": [
+            {
+              "text": "habe"
+            },
+            {
+              "text": "hatte"
+            }
+          ],
+          "sein": [
+            {
+              "text": "bin",
+              "accent": true
+            },
+            {
+              "text": "war"
+            }
+          ]
+        },
+        {
+          "p": "du",
+          "haben": [
+            {
+              "text": "hast",
+              "accent": true
+            },
+            {
+              "text": "hattest"
+            }
+          ],
+          "sein": [
+            {
+              "text": "bist",
+              "accent": true
+            },
+            {
+              "text": "warst"
+            }
+          ]
+        },
+        {
+          "p": "er / sie / es",
+          "haben": [
+            {
+              "text": "hat",
+              "accent": true
+            },
+            {
+              "text": "hatte"
+            }
+          ],
+          "sein": [
+            {
+              "text": "ist",
+              "accent": true
+            },
+            {
+              "text": "war"
+            }
+          ]
+        },
+        {
+          "p": "wir",
+          "haben": [
+            {
+              "text": "haben",
+              "accent": true
+            },
+            {
+              "text": "hatten"
+            }
+          ],
+          "sein": [
+            {
+              "text": "sind",
+              "accent": true
+            },
+            {
+              "text": "waren"
+            }
+          ]
+        },
+        {
+          "p": "ihr",
+          "haben": [
+            {
+              "text": "habt"
+            },
+            {
+              "text": "hattet"
+            }
+          ],
+          "sein": [
+            {
+              "text": "seid",
+              "accent": true
+            },
+            {
+              "text": "wart"
+            }
+          ]
+        },
+        {
+          "p": "sie / Sie",
+          "haben": [
+            {
+              "text": "haben",
+              "accent": true
+            },
+            {
+              "text": "hatten"
+            }
+          ],
+          "sein": [
+            {
+              "text": "sind",
+              "accent": true
+            },
+            {
+              "text": "waren"
+            }
+          ]
+        }
+      ]
+    },
+    "subjectOrder": {
+      "title": "Wortstellung Subjekt",
+      "text1": "Das Subjekt steht auf Position 1 oder nach dem Verb.",
+      "left": [
+        {
+          "parts": [
+            "Am Sonntag ",
+            {
+              "text": "ist",
+              "accent": true
+            },
+            " ",
+            {
+              "text": "das Brunnenst\u00fcb\u00f6rl",
+              "accent": true
+            },
+            " ge\u00f6ffnet."
+          ]
+        },
+        {
+          "parts": [
+            {
+              "text": "Das Brunnenst\u00fcb\u00f6rl",
+              "accent": true
+            },
+            " ",
+            {
+              "text": "ist",
+              "accent": true
+            },
+            " am Sonntag ge\u00f6ffnet."
+          ]
+        }
+      ],
+      "right": [
+        {
+          "parts": [
+            {
+              "text": "Das Wetter",
+              "accent": true
+            },
+            " ",
+            {
+              "text": "war",
+              "accent": true
+            },
+            " leider nicht so gut."
+          ]
+        },
+        {
+          "parts": [
+            "Leider ",
+            {
+              "text": "war",
+              "accent": true
+            },
+            " ",
+            {
+              "text": "das Wetter",
+              "accent": true
+            },
+            " nicht so gut."
+          ]
+        }
+      ],
+      "text2": "Verwenden Sie in Ihren Texten beide M\u00f6glichkeiten und arbeiten Sie mit Variation."
+    },
+    "accPronouns": {
+      "title": "Personalpronomen im Akkusativ",
+      "columns": [
+        "Singular: Nominativ",
+        "Singular: Akkusativ",
+        "Plural: Nominativ",
+        "Plural: Akkusativ"
+      ],
+      "rows": [
+        [
+          "ich",
+          "mich",
+          "wir",
+          "uns"
+        ],
+        [
+          "du",
+          "dich",
+          "ihr",
+          "euch"
+        ],
+        [
+          "er / es / sie",
+          "ihn / es / sie",
+          "sie / Sie",
+          "sie / Sie"
+        ]
+      ]
+    }
+  }
+}
