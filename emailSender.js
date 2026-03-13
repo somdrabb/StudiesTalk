@@ -4,12 +4,12 @@ function normalize(v) {
   return String(v || "").trim();
 }
 
-function buildFrom() {
+function buildFrom(fromNameOverride = "") {
   const ionosFromName = normalize(process.env.IONOS_SMTP_FROM_NAME);
   const ionosFromUser = normalize(process.env.IONOS_SMTP_USER);
   const fallbackName = normalize(process.env.EMAIL_FROM_NAME || "StudisNest powered by StudisTalk");
   const fallbackEmail = normalize(process.env.EMAIL_FROM_EMAIL);
-  const fromName = ionosFromName || fallbackName;
+  const fromName = normalize(fromNameOverride) || ionosFromName || fallbackName;
   const fromEmail = ionosFromUser || fallbackEmail;
   if (!fromEmail.includes("@")) {
     throw new Error("EMAIL_FROM_EMAIL or IONOS_SMTP_USER is missing or invalid.");
@@ -71,14 +71,15 @@ function makeProvider() {
 
     return {
       name: "gmail",
-      async send({ to, subject, text, html, replyTo }) {
+      async send({ to, subject, text, html, replyTo, fromName, headers }) {
         return transporter.sendMail({
-          from: buildFrom(),
+          from: buildFrom(fromName),
           to,
           subject,
           text,
           html,
-          replyTo
+          replyTo,
+          headers
         });
       }
     };
@@ -109,14 +110,15 @@ function makeProvider() {
 
     return {
       name: "ionos",
-      async send({ to, subject, text, html, replyTo }) {
+      async send({ to, subject, text, html, replyTo, fromName, headers }) {
         return transporter.sendMail({
-          from: buildFrom(),
+          from: buildFrom(fromName),
           to,
           subject,
           text,
           html,
-          replyTo
+          replyTo,
+          headers
         });
       }
     };
@@ -127,11 +129,11 @@ function makeProvider() {
 
 const provider = makeProvider();
 
-async function sendPlatformEmail({ to, subject, text, html, replyTo }) {
+async function sendPlatformEmail({ to, subject, text, html, replyTo, fromName, headers }) {
   if (!to || !to.includes("@")) {
     throw new Error("Invalid recipient email.");
   }
-  return provider.send({ to, subject, text, html, replyTo });
+  return provider.send({ to, subject, text, html, replyTo, fromName, headers });
 }
 
 module.exports = {

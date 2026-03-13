@@ -65,6 +65,61 @@ function formatAddressList(list) {
     .join(', ');
 }
 
+function normalizeMessageId(value = '') {
+  return String(value || '').trim();
+}
+
+function joinReferenceHeader(value) {
+  if (Array.isArray(value)) {
+    return value.map((entry) => normalizeMessageId(entry)).filter(Boolean).join(' ').trim();
+  }
+  return String(value || '').trim();
+}
+
+function extractMessageIds(value = '') {
+  const text = String(value || '').trim();
+  if (!text) return [];
+  const matches = text.match(/<[^>]+>/g);
+  if (Array.isArray(matches) && matches.length) {
+    return matches.map((entry) => normalizeMessageId(entry)).filter(Boolean);
+  }
+  return text
+    .split(/\s+/)
+    .map((entry) => normalizeMessageId(entry))
+    .filter(Boolean);
+}
+
+function resolveWorkspaceFromOutboundLog(dbInstance, parsed = {}) {
+  if (!dbInstance) return { workspaceId: '', relatedEmailLogId: '' };
+  const candidates = [
+    normalizeMessageId(parsed.inReplyTo || ''),
+    ...extractMessageIds(joinReferenceHeader(parsed.references))
+  ].filter(Boolean);
+  if (!candidates.length) {
+    return { workspaceId: '', relatedEmailLogId: '' };
+  }
+
+  const lookup = dbInstance.prepare(`
+    SELECT id, workspace_id
+    FROM workspace_email_logs
+    WHERE message_id = ?
+    ORDER BY created_at DESC
+    LIMIT 1
+  `);
+
+  for (const candidate of candidates) {
+    const found = lookup.get(candidate);
+    if (found?.id) {
+      return {
+        workspaceId: String(found.workspace_id || '').trim(),
+        relatedEmailLogId: String(found.id || '').trim()
+      };
+    }
+  }
+
+  return { workspaceId: '', relatedEmailLogId: '' };
+}
+
 function formatSnippet(text) {
   const normalized = String(text || '').replace(/\s+/g, ' ').trim();
   if (!normalized) return '';
@@ -267,11 +322,18 @@ async function syncInboundEmails(dbInstance, limit) {
   const client = new ImapFlow(clientConfig);
   let lock = null;
   const insertStmt = dbInstance.prepare(`
-      INSERT OR IGNORE INTO inbound_emails (message_id, sender, subject, text_body, html_body, received_at, attachments_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT OR IGNORE INTO inbound_emails (
+        workspace_id, message_id, sender, recipient, subject,
+        text_body, html_body, in_reply_to, references_header, related_email_log_id,
+        received_at, attachments_json
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
   const existsStmt = dbInstance.prepare(`
       SELECT 1 FROM inbound_emails WHERE message_id = ? LIMIT 1
+    `);
+  const deletedStmt = dbInstance.prepare(`
+      SELECT 1 FROM deleted_inbound_emails WHERE message_id = ? LIMIT 1
     `);
 
   try {
@@ -303,6 +365,7 @@ async function syncInboundEmails(dbInstance, limit) {
       const uid = msg.uid;
       const parsed = await safeParse(msg.source);
       const sender = formatAddressList(parsed.from?.value || msg.envelope?.from);
+      const recipient = formatAddressList(parsed.to?.value || msg.envelope?.to);
       const subject = String(parsed.subject || msg.envelope?.subject || '').trim();
       const bodyText = parsed.text || '';
       const bodyHtml = parsed.html || '';
@@ -312,18 +375,27 @@ async function syncInboundEmails(dbInstance, limit) {
         ? new Date(parsed.date).toISOString()
         : new Date().toISOString();
       const messageId = String(parsed.messageId || msg.envelope?.messageId || msg.uid);
+      if (deletedStmt.get(messageId)) continue;
       if (existsStmt.get(messageId)) continue;
+      const inReplyTo = normalizeMessageId(parsed.inReplyTo || '');
+      const referencesHeader = joinReferenceHeader(parsed.references);
+      const threadLink = resolveWorkspaceFromOutboundLog(dbInstance, parsed);
       const attachmentsMeta = await persistAttachments(parsed.attachments);
       const attachmentsJson = JSON.stringify(attachmentsMeta);
       rows.push({
         uid,
         envelope: msg.envelope,
         parsed,
+        workspaceId: threadLink.workspaceId,
         messageId,
         sender,
+        recipient,
         subject,
         bodyText,
         bodyHtml,
+        inReplyTo,
+        referencesHeader,
+        relatedEmailLogId: threadLink.relatedEmailLogId,
         receivedAt,
         attachmentsJson
       });
@@ -334,11 +406,16 @@ async function syncInboundEmails(dbInstance, limit) {
     });
     for (const row of rows) {
       insertStmt.run(
+        row.workspaceId,
         row.messageId,
         row.sender,
+        row.recipient,
         row.subject,
         row.bodyText,
         row.bodyHtml,
+        row.inReplyTo,
+        row.referencesHeader,
+        row.relatedEmailLogId,
         row.receivedAt,
         row.attachmentsJson
       );
