@@ -1379,6 +1379,81 @@ function getWorkspaceName(workspaceId) {
   return row?.name || 'School';
 }
 
+function buildSchoolDisplayName(schoolName = '') {
+  const school = String(schoolName || '').trim();
+  const platform = String(process.env.IONOS_SMTP_FROM_NAME || 'StudiesTalk').trim() || 'StudiesTalk';
+  return school || platform;
+}
+
+function slugifyEmailSenderLabel(value = '') {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-{2,}/g, '-');
+}
+
+const AUTOMATED_EMAIL_SENDER_KEYWORDS = {
+  welcome_email: 'welcome',
+  invite_student_set_password: 'password',
+  invite_teacher_set_password: 'password',
+  password_reset: 'reset',
+  live_session_invite: 'live-session',
+  otp_2fa: 'otp',
+  invoice_sent: 'invoice',
+  payment_success: 'payment',
+  course_end_reminder: 'reminder',
+  new_course_offer: 'course',
+  class_absence: 'absence',
+  course_completion_congrats: 'completion',
+  exam_registration_success: 'exam-registration',
+  exam_date_notice: 'exam',
+  registration_complete: 'registration',
+  password_changed: 'password',
+  automated: 'mail'
+};
+
+function buildAutomatedEmailSenderName(schoolName = '', templateKey = 'automated') {
+  const schoolSlug = slugifyEmailSenderLabel(schoolName) || 'school';
+  const keyword =
+    slugifyEmailSenderLabel(AUTOMATED_EMAIL_SENDER_KEYWORDS[String(templateKey || '').trim()] || templateKey) || 'mail';
+  return `noreply-${schoolSlug}-${keyword}`;
+}
+
+function getPlatformContactEmail() {
+  return String(process.env.IONOS_SMTP_USER || 'info@studiestalk.com').trim();
+}
+
+function getInboundMailboxEmail() {
+  return String(process.env.IONOS_IMAP_USER || process.env.IONOS_SMTP_USER || '').trim();
+}
+
+function normalizeEmailMessageId(value = '') {
+  return String(value || '').trim();
+}
+
+function extractReferencedMessageIds(value = '') {
+  const text = String(value || '').trim();
+  if (!text) return [];
+  const matches = text.match(/<[^>]+>/g);
+  if (Array.isArray(matches) && matches.length) {
+    return matches.map((entry) => normalizeEmailMessageId(entry)).filter(Boolean);
+  }
+  return text
+    .split(/\s+/)
+    .map((entry) => normalizeEmailMessageId(entry))
+    .filter(Boolean);
+}
+
+function resolveWorkspaceContactEmail({ profileRow = {}, workspaceRow = {} } = {}) {
+  const usePlatformEmail = Number(profileRow.use_platform_contact_email || 0) === 1;
+  if (usePlatformEmail) {
+    return getPlatformContactEmail();
+  }
+  return String(workspaceRow.admin_email || '').trim();
+}
+
 function findUserByEmail(email) {
   const normalized = String(email || '').trim().toLowerCase();
   if (!normalized) return null;
@@ -1454,7 +1529,13 @@ async function sendPasswordResetEmail(user, token) {
   </div>
 </div>`;
   const text = `Hi ${recipientName},\n\nPlease reset your ${schoolName} password using this link (expires in ${PASSWORD_RESET_EXPIRY_HOURS} hours): ${link}\n\nIf you did not request this, ignore this email or contact ${supportEmail}.`;
-  await sendPlatformEmail({ to: user.email, subject, html, text });
+  await sendPlatformEmail({
+    to: user.email,
+    subject,
+    html,
+    text,
+    fromName: buildAutomatedEmailSenderName(schoolName, 'password_reset')
+  });
 }
 
 async function sendPasswordChangedEmail(user) {
@@ -1504,7 +1585,13 @@ async function sendPasswordChangedEmail(user) {
   </div>
 </div>`;
   const text = `Hi ${recipientName},\n\nYour password for ${schoolName} has been successfully updated. Log in here: ${loginUrl}.\n\nIf you did not perform this change, contact ${supportEmail} immediately.`;
-  await sendPlatformEmail({ to: user.email, subject, html, text });
+  await sendPlatformEmail({
+    to: user.email,
+    subject,
+    html,
+    text,
+    fromName: buildAutomatedEmailSenderName(schoolName, 'password_changed')
+  });
 }
 
 function userTableColumns() {
@@ -1669,7 +1756,8 @@ function recordEmailLog({
   bodyHtml,
   type = 'test',
   status = 'sent',
-  errorMessage = ''
+  errorMessage = '',
+  messageId = ''
 }) {
   ensureEmailLogStmt().run(
     id,
@@ -1683,6 +1771,7 @@ function recordEmailLog({
     type,
     status,
     errorMessage || '',
+    messageId || '',
     new Date().toISOString()
   );
 }
@@ -1693,8 +1782,8 @@ function ensureEmailLogStmt() {
     insertEmailLogStmt = db.prepare(`
       INSERT INTO workspace_email_logs (
         id, workspace_id, sent_by_user_id, to_email, to_name,
-        subject, body_text, body_html, type, status, error_message, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        subject, body_text, body_html, type, status, error_message, message_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
   }
   return insertEmailLogStmt;
@@ -2824,6 +2913,7 @@ app.post("/api/register/send-link", async (req, res) => {
     const subject = rendered.subject || `Welcome to ${schoolName}`;
     const html = rendered.bodyInnerHtml || `<p>Hi ${displayName},</p><p>Your registration link: <a href="${link}">${link}</a></p>`;
     const text = rendered.bodyText || `Welcome to ${schoolName}. Open your registration link: ${link}`;
+    const fromName = buildAutomatedEmailSenderName(schoolName, 'welcome_email');
 
     console.log('SEND-LINK: provider =', providerName);
     console.log('SEND-LINK: from =', ENV.EMAIL_FROM);
@@ -2833,7 +2923,7 @@ app.post("/api/register/send-link", async (req, res) => {
     console.log('SEND-LINK: link =', link);
 
     try {
-      await sendPlatformEmail({ to: emailNorm, subject, html, text });
+      await sendPlatformEmail({ to: emailNorm, subject, html, text, fromName });
       console.log('SEND-LINK: ✅ email sent');
     } catch (err) {
       console.error('SEND-LINK: ❌ email failed:', err?.message || err);
@@ -3139,7 +3229,13 @@ app.post('/api/register/complete', async (req, res) => {
     const welcomeText = `Welcome to ${schoolNameForEmail}. Your account is ready. Log in here: ${loginUrl}. Need help? ${supportEmailForWelcome}`;
 
     try {
-      await sendPlatformEmail({ to: String(linkRow.email || '').trim(), subject: welcomeSubject, html: welcomeHtml, text: welcomeText });
+      await sendPlatformEmail({
+        to: String(linkRow.email || '').trim(),
+        subject: welcomeSubject,
+        html: welcomeHtml,
+        text: welcomeText,
+        fromName: buildAutomatedEmailSenderName(schoolNameForEmail, 'registration_complete')
+      });
       console.log('REGISTER-COMPLETE: welcome email sent to', linkRow.email);
     } catch (emailErr) {
       console.error('REGISTER-COMPLETE: welcome email failed', emailErr?.message || emailErr);
@@ -3837,6 +3933,7 @@ db.exec(`
     opening_hours_json TEXT DEFAULT '',
     website TEXT DEFAULT '',
     registration_details TEXT DEFAULT '',
+    use_platform_contact_email INTEGER DEFAULT 0,
     updated_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -4206,6 +4303,7 @@ CREATE TABLE IF NOT EXISTS announcements (
     type TEXT DEFAULT 'test',
     status TEXT DEFAULT 'sent',
     error_message TEXT,
+    message_id TEXT DEFAULT '',
     created_at TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
   );
@@ -4583,11 +4681,18 @@ try {
 
     CREATE TABLE IF NOT EXISTS inbound_emails (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workspace_id TEXT DEFAULT '',
       message_id TEXT UNIQUE,
       sender TEXT,
+      recipient TEXT DEFAULT '',
       subject TEXT,
       text_body TEXT,
       html_body TEXT,
+      in_reply_to TEXT DEFAULT '',
+      references_header TEXT DEFAULT '',
+      related_email_log_id TEXT DEFAULT '',
+      folder TEXT DEFAULT 'inbox',
+      attachments_json TEXT DEFAULT '',
       received_at TEXT,
       is_read INTEGER DEFAULT 0
     );
@@ -4598,6 +4703,11 @@ try {
       body TEXT DEFAULT '',
       created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (inbound_email_id) REFERENCES inbound_emails(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS deleted_inbound_emails (
+      message_id TEXT PRIMARY KEY,
+      deleted_at TEXT DEFAULT (datetime('now'))
     );
 
   `);
@@ -4681,6 +4791,24 @@ tryAlter("ALTER TABLE users ADD COLUMN learning_goal TEXT DEFAULT ''");
 tryAlter(`
   ALTER TABLE workspace_profile
   ADD COLUMN registration_details TEXT DEFAULT ''
+`);
+tryAlter(`
+  ALTER TABLE workspace_profile
+  ADD COLUMN use_platform_contact_email INTEGER DEFAULT 0
+`);
+tryAlter("ALTER TABLE workspace_email_logs ADD COLUMN message_id TEXT DEFAULT ''");
+tryAlter("ALTER TABLE inbound_emails ADD COLUMN workspace_id TEXT DEFAULT ''");
+tryAlter("ALTER TABLE inbound_emails ADD COLUMN recipient TEXT DEFAULT ''");
+tryAlter("ALTER TABLE inbound_emails ADD COLUMN in_reply_to TEXT DEFAULT ''");
+tryAlter("ALTER TABLE inbound_emails ADD COLUMN references_header TEXT DEFAULT ''");
+tryAlter("ALTER TABLE inbound_emails ADD COLUMN related_email_log_id TEXT DEFAULT ''");
+tryAlter("ALTER TABLE inbound_emails ADD COLUMN folder TEXT DEFAULT 'inbox'");
+tryAlter("ALTER TABLE inbound_emails ADD COLUMN attachments_json TEXT DEFAULT ''");
+db.exec(`
+  CREATE TABLE IF NOT EXISTS deleted_inbound_emails (
+    message_id TEXT PRIMARY KEY,
+    deleted_at TEXT DEFAULT (datetime('now'))
+  )
 `);
 tryAlter("ALTER TABLE registration_links ADD COLUMN first_name TEXT");
 tryAlter("ALTER TABLE registration_links ADD COLUMN last_name TEXT");
@@ -8806,6 +8934,9 @@ app.post('/api/workspaces/:workspaceId/email-settings/test', async (req, res) =>
   const logId = `elog_${crypto.randomUUID()}`;
   const recipientName =
     String(req.body?.toName || '').trim() || resolveRecipientName(workspaceId, to);
+  const fromName = buildSchoolDisplayName(
+    String(normalizedSettings.brand_school_name || workspaceRow.name || '').trim()
+  );
   const baseLog = {
     id: logId,
     workspaceId,
@@ -8817,10 +8948,27 @@ app.post('/api/workspaces/:workspaceId/email-settings/test', async (req, res) =>
     bodyHtml: html,
     type: 'test'
   };
+  const monitoredReplyTo = getInboundMailboxEmail() || replyTo;
+  const outboundHeaders = {
+    'X-StudiesTalk-Workspace': workspaceId,
+    'X-StudiesTalk-Email-Log': logId
+  };
 
   try {
-    await sendPlatformEmail({ to, subject, html, text, replyTo });
-    recordEmailLog({ ...baseLog, status: 'sent' });
+    const info = await sendPlatformEmail({
+      to,
+      subject,
+      html,
+      text,
+      replyTo: monitoredReplyTo,
+      fromName,
+      headers: outboundHeaders
+    });
+    recordEmailLog({
+      ...baseLog,
+      status: 'sent',
+      messageId: normalizeEmailMessageId(info?.messageId || '')
+    });
     res.json({ ok: true, provider: providerName });
   } catch (e) {
     recordEmailLog({ ...baseLog, status: 'failed', errorMessage: String(e.message || e) });
@@ -9005,9 +9153,13 @@ app.post('/api/workspaces/:workspaceId/email-templates/:templateKey/test', async
 
   const logId = `elog_${crypto.randomUUID()}`;
   const recipientName = resolveRecipientName(workspaceId, to);
+  const fromName = buildAutomatedEmailSenderName(
+    String(s.brand_school_name || workspaceRow.name || '').trim(),
+    templateKey
+  );
 
   try {
-    await sendPlatformEmail({ to, subject, html, text, replyTo });
+    await sendPlatformEmail({ to, subject, html, text, replyTo, fromName });
     recordEmailLog({
       id: logId,
       workspaceId,
@@ -9064,13 +9216,26 @@ app.get('/api/workspaces/:workspaceId/email-inbox', async (req, res) => {
 });
 
 app.get('/api/admin/inbox', async (req, res) => {
+  const shouldSync = String(req.query.sync || '0') === '1';
+  const folder = String(req.query.folder || 'inbox').trim().toLowerCase() === 'trash'
+    ? 'trash'
+    : 'inbox';
+  if (shouldSync && inboundEmailService.isConfigured()) {
+    try {
+      await inboundEmailService.syncInboundEmails(db);
+    } catch (err) {
+      console.error('[InboundEmail] Failed to sync inbox before listing', err?.message || err);
+    }
+  }
+
   const rows = db
     .prepare(`
       SELECT *
       FROM inbound_emails
+      WHERE folder = ?
       ORDER BY received_at DESC
     `)
-    .all();
+    .all(folder);
 
   const repliesStmt = db.prepare(`
     SELECT id, body, created_at
@@ -9111,6 +9276,158 @@ app.get('/api/admin/inbox', async (req, res) => {
 
   res.json(inboxRows);
 });
+
+function parseInboxBulkIds(body = {}) {
+  return Array.isArray(body?.ids)
+    ? body.ids
+        .map((value) => Number.parseInt(String(value || '').trim(), 10))
+        .filter((value) => Number.isFinite(value))
+    : [];
+}
+
+function deleteInboxRowsForever(rows = []) {
+  for (const row of rows) {
+    const messageId = String(row?.message_id || '').trim();
+    if (messageId) {
+      db.prepare(`
+        INSERT INTO deleted_inbound_emails (message_id, deleted_at)
+        VALUES (?, datetime('now'))
+        ON CONFLICT(message_id) DO UPDATE SET deleted_at = datetime('now')
+      `).run(messageId);
+    }
+    const attachments = parseAttachmentsForRow(row);
+    for (const attachment of attachments) {
+      const filePath = resolveAttachmentFilePath(attachment?.storedName);
+      if (!filePath) continue;
+      try {
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+      } catch (err) {
+        console.warn('[InboundEmail] Failed to delete attachment file', filePath, err?.message || err);
+      }
+    }
+  }
+}
+
+app.post(
+  '/api/admin/inbox/bulk-delete',
+  requireAccessToken,
+  requireAdmin,
+  express.json(),
+  async (req, res) => {
+    try {
+      const ids = parseInboxBulkIds(req.body);
+
+      if (!ids.length) {
+        return res.status(400).json({ error: 'No inbox emails selected' });
+      }
+
+      const selectStmt = db.prepare(
+        `SELECT id, message_id, attachments_json FROM inbound_emails WHERE id IN (${ids.map(() => '?').join(',')})`
+      );
+      const rows = selectStmt.all(...ids);
+      if (!rows.length) {
+        return res.status(404).json({ error: 'Selected inbox emails were not found' });
+      }
+
+      for (const row of rows) {
+        void row;
+      }
+
+      db.prepare(
+        `UPDATE inbound_emails SET folder = 'trash' WHERE id IN (${ids.map(() => '?').join(',')})`
+      ).run(...ids);
+
+      res.json({ ok: true, deleted: rows.length, movedTo: 'trash' });
+    } catch (err) {
+      console.error('[InboundEmail] Bulk delete failed', err?.message || err);
+      res.status(500).json({ error: 'Failed to delete inbox emails' });
+    }
+  }
+);
+
+app.post(
+  '/api/admin/inbox/bulk-restore',
+  requireAccessToken,
+  requireAdmin,
+  express.json(),
+  async (req, res) => {
+    try {
+      const ids = parseInboxBulkIds(req.body);
+      if (!ids.length) {
+        return res.status(400).json({ error: 'No trash emails selected' });
+      }
+
+      const restored = db.prepare(
+        `UPDATE inbound_emails SET folder = 'inbox' WHERE id IN (${ids.map(() => '?').join(',')}) AND folder = 'trash'`
+      ).run(...ids);
+
+      res.json({ ok: true, restored: Number(restored?.changes || 0) });
+    } catch (err) {
+      console.error('[InboundEmail] Bulk restore failed', err?.message || err);
+      res.status(500).json({ error: 'Failed to restore trash emails' });
+    }
+  }
+);
+
+app.post(
+  '/api/admin/inbox/bulk-delete-forever',
+  requireAccessToken,
+  requireAdmin,
+  express.json(),
+  async (req, res) => {
+    try {
+      const ids = parseInboxBulkIds(req.body);
+      if (!ids.length) {
+        return res.status(400).json({ error: 'No trash emails selected' });
+      }
+
+      const rows = db.prepare(
+        `SELECT id, message_id, attachments_json FROM inbound_emails WHERE id IN (${ids.map(() => '?').join(',')}) AND folder = 'trash'`
+      ).all(...ids);
+      if (!rows.length) {
+        return res.status(404).json({ error: 'Selected trash emails were not found' });
+      }
+
+      deleteInboxRowsForever(rows);
+      db.prepare(
+        `DELETE FROM inbound_emails WHERE id IN (${rows.map(() => '?').join(',')})`
+      ).run(...rows.map((row) => row.id));
+
+      res.json({ ok: true, deleted: rows.length });
+    } catch (err) {
+      console.error('[InboundEmail] Permanent delete failed', err?.message || err);
+      res.status(500).json({ error: 'Failed to delete trash emails forever' });
+    }
+  }
+);
+
+app.post(
+  '/api/admin/inbox/empty-trash',
+  requireAccessToken,
+  requireAdmin,
+  express.json(),
+  async (_req, res) => {
+    try {
+      const rows = db
+        .prepare(`SELECT id, message_id, attachments_json FROM inbound_emails WHERE folder = 'trash'`)
+        .all();
+
+      if (!rows.length) {
+        return res.json({ ok: true, deleted: 0 });
+      }
+
+      deleteInboxRowsForever(rows);
+      db.prepare(`DELETE FROM inbound_emails WHERE folder = 'trash'`).run();
+
+      res.json({ ok: true, deleted: rows.length });
+    } catch (err) {
+      console.error('[InboundEmail] Empty trash failed', err?.message || err);
+      res.status(500).json({ error: 'Failed to clean trash' });
+    }
+  }
+);
 
 app.get(
   '/api/admin/inbox/:emailId/attachments/:attachmentId',
@@ -9193,7 +9510,7 @@ app.post(
       if (!replyText) return res.status(400).json({ error: 'Reply text is required' });
 
       const inReplyTo = String(row.message_id || row.messageId || '').trim();
-      const referencesHeader = [String(row.references || '').trim(), inReplyTo]
+      const referencesHeader = [String(row.references_header || row.references || '').trim(), inReplyTo]
         .filter(Boolean)
         .join(' ')
         .trim();
@@ -9203,7 +9520,9 @@ app.post(
 
       const fromAddr = String(process.env.IONOS_SMTP_USER || '').trim();
       if (!fromAddr) return res.status(500).json({ error: 'SMTP sender not configured' });
-      const fromName = String(process.env.IONOS_SMTP_FROM_NAME || 'WorkNest').trim();
+      const rowWorkspaceId = String(row.workspace_id || row.workspaceId || user.workspaceId || user.workspace_id || '').trim();
+      const schoolName = rowWorkspaceId ? getWorkspaceName(rowWorkspaceId) : '';
+      const fromName = buildSchoolDisplayName(schoolName);
       const fromHeader = `"${fromName}" <${fromAddr}>`;
 
       const attachmentsMeta = parseAttachmentsForRow(row);
@@ -9428,7 +9747,8 @@ app.post('/api/classes/:channelId/attendance/save', express.json(), async (req, 
           to: stu.email,
           subject: rendered.subject,
           html: rendered.bodyInnerHtml,
-          text: rendered.bodyText
+          text: rendered.bodyText,
+          fromName: buildAutomatedEmailSenderName(workspaceEmailRow.name || 'School', 'class_absence')
         });
 
         db.prepare(
@@ -9598,8 +9918,13 @@ app.get('/api/workspaces/:workspaceId/profile', (req, res) => {
   };
 
   profile.registrationDetails = row.registration_details || '';
-
   profile.adminEmail = workspaceRow.admin_email || '';
+  profile.usePlatformContactEmail = Number(row.use_platform_contact_email || 0) === 1;
+  profile.platformContactEmail = getPlatformContactEmail();
+  profile.signatureEmail = resolveWorkspaceContactEmail({
+    profileRow: row,
+    workspaceRow
+  });
 
   res.json(profile);
 });
@@ -9666,6 +9991,7 @@ app.patch('/api/workspaces/:workspaceId/profile', (req, res) => {
   const registrationDetails = String(
     body.registrationDetails || body.registration_details || ''
   ).trim();
+  const usePlatformContactEmail = body.usePlatformContactEmail ? 1 : 0;
 
   db.prepare(`
     INSERT INTO workspace_profile (
@@ -9680,9 +10006,10 @@ app.patch('/api/workspaces/:workspaceId/profile', (req, res) => {
       website,
       opening_hours_json,
       registration_details,
+      use_platform_contact_email,
       updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     ON CONFLICT(workspace_id) DO UPDATE SET
       street = excluded.street,
       house_number = excluded.house_number,
@@ -9694,6 +10021,7 @@ app.patch('/api/workspaces/:workspaceId/profile', (req, res) => {
       website = excluded.website,
       opening_hours_json = excluded.opening_hours_json,
       registration_details = excluded.registration_details,
+      use_platform_contact_email = excluded.use_platform_contact_email,
       updated_at = datetime('now')
   `).run(
     workspaceId,
@@ -9706,7 +10034,8 @@ app.patch('/api/workspaces/:workspaceId/profile', (req, res) => {
     phone,
     website,
     openingHoursJson,
-    registrationDetails
+    registrationDetails,
+    usePlatformContactEmail
   );
 
   if (workspaceName !== null) {
@@ -9734,6 +10063,17 @@ app.patch('/api/workspaces/:workspaceId/profile', (req, res) => {
     updatedAt: updatedRow.updated_at || ''
   };
   profile.registrationDetails = updatedRow.registration_details || '';
+  profile.adminEmail = (
+    db.prepare('SELECT admin_email FROM workspaces WHERE id = ?').get(workspaceId) || {}
+  ).admin_email || '';
+  profile.usePlatformContactEmail = Number(updatedRow.use_platform_contact_email || 0) === 1;
+  profile.platformContactEmail = getPlatformContactEmail();
+  profile.signatureEmail = resolveWorkspaceContactEmail({
+    profileRow: updatedRow,
+    workspaceRow: {
+      admin_email: profile.adminEmail
+    }
+  });
 
   // refresh system policy message so it shows updated school name/address
   try {
@@ -13256,7 +13596,13 @@ function buildEmailSignatureBlock({ profileRow = {}, workspaceRow = {}, settings
 
   const hoursLines = buildEmailOpeningHoursLines(profileRow);
   const phone = String(profileRow.phone || "").trim();
-  const replyEmail = String(settings.reply_to_email || workspaceRow.admin_email || "").trim();
+  const replyEmail = resolveWorkspaceContactEmail({
+    profileRow,
+    workspaceRow: {
+      ...workspaceRow,
+      admin_email: String(settings.reply_to_email || workspaceRow.admin_email || "").trim()
+    }
+  });
   const registrationDetails = String(profileRow.registration_details || "").trim();
   const contactLines = [];
   if (phone) contactLines.push(`Phone: ${phone}`);
@@ -13527,6 +13873,10 @@ async function sendLiveSessionEmails({ workspaceId, channelId, session }) {
     footer_text: String(settings.footer_text || '').trim()
   };
   const replyTo = normalizedSettings.reply_to_email;
+  const fromName = buildAutomatedEmailSenderName(
+    normalizedSettings.brand_school_name || workspaceRow.name || '',
+    'live_session_invite'
+  );
   const chan = db.prepare('SELECT name FROM channels WHERE id = ?').get(channelId);
   const className = chan?.name || 'Class';
   const prefix = normalizedSettings.subject_prefix ? `${normalizedSettings.subject_prefix} ` : '';
@@ -13638,7 +13988,7 @@ async function sendLiveSessionEmails({ workspaceId, channelId, session }) {
   for (const to of recipients) {
     const eventId = generateId('ee');
     try {
-      await sendPlatformEmail({ to, subject, html, text, replyTo });
+      await sendPlatformEmail({ to, subject, html, text, replyTo, fromName });
       insertEvent.run(
         eventId,
         workspaceId,

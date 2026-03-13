@@ -809,11 +809,15 @@
 
           <button class="ses-header-btn" id="sesHistoryBtn" type="button">
             <i class="fa-solid fa-history" aria-hidden="true"></i>
-            <span>History</span>
+            <span>Sent</span>
           </button>
 
           <button class="ses-header-btn" id="sesFormatBtn" type="button">Email format</button>
           <button class="ses-header-btn" id="sesInboxBtn" type="button">Inbox</button>
+          <button class="ses-header-btn" id="sesTrashBtn" type="button">
+            <i class="fa-regular fa-trash-can" aria-hidden="true"></i>
+            <span>Trash</span>
+          </button>
         </div>
 
         <div class="channel-line-actions" id="headerLineActions">
@@ -1807,6 +1811,13 @@
         <button class="btn-ghost" id="btnBulkRead" type="button">Mark read</button>
         <button class="btn-ghost" id="btnBulkUnread" type="button">Mark unread</button>
         <button class="btn-danger" id="btnBulkDelete" type="button">Delete</button>
+      </div>
+
+      <div class="mbx-bulk" id="trashActions" hidden>
+        <button class="btn-ghost" id="btnTrashRestore" type="button">Put back</button>
+        <button class="btn-danger" id="btnTrashDeleteForever" type="button">Delete forever</button>
+        <button class="btn-ghost" id="btnEmptyTrash" type="button">Clean Trash</button>
+        <button class="btn-ghost" id="btnTrashCancel" type="button" hidden>Cancel</button>
       </div>
 
       <div class="mbx-spacer"></div>
@@ -4299,6 +4310,18 @@
               <div class="user-profile-hero-inline-text">
                 <span class="user-profile-inline-label">Email</span>
                 <span class="user-profile-field-value" id="userProfileAccountEmail">—</span>
+              </div>
+              <div class="user-profile-hero-inline-text user-profile-hero-inline-text-signature">
+                <span class="user-profile-inline-label">Signature email</span>
+                <span class="user-profile-field-value" id="userProfileSignatureEmail">—</span>
+                <span class="user-profile-email-switch-label">Use StudiesTalk email</span>
+                <label class="switch user-profile-email-switch" for="schoolProfileUsePlatformEmail" title="Use StudiesTalk email in signatures">
+                  <input id="schoolProfileUsePlatformEmail" type="checkbox" />
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="user-profile-email-help" id="schoolProfileEmailHelp">
+                Registered school email: —
               </div>
             </div>
           </div>

@@ -4431,9 +4431,12 @@ async function loadSesEmailLogPreview(logId) {
   }
 }
 
-async function loadSesInboxMessages() {
+async function loadSesInboxMessages(options = {}) {
+  if (options?.folder) {
+    sesCurrentMailboxFolder = String(options.folder).trim().toLowerCase() === "trash" ? "trash" : "inbox";
+  }
   if (window.refreshGmailishInbox) {
-    return window.refreshGmailishInbox();
+    return window.refreshGmailishInbox({ folder: sesCurrentMailboxFolder });
   }
   return;
 }
@@ -7356,11 +7359,12 @@ function setSesSettingsView(view) {
   const historyBtn = document.getElementById("sesHistoryBtn");
   const formatBtn = document.getElementById("sesFormatBtn");
   const inboxBtn = document.getElementById("sesInboxBtn");
+  const trashBtn = document.getElementById("sesTrashBtn");
 
   if (!body || !formCol || !metaCol || !historyPanel || !formatCard) return;
 
   body.classList.remove("ses-view-sent", "ses-view-history", "ses-view-format");
-  body.classList.remove("ses-view-inbox");
+  body.classList.remove("ses-view-inbox", "ses-view-trash");
   body.classList.remove("hidden");
 
   formCol.classList.add("hidden");
@@ -7384,6 +7388,7 @@ function setSesSettingsView(view) {
   setActive(historyBtn, view === "history");
   setActive(formatBtn, view === "format");
   setActive(inboxBtn, view === "inbox");
+  setActive(trashBtn, view === "trash");
 
   if (view === "sent") {
     body.classList.add("ses-view-sent");
@@ -7408,7 +7413,18 @@ function setSesSettingsView(view) {
       inboxPanel.classList.remove("hidden");
     }
     historyPanel.classList.add("hidden");
-    loadSesInboxMessages();
+    sesCurrentMailboxFolder = "inbox";
+    loadSesInboxMessages({ folder: "inbox" });
+    renderSesInboxView();
+  } else if (view === "trash") {
+    body.classList.add("ses-view-trash");
+    metaCol.classList.remove("hidden");
+    if (inboxPanel) {
+      inboxPanel.classList.remove("hidden");
+    }
+    historyPanel.classList.add("hidden");
+    sesCurrentMailboxFolder = "trash";
+    loadSesInboxMessages({ folder: "trash" });
     renderSesInboxView();
   }
 }
@@ -7419,6 +7435,7 @@ function wireSesTabButtons() {
   const formatBtn = document.getElementById("sesFormatBtn");
   const formatBackBtn = document.getElementById("sesFormatBackBtn");
   const inboxBtn = document.getElementById("sesInboxBtn");
+  const trashBtn = document.getElementById("sesTrashBtn");
 
   sentBtn?.addEventListener("click", () => setSesSettingsView("sent"));
   historyBtn?.addEventListener("click", async () => {
@@ -7432,6 +7449,7 @@ function wireSesTabButtons() {
   formatBtn?.addEventListener("click", () => setSesSettingsView("format"));
   formatBackBtn?.addEventListener("click", () => setSesSettingsView("sent"));
   inboxBtn?.addEventListener("click", () => setSesSettingsView("inbox"));
+  trashBtn?.addEventListener("click", () => setSesSettingsView("trash"));
 }
 
 function wireSesInboxActions() {
@@ -10125,6 +10143,7 @@ const emailPanelBody = document.getElementById("emailPanelBody");
 const sesFormatBtn = document.getElementById("sesFormatBtn");
 const sesFormatCard = document.getElementById("sesFormatCard");
 const sesInboxBtn = document.getElementById("sesInboxBtn");
+const sesTrashBtn = document.getElementById("sesTrashBtn");
 const sesInboxPanel = document.getElementById("sesInboxPanel");
 const sesInboxList = document.getElementById("sesInboxList");
 const sesInboxPlaceholder = document.getElementById("sesInboxPlaceholder");
@@ -10195,6 +10214,7 @@ let sesInboxDetailVisible = false;
 let sesInboxActiveMessage = null;
 let sesActiveHistoryLogId = null;
 let sesFormatViewActive = false;
+let sesCurrentMailboxFolder = "inbox";
 const sesRegistrationDetails = document.getElementById("sesRegistrationDetails");
 const sesPreviewBtn = document.getElementById("sesPreviewBtn");
 let liveScope = "all";
@@ -10532,10 +10552,13 @@ const userProfileUsername = document.getElementById("userProfileUsername");
 const userProfileRole = document.getElementById("userProfileRole");
 const userProfileAccountName = document.getElementById("userProfileAccountName");
 const userProfileAccountEmail = document.getElementById("userProfileAccountEmail");
+const userProfileSignatureEmail = document.getElementById("userProfileSignatureEmail");
 const userProfileAccountRole = document.getElementById("userProfileAccountRole");
 const userProfileAccountJoined = document.getElementById("userProfileAccountJoined");
 const userProfileHeaderTime = document.getElementById("userProfileHeaderTime");
 const userProfileSchoolName = document.getElementById("userProfileSchoolName");
+const schoolProfileUsePlatformEmail = document.getElementById("schoolProfileUsePlatformEmail");
+const schoolProfileEmailHelp = document.getElementById("schoolProfileEmailHelp");
 const userProfileClose = document.getElementById("userProfileClose");
 const userProfileSchoolSection = document.getElementById("userProfileSchoolSection");
 const schoolProfileForm = document.getElementById("schoolProfileForm");
@@ -13143,6 +13166,7 @@ async function openUserProfile(name, avatarUrl = "", msg = null) {
   applyRoleLabel(userProfileRole, null);
   if (userProfileAccountName) userProfileAccountName.textContent = displayName;
   if (userProfileAccountEmail) userProfileAccountEmail.textContent = email;
+  syncSchoolProfileEmailUi({ adminEmail: email, usePlatformContactEmail: false });
   if (userProfileAccountRole) userProfileAccountRole.textContent = getRoleText(role, "Member");
   if (userProfileAccountJoined) userProfileAccountJoined.textContent = joined;
   if (userProfileHeaderTime) userProfileHeaderTime.textContent = localTime;
@@ -13157,7 +13181,10 @@ async function openUserProfile(name, avatarUrl = "", msg = null) {
     );
   }
 
-  userProfileModal.classList.toggle("is-school-admin-profile", normalizedRole === "school_admin");
+  userProfileModal.classList.toggle(
+    "is-school-admin-profile",
+    canEditWorkspaceProfile() || normalizedRole === "school_admin"
+  );
   userProfileModal.classList.remove("hidden");
   updateSchoolSectionVisibility();
   if (canEditWorkspaceProfile()) {
@@ -13168,7 +13195,7 @@ async function openUserProfile(name, avatarUrl = "", msg = null) {
 function canEditWorkspaceProfile() {
   if (!sessionUser) return false;
   const role = normalizeRole(sessionUser.role || sessionUser.userRole);
-  return ["school_admin", "super_admin"].includes(role);
+  return ["admin", "school_admin", "super_admin"].includes(role);
 }
 
 function updateSchoolSectionVisibility() {
@@ -13227,6 +13254,46 @@ function showSchoolProfileStatus(message, isError = false) {
   schoolProfileStatus.hidden = false;
   schoolProfileStatus.textContent = message;
   schoolProfileStatus.classList.toggle("is-error", isError);
+}
+
+function getPlatformContactEmail(profile = {}) {
+  return (
+    String(profile.platformContactEmail || "").trim() ||
+    "info@studiestalk.com"
+  );
+}
+
+function getRegisteredSchoolContactEmail(profile = {}) {
+  return (
+    String(profile.adminEmail || "").trim() ||
+    String(sessionUser?.email || "").trim()
+  );
+}
+
+function shouldUsePlatformContactEmail(profile = {}) {
+  return !!profile.usePlatformContactEmail;
+}
+
+function getEffectiveSchoolContactEmail(profile = {}) {
+  return shouldUsePlatformContactEmail(profile)
+    ? getPlatformContactEmail(profile)
+    : getRegisteredSchoolContactEmail(profile);
+}
+
+function syncSchoolProfileEmailUi(profile = {}) {
+  const effectiveEmail = getEffectiveSchoolContactEmail(profile) || "—";
+  const registeredEmail = getRegisteredSchoolContactEmail(profile) || "—";
+  const usePlatformEmail = shouldUsePlatformContactEmail(profile);
+
+  if (schoolProfileUsePlatformEmail) {
+    schoolProfileUsePlatformEmail.checked = usePlatformEmail;
+  }
+  if (userProfileSignatureEmail) {
+    userProfileSignatureEmail.textContent = effectiveEmail;
+  }
+  if (schoolProfileEmailHelp) {
+    schoolProfileEmailHelp.textContent = `Registered school email: ${registeredEmail}`;
+  }
 }
 
 
@@ -13406,6 +13473,7 @@ function populateSchoolProfileForm(data = {}) {
   if (schoolProfileWebsite) {
     schoolProfileWebsite.value = data.website || "";
   }
+  syncSchoolProfileEmailUi(data);
   if (sesRegistrationDetails) {
     sesRegistrationDetails.value = data.registrationDetails || "";
   }
@@ -13423,6 +13491,7 @@ async function refreshSchoolProfileForm({ force } = {}) {
       showSchoolProfileStatus("No profile found", true);
       return;
     }
+    sesWorkspaceProfileCache = profile;
     populateSchoolProfileForm(profile);
   } catch (err) {
     console.error("Failed to load workspace profile", err);
@@ -13459,7 +13528,8 @@ async function handleSchoolProfileSave() {
       days: openingHoursEntries
     },
     website: (schoolProfileWebsite?.value || "").trim(),
-    registrationDetails
+    registrationDetails,
+    usePlatformContactEmail: !!schoolProfileUsePlatformEmail?.checked
   };
   if (schoolProfileSaveBtn) schoolProfileSaveBtn.disabled = true;
   showSchoolProfileStatus("Saving school profile…");
@@ -26173,8 +26243,10 @@ function sesUpdateSideCard() {
     profile.country || profile.state || ""
   );
   const phone = readField("schoolProfilePhone", profile.phone);
-  const adminEmail =
-    profile.adminEmail?.trim() || sessionUser?.email?.trim() || "";
+  const adminEmail = getEffectiveSchoolContactEmail({
+    ...profile,
+    usePlatformContactEmail: !!schoolProfileUsePlatformEmail?.checked
+  });
 
   const addressLines = [];
   const line1 = [street, house].filter(Boolean).join(" ");
@@ -26349,6 +26421,16 @@ document.addEventListener("DOMContentLoaded", () => {
     const el = document.getElementById(id);
     if (el) el.addEventListener("input", sesUpdateSideCard);
   });
+  if (schoolProfileUsePlatformEmail) {
+    schoolProfileUsePlatformEmail.addEventListener("change", () => {
+      const profile = {
+        ...(sesWorkspaceProfileCache || {}),
+        usePlatformContactEmail: !!schoolProfileUsePlatformEmail.checked
+      };
+      syncSchoolProfileEmailUi(profile);
+      sesUpdateSideCard();
+    });
+  }
   sesUpdateSideCard();
   updateSesBodyChrome().catch(() => {});
 
@@ -26818,11 +26900,20 @@ document.addEventListener("DOMContentLoaded", () => {
   (function initGmailishInbox() {
     const listEl = document.getElementById("inboxList");
     const countEl = document.getElementById("mbxCount");
+    const titleEl = document.querySelector("#wnMailbox .mbx-name");
+    const iconEl = document.querySelector("#wnMailbox .mbx-icon");
     const refreshBtn = document.getElementById("btnRefresh");
     const markAllBtn = document.getElementById("btnMarkAllRead");
     const searchEl = document.getElementById("mbxSearch");
     const selectAllEl = document.getElementById("selectAll");
+    const selectHeaderEl = document.querySelector(".mbx-header-select");
     const bulkEl = document.getElementById("bulkActions");
+    const bulkDeleteBtn = bulkEl?.querySelector('[data-action="delete"], .btn-danger');
+    const trashActionsEl = document.getElementById("trashActions");
+    const trashRestoreBtn = document.getElementById("btnTrashRestore");
+    const trashDeleteForeverBtn = document.getElementById("btnTrashDeleteForever");
+    const trashEmptyBtn = document.getElementById("btnEmptyTrash");
+    const trashCancelBtn = document.getElementById("btnTrashCancel");
 
     const detailPanel = document.getElementById("inboxDetailPanel");
     const detailCloseBtn = document.getElementById("detailCloseBtn");
@@ -26999,7 +27090,55 @@ document.addEventListener("DOMContentLoaded", () => {
     let inbox = [];
     let filtered = [];
     let activeId = null;
+    let currentFolder = "inbox";
+    let currentTrashAction = null;
     const selected = new Set();
+
+    function isTrashSelectionMode() {
+      return currentFolder === "trash" && !!currentTrashAction;
+    }
+
+    function syncMailboxHeading() {
+      if (titleEl) titleEl.textContent = currentFolder === "trash" ? "Trash" : "Inbox";
+      if (iconEl) iconEl.textContent = currentFolder === "trash" ? "🗑️" : "📥";
+    }
+
+    function updateMailboxModeUI() {
+      const inTrash = currentFolder === "trash";
+      const selectingTrash = isTrashSelectionMode();
+      if (markAllBtn) {
+        markAllBtn.hidden = inTrash;
+      }
+      if (trashActionsEl) {
+        trashActionsEl.hidden = !inTrash;
+      }
+      if (selectHeaderEl) {
+        selectHeaderEl.hidden = inTrash && !selectingTrash;
+      }
+      if (selectAllEl && (inTrash && !selectingTrash)) {
+        selectAllEl.checked = false;
+      }
+      if (trashRestoreBtn) {
+        trashRestoreBtn.textContent = currentTrashAction === "restore" ? "Confirm put back" : "Put back";
+      }
+      if (trashDeleteForeverBtn) {
+        trashDeleteForeverBtn.textContent =
+          currentTrashAction === "deleteForever" ? "Confirm delete forever" : "Delete forever";
+      }
+      if (trashCancelBtn) {
+        trashCancelBtn.hidden = !selectingTrash;
+      }
+      if (bulkEl) {
+        bulkEl.hidden = inTrash || selected.size === 0;
+      }
+    }
+
+    function resetTrashSelectionMode() {
+      currentTrashAction = null;
+      selected.clear();
+      if (selectAllEl) selectAllEl.checked = false;
+      updateMailboxModeUI();
+    }
 
     function fmtDate(ts) {
       try {
@@ -27076,6 +27215,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const chk = document.createElement("div");
     chk.className = "row-check";
+    if (currentFolder === "trash" && !isTrashSelectionMode()) {
+      chk.style.visibility = "hidden";
+    }
     chk.innerHTML = `<input type="checkbox" ${selected.has(mail.id) ? "checked" : ""} aria-label="Select email">`;
     chk.querySelector("input").addEventListener("click", (e) => {
       e.stopPropagation();
@@ -27158,11 +27300,11 @@ document.addEventListener("DOMContentLoaded", () => {
     function renderList() {
       listEl.innerHTML = "";
       countEl.textContent = String(filtered.length);
+      updateMailboxModeUI();
 
       if (!filtered.length) {
         const empty = document.createElement("div");
-        empty.style.padding = "18px";
-        empty.style.color = "#6b7280";
+        empty.className = "mbx-empty-state";
         empty.textContent = "No messages";
         listEl.appendChild(empty);
         return;
@@ -27315,12 +27457,29 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function updateBulkUI() {
       const has = selected.size > 0;
-      bulkEl.hidden = !has;
-      selectAllEl.checked = has && selected.size === filtered.length;
+      if (bulkEl) {
+        bulkEl.hidden = currentFolder === "trash" || !has;
+      }
+      if (selectAllEl) {
+        selectAllEl.checked = has && selected.size === filtered.length;
+      }
+      updateMailboxModeUI();
     }
 
-    async function loadInbox() {
-      const res = await fetch("/api/admin/inbox", { credentials: "include" });
+    async function loadInbox({ sync = false, folder } = {}) {
+      if (folder) {
+        currentFolder = String(folder).trim().toLowerCase() === "trash" ? "trash" : "inbox";
+      }
+      if (currentFolder !== "trash") {
+        currentTrashAction = null;
+      }
+      syncMailboxHeading();
+      updateMailboxModeUI();
+      const params = new URLSearchParams();
+      params.set("folder", currentFolder);
+      if (sync) params.set("sync", "1");
+      const url = `/api/admin/inbox?${params.toString()}`;
+      const res = await fetch(url, { credentials: "include" });
       const data = await res.json();
 
       const raw = Array.isArray(data) ? data : (Array.isArray(data?.rows) ? data.rows : []);
@@ -27340,6 +27499,8 @@ document.addEventListener("DOMContentLoaded", () => {
         };
       });
       filtered = [...inbox];
+      selected.clear();
+      if (selectAllEl) selectAllEl.checked = false;
 
       if (activeId && !inbox.some((m) => m.id === activeId)) {
         activeId = null;
@@ -27354,8 +27515,210 @@ document.addEventListener("DOMContentLoaded", () => {
       updateBulkUI();
     }
 
-    refreshBtn?.addEventListener("click", () => loadInbox());
+    async function deleteSelectedInboxMessages() {
+      const ids = Array.from(selected).map((value) => Number.parseInt(String(value), 10)).filter(Number.isFinite);
+      if (!ids.length) {
+        showToast("Select at least one email", "info");
+        return;
+      }
+
+      const ok = await openConfirmModal({
+        title: currentFolder === "trash" ? "Move to trash again?" : "Move selected emails to trash?",
+        message:
+          currentFolder === "trash"
+            ? `These ${ids.length} email${ids.length === 1 ? "" : "s"} are already in trash.`
+            : `Move ${ids.length} selected email${ids.length === 1 ? "" : "s"} to trash?`,
+        confirmText: currentFolder === "trash" ? "OK" : "Move to trash",
+        danger: true
+      });
+      if (!ok) return;
+      if (currentFolder === "trash") return;
+
+      const response = await fetch("/api/admin/inbox/bulk-delete", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "x-csrf-token": getCsrfToken()
+        },
+        body: JSON.stringify({ ids })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "Delete failed");
+      }
+
+      const selectedIds = new Set(ids.map(String));
+      inbox = inbox.filter((mail) => !selectedIds.has(String(mail.id)));
+      filtered = filtered.filter((mail) => !selectedIds.has(String(mail.id)));
+      selected.clear();
+      if (activeId && selectedIds.has(String(activeId))) {
+        activeId = null;
+        renderDetail(null);
+        exitDetailView();
+      }
+      applySearch();
+      updateBulkUI();
+      showToast(`${data.deleted || ids.length} email${(data.deleted || ids.length) === 1 ? "" : "s"} moved to trash`, "success");
+    }
+
+    async function restoreSelectedTrashMessages() {
+      const ids = Array.from(selected).map((value) => Number.parseInt(String(value), 10)).filter(Number.isFinite);
+      if (!ids.length) {
+        showToast("Select at least one trash email", "info");
+        return;
+      }
+      const response = await fetch("/api/admin/inbox/bulk-restore", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "x-csrf-token": getCsrfToken()
+        },
+        body: JSON.stringify({ ids })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "Restore failed");
+      }
+      const selectedIds = new Set(ids.map(String));
+      inbox = inbox.filter((mail) => !selectedIds.has(String(mail.id)));
+      filtered = filtered.filter((mail) => !selectedIds.has(String(mail.id)));
+      if (activeId && selectedIds.has(String(activeId))) {
+        activeId = null;
+        renderDetail(null);
+        exitDetailView();
+      }
+      resetTrashSelectionMode();
+      applySearch();
+      showToast(`${data.restored || ids.length} email${(data.restored || ids.length) === 1 ? "" : "s"} put back`, "success");
+    }
+
+    async function deleteTrashForever() {
+      const ids = Array.from(selected).map((value) => Number.parseInt(String(value), 10)).filter(Number.isFinite);
+      if (!ids.length) {
+        showToast("Select at least one trash email", "info");
+        return;
+      }
+      const ok = await openConfirmModal({
+        title: "Delete forever?",
+        message: `Permanently delete ${ids.length} trash email${ids.length === 1 ? "" : "s"}?`,
+        confirmText: "Delete forever",
+        danger: true
+      });
+      if (!ok) return;
+      const response = await fetch("/api/admin/inbox/bulk-delete-forever", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "x-csrf-token": getCsrfToken()
+        },
+        body: JSON.stringify({ ids })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "Permanent delete failed");
+      }
+      const selectedIds = new Set(ids.map(String));
+      inbox = inbox.filter((mail) => !selectedIds.has(String(mail.id)));
+      filtered = filtered.filter((mail) => !selectedIds.has(String(mail.id)));
+      if (activeId && selectedIds.has(String(activeId))) {
+        activeId = null;
+        renderDetail(null);
+        exitDetailView();
+      }
+      resetTrashSelectionMode();
+      applySearch();
+      showToast(`${data.deleted || ids.length} email${(data.deleted || ids.length) === 1 ? "" : "s"} deleted forever`, "success");
+    }
+
+    async function emptyTrash() {
+      const ok = await openConfirmModal({
+        title: "Clean Trash?",
+        message: "Delete all emails in Trash forever?",
+        confirmText: "Clean Trash",
+        danger: true
+      });
+      if (!ok) return;
+      const response = await fetch("/api/admin/inbox/empty-trash", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "x-csrf-token": getCsrfToken()
+        },
+        body: JSON.stringify({})
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "Clean trash failed");
+      }
+      inbox = [];
+      filtered = [];
+      activeId = null;
+      renderDetail(null);
+      exitDetailView();
+      resetTrashSelectionMode();
+      renderList();
+      showToast(`${data.deleted || 0} email${(data.deleted || 0) === 1 ? "" : "s"} deleted forever`, "success");
+    }
+
+    refreshBtn?.addEventListener("click", () => loadInbox({ sync: true, folder: currentFolder }));
     searchEl?.addEventListener("input", () => applySearch());
+    bulkDeleteBtn?.addEventListener("click", async () => {
+      try {
+        await deleteSelectedInboxMessages();
+      } catch (error) {
+        console.error("Inbox delete failed", error);
+        showToast(error.message || "Delete failed", "error");
+      }
+    });
+    trashRestoreBtn?.addEventListener("click", async () => {
+      try {
+        if (currentFolder !== "trash") return;
+        if (currentTrashAction !== "restore") {
+          currentTrashAction = "restore";
+          selected.clear();
+          renderList();
+          showToast("Select trash emails to put back", "info");
+          return;
+        }
+        await restoreSelectedTrashMessages();
+      } catch (error) {
+        console.error("Trash restore failed", error);
+        showToast(error.message || "Restore failed", "error");
+      }
+    });
+    trashDeleteForeverBtn?.addEventListener("click", async () => {
+      try {
+        if (currentFolder !== "trash") return;
+        if (currentTrashAction !== "deleteForever") {
+          currentTrashAction = "deleteForever";
+          selected.clear();
+          renderList();
+          showToast("Select trash emails to delete forever", "info");
+          return;
+        }
+        await deleteTrashForever();
+      } catch (error) {
+        console.error("Trash permanent delete failed", error);
+        showToast(error.message || "Delete forever failed", "error");
+      }
+    });
+    trashEmptyBtn?.addEventListener("click", async () => {
+      try {
+        if (currentFolder !== "trash") return;
+        await emptyTrash();
+      } catch (error) {
+        console.error("Trash empty failed", error);
+        showToast(error.message || "Clean trash failed", "error");
+      }
+    });
+    trashCancelBtn?.addEventListener("click", () => {
+      resetTrashSelectionMode();
+      renderList();
+    });
 
     selectAllEl?.addEventListener("change", (e) => {
       selected.clear();
@@ -27370,7 +27733,8 @@ document.addEventListener("DOMContentLoaded", () => {
       if (activeId) renderDetail(inbox.find((m) => m.id === activeId));
     });
 
-    loadInbox().catch((e) => {
+    syncMailboxHeading();
+    loadInbox({ sync: false, folder: currentFolder }).catch((e) => {
       console.error("Inbox load failed", e);
     });
 
@@ -27383,7 +27747,7 @@ document.addEventListener("DOMContentLoaded", () => {
       updateReplyGreeting("");
     });
 
-    window.refreshGmailishInbox = () => loadInbox();
+    window.refreshGmailishInbox = (options) => loadInbox(options || {});
   })();
 
   let lastChannelId = null;
