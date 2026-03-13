@@ -2151,7 +2151,7 @@ if (ENV.IS_PROD) {
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(
   '/integration-assets',
-  express.static(path.join(__dirname, 'App-side integration plan (your platform)'))
+  express.static(path.join(__dirname, 'Ai Intregration'))
 );
 
 // ---------- ADMIN FRONTEND (static) ----------
@@ -2482,6 +2482,57 @@ function workspaceIdFromRequest(req) {
     return user.workspaceId || user.workspace_id || 'default';
   }
   return 'default';
+}
+
+function getUserById(userId) {
+  if (!userId) return null;
+  const row = db.prepare('SELECT id, workspace_id, role FROM users WHERE id = ? LIMIT 1').get(userId);
+  if (!row) return null;
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    role: normalizeRoleName(row.role || '')
+  };
+}
+
+function getRequesterWorkspaceId(req) {
+  const requesterId = getRequesterId(req);
+  if (requesterId) {
+    const user = getUserById(requesterId);
+    if (user?.workspaceId) return user.workspaceId;
+  }
+  return (req.query.workspaceId || 'default').trim() || 'default';
+}
+
+function getCalendarRequesterContext(req, fallbackUserId = "") {
+  const requesterId = String(getRequesterId(req) || fallbackUserId || getAuthUserId(req) || "").trim();
+  const user = requesterId ? getUserById(requesterId) : null;
+  const role = normalizeRoleName(
+    user?.role || getRequesterRole(req) || getAuthRole(req) || req.auth?.role || "student"
+  );
+  const workspaceId =
+    user?.workspaceId ||
+    getAuthWorkspaceId(req) ||
+    String(req.headers["x-workspace-id"] || req.query.workspaceId || "default").trim() ||
+    "default";
+  const isAdmin = ["admin", "school_admin", "super_admin"].includes(role);
+  return { requesterId, role, workspaceId, isAdmin };
+}
+
+function getUserChannelIds(userId, workspaceId) {
+  if (!userId) return [];
+  return db
+    .prepare(
+      `
+      SELECT cm.channel_id
+      FROM channel_members cm
+      JOIN channels c ON c.id = cm.channel_id
+      WHERE cm.user_id = ?
+        AND c.workspace_id = ?
+    `
+    )
+    .all(userId, workspaceId)
+    .map((row) => row.channel_id);
 }
 
 function resolveRequestedWorkspaceId(req) {
@@ -5036,32 +5087,272 @@ function ensureCalendarSchema() {
       CREATE TABLE IF NOT EXISTS calendar_events (
         id TEXT PRIMARY KEY,
         workspace_id TEXT DEFAULT 'default',
+        source_type TEXT DEFAULT 'manual',
+        source_id TEXT DEFAULT '',
+        visibility_scope TEXT DEFAULT '',
+        target_type TEXT DEFAULT '',
+        target_id TEXT DEFAULT '',
         title TEXT NOT NULL,
-        date TEXT NOT NULL,
+        description TEXT DEFAULT '',
+        notes TEXT DEFAULT '',
+        date TEXT DEFAULT '',
+        event_date TEXT DEFAULT '',
         start_time TEXT DEFAULT '',
         end_time TEXT DEFAULT '',
-        notes TEXT DEFAULT '',
+        all_day INTEGER DEFAULT 0,
         meet_link TEXT DEFAULT '',
+        details_url TEXT DEFAULT '',
         assignee_id TEXT DEFAULT '',
         created_by TEXT DEFAULT '',
         remind_min INTEGER DEFAULT 0,
-        color TEXT DEFAULT '#1a73e8',
         repeat_json TEXT DEFAULT '',
         done INTEGER DEFAULT 0,
+        color TEXT DEFAULT '#1a73e8',
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
       );
-      CREATE INDEX IF NOT EXISTS idx_cal_events_ws_date ON calendar_events(workspace_id, date);
-      CREATE INDEX IF NOT EXISTS idx_cal_events_assignee ON calendar_events(assignee_id);
     `);
   } catch (err) {
     console.error("Failed to ensure calendar schema", err);
   }
+  safeAlter("ALTER TABLE calendar_events ADD COLUMN source_type TEXT DEFAULT 'manual'");
+  safeAlter("ALTER TABLE calendar_events ADD COLUMN source_id TEXT DEFAULT ''");
+  safeAlter("ALTER TABLE calendar_events ADD COLUMN visibility_scope TEXT DEFAULT ''");
+  safeAlter("ALTER TABLE calendar_events ADD COLUMN target_type TEXT DEFAULT ''");
+  safeAlter("ALTER TABLE calendar_events ADD COLUMN target_id TEXT DEFAULT ''");
+  safeAlter("ALTER TABLE calendar_events ADD COLUMN description TEXT DEFAULT ''");
+  safeAlter("ALTER TABLE calendar_events ADD COLUMN notes TEXT DEFAULT ''");
+  safeAlter("ALTER TABLE calendar_events ADD COLUMN date TEXT DEFAULT ''");
+  safeAlter("ALTER TABLE calendar_events ADD COLUMN event_date TEXT DEFAULT ''");
+  safeAlter("ALTER TABLE calendar_events ADD COLUMN all_day INTEGER DEFAULT 0");
+  safeAlter("ALTER TABLE calendar_events ADD COLUMN details_url TEXT DEFAULT ''");
+  safeAlter("ALTER TABLE calendar_events ADD COLUMN remind_min INTEGER DEFAULT 0");
+  safeAlter("ALTER TABLE calendar_events ADD COLUMN repeat_json TEXT DEFAULT ''");
+  safeAlter("ALTER TABLE calendar_events ADD COLUMN done INTEGER DEFAULT 0");
+  safeAlter("ALTER TABLE calendar_events ADD COLUMN color TEXT DEFAULT '#1a73e8'");
+  safeAlter("ALTER TABLE calendar_events ADD COLUMN created_at TEXT DEFAULT (datetime('now'))");
+  safeAlter("ALTER TABLE calendar_events ADD COLUMN updated_at TEXT DEFAULT (datetime('now'))");
   try {
-    db.exec(`ALTER TABLE calendar_events ADD COLUMN color TEXT DEFAULT '#1a73e8'`);
-  } catch (_err) {
-    /* likely exists */
+    db.exec("CREATE INDEX IF NOT EXISTS idx_cal_events_ws_date ON calendar_events(workspace_id, event_date)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_cal_events_assignee ON calendar_events(assignee_id)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_cal_events_visibility ON calendar_events(workspace_id, visibility_scope, target_type, target_id)");
+  } catch (err) {
+    console.error("Failed to ensure calendar indexes", err);
   }
+  try {
+    db.exec("UPDATE calendar_events SET event_date = date WHERE (event_date IS NULL OR event_date = '') AND (date IS NOT NULL AND date <> '')");
+    db.exec(`
+      UPDATE calendar_events
+      SET target_type = COALESCE((
+            SELECT t.target_type
+            FROM calendar_event_targets t
+            WHERE t.calendar_event_id = calendar_events.id
+            ORDER BY t.created_at DESC
+            LIMIT 1
+          ), target_type)
+      WHERE target_type IS NULL OR target_type = ''
+    `);
+    db.exec(`
+      UPDATE calendar_events
+      SET target_id = COALESCE((
+            SELECT t.target_id
+            FROM calendar_event_targets t
+            WHERE t.calendar_event_id = calendar_events.id
+            ORDER BY t.created_at DESC
+            LIMIT 1
+          ), target_id)
+      WHERE target_id IS NULL OR target_id = ''
+    `);
+    db.exec(`
+      UPDATE calendar_events
+      SET target_type = 'school',
+          target_id = '',
+          visibility_scope = 'workspace'
+      WHERE source_type = 'manual'
+        AND (target_type IS NULL OR target_type = '' OR target_type = 'user')
+        AND EXISTS (
+          SELECT 1
+          FROM users u
+          WHERE u.id = calendar_events.created_by
+            AND lower(COALESCE(u.role, '')) IN ('admin', 'school_admin', 'super_admin')
+        )
+    `);
+    db.exec(`
+      UPDATE calendar_event_targets
+      SET target_type = 'school',
+          target_id = ''
+      WHERE calendar_event_id IN (
+        SELECT e.id
+        FROM calendar_events e
+        JOIN users u ON u.id = e.created_by
+        WHERE e.source_type = 'manual'
+          AND lower(COALESCE(u.role, '')) IN ('admin', 'school_admin', 'super_admin')
+      )
+    `);
+    db.exec(`
+      UPDATE calendar_events
+      SET visibility_scope = CASE
+            WHEN target_type = 'school' THEN 'workspace'
+            WHEN target_type = 'class' THEN 'targeted'
+            WHEN target_type = 'user' THEN 'private_user'
+            ELSE visibility_scope
+          END
+      WHERE visibility_scope IS NULL OR visibility_scope = ''
+    `);
+    db.exec(`
+      UPDATE calendar_events
+      SET visibility_scope = CASE
+            WHEN target_type = 'school' THEN 'workspace'
+            WHEN target_type = 'class' THEN 'targeted'
+            WHEN target_type = 'user' THEN 'private_user'
+            ELSE visibility_scope
+          END
+      WHERE visibility_scope IS NULL OR visibility_scope = ''
+    `);
+  } catch (_err) {
+    // ignore
+  }
+}
+
+function ensureCalendarTargetsSchema() {
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS calendar_event_targets (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        calendar_event_id TEXT NOT NULL,
+        target_type TEXT NOT NULL,
+        target_id TEXT DEFAULT '',
+        created_at TEXT DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_cal_event_targets_ws ON calendar_event_targets(workspace_id);
+      CREATE INDEX IF NOT EXISTS idx_cal_event_targets_event ON calendar_event_targets(calendar_event_id);
+    `);
+  } catch (err) {
+    console.error('Failed to ensure calendar_event_targets schema', err);
+  }
+}
+
+function deleteCalendarEventTargets(eventId) {
+  if (!eventId) return;
+  db.prepare('DELETE FROM calendar_event_targets WHERE calendar_event_id = ?').run(eventId);
+}
+
+function upsertCalendarEventTarget(eventId, workspaceId, type, targetId) {
+  if (!eventId || !workspaceId || !type) return;
+  deleteCalendarEventTargets(eventId);
+  db.prepare(
+    `
+    INSERT INTO calendar_event_targets
+      (id, workspace_id, calendar_event_id, target_type, target_id, created_at)
+    VALUES
+      (@id, @workspace_id, @calendar_event_id, @target_type, @target_id, datetime('now'))
+  `
+  ).run({
+    id: generateId('cet'),
+    workspace_id: workspaceId,
+    calendar_event_id: eventId,
+    target_type: type,
+    target_id: targetId || ''
+  });
+}
+
+function buildLiveSessionEventPayload(session) {
+  if (!session || !session.id) return null;
+  const workspaceId = session.workspace_id || 'default';
+  const eventDate = session.event_date || session.date || '';
+  const now = nowIso();
+  const targetType = session.channel_id ? 'class' : 'school';
+  const targetId = session.channel_id || '';
+  const visibilityScope = session.channel_id ? 'targeted' : 'workspace';
+  return {
+    workspace_id: workspaceId,
+    source_type: 'live_session',
+    source_id: session.id,
+    visibility_scope: visibilityScope,
+    target_type: targetType,
+    target_id: targetId,
+    title: session.title || 'Live session',
+    description: session.student_notes || '',
+    notes: session.student_notes || '',
+    date: eventDate,
+    event_date: eventDate,
+    start_time: session.start_time || '',
+    end_time: session.end_time || '',
+    all_day: 0,
+    meet_link: session.meeting_url || '',
+    details_url: `/live-sessions/${session.id}`,
+    assignee_id: session.created_by || '',
+    created_by: session.created_by || '',
+    remind_min: 0,
+    repeat_json: '',
+    done: 0,
+    color: '#2563eb',
+    created_at: now,
+    updated_at: now
+  };
+}
+
+function ensureLiveSessionCalendar(session) {
+  if (!session || !session.id) return null;
+  const existing = db
+    .prepare('SELECT * FROM calendar_events WHERE source_type = ? AND source_id = ? LIMIT 1')
+    .get('live_session', session.id);
+  const payload = buildLiveSessionEventPayload(session);
+  if (!payload) return null;
+  if (!payload.event_date) payload.event_date = payload.date;
+  if (!payload.event_date) return null;
+  if (existing) {
+    const setStmt = `
+      UPDATE calendar_events SET
+        title = @title,
+        description = @description,
+        notes = @notes,
+        visibility_scope = @visibility_scope,
+        target_type = @target_type,
+        target_id = @target_id,
+        event_date = @event_date,
+        date = @date,
+        start_time = @start_time,
+        end_time = @end_time,
+        meet_link = @meet_link,
+        details_url = @details_url,
+        updated_at = datetime('now')
+      WHERE id = @id
+    `;
+    db.prepare(setStmt).run({ id: existing.id, ...payload });
+    const targetType = session.channel_id ? 'class' : 'school';
+    const targetId = session.channel_id || '';
+    upsertCalendarEventTarget(existing.id, payload.workspace_id, targetType, targetId);
+    return db.prepare('SELECT * FROM calendar_events WHERE id = ?').get(existing.id);
+  }
+  const eventId = generateId('ce');
+  db.prepare(
+    `
+    INSERT INTO calendar_events
+      (id, workspace_id, source_type, source_id, visibility_scope, target_type, target_id,
+       title, description, notes, date, event_date, start_time, end_time, all_day, meet_link, details_url,
+       assignee_id, created_by, remind_min, repeat_json, done, color, created_at, updated_at)
+    VALUES
+      (@id, @workspace_id, @source_type, @source_id, @visibility_scope, @target_type, @target_id,
+       @title, @description, @notes, @date, @event_date, @start_time, @end_time, @all_day, @meet_link, @details_url,
+       @assignee_id, @created_by, @remind_min, @repeat_json, @done, @color, @created_at, @updated_at)
+  `
+  ).run({ id: eventId, ...payload });
+  const targetType = session.channel_id ? 'class' : 'school';
+  const targetId = session.channel_id || '';
+  upsertCalendarEventTarget(eventId, payload.workspace_id, targetType, targetId);
+  return db.prepare('SELECT * FROM calendar_events WHERE id = ?').get(eventId);
+}
+
+function removeLiveSessionCalendar(sessionId) {
+  if (!sessionId) return;
+  const ev = db
+    .prepare('SELECT id FROM calendar_events WHERE source_type = ? AND source_id = ?')
+    .get('live_session', sessionId);
+  if (!ev) return;
+  deleteCalendarEventTargets(ev.id);
+  db.prepare('DELETE FROM calendar_events WHERE id = ?').run(ev.id);
 }
 
 function ensureKnowledgeSchema() {
@@ -5100,6 +5391,7 @@ function ensureFileEventsSchema() {
   ensureReplySchema();
   ensureDmSchema();
   ensureCalendarSchema();
+  ensureCalendarTargetsSchema();
   ensureKnowledgeSchema();
   ensureFileEventsSchema();
 
@@ -5107,40 +5399,151 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function getCalendarTargetsByEventIds(workspaceId, eventIds = []) {
+  if (!workspaceId || !Array.isArray(eventIds) || !eventIds.length) return new Map();
+  const placeholders = eventIds.map(() => "?").join(",");
+  const rows = db
+    .prepare(
+      `
+        SELECT *
+        FROM calendar_event_targets
+        WHERE workspace_id = ?
+          AND calendar_event_id IN (${placeholders})
+        ORDER BY created_at DESC
+      `
+    )
+    .all(workspaceId, ...eventIds);
+  const map = new Map();
+  rows.forEach((row) => {
+    if (!map.has(row.calendar_event_id)) {
+      map.set(row.calendar_event_id, row);
+    }
+  });
+  return map;
+}
+
+function resolveCalendarEventAccess(row, targetRow = null) {
+  const rawVisibility = String(row?.visibility_scope || "").trim();
+  const rawTargetType = String(row?.target_type || targetRow?.target_type || "").trim();
+  const rawTargetId = String(row?.target_id || targetRow?.target_id || "").trim();
+
+  let visibilityScope = rawVisibility;
+  if (!visibilityScope) {
+    if (rawTargetType === "school") visibilityScope = "workspace";
+    else if (rawTargetType === "class") visibilityScope = "targeted";
+    else visibilityScope = "private_user";
+  }
+
+  let targetType = rawTargetType;
+  if (!targetType) {
+    if (visibilityScope === "workspace") targetType = "school";
+    else if (visibilityScope === "targeted") targetType = "class";
+    else targetType = "user";
+  }
+
+  let targetId = rawTargetId;
+  if (!targetId && targetType === "user") {
+    targetId = String(row?.created_by || row?.assignee_id || "").trim();
+  }
+  if (targetType === "school") {
+    targetId = "";
+  }
+
+  return { visibilityScope, targetType, targetId };
+}
+
+function canViewCalendarEvent(row, targetRow, requester, channelIds = []) {
+  if (!row || !requester) return false;
+  if (String(row.workspace_id || "") !== String(requester.workspaceId || "")) return false;
+
+  const access = resolveCalendarEventAccess(row, targetRow);
+  if (requester.isAdmin) {
+    if (access.visibilityScope === "private_user") {
+      return access.targetType === "user" && access.targetId === requester.requesterId;
+    }
+    return true;
+  }
+
+  if (access.visibilityScope === "workspace") return true;
+  if (access.visibilityScope === "private_user") {
+    return access.targetType === "user" && access.targetId === requester.requesterId;
+  }
+  if (access.visibilityScope === "targeted") {
+    if (access.targetType === "class") {
+      return channelIds.includes(access.targetId);
+    }
+    return access.targetType === "school";
+  }
+  return false;
+}
+
+function canManageCalendarEvent(row, targetRow, requester) {
+  if (!row || !requester) return false;
+  if (String(row.workspace_id || "") !== String(requester.workspaceId || "")) return false;
+
+  const access = resolveCalendarEventAccess(row, targetRow);
+  if (requester.isAdmin) {
+    return access.visibilityScope !== "private_user";
+  }
+
+  return (
+    access.visibilityScope === "private_user" &&
+    access.targetType === "user" &&
+    access.targetId === requester.requesterId &&
+    String(row.created_by || "").trim() === requester.requesterId
+  );
+}
+
 app.get("/api/calendar/events", (req, res) => {
-  const workspaceId = req.query.workspaceId || "default";
+  const requester = getCalendarRequesterContext(req);
   const from = req.query.from || null;
   const to = req.query.to || null;
+  const channelIds = getUserChannelIds(requester.requesterId, requester.workspaceId);
 
   let rows;
   if (from && to) {
     rows = db
       .prepare(
         `
-      SELECT *
-      FROM calendar_events
-      WHERE workspace_id = ?
-        AND date >= ?
-        AND date <= ?
-      ORDER BY date, start_time
-    `
+          SELECT *
+          FROM calendar_events
+          WHERE workspace_id = ?
+            AND COALESCE(NULLIF(event_date, ''), date) >= ?
+            AND COALESCE(NULLIF(event_date, ''), date) <= ?
+          ORDER BY COALESCE(NULLIF(event_date, ''), date), start_time
+        `
       )
-      .all(workspaceId, from, to);
+      .all(requester.workspaceId, from, to);
   } else {
     rows = db
       .prepare(
         `
-      SELECT *
-      FROM calendar_events
-      WHERE workspace_id = ?
-      ORDER BY date, start_time
-      LIMIT 2000
-    `
+          SELECT *
+          FROM calendar_events
+          WHERE workspace_id = ?
+          ORDER BY COALESCE(NULLIF(event_date, ''), date), start_time
+          LIMIT 2000
+        `
       )
-      .all(workspaceId);
+      .all(requester.workspaceId);
   }
 
-  res.json(rows.map(mapCalendarRow));
+  const targetMap = getCalendarTargetsByEventIds(
+    requester.workspaceId,
+    rows.map((row) => row.id).filter(Boolean)
+  );
+  const visibleRows = rows.filter((row) =>
+    canViewCalendarEvent(row, targetMap.get(row.id), requester, channelIds)
+  );
+
+  res.json(
+    visibleRows.map((row) =>
+      mapCalendarRow(row, {
+        targetRow: targetMap.get(row.id),
+        requesterContext: requester
+      })
+    )
+  );
 });
 
 function safeJsonParse(s) {
@@ -5151,23 +5554,38 @@ function safeJsonParse(s) {
   }
 }
 
-function mapCalendarRow(r) {
+function mapCalendarRow(r, options = {}) {
   if (!r) return null;
+  const targetRow = options.targetRow || null;
+  const requester = options.requesterContext || null;
+  const access = resolveCalendarEventAccess(r, targetRow);
+  const normalizedDate = r.event_date || r.date || '';
   return {
     id: r.id,
     workspaceId: r.workspace_id,
+    sourceType: r.source_type || 'manual',
+    sourceId: r.source_id || '',
+    visibilityScope: access.visibilityScope,
+    targetType: access.targetType,
+    targetId: access.targetId,
     title: r.title,
-    date: r.date,
+    description: r.description || r.notes || '',
+    notes: r.notes,
+    date: normalizedDate,
+    eventDate: normalizedDate,
     startTime: r.start_time,
     endTime: r.end_time,
-    notes: r.notes,
+    allDay: !!r.all_day,
     meetLink: r.meet_link,
+    detailsUrl: r.details_url || '',
     assigneeId: r.assignee_id,
     createdBy: r.created_by,
     remindMin: r.remind_min || 0,
-    color: r.color || "#1a73e8",
+    color: r.color || '#1a73e8',
     repeat: r.repeat_json ? safeJsonParse(r.repeat_json) : null,
     done: !!r.done,
+    canEdit: requester ? canManageCalendarEvent(r, targetRow, requester) : undefined,
+    canDelete: requester ? canManageCalendarEvent(r, targetRow, requester) : undefined,
     createdAt: r.created_at,
     updatedAt: r.updated_at
   };
@@ -5190,20 +5608,26 @@ function normalizeDateInput(s) {
 app.post("/api/calendar/events", (req, res) => {
   console.log("CAL POST headers content-type:", req.headers["content-type"]);
   console.log("CAL POST body:", req.body);
-  const workspaceId = req.body?.workspaceId || "default";
   const {
     title,
     date,
     startTime = "",
     endTime = "",
     notes = "",
+    description = "",
     meetLink = "",
     assigneeId = "",
     createdBy = "",
     remindMin = 0,
     color = "#1a73e8",
-    repeat = null
+    repeat = null,
+    detailsUrl = "",
+    allDay = false
   } = req.body || {};
+  const fallbackCreatorId = String(createdBy || "").trim();
+  const requester = getCalendarRequesterContext(req, fallbackCreatorId);
+  const workspaceId = requester.workspaceId;
+  const requesterId = requester.requesterId || fallbackCreatorId;
 
   const titleTrimmed = title ? String(title).trim() : "";
   const dateNorm = normalizeDateInput(date);
@@ -5215,40 +5639,68 @@ app.post("/api/calendar/events", (req, res) => {
 
   const id = generateId("ce");
   const repeatJson = repeat ? JSON.stringify(repeat) : "";
+  const visibilityScope = requester.isAdmin ? "workspace" : "private_user";
+  const targetType = requester.isAdmin ? "school" : "user";
+  const targetId = requester.isAdmin ? "" : requesterId;
 
   db.prepare(
     `
     INSERT INTO calendar_events
-      (id, workspace_id, title, date, start_time, end_time, notes, meet_link, assignee_id, created_by, remind_min, color, repeat_json, done, created_at, updated_at)
+      (id, workspace_id, source_type, source_id, visibility_scope, target_type, target_id,
+       title, description, notes, date, event_date, start_time, end_time, all_day,
+       meet_link, details_url, assignee_id, created_by, remind_min, color, repeat_json,
+       done, created_at, updated_at)
     VALUES
-      (@id, @workspace_id, @title, @date, @start_time, @end_time, @notes, @meet_link, @assignee_id, @created_by, @remind_min, @color, @repeat_json, 0, datetime('now'), datetime('now'))
+      (@id, @workspace_id, @source_type, @source_id, @visibility_scope, @target_type, @target_id,
+       @title, @description, @notes, @date, @event_date, @start_time, @end_time, @all_day,
+       @meet_link, @details_url, @assignee_id, @created_by, @remind_min, @color, @repeat_json,
+       0, datetime('now'), datetime('now'))
   `
   ).run({
     id,
     workspace_id: workspaceId,
+    source_type: "manual",
+    source_id: "",
+    visibility_scope: visibilityScope,
+    target_type: targetType,
+    target_id: targetId,
     title: titleTrimmed,
+    description: String(description || notes || ""),
+    notes: String(notes || ""),
+    event_date: dateNorm,
     date: dateNorm,
     start_time: String(startTime || "").trim(),
     end_time: String(endTime || "").trim(),
-    notes: String(notes || ""),
+    all_day: allDay ? 1 : 0,
     meet_link: String(meetLink || ""),
+    details_url: String(detailsUrl || ""),
     assignee_id: String(assigneeId || ""),
-    created_by: String(createdBy || ""),
+    created_by: String(requesterId || createdBy || ""),
     remind_min: Number(remindMin || 0),
     color: String(color || "#1a73e8"),
     repeat_json: repeatJson
   });
 
   const ev = db.prepare(`SELECT * FROM calendar_events WHERE id = ?`).get(id);
-  const payload = { event: mapCalendarRow(ev) };
+  upsertCalendarEventTarget(id, workspaceId, targetType, targetId);
+  const payload = {
+    event: mapCalendarRow(ev, {
+      requesterContext: requester
+    })
+  };
   broadcastEvent("calendar_event_created", payload);
   res.status(201).json(payload);
 });
 
 app.patch("/api/calendar/events/:id", (req, res) => {
   const { id } = req.params;
+  const requester = getCalendarRequesterContext(req);
   const existing = db.prepare(`SELECT * FROM calendar_events WHERE id = ?`).get(id);
   if (!existing) return res.status(404).json({ error: "not found" });
+  const targetRow = getCalendarTargetsByEventIds(existing.workspace_id, [id]).get(id) || null;
+  if (!canManageCalendarEvent(existing, targetRow, requester)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
 
   const patch = req.body || {};
   const dateNorm = normalizeDateInput(patch.date ?? existing.date);
@@ -5260,9 +5712,12 @@ app.patch("/api/calendar/events/:id", (req, res) => {
     UPDATE calendar_events SET
       title = COALESCE(@title, title),
       date = COALESCE(@date, date),
+      event_date = COALESCE(@event_date, event_date),
+      description = COALESCE(@description, description),
+      notes = COALESCE(@notes, notes),
       start_time = COALESCE(@start_time, start_time),
       end_time = COALESCE(@end_time, end_time),
-      notes = COALESCE(@notes, notes),
+      all_day = COALESCE(@all_day, all_day),
       meet_link = COALESCE(@meet_link, meet_link),
       assignee_id = COALESCE(@assignee_id, assignee_id),
       remind_min = COALESCE(@remind_min, remind_min),
@@ -5276,9 +5731,20 @@ app.patch("/api/calendar/events/:id", (req, res) => {
     id,
     title: patch.title !== undefined ? String(patch.title).trim() : null,
     date: dateNorm || null,
+    event_date: dateNorm || null,
+    description:
+      patch.description !== undefined
+        ? String(patch.description || patch.notes || '').trim()
+        : null,
+    notes: patch.notes ?? null,
     start_time: patch.startTime ?? null,
     end_time: patch.endTime ?? null,
-    notes: patch.notes ?? null,
+    all_day:
+      patch.allDay === true
+        ? 1
+        : patch.allDay === false
+        ? 0
+        : null,
     meet_link: patch.meetLink ?? null,
     assignee_id: patch.assigneeId ?? null,
     remind_min: patch.remindMin ?? null,
@@ -5288,16 +5754,25 @@ app.patch("/api/calendar/events/:id", (req, res) => {
   });
 
   const ev = db.prepare(`SELECT * FROM calendar_events WHERE id = ?`).get(id);
-  const mapped = mapCalendarRow(ev);
+  const mapped = mapCalendarRow(ev, {
+    targetRow,
+    requesterContext: requester
+  });
   broadcastEvent("calendar_event_updated", { event: mapped });
   res.json({ event: mapped });
 });
 
 app.delete("/api/calendar/events/:id", (req, res) => {
   const { id } = req.params;
+  const requester = getCalendarRequesterContext(req);
   const ev = db.prepare(`SELECT * FROM calendar_events WHERE id = ?`).get(id);
   if (!ev) return res.status(404).json({ error: "not found" });
+  const targetRow = getCalendarTargetsByEventIds(ev.workspace_id, [id]).get(id) || null;
+  if (!canManageCalendarEvent(ev, targetRow, requester)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
 
+  deleteCalendarEventTargets(id);
   db.prepare(`DELETE FROM calendar_events WHERE id = ?`).run(id);
   broadcastEvent("calendar_event_deleted", { id });
   res.json({ ok: true, id });
@@ -13411,6 +13886,7 @@ app.post('/api/live-sessions', async (req, res) => {
     updated_at: now
   };
   stmt.run(record);
+  ensureLiveSessionCalendar(record);
   autopostLiveSessionMessage(record, user);
   if (notifyEmail) {
     try {
@@ -13486,6 +13962,7 @@ app.patch('/api/live-sessions/:sessionId', (req, res) => {
   stmt.run({ id: sessionId, ...updates });
   const updated = db.prepare('SELECT * FROM live_sessions WHERE id = ?').get(sessionId);
   autopostLiveSessionMessage(updated, user, { variant: "updated" });
+  ensureLiveSessionCalendar(updated);
   res.json(updated);
 });
 
@@ -13500,6 +13977,7 @@ app.delete('/api/live-sessions/:sessionId', (req, res) => {
     return res.status(404).json({ error: 'Session not found' });
   }
   autopostLiveSessionMessage(existing, user, { variant: "cancelled" });
+  removeLiveSessionCalendar(sessionId);
   db.prepare('DELETE FROM live_sessions WHERE id = ?').run(sessionId);
   res.json({ ok: true, sessionId });
 });
