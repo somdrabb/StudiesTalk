@@ -1,0 +1,2609 @@
+/* =========================
+   CALENDAR / PLANNER â€“ Modern UI refresh
+   Paste at END of styles.refactor.css
+   ========================= */
+
+/* --- panel background + spacing --- */
+#calendarPanel{
+  padding: 8px 0 24px;
+  width: 100%;
+  max-width: none;
+  height: calc(100vh - 110px);
+  display: flex;
+  flex-direction: column;
+}
+#calendarPanel .planner{
+  width: 100%;
+  margin: 0;
+  max-width: none;
+  padding-inline: clamp(12px, 4vw, 48px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+/* --- header (title + controls) --- */
+#calendarPanel .planner-header{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid rgba(148,163,184,.14);
+  border-radius: 18px;
+  background: rgba(255,255,255,.42);
+  box-shadow: none;
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  backdrop-filter: blur(10px);
+}
+
+#calendarPanel .planner-title h1{
+  font-size: 24px;
+  letter-spacing: -0.02em;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+#calendarPanel .planner-title-row{
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+#calendarPanel .planner-subtitle{
+  margin-top: 0;
+  color: var(--text-soft);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+}
+#calendarPanel .planner-subtitle-sep{
+  color: var(--text-soft);
+  opacity: .7;
+}
+
+#calendarPanel .planner-nav{
+  display:flex;
+  align-items:center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+#calendarPanel .planner-month{
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  background: rgba(0,0,0,0.03);
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+/* --- primary buttons (Prev/Today/Next + view buttons) --- */
+#calendarPanel .pbtn{
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border-soft);
+  background: #fff;
+  color: var(--text-primary);
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform 120ms ease, background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+#calendarPanel .pbtn:hover{
+  transform: translateY(-1px);
+  background: rgba(17,100,163,0.06);
+  border-color: color-mix(in srgb, var(--brand) 25%, var(--border-soft));
+  box-shadow: 0 12px 20px rgba(15,23,42,0.08);
+}
+#calendarPanel .pbtn:active{ transform: translateY(0); }
+
+#calendarPanel .pbtn-active{
+  background: rgba(17,100,163,0.12);
+  border-color: rgba(17,100,163,0.28);
+  box-shadow: inset 0 0 0 1px rgba(17,100,163,0.16);
+}
+
+/* --- search + icon buttons on right --- */
+#calendarPanel .planner-right{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+#calendarPanel .planner-search{
+  display:flex;
+  align-items:center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border-soft);
+  background: #fff;
+  min-width: min(420px, 70vw);
+}
+#calendarPanel .planner-search i{
+  opacity: .6;
+}
+#calendarPanel .planner-search input{
+  border: none;
+  outline: none;
+  width: 100%;
+  font-size: 14px;
+  background: transparent;
+  color: var(--text-primary);
+}
+
+#calendarPanel .picon{
+  width: 40px;
+  height: 40px;
+  border-radius: 14px;
+  border: 1px solid var(--border-soft);
+  background: #fff;
+  display:grid;
+  place-items:center;
+  cursor:pointer;
+  transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
+}
+#calendarPanel .picon:hover{
+  transform: translateY(-1px);
+  background: rgba(0,0,0,0.03);
+  box-shadow: 0 12px 20px rgba(15,23,42,0.08);
+}
+#calendarPanel .picon-primary{
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  border: none;
+  box-shadow: 0 12px 22px rgba(34,197,94,0.22);
+}
+#calendarPanel .picon-primary i{ color: #fff !important; }
+
+/* --- filter chips --- */
+#calendarPanel .planner-chips{
+  display:none;
+  position: absolute;
+  top: var(--planner-chips-top, calc(100% + 8px));
+  left: var(--planner-chips-left, auto);
+  right: auto;
+  gap: 8px;
+  flex-wrap: nowrap;
+  align-items: center;
+  padding: 14px 12px;
+  border-radius: 18px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  z-index: 35;
+  overflow-x: auto;
+  max-width: min(100%, 820px);
+}
+#calendarPanel .planner-chips.is-open{
+  display:flex;
+}
+#calendarPanel .chip{
+  height: 38px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(148,163,184,.22);
+  background: rgba(226,232,240,.36);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.42), 0 10px 24px rgba(15,23,42,.10);
+  font-weight: 800;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 120ms ease, transform 120ms ease, border-color 120ms ease;
+}
+#calendarPanel .chip:hover{
+  transform: translateY(-1px);
+  background: rgba(0,0,0,0.03);
+}
+#calendarPanel .chip-active{
+  background: rgba(17,100,163,0.12);
+  border-color: rgba(17,100,163,0.28);
+  color: var(--text-primary);
+}
+#calendarPanel .chip-admin{
+  border-style: dashed;
+}
+
+/* --- main grid layout (calendar + side panels) --- */
+#calendarPanel .planner-grid{
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 320px);
+  gap: 10px;
+  align-items: start;
+  flex: 1;
+  min-height: 0;
+}
+#calendarPanel .planner-grid.expanded {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* --- calendar "card" --- */
+#calendarPanel .planner-main{
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  width: 100%;
+  grid-column: 2;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+#calendarPanel .planner-side{
+  position: sticky;
+  top: 0.5rem;
+  border-radius: 1rem;
+  padding: 1rem;
+  border: 1px solid rgba(15,23,42,0.08);
+  background: #fff;
+  box-shadow: 0 12px 26px rgba(15,23,42,0.08);
+  grid-column: 1;
+  min-height: 0;
+  overflow: auto;
+  max-height: calc(100vh - 96px);
+}
+
+/* weekday header row */
+#calendarPanel .calendar-weekdays{
+  display:grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0;
+  padding: 10px 10px;
+  border-bottom: 1px solid rgba(15,23,42,0.08);
+  background: linear-gradient(90deg, rgba(17,100,163,0.08), rgba(34,197,94,0.06));
+}
+#calendarPanel .calendar-weekdays > div{
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(15,23,42,0.65);
+  text-align: center;
+}
+
+/* month grid itself */
+#calendarPanel .calendar-grid{
+  display:grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px;
+}
+
+/* day cells are buttons (in JS) */
+#calendarPanel .calendar-day{
+  position: relative;
+  min-height: 110px;
+  border-radius: 16px;
+  border: 1px solid rgba(15,23,42,0.10);
+  background: rgba(15,23,42,0.02);
+  padding: 10px 10px 10px;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+#calendarPanel .calendar-day:hover{
+  transform: translateY(-1px);
+  background: rgba(17,100,163,0.05);
+  border-color: rgba(17,100,163,0.18);
+  box-shadow: 0 10px 18px rgba(15,23,42,0.10);
+}
+
+/* empty padding cells */
+#calendarPanel .calendar-day.is-empty{
+  border: 1px dashed rgba(15,23,42,0.10);
+  background: transparent;
+  cursor: default;
+}
+
+/* day header */
+#calendarPanel .cal-day-header{
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  gap: 8px;
+}
+#calendarPanel .cal-num{
+  width: 34px;
+  height: 34px;
+  display:grid;
+  place-items:center;
+  border-radius: 12px;
+  background: rgba(0,0,0,0.04);
+  font-weight: 900;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* today + selected states (JS adds is-today / is-selected) */
+#calendarPanel .calendar-day.is-today{
+  border-color: rgba(34,197,94,0.35);
+  box-shadow: inset 0 0 0 2px rgba(34,197,94,0.16);
+}
+#calendarPanel .calendar-day.is-selected{
+  border-color: rgba(17,100,163,0.40);
+  box-shadow: inset 0 0 0 2px rgba(17,100,163,0.20);
+}
+
+/* + button inside day */
+#calendarPanel .cal-plus{
+  position:absolute;
+  top: 10px;
+  right: 10px;
+  width: 30px;
+  height: 30px;
+  border-radius: 12px;
+  border: 1px solid rgba(15,23,42,0.12);
+  background: #fff;
+  cursor: pointer;
+  display:grid;
+  place-items:center;
+  font-weight: 900;
+  transition: transform 120ms ease, background 120ms ease;
+}
+#calendarPanel .calendar-day:hover .cal-plus{
+  transform: translateY(-1px);
+  background: rgba(0,0,0,0.03);
+}
+
+/* event chips inside day */
+#calendarPanel .cal-day-events{
+  margin-top: 10px;
+  display:flex;
+  flex-direction: column;
+  gap: 6px;
+}
+#calendarPanel .cal-chip{
+  display:flex;
+  align-items:center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(15,23,42,0.10);
+  background: rgba(255,255,255,0.85);
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(15,23,42,0.88);
+  overflow:hidden;
+}
+#calendarPanel .cal-chip-dot{
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+#calendarPanel .cal-chip-time{
+  font-variant-numeric: tabular-nums;
+  opacity: .75;
+  flex: 0 0 auto;
+}
+#calendarPanel .cal-chip span:last-child{
+  overflow:hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- side panels --- */
+#calendarPanel .planner-side{
+  display:flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#calendarPanel .ps-card{
+  border: none;
+  border-radius: 16px;
+  background: #fdfdfd;
+  box-shadow: 0 8px 16px rgba(15,23,42,0.12);
+  overflow: hidden;
+}
+#calendarPanel .ps-head{
+  padding: 4px 10px;
+  border-bottom: 1px solid rgba(15,23,42,0.06);
+  background: #fff;
+  display:flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 14px;
+  font-weight: 700;
+  gap:6px;
+  min-height: 32px;
+}
+#calendarPanel .ps-head h3{
+  font-size: 14px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+}
+#calendarPanel .ps-muted,
+#calendarPanel .ps-date{
+  font-size: 12px;
+  font-weight: 800;
+  color: rgba(15,23,42,0.60);
+}
+#calendarPanel .ps-list{
+  padding: 6px 10px 10px;
+  display:flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+#calendarPanel .ps-summary{
+  padding: 14px 0;
+}
+#calendarPanel .ps-summary{
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(15,23,42,0.08);
+}
+#calendarPanel .ps-summary-label-row,
+#calendarPanel .ps-summary-count-row{
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+#calendarPanel .ps-summary-label{
+  flex:1;
+  text-align:left;
+  font-size: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-soft);
+}
+#calendarPanel .ps-summary-count-row strong{
+  flex:1;
+  text-align:left;
+  font-size: 16px;
+  font-weight: 800;
+  display:block;
+}
+
+/* rows inside side lists (plannerRowHTML) */
+#calendarPanel .ps-row{
+  display:flex;
+  gap: 8px;
+  padding: 8px 8px;
+  border-radius: 18px;
+  border: 1px solid rgba(15,23,42,0.06);
+  background: rgba(15,23,42,0.02);
+  cursor: pointer;
+  transition: transform 120ms ease, background 120ms ease;
+  white-space: normal;
+}
+#calendarPanel .ps-row:hover{
+  transform: translateY(-1px);
+  background: rgba(17,100,163,0.05);
+}
+#calendarPanel .ps-dot{
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  margin-top: 6px;
+  flex: 0 0 auto;
+}
+#calendarPanel .ps-row-title{
+  font-weight: 900;
+  font-size: 13px;
+  line-height: 1.3;
+  word-break: break-word;
+  white-space: normal;
+}
+#calendarPanel .ps-row-sub{
+  margin-top: 2px;
+  font-size: 12px;
+  color: rgba(15,23,42,0.62);
+  font-weight: 700;
+  line-height: 1.3;
+  word-break: break-word;
+  white-space: normal;
+}
+
+/* quick actions */
+#calendarPanel .ps-actions{
+  padding: 10px 12px 12px;
+  display:flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+#calendarPanel .ps-btn{
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border-soft);
+  background: #fff;
+  font-weight: 900;
+  font-size: 13px;
+  cursor:pointer;
+  transition: transform 120ms ease, background 120ms ease;
+}
+#calendarPanel .ps-btn:hover{
+  transform: translateY(-1px);
+  background: rgba(0,0,0,0.03);
+}
+
+/* --- responsive --- */
+@media (max-width: 980px){
+  #calendarPanel .planner-grid{
+    grid-template-columns: 1fr;
+  }
+  #calendarPanel .planner-search{
+    min-width: 0;
+    width: 100%;
+  }
+}
+
+/* --- dark mode --- */
+html[data-theme="dark"] #calendarPanel .planner-header,
+html[data-theme="dark"] #calendarPanel .planner-main,
+html[data-theme="dark"] #calendarPanel .ps-card{
+  background: rgba(15, 23, 42, 0.70);
+  border-color: rgba(148,163,184,0.20);
+  box-shadow: 0 18px 40px rgba(2,6,23,0.55);
+}
+html[data-theme="dark"] #calendarPanel .planner-month,
+html[data-theme="dark"] #calendarPanel .pbtn,
+html[data-theme="dark"] #calendarPanel .picon,
+html[data-theme="dark"] #calendarPanel .planner-search,
+html[data-theme="dark"] #calendarPanel .planner-chips{
+  background: rgba(15,23,42,0.65);
+  border-color: rgba(148,163,184,0.22);
+  color: rgba(226,232,240,0.92);
+}
+html[data-theme="dark"] #calendarPanel .chip{
+  background: rgba(71,85,105,.32);
+  border-color: rgba(148,163,184,.24);
+  color: rgba(226,232,240,.94);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 14px 30px rgba(2,6,23,.34);
+}
+html[data-theme="dark"] #calendarPanel .calendar-weekdays{
+  border-bottom-color: rgba(148,163,184,0.18);
+  background: linear-gradient(90deg, rgba(56,189,248,0.14), rgba(34,197,94,0.10));
+}
+html[data-theme="dark"] #calendarPanel .calendar-day{
+  border-color: rgba(148,163,184,0.18);
+  background: rgba(148,163,184,0.06);
+}
+html[data-theme="dark"] #calendarPanel .cal-num{
+  background: rgba(148,163,184,0.12);
+  color: rgba(226,232,240,0.95);
+}
+html[data-theme="dark"] #calendarPanel .cal-chip{
+  background: rgba(15,23,42,0.55);
+  border-color: rgba(148,163,184,0.20);
+  color: rgba(226,232,240,0.92);
+}
+html[data-theme="dark"] #calendarPanel .ps-head{
+  border-bottom-color: rgba(148,163,184,0.18);
+  background: rgba(148,163,184,0.06);
+}
+html[data-theme="dark"] #calendarPanel .ps-row{
+  border-color: rgba(148,163,184,0.18);
+  background: rgba(148,163,184,0.06);
+}
+html[data-theme="dark"] #calendarPanel .ps-row-sub,
+html[data-theme="dark"] #calendarPanel .ps-muted,
+html[data-theme="dark"] #calendarPanel .ps-date{
+  color: rgba(226,232,240,0.65);
+}
+
+/* =========================
+   CALENDAR â€“ Week + Agenda polish
+   Paste at END of styles.refactor.css
+   ========================= */
+
+/* ---------- Week view ---------- */
+#calendarPanel .cal-week-scroll{
+  padding: 0;
+}
+
+#calendarPanel .cal-week-head{
+  height: 44px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(15,23,42,0.65);
+  background: linear-gradient(90deg, rgba(17,100,163,0.08), rgba(34,197,94,0.06));
+}
+#calendarPanel .cal-week-head.time{
+  background: rgba(0,0,0,0.02);
+}
+
+#calendarPanel .cal-week-time{
+  display:flex;
+  align-items:flex-start;
+  justify-content:center;
+  padding-top: 10px;
+  font-size: 12px;
+  font-weight: 900;
+  color: rgba(15,23,42,0.55);
+  border-top: 1px solid rgba(15,23,42,0.06);
+  background: rgba(0,0,0,0.015);
+  font-variant-numeric: tabular-nums;
+}
+
+#calendarPanel .cal-week-day{
+  position: relative;
+  border-left: 1px solid rgba(15,23,42,0.06);
+  background: rgba(15,23,42,0.01);
+  overflow: hidden;
+}
+
+#calendarPanel .cal-slot{
+  position: relative;
+  height: 52px;
+  border-top: 1px solid rgba(15,23,42,0.06);
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+#calendarPanel .cal-slot:hover{
+  background: rgba(17,100,163,0.06);
+}
+#calendarPanel .cal-slot::after{
+  content: "+";
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  font-size: 12px;
+  font-weight: 900;
+  color: rgba(17,100,163,0.45);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+#calendarPanel .cal-slot:hover::after{
+  opacity: 1;
+}
+
+#calendarPanel .cal-block{
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  border-radius: 14px;
+  border: 1px solid rgba(15,23,42,0.10);
+  box-shadow: 0 10px 18px rgba(15,23,42,0.10);
+  padding: 8px 10px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform 120ms ease, filter 120ms ease;
+}
+#calendarPanel .cal-block:hover{
+  transform: translateY(-1px);
+  filter: brightness(0.98);
+}
+#calendarPanel .cal-block .t{
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 900;
+  color: rgba(15,23,42,0.70);
+  font-variant-numeric: tabular-nums;
+}
+#calendarPanel .cal-block .name{
+  margin-top: 4px;
+  font-size: 13px;
+  font-weight: 900;
+  color: rgba(15,23,42,0.92);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------- Agenda view ---------- */
+#calendarPanel .calendar-grid .file-card{
+  margin: 0 !important;
+  border-radius: 18px;
+  border: 1px solid rgba(15,23,42,0.10);
+  background: #fff;
+  box-shadow: 0 12px 26px rgba(15,23,42,0.08);
+  padding: 12px 12px;
+}
+
+#calendarPanel .calendar-grid .file-card > div:first-child{
+  font-size: 13px;
+  font-weight: 900;
+  color: rgba(15,23,42,0.75);
+  letter-spacing: 0.02em;
+}
+
+#calendarPanel .cal-badge{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(15,23,42,0.10);
+  background: rgba(15,23,42,0.04);
+  font-size: 12px;
+  font-weight: 900;
+  color: rgba(15,23,42,0.70);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+#calendarPanel .calendar-grid .file-card a{
+  font-weight: 900;
+  text-decoration: none;
+  color: rgba(17,100,163,0.95);
+}
+#calendarPanel .calendar-grid .file-card a:hover{
+  text-decoration: underline;
+}
+
+/* ---------- Dark mode for week + agenda ---------- */
+html[data-theme="dark"] #calendarPanel .cal-week-head{
+  color: rgba(226,232,240,0.78);
+  background: linear-gradient(90deg, rgba(56,189,248,0.14), rgba(34,197,94,0.10));
+}
+html[data-theme="dark"] #calendarPanel .cal-week-time{
+  color: rgba(226,232,240,0.55);
+  border-top-color: rgba(148,163,184,0.16);
+  background: rgba(148,163,184,0.06);
+}
+html[data-theme="dark"] #calendarPanel .cal-week-day{
+  border-left-color: rgba(148,163,184,0.14);
+  background: rgba(148,163,184,0.05);
+}
+html[data-theme="dark"] #calendarPanel .cal-slot{
+  border-top-color: rgba(148,163,184,0.14);
+}
+html[data-theme="dark"] #calendarPanel .cal-slot:hover{
+  background: rgba(56,189,248,0.10);
+}
+html[data-theme="dark"] #calendarPanel .cal-slot::after{
+  color: rgba(226,232,240,0.65);
+}
+html[data-theme="dark"] #calendarPanel .cal-block .t,
+html[data-theme="dark"] #calendarPanel .cal-block .name{
+  color: rgba(226,232,240,0.92);
+}
+html[data-theme="dark"] #calendarPanel .calendar-grid .file-card{
+  background: rgba(15, 23, 42, 0.70);
+  border-color: rgba(148,163,184,0.20);
+  box-shadow: 0 18px 40px rgba(2,6,23,0.55);
+}
+html[data-theme="dark"] #calendarPanel .cal-badge{
+  background: rgba(148,163,184,0.10);
+  border-color: rgba(148,163,184,0.20);
+  color: rgba(226,232,240,0.70);
+}
+
+/* =========================================================
+   MODERN CALENDAR: LEFT MINI-MONTH DRAWER + FULL HEIGHT MAIN
+   ========================================================= */
+
+#calendarPanel .ps-mini .mini-month{
+  padding: 10px 12px 12px;
+}
+#calendarPanel .ps-mini-head{
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  gap: 10px;
+}
+#calendarPanel .ps-mini-nav{
+  display:flex;
+  gap: 6px;
+}
+#calendarPanel .mini-nav-btn{
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  border: 1px solid rgba(15,23,42,0.10);
+  background: rgba(15,23,42,0.02);
+  cursor:pointer;
+  font-weight: 900;
+  transition: transform 120ms ease, background 120ms ease;
+}
+#calendarPanel .mini-nav-btn:hover{
+  transform: translateY(-1px);
+  background: rgba(17,100,163,0.06);
+}
+
+#calendarPanel .mini-weekdays{
+  display:grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+  padding: 0 2px 8px;
+}
+#calendarPanel .mini-weekdays > div{
+  text-align:center;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  color: rgba(15,23,42,0.55);
+  text-transform: uppercase;
+}
+
+#calendarPanel .mini-grid{
+  display:grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+#calendarPanel .mini-day{
+  height: 34px;
+  border-radius: 12px;
+  border: 1px solid rgba(15,23,42,0.10);
+  background: rgba(15,23,42,0.02);
+  cursor:pointer;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+#calendarPanel .mini-day:hover{
+  transform: translateY(-1px);
+  background: rgba(17,100,163,0.06);
+  border-color: rgba(17,100,163,0.22);
+}
+#calendarPanel .mini-day.is-empty{
+  border: 1px dashed rgba(15,23,42,0.10);
+  background: transparent;
+  cursor: default;
+}
+#calendarPanel .mini-day.is-today{
+  border-color: rgba(34,197,94,0.35);
+  box-shadow: inset 0 0 0 2px rgba(34,197,94,0.16);
+}
+#calendarPanel .mini-day.is-selected{
+  border-color: rgba(17,100,163,0.45);
+  box-shadow: inset 0 0 0 2px rgba(17,100,163,0.20);
+  background: rgba(17,100,163,0.10);
+}
+
+html[data-theme="dark"] #calendarPanel .mini-nav-btn,
+html[data-theme="dark"] #calendarPanel .mini-day{
+  background: rgba(148,163,184,0.10);
+  border-color: rgba(148,163,184,0.18);
+  color: rgba(226,232,240,0.90);
+}
+html[data-theme="dark"] #calendarPanel .mini-weekdays > div{
+  color: rgba(226,232,240,0.60);
+}
+
+body.app-fullscreen-mode .sidebar,
+body.app-fullscreen-mode .thread-panel {
+  display: none;
+}
+body.app-fullscreen-mode .chat-layout {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+body.app-fullscreen-mode .main-panel {
+  width: 100%;
+}
+
+/* =========================================================
+   MOBILE DRAWER SIDEBAR (slide-in)
+   ========================================================= */
+
+#calendarPanel .cal-drawer-backdrop{
+  display:none;
+}
+
+@media (max-width: 1050px){
+  #calendarPanel .planner-grid{
+    grid-template-columns: 1fr !important;
+    position: relative;
+  }
+
+  /* sidebar becomes off-canvas drawer */
+  #calendarPanel .planner-side{
+    display:block !important;
+    position: fixed;
+    top: 84px;
+    left: 84px;
+    width: min(360px, 90vw);
+    height: calc(100vh - 110px);
+    transform: translateX(-110%);
+    transition: transform 180ms ease;
+    z-index: 60;
+    box-shadow: 0 20px 60px rgba(2,6,23,0.35);
+  }
+
+  #calendarPanel .planner.is-drawer-open .planner-side{
+    transform: translateX(0);
+  }
+
+  /* backdrop */
+  #calendarPanel .cal-drawer-backdrop{
+    display:block;
+    position: fixed;
+    inset: 0;
+    background: rgba(2,6,23,0.35);
+    z-index: 55;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 180ms ease;
+  }
+  #calendarPanel .planner.is-drawer-open .cal-drawer-backdrop{
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* =========================================================
+   "GOOGLE-LIKE" POLISH: hover add, overflow, popover, agenda rows
+   ========================================================= */
+
+#calendarPanel .calendar-grid[data-view="month"] .cal-plus{
+  opacity: 0;
+  transform: scale(0.96);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+#calendarPanel .calendar-grid[data-view="month"] .calendar-day:hover .cal-plus{
+  opacity: 1;
+  transform: scale(1);
+}
+
+#calendarPanel .cal-more{
+  margin-top: 6px;
+  width: 100%;
+  border: 1px dashed rgba(15,23,42,0.16);
+  background: rgba(15,23,42,0.02);
+  border-radius: 12px;
+  padding: 6px 8px;
+  font-weight: 900;
+  font-size: 12px;
+  cursor: pointer;
+}
+#calendarPanel .cal-more:hover{
+  background: rgba(17,100,163,0.06);
+}
+
+.cal-pop{
+  position: fixed;
+  width: 320px;
+  max-height: 360px;
+  display:flex;
+  flex-direction: column;
+  border-radius: 18px;
+  border: 1px solid rgba(15,23,42,0.12);
+  background: #fff;
+  box-shadow: 0 30px 90px rgba(2,6,23,0.28);
+  overflow: hidden;
+  z-index: 9999;
+}
+.cal-pop-head{
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(15,23,42,0.08);
+  background: rgba(0,0,0,0.02);
+}
+.cal-pop-title{ font-weight: 900; }
+.cal-pop-x{
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  border: 1px solid rgba(15,23,42,0.10);
+  background: #fff;
+  cursor: pointer;
+  font-weight: 900;
+}
+.cal-pop-body{
+  padding: 10px 10px 12px;
+  overflow: auto;
+  display:flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cal-pop-item{
+  width: 100%;
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  padding: 10px 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(15,23,42,0.08);
+  background: rgba(15,23,42,0.02);
+  cursor:pointer;
+  text-align:left;
+}
+.cal-pop-item:hover{ background: rgba(17,100,163,0.06); }
+.cal-pop-time{
+  font-weight: 900;
+  opacity: .75;
+  font-variant-numeric: tabular-nums;
+}
+.cal-pop-name{
+  font-weight: 900;
+  overflow:hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#calendarPanel .agenda-row{
+  width: 100%;
+  display:flex;
+  gap: 10px;
+  align-items:center;
+  padding: 10px 10px;
+  margin-bottom: 6px;
+  border-radius: 14px;
+  border: 1px solid rgba(15,23,42,0.08);
+  background: rgba(15,23,42,0.02);
+  cursor: pointer;
+  text-align:left;
+}
+#calendarPanel .agenda-row:hover{
+  background: rgba(17,100,163,0.06);
+}
+/* =========================================
+   CALENDAR FIX PATCH
+   Put this at the VERY END of the calendar CSS
+   ========================================= */
+
+/* 1) Prevent layout overflow everywhere inside planner */
+#calendarPanel,
+#calendarPanel *{
+  box-sizing: border-box;
+}
+
+#calendarPanel .planner,
+#calendarPanel .planner-grid,
+#calendarPanel .planner-side,
+#calendarPanel .planner-main,
+#calendarPanel .ps-card,
+#calendarPanel .ps-list,
+#calendarPanel .ps-summary-grid,
+#calendarPanel .mini-month,
+#calendarPanel .mini-grid,
+#calendarPanel .calendar-grid{
+  min-width: 0;
+}
+
+/* 2) Remove the dark horizontal bar / top strip in week view */
+#calendarPanel .cal-week-scroll{
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+#calendarPanel .cal-week-scroll > div{
+  min-height: auto !important;
+  background: transparent !important;
+}
+
+#calendarPanel .planner-main{
+  overflow: hidden;
+}
+
+#calendarPanel .planner-main::before,
+#calendarPanel .planner-main::after,
+#calendarPanel .calendar-grid::before,
+#calendarPanel .calendar-grid::after,
+#calendarPanel .cal-week-scroll::before,
+#calendarPanel .cal-week-scroll::after{
+  display: none !important;
+  content: none !important;
+}
+
+/* 3) Make week board clean and fully inside card */
+#calendarPanel .calendar-grid[data-view="week"],
+#calendarPanel .cal-week-scroll{
+  padding: 6px 12px 12px !important;
+  overflow: auto !important;
+}
+
+#calendarPanel .cal-week-scroll > div{
+  padding: 0 !important;
+  gap: 10px !important;
+}
+
+#calendarPanel .cal-week-scroll [style*="grid-template-columns: 72px 1fr"]{
+  align-items: start;
+}
+
+/* 4) Sidebar card content should stay inside the card */
+#calendarPanel .planner-side{
+  overflow-x: hidden;
+}
+
+#calendarPanel .ps-card{
+  overflow: hidden;
+}
+
+#calendarPanel .ps-head,
+#calendarPanel .ps-list,
+#calendarPanel .ps-actions,
+#calendarPanel .ps-summary-grid,
+#calendarPanel .mini-month{
+  width: 100%;
+  max-width: 100%;
+}
+
+/* 5) Fix summary items overflowing */
+#calendarPanel .ps-summary-grid{
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: stretch;
+}
+
+#calendarPanel .ps-summary-item{
+  min-width: 0;
+  overflow: hidden;
+}
+
+#calendarPanel .ps-summary-label{
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#calendarPanel .ps-summary-item strong{
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 6) Fix Today / Upcoming / Deadlines content overflow */
+#calendarPanel .ps-row{
+  min-width: 0;
+  align-items: flex-start;
+}
+
+#calendarPanel .ps-row > div{
+  min-width: 0;
+  flex: 1;
+}
+
+#calendarPanel .ps-row-title,
+#calendarPanel .ps-row-sub{
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#calendarPanel .ps-row-title{
+  line-height: 1.35;
+}
+
+#calendarPanel .ps-row-sub{
+  line-height: 1.4;
+}
+
+/* 7) Fix quick action buttons so they stay inside card */
+#calendarPanel .ps-actions{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+#calendarPanel .ps-btn{
+  max-width: 100%;
+  white-space: normal;
+  height: auto;
+  min-height: 36px;
+  line-height: 1.25;
+  padding: 8px 12px;
+}
+
+/* 8) Mini month should fit fully inside card */
+#calendarPanel .ps-mini{
+  overflow: hidden;
+}
+
+#calendarPanel .mini-month{
+  overflow: hidden;
+}
+
+#calendarPanel .mini-grid{
+  width: 100%;
+}
+
+#calendarPanel .mini-day{
+  width: 100%;
+  min-width: 0;
+}
+
+/* 9) Week grid header cleanup */
+#calendarPanel .calendar-weekdays{
+  box-shadow: none !important;
+  border-top: none !important;
+}
+
+#calendarPanel .planner-main > .calendar-weekdays{
+  margin: 0 !important;
+}
+
+/* 10) Better card spacing so text does not touch edges */
+#calendarPanel .ps-list{
+  padding: 12px;
+}
+
+#calendarPanel .ps-head{
+  padding: 14px 16px;
+}
+
+/* 11) Make the whole sidebar visually cleaner */
+#calendarPanel .planner-side{
+  padding-right: 0;
+}
+
+/* 12) Mobile/tablet safety */
+@media (max-width: 1150px){
+  #calendarPanel .ps-summary-grid{
+    grid-template-columns: 1fr;
+  }
+
+  #calendarPanel .ps-summary-item strong,
+  #calendarPanel .ps-summary-label{
+    white-space: normal;
+  }
+}
+/* =========================================
+   HARD FIX: hide internal controls for planner
+   ========================================= */
+
+#calendarPanel .planner-hidden-control,
+#calendarPanel #calAssigneeFilter,
+#calendarPanel #calSelectedDateLabel{
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0 0 0 0) !important;
+  clip-path: inset(50%) !important;
+  border: 0 !important;
+  white-space: nowrap !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+/* =========================================
+   HARD FIX: sidebar cards keep content inside
+   ========================================= */
+
+#calendarPanel .planner-side,
+#calendarPanel .ps-card,
+#calendarPanel .ps-list,
+#calendarPanel .ps-row,
+#calendarPanel .ps-row > div,
+#calendarPanel .ps-summary-item,
+#calendarPanel .ps-actions{
+  min-width: 0 !important;
+}
+
+#calendarPanel .ps-card{
+  overflow: hidden !important;
+}
+
+#calendarPanel .ps-list{
+  overflow-x: hidden !important;
+}
+
+#calendarPanel .ps-row-title,
+#calendarPanel .ps-row-sub{
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+  white-space: normal !important;
+}
+
+#calendarPanel .ps-btn{
+  max-width: 100% !important;
+  white-space: normal !important;
+  height: auto !important;
+}
+/* =========================================
+   FINAL SIDEBAR CONTENT FIT FIX
+   Put this at the VERY END of the calendar CSS
+   ========================================= */
+
+/* Let the sidebar scroll naturally */
+#calendarPanel .planner-side{
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  padding-right: 4px !important;
+}
+
+/* Cards should grow with content */
+#calendarPanel .ps-card{
+  height: auto !important;
+  min-height: unset !important;
+  overflow: hidden !important;
+}
+
+/* Heads and lists need tighter but safe spacing */
+#calendarPanel .ps-head{
+  padding: 14px 16px !important;
+  min-height: auto !important;
+}
+
+#calendarPanel .ps-list{
+  max-height: none !important;
+  overflow: visible !important;
+  padding: 12px 14px 14px !important;
+}
+
+/* Summary count card */
+#calendarPanel .ps-summary{
+  overflow: hidden !important;
+}
+
+#calendarPanel .ps-summary-grid{
+  display: grid !important;
+  grid-template-columns: 1fr !important;
+  gap: 8px !important;
+  padding: 12px 14px !important;
+}
+
+#calendarPanel .ps-summary-item{
+  padding: 10px 12px !important;
+  border-radius: 14px !important;
+}
+
+#calendarPanel .ps-summary-label{
+  display: block !important;
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: unset !important;
+  line-height: 1.25 !important;
+}
+
+#calendarPanel .ps-summary-item strong{
+  display: block !important;
+  margin-top: 6px !important;
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: unset !important;
+  line-height: 1.15 !important;
+}
+
+/* Rows in Today / Upcoming / Deadlines */
+#calendarPanel .ps-row{
+  padding: 12px !important;
+  border-radius: 16px !important;
+  align-items: flex-start !important;
+}
+
+#calendarPanel .ps-row > div{
+  min-width: 0 !important;
+  flex: 1 !important;
+}
+
+#calendarPanel .ps-row-title{
+  font-size: 13px !important;
+  line-height: 1.35 !important;
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: unset !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+}
+
+#calendarPanel .ps-row-sub{
+  margin-top: 4px !important;
+  font-size: 12px !important;
+  line-height: 1.45 !important;
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: unset !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+}
+
+/* Quick actions card */
+#calendarPanel .ps-actions{
+  padding: 12px 14px 14px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  gap: 8px !important;
+}
+
+#calendarPanel .ps-btn{
+  width: 100% !important;
+  max-width: 100% !important;
+  min-height: 38px !important;
+  height: auto !important;
+  padding: 10px 12px !important;
+  white-space: normal !important;
+  line-height: 1.3 !important;
+  text-align: left !important;
+  justify-content: flex-start !important;
+}
+
+/* Mini month card should not squeeze following cards */
+#calendarPanel .ps-mini .mini-month{
+  padding: 10px 12px 12px !important;
+}
+
+#calendarPanel .mini-grid{
+  gap: 6px !important;
+}
+
+/* Slightly more space between cards */
+#calendarPanel .planner-side{
+  gap: 12px !important;
+}
+
+/* Smaller sidebar on tighter layouts */
+@media (min-width: 1151px){
+  #calendarPanel .planner-grid{
+    grid-template-columns: 280px minmax(0, 1fr) !important;
+  }
+}
+/* =========================================
+   SIDEBAR CARD SHRINK FIX
+   Put this at the VERY END
+   ========================================= */
+
+/* Sidebar keeps its own scroll, but cards must not shrink */
+#calendarPanel .planner-side{
+  display: flex !important;
+  flex-direction: column !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  gap: 12px !important;
+  min-height: 0 !important;
+}
+
+/* This is the key fix */
+#calendarPanel .planner-side > .ps-card{
+  flex: 0 0 auto !important;
+  min-height: fit-content !important;
+  height: auto !important;
+}
+
+/* Keep card internals natural */
+#calendarPanel .ps-card{
+  overflow: hidden !important;
+}
+
+#calendarPanel .ps-head{
+  padding: 12px 14px !important;
+}
+
+#calendarPanel .ps-list{
+  max-height: none !important;
+  overflow: visible !important;
+  padding: 10px 12px 12px !important;
+}
+
+/* Summary block */
+#calendarPanel .ps-summary-grid{
+  display: grid !important;
+  grid-template-columns: 1fr !important;
+  gap: 8px !important;
+  padding: 10px 12px 12px !important;
+}
+
+#calendarPanel .ps-summary-item{
+  flex: 0 0 auto !important;
+  min-height: auto !important;
+  padding: 10px 12px !important;
+}
+
+#calendarPanel .ps-summary-label{
+  font-size: 11px !important;
+  line-height: 1.2 !important;
+  white-space: normal !important;
+}
+
+#calendarPanel .ps-summary-item strong{
+  margin-top: 4px !important;
+  font-size: 20px !important;
+  line-height: 1.1 !important;
+  white-space: normal !important;
+}
+
+/* Rows */
+#calendarPanel .ps-row{
+  flex: 0 0 auto !important;
+  padding: 10px 12px !important;
+  align-items: flex-start !important;
+}
+
+#calendarPanel .ps-row > div{
+  min-width: 0 !important;
+  flex: 1 1 auto !important;
+}
+
+#calendarPanel .ps-row-title{
+  font-size: 12px !important;
+  line-height: 1.3 !important;
+  white-space: normal !important;
+  overflow-wrap: anywhere !important;
+}
+
+#calendarPanel .ps-row-sub{
+  margin-top: 3px !important;
+  font-size: 11px !important;
+  line-height: 1.35 !important;
+  white-space: normal !important;
+  overflow-wrap: anywhere !important;
+}
+
+/* Quick actions */
+#calendarPanel .ps-actions{
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 8px !important;
+  padding: 10px 12px 12px !important;
+}
+
+#calendarPanel .ps-btn{
+  flex: 0 0 auto !important;
+  width: 100% !important;
+  min-height: 36px !important;
+  height: auto !important;
+  padding: 9px 12px !important;
+  font-size: 12px !important;
+  line-height: 1.25 !important;
+  text-align: left !important;
+  white-space: normal !important;
+}
+
+/* Mini month card */
+#calendarPanel .ps-mini .mini-month{
+  padding: 10px 12px 12px !important;
+}
+
+/* Desktop sidebar a bit tighter */
+@media (min-width: 1151px){
+  #calendarPanel .planner-grid{
+    grid-template-columns: 270px minmax(0, 1fr) !important;
+  }
+}
+
+/* =========================================
+   EVENT MODAL — cleaner compose layout
+   Put at VERY END of calendar CSS
+   ========================================= */
+
+.modal-backdrop{
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(15,23,42,.42);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 9999;
+}
+
+.modal-backdrop.hidden{
+  display: none !important;
+}
+
+.cal-modal-shell{
+  width: min(680px, calc(100vw - 28px));
+  max-height: min(88vh, 860px);
+  overflow: auto;
+  border-radius: 26px;
+  border: 1px solid rgba(148,163,184,.22);
+  background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.98));
+  box-shadow: 0 24px 80px rgba(15,23,42,.22);
+}
+
+.cal-modal-top{
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px 22px 16px;
+  border-bottom: 1px solid rgba(148,163,184,.16);
+}
+
+.cal-modal-kicker{
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: #64748b;
+  margin-bottom: 6px;
+}
+
+.cal-modal-top h2{
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.1;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.cal-modal-subtitle{
+  margin: 8px 0 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #64748b;
+  max-width: 520px;
+}
+
+.cal-modal-close{
+  width: 44px;
+  height: 44px;
+  border-radius: 16px;
+  border: 1px solid rgba(148,163,184,.22);
+  background: rgba(255,255,255,.92);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  color: #0f172a;
+  transition: transform .12s ease, background .12s ease, box-shadow .12s ease;
+}
+
+.cal-modal-close:hover{
+  transform: translateY(-1px);
+  background: #fff;
+  box-shadow: 0 10px 20px rgba(15,23,42,.08);
+}
+
+.cal-modal-body{
+  padding: 18px 22px 18px;
+}
+
+.cal-form-grid{
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.cal-field{
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.cal-field-title{
+  grid-column: 1 / -1;
+}
+
+.cal-field-date{
+  grid-column: span 1;
+}
+
+.cal-field-time{
+  grid-column: span 1;
+}
+
+.cal-field-endtime{
+  grid-column: span 1;
+}
+
+.cal-field-toggle{
+  grid-column: span 1;
+}
+
+.cal-field-link{
+  grid-column: span 2;
+}
+
+.cal-field-reminder{
+  grid-column: span 2;
+}
+
+.cal-field-notes{
+  grid-column: 1 / -1;
+}
+
+.cal-field-color{
+  grid-column: 1 / -1;
+}
+
+.cal-field label{
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .02em;
+  color: #475569;
+}
+
+.cal-field input,
+.cal-field textarea,
+.cal-field select{
+  width: 100%;
+  border-radius: 14px;
+  border: 1px solid rgba(148,163,184,.26);
+  background: rgba(255,255,255,.94);
+  padding: 12px 14px;
+  font-size: 15px;
+  color: #0f172a;
+  outline: none;
+  transition: border-color .14s ease, box-shadow .14s ease, background .14s ease;
+}
+
+.cal-field input:focus,
+.cal-field textarea:focus,
+.cal-field select:focus{
+  border-color: rgba(37,99,235,.5);
+  box-shadow: 0 0 0 4px rgba(37,99,235,.10);
+  background: #fff;
+}
+
+.cal-field textarea{
+  min-height: 120px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.cal-input-icon{
+  position: relative;
+}
+
+.cal-input-icon i{
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #64748b;
+}
+
+.cal-input-icon input{
+  padding-left: 40px;
+}
+
+.cal-toggle-card{
+  min-height: 50px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 19px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(148,163,184,.24);
+  background: rgba(255,255,255,.8);
+  cursor: pointer;
+}
+
+.cal-toggle-card input{
+  display: none;
+}
+
+.cal-toggle-ui{
+  width: 20px;
+  height: 20px;
+  border-radius: 7px;
+  border: 1.5px solid rgba(148,163,184,.72);
+  background: #fff;
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.cal-toggle-card input:checked + .cal-toggle-ui{
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
+.cal-toggle-card input:checked + .cal-toggle-ui::after{
+  content: "";
+  position: absolute;
+  inset: 4px;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.cal-toggle-copy{
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+}
+
+.cal-toggle-copy strong{
+  font-size: 14px;
+  color: #0f172a;
+}
+
+.cal-toggle-copy small{
+  font-size: 12px;
+  color: #64748b;
+}
+
+.cal-color-row{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.cal-color-chip{
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  border: 2px solid rgba(255,255,255,.95);
+  box-shadow: 0 0 0 1px rgba(15,23,42,.12);
+  cursor: pointer;
+  transition: transform .12s ease;
+}
+
+.cal-color-chip:hover{
+  transform: scale(1.08);
+}
+
+.cal-color-chip.is-blue{ background: #2563eb; }
+.cal-color-chip.is-green{ background: #16a34a; }
+.cal-color-chip.is-amber{ background: #f59e0b; }
+.cal-color-chip.is-red{ background: #ef4444; }
+.cal-color-chip.is-violet{ background: #8b5cf6; }
+
+#calColorInput{
+  width: 42px;
+  height: 34px;
+  padding: 2px;
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.cal-help{
+  font-size: 11px;
+  line-height: 1.4;
+  color: #64748b;
+}
+
+.cal-modal-footer{
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 22px 20px;
+  border-top: 1px solid rgba(148,163,184,.16);
+  background: rgba(248,250,252,.96);
+}
+
+.cal-btn{
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 14px;
+  border: 1px solid rgba(148,163,184,.24);
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform .12s ease, box-shadow .12s ease;
+  max-width: 180px;
+  justify-content: center;
+}
+
+.cal-btn:hover{
+  transform: translateY(-1px);
+}
+
+.cal-btn-ghost{
+  background: #f1f5f9;
+  color: #0f172a;
+  border-color: transparent;
+}
+
+.cal-btn-danger{
+  margin-right: auto;
+  background: rgba(239,68,68,.12);
+  color: #b91c1c;
+  border-color: rgba(239,68,68,.22);
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cal-btn-primary{
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 14px 26px rgba(16,185,129,.35);
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cal-btn-primary:hover{
+  box-shadow: 0 18px 30px rgba(16,185,129,.35);
+  transform: translateY(-1px);
+}
+
+.cal-delete-popover{
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15,23,42,.24);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border-radius: inherit;
+  z-index: 5;
+}
+
+.cal-delete-popover.hidden{
+  display: none;
+}
+
+.cal-delete-popover-card{
+  width: min(360px, 100%);
+  padding: 18px;
+  border-radius: 22px;
+  border: 1px solid rgba(148,163,184,.18);
+  background: rgba(255,255,255,.96);
+  box-shadow: 0 24px 60px rgba(15,23,42,.18);
+}
+
+.cal-delete-popover-copy{
+  display: grid;
+  gap: 6px;
+}
+
+.cal-delete-popover-title{
+  font-size: 18px;
+  font-weight: 900;
+  color: #0f172a;
+}
+
+.cal-delete-popover-text{
+  font-size: 14px;
+  line-height: 1.45;
+  color: #475569;
+}
+
+.cal-delete-popover-actions{
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.cal-alert-popover{
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(127,29,29,.16);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border-radius: inherit;
+  z-index: 6;
+}
+
+.cal-alert-popover.hidden{
+  display: none;
+}
+
+.cal-alert-popover-card{
+  width: min(380px, 100%);
+  padding: 20px;
+  border-radius: 24px;
+  border: 1px solid rgba(239,68,68,.22);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.98), rgba(255,244,244,.96));
+  box-shadow:
+    0 28px 70px rgba(127,29,29,.18),
+    inset 0 1px 0 rgba(255,255,255,.8);
+}
+
+.cal-alert-popover-copy{
+  display: grid;
+  gap: 8px;
+}
+
+.cal-alert-popover-badge{
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(239,68,68,.12);
+  border: 1px solid rgba(239,68,68,.18);
+  color: #b91c1c;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+
+.cal-alert-popover-title{
+  font-size: 20px;
+  font-weight: 900;
+  color: #7f1d1d;
+}
+
+.cal-alert-popover-text{
+  font-size: 14px;
+  line-height: 1.5;
+  color: #7f1d1d;
+}
+
+.cal-alert-popover-actions{
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+
+body.modal-open{
+  overflow: hidden;
+}
+
+@media (max-width: 760px){
+  .modal-backdrop{
+    padding: 10px;
+    place-items: end center;
+  }
+
+  .cal-modal-shell{
+    width: 100%;
+    max-height: 92vh;
+    border-radius: 24px 24px 0 0;
+  }
+
+  .cal-modal-top{
+    padding: 18px 18px 14px;
+  }
+
+  .cal-modal-body{
+    padding: 16px 18px;
+  }
+
+  .cal-form-grid{
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .cal-field-title,
+  .cal-field-date,
+  .cal-field-time,
+  .cal-field-endtime,
+  .cal-field-toggle,
+  .cal-field-link,
+  .cal-field-reminder,
+  .cal-field-notes,
+  .cal-field-color{
+    grid-column: 1 / -1;
+  }
+
+  .cal-toggle-card{
+    margin-top: 0;
+  }
+
+  .cal-modal-footer{
+    padding: 14px 18px 18px;
+    flex-direction: column-reverse;
+  }
+
+  .cal-btn{
+    width: 100%;
+  }
+
+  .cal-delete-popover{
+    padding: 16px;
+    align-items: end;
+  }
+
+  .cal-delete-popover-card{
+    width: 100%;
+    border-radius: 24px;
+  }
+
+  .cal-delete-popover-actions{
+    flex-direction: column-reverse;
+  }
+
+  .cal-alert-popover{
+    padding: 16px;
+    align-items: end;
+  }
+
+  .cal-alert-popover-card{
+    width: 100%;
+    border-radius: 24px;
+  }
+}
+
+html[data-theme="dark"] .cal-modal-shell{
+  border-color: rgba(148,163,184,.18);
+  background: linear-gradient(180deg, rgba(15,23,42,.96), rgba(15,23,42,.98));
+  box-shadow: 0 30px 90px rgba(2,6,23,.55);
+}
+
+html[data-theme="dark"] .cal-modal-top,
+html[data-theme="dark"] .cal-modal-footer{
+  border-color: rgba(148,163,184,.14);
+}
+html[data-theme="dark"] .cal-modal-kicker,
+html[data-theme="dark"] .cal-modal-subtitle,
+html[data-theme="dark"] .cal-help,
+html[data-theme="dark"] .cal-toggle-copy small{color:rgba(226,232,240,.66);}
+html[data-theme="dark"] .cal-modal-top h2,
+html[data-theme="dark"] .cal-field label,
+html[data-theme="dark"] .cal-toggle-copy strong{color:rgba(248,250,252,.96);}
+html[data-theme="dark"] .cal-modal-close,
+html[data-theme="dark"] .cal-field input,
+html[data-theme="dark"] .cal-field textarea,
+html[data-theme="dark"] .cal-field select,
+html[data-theme="dark"] .cal-toggle-card,
+html[data-theme="dark"] .cal-btn-ghost{background:rgba(30,41,59,.72);border-color:rgba(148,163,184,.18);color:rgba(248,250,252,.94);}
+html[data-theme="dark"] .cal-btn-danger{background:rgba(127,29,29,.34);border-color:rgba(248,113,113,.22);color:rgba(254,202,202,.96);}
+html[data-theme="dark"] .cal-btn-primary{background:linear-gradient(135deg,#22c55e,#16a34a);}
+html[data-theme="dark"] .cal-delete-popover{background:rgba(2,6,23,.42);}
+html[data-theme="dark"] .cal-delete-popover-card{background:rgba(15,23,42,.96);border-color:rgba(148,163,184,.18);box-shadow:0 30px 90px rgba(2,6,23,.55);}
+html[data-theme="dark"] .cal-delete-popover-title{color:rgba(248,250,252,.96);}
+html[data-theme="dark"] .cal-delete-popover-text{color:rgba(226,232,240,.72);}
+html[data-theme="dark"] .cal-alert-popover{background:rgba(69,10,10,.28);}
+html[data-theme="dark"] .cal-alert-popover-card{background:linear-gradient(180deg, rgba(41,12,12,.98), rgba(24,8,8,.98));border-color:rgba(248,113,113,.24);box-shadow:0 30px 90px rgba(2,6,23,.6);}
+html[data-theme="dark"] .cal-alert-popover-badge{background:rgba(239,68,68,.18);border-color:rgba(248,113,113,.18);color:rgba(254,202,202,.96);}
+html[data-theme="dark"] .cal-alert-popover-title,
+html[data-theme="dark"] .cal-alert-popover-text{color:rgba(254,202,202,.96);}
+
+/* Planner height bump */
+#calendarPanel{
+  height: calc(100vh - 72px);
+  min-height: calc(100vh - 72px);
+}
+
+#calendarPanel .planner-grid{
+  min-height: 0;
+  height: 100%;
+}
+
+#calendarPanel .cal-slot{
+  height: 64px;
+}
+
+#calendarPanel .planner-main{
+  height: 100%;
+  min-height: 0;
+}
+
+#calendarPanel #calendarGrid,
+#calendarPanel .calendar-grid[data-view="week"],
+#calendarPanel .cal-week-scroll{
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+}
+
+#calendarPanel .cal-week-scroll > div{
+  height: 100%;
+  min-height: 100%;
+  align-items: stretch;
+}
+
+#calendarPanel .cal-week-scroll > div > div:first-child,
+#calendarPanel .cal-week-scroll > div > div:last-child{
+  height: 100%;
+}
+
+#calendarPanel .cal-week-scroll > div > div:first-child{
+  display: flex;
+  flex-direction: column;
+}
+
+#calendarPanel .cal-week-scroll > div > div:last-child{
+  display: flex;
+  flex-direction: column;
+}
+
+#calendarPanel .cal-week-scroll > div > div:last-child > div:last-child{
+  flex: 1 1 auto;
+  min-height: 0;
+  align-content: stretch;
+}
+
+/* Remove outer sidebar shell card */
+#calendarPanel .planner-side{
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+}
+
+#calendarPanel .ps-card{
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] #calendarPanel .cal-plus{
+  background: rgba(30,41,59,.88) !important;
+  border-color: rgba(148,163,184,.22) !important;
+  color: rgba(248,250,252,.92) !important;
+}
+
+html[data-theme="dark"] #calendarPanel .cal-week-scroll > div > div:first-child,
+html[data-theme="dark"] #calendarPanel .cal-week-scroll > div > div:last-child{
+  background: rgba(15,23,42,.86) !important;
+  border-color: rgba(148,163,184,.18) !important;
+}
+
+#calendarPanel .planner-main{
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+/* Compact planner top area */
+#calendarPanel .planner{
+  gap: 8px;
+}
+
+#calendarPanel .planner-header{
+  padding: 6px 10px;
+  gap: 6px;
+}
+
+#calendarPanel .planner-title h1{
+  font-size: 20px;
+}
+
+#calendarPanel .planner-title-row{
+  gap: 8px;
+}
+
+#calendarPanel .planner-subtitle{
+  font-size: 13px;
+}
+
+#calendarPanel .planner-month,
+#calendarPanel .pbtn,
+#calendarPanel .chip{
+  height: 30px;
+}
+
+#calendarPanel .planner-month{
+  padding: 4px 10px;
+}
+
+#calendarPanel .pbtn{
+  padding: 0 9px;
+}
+
+#calendarPanel .picon{
+  width: 34px;
+  height: 34px;
+}
+
+#calendarPanel .planner-search{
+  padding: 4px 10px;
+  min-width: min(360px, 64vw);
+}
+
+#calendarPanel .planner-chips{
+  padding: 2px 2px 0;
+}
+
+/* Mini month color refresh */
+#calendarPanel .ps-mini{
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.96), rgba(244,247,255,.92)) !important;
+  border: 1px solid rgba(125,150,190,.18) !important;
+}
+
+#calendarPanel .ps-mini-head{
+  background:
+    linear-gradient(90deg, rgba(37,99,235,.10), rgba(20,184,166,.08)) !important;
+}
+
+#calendarPanel .mini-nav-btn{
+  background: rgba(255,255,255,.72);
+  border-color: rgba(96,165,250,.22);
+  color: #315072;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.7);
+}
+
+#calendarPanel .mini-weekdays > div{
+  color: #5c7292;
+}
+
+#calendarPanel .mini-day{
+  background: rgba(255,255,255,.62);
+  border-color: rgba(148,163,184,.18);
+  color: #20314d;
+}
+
+#calendarPanel .mini-day:hover{
+  background: rgba(96,165,250,.14);
+  border-color: rgba(96,165,250,.28);
+}
+
+#calendarPanel .mini-day.is-today{
+  background: linear-gradient(135deg, rgba(34,197,94,.18), rgba(16,185,129,.12));
+  border-color: rgba(34,197,94,.38);
+}
+
+#calendarPanel .mini-day.is-selected{
+  background: linear-gradient(135deg, rgba(37,99,235,.20), rgba(125,90,255,.18));
+  border-color: rgba(37,99,235,.38);
+  color: #17335c;
+}
+
+html[data-theme="dark"] #calendarPanel .ps-mini{
+  background: linear-gradient(180deg, rgba(15,23,42,.94), rgba(20,32,56,.94)) !important;
+  border-color: rgba(96,165,250,.18) !important;
+}
+
+html[data-theme="dark"] #calendarPanel .ps-mini-head{
+  background: linear-gradient(90deg, rgba(37,99,235,.18), rgba(20,184,166,.14)) !important;
+}
+
+html[data-theme="dark"] #calendarPanel .mini-nav-btn{
+  background: rgba(30,41,59,.76);
+  border-color: rgba(96,165,250,.22);
+  color: rgba(226,232,240,.94);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.05);
+}
+
+html[data-theme="dark"] #calendarPanel .mini-weekdays > div{
+  color: rgba(191,219,254,.74);
+}
+
+html[data-theme="dark"] #calendarPanel .mini-day{
+  background: rgba(30,41,59,.72);
+  border-color: rgba(148,163,184,.16);
+  color: rgba(241,245,249,.94);
+}
+
+html[data-theme="dark"] #calendarPanel .mini-day:hover{
+  background: rgba(59,130,246,.20);
+  border-color: rgba(96,165,250,.26);
+}
+
+html[data-theme="dark"] #calendarPanel .mini-day.is-today{
+  background: linear-gradient(135deg, rgba(34,197,94,.22), rgba(20,184,166,.16));
+}
+
+html[data-theme="dark"] #calendarPanel .mini-day.is-selected{
+  background: linear-gradient(135deg, rgba(37,99,235,.26), rgba(125,90,255,.24));
+  border-color: rgba(96,165,250,.34);
+  color: #fff;
+}
+
+/* Sidebar card color refresh */
+#calendarPanel .planner-side > .ps-card:not(.ps-mini){
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.96), rgba(245,248,255,.92)) !important;
+  border: 1px solid rgba(125,150,190,.14) !important;
+}
+
+#calendarPanel .ps-summary{
+  background:
+    linear-gradient(90deg, rgba(37,99,235,.08), rgba(20,184,166,.06)) !important;
+}
+
+#calendarPanel .planner-side > .ps-card:not(.ps-mini) .ps-head{
+  background:
+    linear-gradient(90deg, rgba(37,99,235,.08), rgba(125,211,252,.04)) !important;
+  border-bottom-color: rgba(125,150,190,.14) !important;
+}
+
+#calendarPanel .planner-side > .ps-card:not(.ps-mini) .ps-head h3{
+  color: #243956;
+}
+
+#calendarPanel .planner-side > .ps-card:not(.ps-mini) .ps-summary-label{
+  color: #607593;
+}
+
+#calendarPanel .planner-side > .ps-card:not(.ps-mini) .ps-summary-item strong,
+#calendarPanel .planner-side > .ps-card:not(.ps-mini) .ps-row-title{
+  color: #1f3350;
+}
+
+#calendarPanel .planner-side > .ps-card:not(.ps-mini) .ps-row-sub{
+  color: #70819a;
+}
+
+#calendarPanel .planner-side > .ps-card:not(.ps-mini) .ps-row{
+  background: rgba(255,255,255,.56) !important;
+  border-color: rgba(125,150,190,.12) !important;
+}
+
+#calendarPanel .planner-side > .ps-card:not(.ps-mini) .ps-row:hover{
+  background: rgba(96,165,250,.10) !important;
+  border-color: rgba(96,165,250,.18) !important;
+}
+
+html[data-theme="dark"] #calendarPanel .planner-side > .ps-card:not(.ps-mini){
+  background:
+    linear-gradient(180deg, rgba(15,23,42,.90), rgba(18,31,53,.88)) !important;
+  border-color: rgba(96,165,250,.14) !important;
+}
+
+html[data-theme="dark"] #calendarPanel .ps-summary{
+  background:
+    linear-gradient(90deg, rgba(37,99,235,.16), rgba(20,184,166,.10)) !important;
+}
+
+html[data-theme="dark"] #calendarPanel .planner-side > .ps-card:not(.ps-mini) .ps-head{
+  background:
+    linear-gradient(90deg, rgba(37,99,235,.12), rgba(56,189,248,.06)) !important;
+  border-bottom-color: rgba(96,165,250,.12) !important;
+}
+
+html[data-theme="dark"] #calendarPanel .planner-side > .ps-card:not(.ps-mini) .ps-head h3,
+html[data-theme="dark"] #calendarPanel .planner-side > .ps-card:not(.ps-mini) .ps-summary-item strong,
+html[data-theme="dark"] #calendarPanel .planner-side > .ps-card:not(.ps-mini) .ps-row-title{
+  color: rgba(241,245,249,.95);
+}
+
+html[data-theme="dark"] #calendarPanel .planner-side > .ps-card:not(.ps-mini) .ps-summary-label,
+html[data-theme="dark"] #calendarPanel .planner-side > .ps-card:not(.ps-mini) .ps-row-sub{
+  color: rgba(191,219,254,.72);
+}
+
+html[data-theme="dark"] #calendarPanel .planner-side > .ps-card:not(.ps-mini) .ps-row{
+  background: rgba(30,41,59,.56) !important;
+  border-color: rgba(96,165,250,.12) !important;
+}
+
+html[data-theme="dark"] #calendarPanel .planner-side > .ps-card:not(.ps-mini) .ps-row:hover{
+  background: rgba(37,99,235,.18) !important;
+  border-color: rgba(96,165,250,.20) !important;
+}
+
+/* Weekly view WFM-style refresh */
+#calendarPanel .cal-week-scroll{
+  background:
+    linear-gradient(180deg, rgba(241,245,249,.34), rgba(248,250,252,.10)) !important;
+}
+
+#calendarPanel .cal-week-scroll > div > div:first-child{
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.96), rgba(244,247,252,.92)) !important;
+  border-color: rgba(148,163,184,.14) !important;
+}
+
+#calendarPanel .cal-week-scroll > div > div:last-child{
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.98), rgba(247,250,252,.94)) !important;
+  border-color: rgba(148,163,184,.14) !important;
+}
+
+#calendarPanel .cal-week-scroll > div > div:last-child > div:first-child{
+  background:
+    linear-gradient(90deg, rgba(37,99,235,.08), rgba(20,184,166,.05)) !important;
+}
+
+#calendarPanel .cal-week-scroll > div > div:last-child > div:last-child > div{
+  background: rgba(248,250,252,.82) !important;
+}
+
+#calendarPanel .cal-week-scroll > div > div:last-child > div:last-child > div:hover{
+  background: rgba(239,246,255,.92) !important;
+}
+
+#calendarPanel .cal-slot{
+  background: transparent;
+}
+
+#calendarPanel .cal-slot::after{
+  background: linear-gradient(90deg, rgba(37,99,235,.10), rgba(20,184,166,.08)) !important;
+}
+
+html[data-theme="dark"] #calendarPanel .cal-week-scroll{
+  background:
+    linear-gradient(180deg, rgba(15,23,42,.22), rgba(15,23,42,.08)) !important;
+}
+
+html[data-theme="dark"] #calendarPanel .cal-week-scroll > div > div:first-child{
+  background:
+    linear-gradient(180deg, rgba(15,23,42,.94), rgba(22,34,57,.92)) !important;
+  border-color: rgba(96,165,250,.12) !important;
+}
+
+html[data-theme="dark"] #calendarPanel .cal-week-scroll > div > div:last-child{
+  background:
+    linear-gradient(180deg, rgba(15,23,42,.96), rgba(18,30,52,.94)) !important;
+  border-color: rgba(96,165,250,.12) !important;
+}
+
+html[data-theme="dark"] #calendarPanel .cal-week-scroll > div > div:last-child > div:first-child{
+  background:
+    linear-gradient(90deg, rgba(37,99,235,.16), rgba(20,184,166,.10)) !important;
+}
+
+html[data-theme="dark"] #calendarPanel .cal-week-scroll > div > div:last-child > div:last-child > div{
+  background: rgba(30,41,59,.42) !important;
+}
+
+html[data-theme="dark"] #calendarPanel .cal-week-scroll > div > div:last-child > div:last-child > div:hover{
+  background: rgba(37,99,235,.14) !important;
+}
+
+html[data-theme="dark"] #calendarPanel .cal-slot::after{
+  background: linear-gradient(90deg, rgba(96,165,250,.16), rgba(45,212,191,.10)) !important;
+}
+
+/* Header color refresh */
+#calendarPanel .planner-header{
+  background:
+    linear-gradient(135deg, rgba(255,255,255,.94), rgba(242,247,255,.88)) !important;
+  border-color: rgba(125,150,190,.16) !important;
+}
+
+#calendarPanel .planner-title h1{
+  color: #213552;
+}
+
+#calendarPanel .planner-subtitle{
+  color: #5d7698;
+}
+
+#calendarPanel .planner-month{
+  background: rgba(255,255,255,.62) !important;
+  border-color: rgba(96,165,250,.18) !important;
+  color: #234062;
+}
+
+#calendarPanel .pbtn{
+  background: rgba(255,255,255,.72) !important;
+  border-color: rgba(125,150,190,.18) !important;
+}
+
+#calendarPanel .pbtn:hover{
+  background: rgba(239,246,255,.90) !important;
+}
+
+#calendarPanel .pbtn-active{
+  background: linear-gradient(135deg, rgba(37,99,235,.14), rgba(20,184,166,.10)) !important;
+  border-color: rgba(37,99,235,.24) !important;
+  color: #1b3b63 !important;
+}
+
+#calendarPanel .planner-search{
+  background: rgba(255,255,255,.70) !important;
+  border-color: rgba(125,150,190,.16) !important;
+}
+
+#calendarPanel .planner-search i{
+  color: #6d82a0;
+}
+
+html[data-theme="dark"] #calendarPanel .planner-header{
+  background:
+    linear-gradient(135deg, rgba(15,23,42,.90), rgba(18,32,56,.86)) !important;
+  border-color: rgba(96,165,250,.14) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] #calendarPanel .planner-title h1{
+  color: rgba(241,245,249,.96);
+}
+
+html[data-theme="dark"] #calendarPanel .planner-subtitle{
+  color: rgba(191,219,254,.72);
+}
+
+html[data-theme="dark"] #calendarPanel .planner-month{
+  background: rgba(30,41,59,.58) !important;
+  border-color: rgba(96,165,250,.18) !important;
+  color: rgba(241,245,249,.94) !important;
+}
+
+html[data-theme="dark"] #calendarPanel .pbtn{
+  background: rgba(30,41,59,.62) !important;
+  border-color: rgba(96,165,250,.14) !important;
+}
+
+html[data-theme="dark"] #calendarPanel .pbtn:hover{
+  background: rgba(37,99,235,.16) !important;
+}
+
+html[data-theme="dark"] #calendarPanel .pbtn-active{
+  background: linear-gradient(135deg, rgba(37,99,235,.24), rgba(20,184,166,.14)) !important;
+  border-color: rgba(96,165,250,.22) !important;
+  color: rgba(255,255,255,.98) !important;
+}
+
+html[data-theme="dark"] #calendarPanel .planner-search{
+  background: rgba(30,41,59,.58) !important;
+  border-color: rgba(96,165,250,.14) !important;
+}
+
+html[data-theme="dark"] #calendarPanel .planner-search i{
+  color: rgba(191,219,254,.68);
+}
