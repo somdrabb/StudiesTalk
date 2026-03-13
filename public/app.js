@@ -184,10 +184,18 @@ async function bootstrapAfterAuth(user, options = {}) {
   window.currentUser = actualUser;
   persistSessionUser(actualUser);
 
-  if (actualUser?.workspaceId) {
-    window.selectedWorkspaceId = actualUser.workspaceId;
+  const authWorkspaceId = String(
+    actualUser?.workspaceId ||
+    actualUser?.workspace_id ||
+    window.selectedWorkspaceId ||
+    currentWorkspaceId ||
+    "default"
+  ).trim();
+  if (authWorkspaceId) {
+    window.selectedWorkspaceId = authWorkspaceId;
+    currentWorkspaceId = authWorkspaceId;
     const wsSelect = document.getElementById("workspaceSelect");
-    if (wsSelect) wsSelect.value = actualUser.workspaceId;
+    if (wsSelect) wsSelect.value = authWorkspaceId;
   }
 
   const loginOverlay = document.getElementById("loginOverlay");
@@ -197,7 +205,7 @@ async function bootstrapAfterAuth(user, options = {}) {
   }
 
   await loadWorkspaces?.();
-  await loadUsers?.(actualUser.workspaceId);
+  await loadUsers?.(authWorkspaceId);
   await loadChannels?.();
   await refreshAll?.();
 
@@ -229,6 +237,8 @@ const teachersSection = document.getElementById("teachersSection");
 const teachersChannelsContainer = document.getElementById("teachersChannelsContainer");
 const known = new Set(["classes","clubs","exams","tools","homework","teachers"]);
 const ADMIN_ROLE_VALUES = new Set(["school_admin", "super_admin"]);
+// drafts
+const DRAFT_KEY_PREFIX = "worknest_draft_";
 
 function normalizeRole(value) {
   const raw = String(value || "").trim().toLowerCase();
@@ -566,6 +576,32 @@ async function fetchJSON(path, options = {}) {
   return res.json();
 }
 
+function scheduleReminder(ev) {
+  if (!ev || !ev.remindMin) return;
+  const time = String(ev.startTime || "").trim();
+  if (!time) return;
+
+  const [hour, minute] = time.split(":").map((v) => Number(v));
+  if (Number.isNaN(hour) || Number.isNaN(minute)) return;
+
+  const start = new Date(`${ev.date}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00`);
+  const remindAt = start.getTime() - Number(ev.remindMin) * 60 * 1000;
+  const delay = remindAt - Date.now();
+  if (delay <= 0) return;
+
+  setTimeout(() => {
+    try {
+      if ("Notification" in window && Notification.permission === "granted") {
+        new Notification("School planner reminder", {
+          body: `${ev.title || "Event"} at ${time}`
+        });
+      }
+    } catch (err) {
+      console.error("Reminder notification failed", err);
+    }
+  }, delay);
+}
+
 async function api(url, opts = {}) {
   const res = await apiFetch(url, {
     ...opts,
@@ -862,8 +898,15 @@ async function loadWorkspacesFromServer() {
     workspaces = await fetchJSON("/api/workspaces");
 
     const isSuper = isSuperAdmin();
-    if (sessionUser && !isSuper && sessionUser.workspaceId) {
-      workspaces = workspaces.filter((w) => w.id === sessionUser.workspaceId);
+    const sessionWorkspaceId = String(
+      sessionUser?.workspaceId ||
+      sessionUser?.workspace_id ||
+      window.selectedWorkspaceId ||
+      currentWorkspaceId ||
+      ""
+    ).trim();
+    if (sessionUser && !isSuper && sessionWorkspaceId) {
+      workspaces = workspaces.filter((w) => w.id === sessionWorkspaceId);
     }
 
     if (!workspaces.length) {
@@ -871,10 +914,20 @@ async function loadWorkspacesFromServer() {
       return;
     }
 
-    const exists = workspaces.some((w) => w.id === currentWorkspaceId);
+    const preferredWorkspaceId = String(
+      sessionWorkspaceId ||
+      window.selectedWorkspaceId ||
+      currentWorkspaceId ||
+      ""
+    ).trim();
+    const exists = workspaces.some((w) => w.id === preferredWorkspaceId);
     if (!exists) {
       currentWorkspaceId = workspaces[0].id;
       persistCurrentWorkspace();
+      window.selectedWorkspaceId = currentWorkspaceId;
+    } else {
+      currentWorkspaceId = preferredWorkspaceId;
+      window.selectedWorkspaceId = preferredWorkspaceId;
     }
 
     renderWorkspaces();
@@ -1018,6 +1071,17 @@ function syncAdminStatus(user) {
 function persistSessionUser(user) {
   sessionUser = user;
   if (sessionUser) {
+    const normalizedWorkspaceId = String(
+      sessionUser.workspaceId ||
+      sessionUser.workspace_id ||
+      window.selectedWorkspaceId ||
+      currentWorkspaceId ||
+      "default"
+    ).trim();
+    sessionUser.workspaceId = normalizedWorkspaceId;
+    sessionUser.workspace_id = normalizedWorkspaceId;
+    window.selectedWorkspaceId = normalizedWorkspaceId;
+    currentWorkspaceId = normalizedWorkspaceId;
     sessionUser.nativeLanguage = normalizeCultureLanguageCode(sessionUser.nativeLanguage || "en");
   }
   syncAdminStatus(sessionUser);
@@ -1216,6 +1280,13 @@ function resetCultureTranslationState() {
 
 async function loadUserDirectory() {
   if (userDirectoryLoaded) return userDirectoryCache;
+  const role = normalizeRole(sessionUser?.role || sessionUser?.userRole || "");
+  const canReadDirectory = role === "admin" || role === "school_admin" || role === "super_admin";
+  if (!canReadDirectory) {
+    userDirectoryCache = [];
+    userDirectoryLoaded = true;
+    return userDirectoryCache;
+  }
   try {
     const workspaceId = getCurrentWorkspaceId();
     const users = await fetchJSON(`/api/users?workspaceId=${encodeURIComponent(workspaceId)}`);
@@ -2393,19 +2464,11 @@ function updateAdminButtonState() {
   const isAdmin = isAdminUser();
   const isSuper = isSuperAdmin();
   if (btn) {
-    if (isAdmin) {
-      btn.hidden = false;
-      btn.style.display = "grid";
-      btn.disabled = false;
-      btn.style.pointerEvents = "auto";
-      btn.classList.remove("rail-btn-disabled");
-    } else {
-      btn.hidden = true;
-      btn.style.display = "none";
-      btn.disabled = true;
-      btn.style.pointerEvents = "none";
-      btn.classList.add("rail-btn-disabled");
-    }
+    btn.hidden = false;
+    btn.style.display = "grid";
+    btn.disabled = false;
+    btn.style.pointerEvents = "auto";
+    btn.classList.toggle("rail-btn-disabled", !isAdmin);
   }
 
   if (addChannelBtn) {
@@ -3329,16 +3392,6 @@ function renderAiActions() {
   });
 }
 
-let analyticsContextSnapshot = null;
-
-function setAnalyticsContextSnapshot(data) {
-  analyticsContextSnapshot = data || null;
-}
-
-function getAnalyticsContextSnapshot() {
-  return analyticsContextSnapshot;
-}
-
   async function sendAiMessage() {
   if (!aiInput) return;
   const text = (aiInput.value || "").trim();
@@ -3643,6 +3696,13 @@ function updateAiContextBlock() {
 }
 
 function showPanel(panelId) {
+  setAppFullScreenMode(panelId !== "chatPanel");
+  if (panelId !== "adminPanel") {
+    restoreUserProfileCardToModal();
+  }
+  if (panelId !== "emailPanel") {
+    restoreSchoolEmailUiToChatHeader();
+  }
   document.querySelectorAll(".main-panel").forEach((p) => {
     p.classList.add("hidden");
     p.setAttribute("aria-hidden", "true");
@@ -3655,6 +3715,9 @@ function showPanel(panelId) {
       localStorage.setItem(LAST_ACTIVE_VIEW_KEY, panelId);
     } catch (err) {
       /* ignore */
+    }
+    if (panelId === "calendarPanel") {
+      document.dispatchEvent(new Event("calendarPanelOpened"));
     }
   }
 
@@ -3698,8 +3761,6 @@ function openFilesPanel() {
 }
 function openCalendarPanel() {
   showPanel("calendarPanel");
-  initCalendarIfNeeded();
-  renderCalendar();
 }
 function openLivePanel() {
   showPanel("livePanel");
@@ -3711,6 +3772,35 @@ function openLivePanel() {
 function openAnalyticsPanel() {
   showPanel("analyticsPanel");
   renderAnalyticsPanel();
+}
+
+async function openEmailPanel() {
+  showPanel("emailPanel");
+  closeAdminDock();
+  setSuperAdminLanding(false);
+  mountSchoolEmailUiToEmailPanel();
+  setSesSettingsView("sent");
+  schoolEmailSettingsPage?.classList.remove("hidden");
+  schoolEmailSettingsPage?.setAttribute("aria-hidden", "false");
+  try {
+    await loadEmailSettings();
+    await loadClassSettingsSchoolDetails();
+  } catch (err) {
+    console.error("Failed to load email settings", err);
+    showToast("Could not load settings");
+  }
+}
+
+async function openAdminProfilePanel() {
+  showPanel("adminPanel");
+  closeAdminDock();
+  setSuperAdminLanding(false);
+  try {
+    await openCurrentUserProfile();
+  } catch (err) {
+    console.error("Failed to load admin profile panel", err);
+  }
+  mountUserProfileCardToAdminPanel();
 }
 
 function closeModal(el) {
@@ -3775,7 +3865,7 @@ const SES_LAST_TEST_KEY = "worknest_ses_last_test_sent";
 let sesSavedSubjectPrefix = "";
 
 async function loadEmailSettings() {
-  const ws = sessionUser?.workspaceId || currentWorkspaceId || "default";
+  const ws = await resolveProfileWorkspaceId();
   const s = await fetchJSON(`/api/workspaces/${encodeURIComponent(ws)}/email-settings`, {
     headers: { "x-user-id": getCurrentUserId() }
   });
@@ -4299,7 +4389,7 @@ function clearSesHistorySelection() {
 }
 
 async function loadSesEmailLogs() {
-  const ws = sessionUser?.workspaceId || currentWorkspaceId || "default";
+  const ws = await resolveProfileWorkspaceId();
   if (!ws) return;
   const endpoint = `/api/workspaces/${encodeURIComponent(ws)}/email-logs?limit=${SES_HISTORY_LIMIT}`;
   try {
@@ -4324,7 +4414,7 @@ async function loadSesEmailLogs() {
 
 async function loadSesEmailLogPreview(logId) {
   if (!logId) return;
-  const ws = sessionUser?.workspaceId || currentWorkspaceId || "default";
+  const ws = await resolveProfileWorkspaceId();
   if (!ws) return;
   const endpoint = `/api/workspaces/${encodeURIComponent(ws)}/email-logs/${encodeURIComponent(logId)}`;
   try {
@@ -4435,7 +4525,7 @@ function fileToDataUrl(file) {
 }
 
 async function uploadSchoolLogo(file) {
-  const ws = sessionUser?.workspaceId || currentWorkspaceId || "default";
+  const ws = await resolveProfileWorkspaceId();
   const dataUrl = await fileToDataUrl(file);
 
   const resp = await fetchJSON(`/api/workspaces/${encodeURIComponent(ws)}/logo`, {
@@ -4456,7 +4546,7 @@ async function uploadSchoolLogo(file) {
 }
 
 async function saveEmailSettings() {
-  const ws = sessionUser?.workspaceId || currentWorkspaceId || "default";
+  const ws = await resolveProfileWorkspaceId();
   if (!sesStatus) return;
   sesStatus.textContent = "Saving…";
   const manualBodyText = sesBodyText?.value || "";
@@ -4481,7 +4571,7 @@ async function saveEmailSettings() {
 }
 
 async function sendTestEmail() {
-  const ws = sessionUser?.workspaceId || currentWorkspaceId || "default";
+  const ws = await resolveProfileWorkspaceId();
   if (!sesStatus) return;
   const to = (sesTestTo.value || "").trim();
   if (!to.includes("@")) {
@@ -5204,1064 +5294,6 @@ async function renderFilesPanel() {
     .join("");
 }
 
-// ===================== CALENDAR v2 (Server + Month/Week/Agenda) =====================
-let calInitDone = false;
-let calViewMode = "month";
-let calView = { year: 0, month: 0 };
-let calSelected = "";
-let calAssigneeOnly = "";
-let calTypeFilter = "all";
-let calSearchQuery = "";
-let calEventsCache = [];
-let calReminderTimers = new Map();
-let calEditingId = null;
-
-function qs(id) {
-  return document.getElementById(id);
-}
-
-function pad2(n) {
-  return String(n).padStart(2, "0");
-}
-function ymd(d) {
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-}
-function addDays(dateStr, n) {
-  const d = new Date(dateStr + "T00:00:00");
-  d.setDate(d.getDate() + n);
-  return ymd(d);
-}
-function startOfWeek(dateStr) {
-  const d = new Date(dateStr + "T00:00:00");
-  const dow = d.getDay();
-  d.setDate(d.getDate() - dow);
-  return ymd(d);
-}
-function endOfWeek(dateStr) {
-  return addDays(startOfWeek(dateStr), 6);
-}
-
-function toMinutes(hhmm = "") {
-  const [h, m] = (hhmm || "").split(":").map(Number);
-  if (Number.isNaN(h) || Number.isNaN(m)) return null;
-  return h * 60 + m;
-}
-function clamp(n, min, max) {
-  return Math.max(min, Math.min(max, n));
-}
-function fmtDow(dateStr) {
-  const d = new Date(dateStr + "T00:00:00");
-  return ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"][d.getDay()];
-}
-
-function normalizeDateToYMD(s) {
-  if (!s) return "";
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-  const m = s.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
-  if (m) {
-    const dd = String(m[1]).padStart(2, "0");
-    const mm = String(m[2]).padStart(2, "0");
-    const yyyy = m[3];
-    return `${yyyy}-${mm}-${dd}`;
-  }
-  return "";
-}
-
-async function fetchCalendarEvents(from, to) {
-  const ws = currentWorkspaceId || "default";
-  const q =
-    from && to
-      ? `?workspaceId=${encodeURIComponent(ws)}&from=${from}&to=${to}`
-      : `?workspaceId=${encodeURIComponent(ws)}`;
-  const rows = await fetchJSON(`/api/calendar/events${q}`, {
-    headers: { "x-user-id": getCurrentUserId() }
-  });
-  calEventsCache = Array.isArray(rows) ? rows.map(normalizeCalendarEvent) : [];
-  calEventsCache.forEach(scheduleReminder);
-}
-
-function expandRepeats(baseEvents, from, to) {
-  const out = [];
-  const fromD = new Date(from + "T00:00:00").getTime();
-  const toD = new Date(to + "T23:59:59").getTime();
-
-  for (const e of baseEvents) {
-    const repeat = e.repeat || null;
-    if (!repeat || !repeat.freq) {
-      out.push(e);
-      continue;
-    }
-
-    const interval = Math.max(1, Number(repeat.interval || 1));
-    const freq = String(repeat.freq).toUpperCase();
-
-    let cur = new Date(e.date + "T00:00:00");
-    while (cur.getTime() <= toD) {
-      const ts = cur.getTime();
-      if (ts >= fromD && ts <= toD) {
-        if (repeat.byWeekday && !repeat.byWeekday.includes(cur.getDay())) {
-          // skip non-matching weekday
-        } else {
-          out.push({ ...e, date: ymd(cur), _occurrence: true, _baseId: e.id });
-        }
-      }
-
-      if (freq === "DAILY") cur.setDate(cur.getDate() + interval);
-      else if (freq === "WEEKLY") {
-        if (Array.isArray(repeat.byWeekday)) {
-          cur.setDate(cur.getDate() + 1);
-        } else {
-          cur.setDate(cur.getDate() + 7 * interval);
-        }
-      } else if (freq === "MONTHLY") cur.setMonth(cur.getMonth() + interval);
-      else break;
-    }
-  }
-  return out;
-}
-
-function normalizeCalendarEvent(ev) {
-  if (!ev) return ev;
-  let repeat = ev.repeat;
-  if (!repeat && typeof ev.repeat_json === "string") {
-    try {
-      repeat = JSON.parse(ev.repeat_json);
-    } catch (_err) {
-      repeat = null;
-    }
-  }
-
-  return {
-    id: ev.id,
-    workspaceId: ev.workspaceId || ev.workspace_id,
-    title: ev.title,
-    date: ev.date,
-    startTime: ev.startTime || ev.start_time || "",
-    endTime: ev.endTime || ev.end_time || "",
-    notes: ev.notes || "",
-    meetLink: ev.meetLink || ev.meet_link || "",
-    assigneeId: ev.assigneeId || ev.assignee_id || "",
-    createdBy: ev.createdBy || ev.created_by || "",
-    remindMin:
-      ev.remindMin !== undefined
-        ? ev.remindMin
-        : ev.remind_min !== undefined
-        ? ev.remind_min
-        : 0,
-    color: ev.color || "#1a73e8",
-    repeat,
-    done: typeof ev.done === "boolean" ? ev.done : !!ev.done,
-    createdAt: ev.createdAt || ev.created_at,
-    updatedAt: ev.updatedAt || ev.updated_at
-  };
-}
-
-function scheduleReminder(ev) {
-  if (!ev || !ev.remindMin || !ev.startTime) return;
-
-  const key = ev.id;
-  if (calReminderTimers.has(key)) {
-    clearTimeout(calReminderTimers.get(key));
-    calReminderTimers.delete(key);
-  }
-
-  const start = new Date(`${ev.date}T${ev.startTime}:00`);
-  const remindAt = start.getTime() - Number(ev.remindMin) * 60 * 1000;
-  const ms = remindAt - Date.now();
-  if (ms <= 0) return;
-
-  const t = setTimeout(() => {
-    try {
-      if ("Notification" in window) {
-        if (Notification.permission === "granted") {
-          new Notification("WorkNest Reminder", { body: `${ev.title} @ ${ev.startTime}` });
-        } else if (Notification.permission !== "denied") {
-          Notification.requestPermission().then((p) => {
-            if (p === "granted") new Notification("WorkNest Reminder", { body: `${ev.title} @ ${ev.startTime}` });
-            else alert(`Reminder: ${ev.title} @ ${ev.startTime}`);
-          });
-        } else {
-          alert(`Reminder: ${ev.title} @ ${ev.startTime}`);
-        }
-      } else {
-        alert(`Reminder: ${ev.title} @ ${ev.startTime}`);
-      }
-    } catch {
-      alert(`Reminder: ${ev.title} @ ${ev.startTime}`);
-    }
-  }, ms);
-
-  calReminderTimers.set(key, t);
-}
-
-function openCalModal({ mode = "add", event = null, date = calSelected, time = "", title = "" } = {}) {
-  calEditingId = event ? event.id : null;
-
-  const resolvedDate = event?.date || date || calSelected || ymd(new Date());
-  const resolvedTime = event?.startTime || time || "";
-  const allDay = !resolvedTime;
-
-  const titleInput = qs("calTitleInput");
-  const dateInput = qs("calDateInput");
-  const timeInput = qs("calTimeInput");
-  const allDayInput = qs("calAllDayInput");
-  const meetInput = qs("calMeetInput");
-  const notesInput = qs("calNotesInput");
-  const colorInput = qs("calColorInput");
-  const remindInput = qs("calRemindInput");
-
-  const modalTitle = qs("calModalTitle");
-  if (modalTitle) modalTitle.textContent = event ? "Edit event" : "Add event";
-  if (titleInput) {
-    if (title) titleInput.value = title;
-    else titleInput.value = event?.title || "";
-  }
-  if (dateInput) dateInput.value = resolvedDate;
-  if (timeInput) {
-    timeInput.value = resolvedTime;
-    timeInput.disabled = allDay;
-  }
-  if (allDayInput) allDayInput.checked = allDay;
-  if (meetInput) meetInput.value = event?.meetLink || "";
-  if (notesInput) notesInput.value = event?.notes || "";
-  if (colorInput) colorInput.value = event?.color || "#1a73e8";
-  if (remindInput) remindInput.value = String(event?.remindMin || 0);
-
-  qs("calEventModal")?.classList.remove("hidden");
-}
-
-function closeCalModal() {
-  qs("calEventModal")?.classList.add("hidden");
-  calEditingId = null;
-}
-
-
-async function initCalendarIfNeeded() {
-  if (calInitDone) return;
-  calInitDone = true;
-
-  const now = new Date();
-  calView.year = now.getFullYear();
-  calView.month = now.getMonth();
-  calSelected = ymd(now);
-
-  // View buttons (Week/Agenda/Month) — uses .pbtn-active in your HTML/CSS
-  const viewBtns = Array.from(document.querySelectorAll("[data-cal-view]"));
-  viewBtns.forEach((btn) => {
-    if (btn.dataset.bound) return;
-    btn.dataset.bound = "1";
-    btn.addEventListener("click", async () => {
-      viewBtns.forEach((b) => b.classList.remove("pbtn-active"));
-      btn.classList.add("pbtn-active");
-      calViewMode = btn.getAttribute("data-cal-view") || "month";
-      await renderCalendar();
-    });
-  });
-
-  // Set initial view from whichever button is marked active in HTML
-  const activeView = viewBtns.find((b) => b.classList.contains("pbtn-active"));
-  if (activeView) calViewMode = activeView.getAttribute("data-cal-view") || calViewMode;
-
-  const prev = document.getElementById("calPrevBtn");
-  const next = document.getElementById("calNextBtn");
-  const today = document.getElementById("calTodayBtn");
-  const dateLabel = document.getElementById("calSelectedDateLabel");
-  if (prev)
-    prev.addEventListener("click", async () => {
-      if (calViewMode === "week" || calViewMode === "agenda") calSelected = addDays(calSelected, -7);
-      else {
-        calView.month--;
-        if (calView.month < 0) {
-          calView.month = 11;
-          calView.year--;
-        }
-      }
-      await renderCalendar();
-    });
-  if (next)
-    next.addEventListener("click", async () => {
-      if (calViewMode === "week" || calViewMode === "agenda") calSelected = addDays(calSelected, 7);
-      else {
-        calView.month++;
-        if (calView.month > 11) {
-          calView.month = 0;
-          calView.year++;
-        }
-      }
-      await renderCalendar();
-    });
-  if (today)
-    today.addEventListener("click", async () => {
-      const n = new Date();
-      calView.year = n.getFullYear();
-      calView.month = n.getMonth();
-      calSelected = ymd(n);
-      await renderCalendar();
-    });
-  if (dateLabel && !dateLabel.dataset.clickBound) {
-    dateLabel.dataset.clickBound = "1";
-    dateLabel.style.cursor = "pointer";
-    dateLabel.title = "Add task/meeting";
-    dateLabel.addEventListener("click", () => openCalModal({ date: calSelected }));
-  }
-
-  // Sidebar collapse/expand (persisted)
-  const planner = document.querySelector("#calendarPanel .planner");
-  const toggleBtn = document.getElementById("calSidebarToggle");
-  if (planner) {
-    const saved = localStorage.getItem("calSidebarCollapsed");
-    if (saved === "1") planner.classList.add("is-sidebar-collapsed");
-  }
-  if (toggleBtn && planner && !toggleBtn.dataset.bound) {
-    toggleBtn.dataset.bound = "1";
-    toggleBtn.addEventListener("click", () => {
-      planner.classList.toggle("is-sidebar-collapsed");
-      localStorage.setItem("calSidebarCollapsed", planner.classList.contains("is-sidebar-collapsed") ? "1" : "0");
-    });
-  }
-
-  const backdrop = document.getElementById("calDrawerBackdrop");
-  if (toggleBtn && planner && backdrop && !toggleBtn.dataset.drawerBound) {
-    toggleBtn.dataset.drawerBound = "1";
-    toggleBtn.addEventListener("click", () => {
-      planner.classList.toggle("is-drawer-open");
-    });
-    backdrop.addEventListener("click", () => planner.classList.remove("is-drawer-open"));
-    document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") planner.classList.remove("is-drawer-open");
-    });
-  }
-
-  // Mini month prev/next
-  const miniPrev = document.getElementById("miniMonthPrev");
-  const miniNext = document.getElementById("miniMonthNext");
-  if (miniPrev && !miniPrev.dataset.bound) {
-    miniPrev.dataset.bound = "1";
-    miniPrev.addEventListener("click", async () => {
-      calView.month--;
-      if (calView.month < 0) {
-        calView.month = 11;
-        calView.year--;
-      }
-      await renderCalendar();
-    });
-  }
-  if (miniNext && !miniNext.dataset.bound) {
-    miniNext.dataset.bound = "1";
-    miniNext.addEventListener("click", async () => {
-      calView.month++;
-      if (calView.month > 11) {
-        calView.month = 0;
-        calView.year++;
-      }
-      await renderCalendar();
-    });
-  }
-
-  const chips = document.getElementById("plannerChips");
-  if (chips && !chips.dataset.bound) {
-    chips.dataset.bound = "1";
-    chips.addEventListener("click", async (e) => {
-      const b = e.target.closest("button[data-filter]");
-      if (!b) return;
-      calTypeFilter = b.getAttribute("data-filter") || "all";
-      chips.querySelectorAll(".chip").forEach((x) => x.classList.remove("chip-active"));
-      b.classList.add("chip-active");
-      await renderCalendar();
-    });
-  }
-
-  const search = document.getElementById("plannerSearch");
-  if (search && !search.dataset.bound) {
-    search.dataset.bound = "1";
-    search.addEventListener("input", async () => {
-      calSearchQuery = search.value || "";
-      await renderCalendar();
-    });
-  }
-
-  const quick = document.getElementById("plannerQuickActions");
-  if (quick && !quick.dataset.bound) {
-    quick.dataset.bound = "1";
-    quick.addEventListener("click", (e) => {
-      const b = e.target.closest("button[data-action]");
-      if (!b) return;
-      const a = b.getAttribute("data-action");
-
-      if (a === "addReminder") openCalModal({ date: calSelected, title: "Reminder – " });
-      else if (a === "createHomework") openCalModal({ date: calSelected, title: "Homework – " });
-      else if (a === "scheduleExam") openCalModal({ date: calSelected, title: "Exam – " });
-      else if (a === "addSpeaking") openCalModal({ date: calSelected, title: "Speaking session – " });
-    });
-  }
-
-  const addBtn = document.getElementById("calAddBtn");
-  if (addBtn) addBtn.addEventListener("click", () => openCalModal({ date: calSelected }));
-
-  await loadUserDirectory?.();
-  const assSel = document.getElementById("calAssigneeFilter");
-  if (assSel) {
-    assSel.innerHTML =
-      `<option value="">All assignees</option>` +
-      (userDirectoryCache || [])
-        .map((u) => {
-          const id = u.id || u.userId || u.email || "";
-          const name = u.name || u.username || u.email || id;
-          return `<option value="${escapeHtml(id)}">${escapeHtml(name)}</option>`;
-        })
-        .join("");
-    assSel.addEventListener("change", async () => {
-      calAssigneeOnly = assSel.value || "";
-      await renderCalendar();
-    });
-  }
-
-  // modal buttons
-  qs("calModalCloseBtn")?.addEventListener("click", closeCalModal);
-  qs("calCancelBtn")?.addEventListener("click", closeCalModal);
-  qs("calEventModal")?.addEventListener("click", (e) => {
-    if (e.target?.id === "calEventModal") closeCalModal();
-  });
-  qs("calAllDayInput")?.addEventListener("change", (e) => {
-    const timeInput = qs("calTimeInput");
-    if (timeInput) timeInput.disabled = e.target.checked;
-  });
-
-  qs("calSaveBtn")?.addEventListener("click", async () => {
-    const title = (qs("calTitleInput")?.value || "").trim();
-    const dateRaw = qs("calDateInput")?.value || calSelected || ymd(new Date());
-    const date = normalizeDateToYMD(dateRaw);
-    const allDay = !!qs("calAllDayInput")?.checked;
-    const startTime = allDay ? "" : (qs("calTimeInput")?.value || "").trim();
-    const meetLink = (qs("calMeetInput")?.value || "").trim();
-    const notes = (qs("calNotesInput")?.value || "").trim();
-    const color = (qs("calColorInput")?.value || "#1a73e8").trim();
-    const remindMin = Number(qs("calRemindInput")?.value || 0);
-
-    console.log("CAL SAVE PAYLOAD:", { title, dateRaw, date });
-
-    if (!title || !date) {
-      if (typeof showToast === "function") showToast("Title and date are required");
-      else alert("Title and date are required");
-      return;
-    }
-
-    const ws = currentWorkspaceId || "default";
-    const createdBy = (typeof getCurrentUserId === "function" ? getCurrentUserId() : "") || "";
-
-    const url = calEditingId
-      ? `/api/calendar/events/${encodeURIComponent(calEditingId)}`
-      : `/api/calendar/events`;
-
-    const method = calEditingId ? "PATCH" : "POST";
-
-    const payload = calEditingId
-      ? { title, date, startTime, meetLink, notes, remindMin, color }
-      : { workspaceId: ws, title, date, startTime, meetLink, notes, remindMin, color, createdBy };
-
-    try {
-      const res = await fetch(url, {
-        method,
-        headers: {
-          "Content-Type": "application/json",
-          "x-user-id": createdBy
-        },
-        body: JSON.stringify(payload)
-      });
-
-      const text = await res.text();
-      let data;
-      try {
-        data = JSON.parse(text);
-      } catch (_err) {
-        data = { raw: text };
-      }
-
-      if (!res.ok) {
-        console.error("Calendar save failed:", res.status, data);
-        alert((data && data.error) || "Could not save event. Please check title/date and try again.");
-        return;
-      }
-
-      closeCalModal();
-      await renderCalendar();
-    } catch (err) {
-      console.error("Calendar save request error:", err);
-      alert("Network error while saving event.");
-    }
-  });
-}
-
-async function renderCalendar() {
-  const grid = document.getElementById("calendarGrid");
-  const monthLabel = document.getElementById("calMonthLabel");
-  const selLabel = document.getElementById("calSelectedDateLabel");
-  const listEl = document.getElementById("calendarEventsList");
-  if (!grid || !monthLabel || !selLabel || !listEl) return;
-
-  closeMonthOverflowPopover();
-
-  let from;
-  let to;
-  if (calViewMode === "month") {
-    const first = new Date(calView.year, calView.month, 1);
-    const last = new Date(calView.year, calView.month + 1, 0);
-    from = ymd(first);
-    to = ymd(last);
-    const monthNames = [
-      "January",
-      "February",
-      "March",
-      "April",
-      "May",
-      "June",
-      "July",
-      "August",
-      "September",
-      "October",
-      "November",
-      "December"
-    ];
-    monthLabel.textContent = `${monthNames[calView.month]} ${calView.year}`;
-  } else {
-    from = startOfWeek(calSelected);
-    to = calViewMode === "week" ? endOfWeek(calSelected) : addDays(from, 27);
-    monthLabel.textContent = `${from} → ${to}`;
-  }
-
-  await fetchCalendarEvents(from, to);
-
-  let events = expandRepeats(calEventsCache, from, to);
-  if (calAssigneeOnly) {
-    events = events.filter((e) => (e.assigneeId || "") === calAssigneeOnly);
-  }
-
-  // Search filter
-  if (calSearchQuery) {
-    const q = calSearchQuery.toLowerCase();
-    events = events.filter((e) => {
-      const t = (e.title || "").toLowerCase();
-      const n = (e.notes || "").toLowerCase();
-      return t.includes(q) || n.includes(q);
-    });
-  }
-
-  // Chip type filter (party best-effort)
-  if (calTypeFilter && calTypeFilter !== "all") {
-    const me = (typeof getCurrentUserId === "function" ? getCurrentUserId() : "") || "";
-    const typeFromTitle = (title = "") => {
-      const t = title.toLowerCase();
-      if (t.includes("exam")) return "exam";
-      if (t.includes("homework")) return "homework";
-      if (t.includes("class")) return "class";
-      if (t.includes("club")) return "club";
-      if (t.includes("school")) return "school";
-      return "other";
-    };
-
-    events = events.filter((e) => {
-      if (calTypeFilter === "my") return String(e.createdBy || "") === String(me);
-      return typeFromTitle(e.title || "") === calTypeFilter;
-    });
-  }
-
-  grid.innerHTML = "";
-  grid.dataset.view = calViewMode;
-  const weekdays = document.querySelector("#calendarPanel .calendar-weekdays");
-  if (weekdays) weekdays.style.display = calViewMode === "month" ? "grid" : "none";
-  if (calViewMode === "month") renderCalendarMonth(grid, events);
-  if (calViewMode === "week") renderCalendarWeek(grid, events, from);
-  if (calViewMode === "agenda") renderCalendarAgenda(grid, events, from, to);
-
-  selLabel.textContent = calSelected;
-  renderCalendarDayList(listEl, events);
-  renderMiniMonth();
-}
-
-function renderCalendarMonth(grid, events) {
-  grid.className = "calendar-grid";
-  const first = new Date(calView.year, calView.month, 1);
-  const startDow = first.getDay();
-  const daysInMonth = new Date(calView.year, calView.month + 1, 0).getDate();
-
-  const countByDate = new Map();
-  for (const ev of events) countByDate.set(ev.date, (countByDate.get(ev.date) || 0) + 1);
-
-  for (let i = 0; i < startDow; i++) {
-    const cell = document.createElement("div");
-    cell.className = "calendar-day is-empty";
-    grid.appendChild(cell);
-  }
-
-  for (let day = 1; day <= daysInMonth; day++) {
-    const d = new Date(calView.year, calView.month, day);
-    const dateStr = ymd(d);
-    const allDayEvents = events
-      .filter((ev) => ev.date === dateStr)
-      .sort((a, b) => {
-        const at = a.startTime ? 1 : 0;
-        const bt = b.startTime ? 1 : 0;
-        if (at !== bt) return at - bt;
-        return String(a.startTime || "").localeCompare(String(b.startTime || ""));
-      });
-    const dayEvents = allDayEvents.slice(0, 2);
-    const overflow = Math.max(0, allDayEvents.length - dayEvents.length);
-    const primaryColor = dayEvents[0]?.color || allDayEvents[0]?.color || null;
-
-    const cell = document.createElement("button");
-    cell.type = "button";
-    cell.className = "calendar-day";
-    if (dateStr === ymd(new Date())) cell.classList.add("is-today");
-    if (dateStr === calSelected) cell.classList.add("is-selected");
-
-    if (primaryColor) {
-      cell.style.background = `${primaryColor}33`;
-      cell.style.borderColor = `${primaryColor}77`;
-      cell.style.boxShadow = `0 0 0 4px ${primaryColor}33`;
-    }
-    cell.innerHTML = `
-      <div class="cal-day-header">
-        <span class="cal-num">${day}</span>
-      </div>
-      <button type="button" class="cal-plus" title="Add event">+</button>
-      ${
-        dayEvents.length
-          ? `<div class="cal-day-events">
-              ${dayEvents
-                .map(
-                  (ev) => `
-                <div class="cal-chip" title="${escapeHtml(ev.title || "")}">
-                  <span class="cal-chip-dot" style="background:${escapeHtml(ev.color || "#1a73e8")}"></span>
-                  <span class="cal-chip-time">${escapeHtml(ev.startTime || "All-day")}</span>
-                  <span>${escapeHtml(ev.title || "")}${ev.notes ? " 📝" : ""}</span>
-                </div>
-              `
-                )
-                .join("")}
-              ${overflow ? `<button type="button" class="cal-more">+${overflow} more</button>` : ""}
-            </div>`
-          : ""
-      }
-    `;
-
-    cell.addEventListener("click", async (e) => {
-      if (e.target.closest(".cal-plus") || e.target.closest(".cal-chip") || e.target.closest(".cal-more")) return;
-      calSelected = dateStr;
-      await renderCalendar();
-    });
-
-    cell.querySelector(".cal-plus")?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      calSelected = dateStr;
-      openCalModal({ date: dateStr });
-    });
-
-    cell.querySelectorAll(".cal-chip").forEach((chip, idx) => {
-      chip.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const ev = dayEvents[idx];
-        if (!ev) return;
-        const base = (calEventsCache || []).find((x) => x.id === ev.id) || ev;
-        openCalModal({ event: base, date: dateStr });
-      });
-    });
-
-    cell.querySelector(".cal-more")?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      openMonthOverflowPopover(cell, dateStr, allDayEvents);
-    });
-
-    cell.addEventListener("dragover", (e) => e.preventDefault());
-    cell.addEventListener("drop", async (e) => {
-      e.preventDefault();
-      const id = e.dataTransfer.getData("text/event-id");
-      if (!id) return;
-      await moveCalendarEvent(id, dateStr);
-    });
-    grid.appendChild(cell);
-  }
-}
-
-function openMonthOverflowPopover(anchorCell, dateStr, list) {
-  closeMonthOverflowPopover();
-
-  const pop = document.createElement("div");
-  pop.className = "cal-pop";
-  pop.innerHTML = `
-    <div class="cal-pop-head">
-      <div class="cal-pop-title">${escapeHtml(dateStr)}</div>
-      <button class="cal-pop-x" type="button" aria-label="Close">✕</button>
-    </div>
-    <div class="cal-pop-body">
-      ${list
-        .map(
-          (ev) => `
-        <button type="button" class="cal-pop-item" data-id="${escapeHtml(ev.id)}">
-          <span class="cal-chip-dot" style="background:${escapeHtml(ev.color || "#1a73e8")}"></span>
-          <span class="cal-pop-time">${escapeHtml(ev.startTime || "All-day")}</span>
-          <span class="cal-pop-name">${escapeHtml(ev.title || "")}${ev.notes ? " 📝" : ""}</span>
-        </button>
-      `
-        )
-        .join("")}
-    </div>
-  `;
-
-  document.body.appendChild(pop);
-
-  const rect = anchorCell.getBoundingClientRect();
-  pop.style.top = `${Math.min(window.innerHeight - 20, rect.bottom + 8)}px`;
-  pop.style.left = `${Math.min(window.innerWidth - 320, rect.left)}px`;
-
-  pop.querySelector(".cal-pop-x")?.addEventListener("click", closeMonthOverflowPopover);
-
-  pop.querySelectorAll(".cal-pop-item").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const id = btn.getAttribute("data-id");
-      const base = (calEventsCache || []).find((x) => x.id === id);
-      if (base) openCalModal({ event: base, date: dateStr });
-      closeMonthOverflowPopover();
-    });
-  });
-
-  setTimeout(() => {
-    document.addEventListener("mousedown", onMonthPopOutside, { capture: true });
-    document.addEventListener("keydown", onMonthPopEsc);
-  }, 0);
-}
-
-function closeMonthOverflowPopover() {
-  document.querySelectorAll(".cal-pop").forEach((x) => x.remove());
-  document.removeEventListener("mousedown", onMonthPopOutside, { capture: true });
-  document.removeEventListener("keydown", onMonthPopEsc);
-}
-
-function onMonthPopOutside(e) {
-  if (e.target.closest(".cal-pop")) return;
-  closeMonthOverflowPopover();
-}
-function onMonthPopEsc(e) {
-  if (e.key === "Escape") closeMonthOverflowPopover();
-}
-
-function renderCalendarWeek(grid, events, fromDate) {
-  grid.className = "cal-week-scroll";
-  grid.innerHTML = "";
-
-  const DAYS = Array.from({ length: 7 }).map((_, i) => addDays(fromDate, i));
-
-  const START_HOUR = 7;
-  const END_HOUR = 20;
-  const hourHeight = 52;
-
-  const shell = document.createElement("div");
-  shell.style.display = "grid";
-  shell.style.gridTemplateColumns = "80px 1fr";
-  shell.style.gap = "10px";
-  shell.style.padding = "14px";
-
-  // Left: time gutter
-  const gutter = document.createElement("div");
-  gutter.style.borderRadius = "18px";
-  gutter.style.overflow = "hidden";
-  gutter.style.border = "1px solid rgba(0,0,0,.08)";
-  gutter.style.background = "#fff";
-
-  const gutterHead = document.createElement("div");
-  gutterHead.className = "cal-week-head time";
-  gutterHead.textContent = "";
-  gutter.appendChild(gutterHead);
-
-  for (let h = START_HOUR; h < END_HOUR; h++) {
-    const t = document.createElement("div");
-    t.className = "cal-week-time";
-    t.style.height = `${hourHeight}px`;
-    t.textContent = `${String(h).padStart(2, "0")}:00`;
-    gutter.appendChild(t);
-  }
-
-  // Right: 7 day columns
-  const board = document.createElement("div");
-  board.style.borderRadius = "18px";
-  board.style.overflow = "hidden";
-  board.style.border = "1px solid rgba(0,0,0,.08)";
-  board.style.background = "#fff";
-
-  const boardHead = document.createElement("div");
-  boardHead.style.display = "grid";
-  boardHead.style.gridTemplateColumns = "repeat(7, 1fr)";
-  boardHead.style.borderBottom = "1px solid rgba(0,0,0,.08)";
-  board.appendChild(boardHead);
-
-  for (const d of DAYS) {
-    const h = document.createElement("div");
-    h.className = "cal-week-head";
-    h.innerHTML = `${fmtDow(d)} <span style="opacity:.55; font-weight:900;">${d.slice(8)}</span>`;
-    boardHead.appendChild(h);
-  }
-
-  const boardBody = document.createElement("div");
-  boardBody.style.display = "grid";
-  boardBody.style.gridTemplateColumns = "repeat(7, 1fr)";
-  board.appendChild(boardBody);
-
-  for (const d of DAYS) {
-    const col = document.createElement("div");
-    col.className = "cal-week-day";
-    col.style.height = `${(END_HOUR - START_HOUR) * hourHeight}px`;
-
-    // slots for click-to-add
-    for (let i = 0; i < END_HOUR - START_HOUR; i++) {
-      const slot = document.createElement("div");
-      slot.className = "cal-slot";
-      slot.addEventListener("click", () => {
-        const hour = START_HOUR + i;
-        const time = `${String(hour).padStart(2, "0")}:00`;
-        if (typeof openCalModal === "function") openCalModal({ date: d, time });
-      });
-      col.appendChild(slot);
-    }
-
-    const dayEvents = events.filter((e) => e.date === d);
-    for (const ev of dayEvents) {
-      const startMin = toMinutes(ev.startTime || "");
-      if (startMin == null) continue;
-
-      const endMin = toMinutes(ev.endTime || "");
-      const dur = endMin != null && endMin > startMin ? endMin - startMin : 60;
-
-      const topMin = clamp(startMin - START_HOUR * 60, 0, (END_HOUR - START_HOUR) * 60);
-      const heightMin = clamp(dur, 20, (END_HOUR - START_HOUR) * 60);
-
-      const block = document.createElement("div");
-      block.className = "cal-block";
-      block.style.top = `${(topMin / 60) * hourHeight}px`;
-      block.style.height = `${(heightMin / 60) * hourHeight - 6}px`;
-
-      const color = ev.color || "#1a73e8";
-      block.style.background = `${color}22`;
-      block.style.borderColor = `${color}44`;
-
-      block.innerHTML = `
-        <div class="t">
-          <span>${escapeHtml(ev.startTime || "")}</span>
-          <span style="opacity:.65;">${ev.notes ? "📝" : ""}${ev.meetLink ? "🔗" : ""}</span>
-        </div>
-        <div class="name">${escapeHtml(ev.title || "")}</div>
-      `;
-
-      block.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const base = (calEventsCache || []).find((x) => x.id === ev.id);
-        if (typeof openCalModal === "function") openCalModal({ event: base || ev });
-      });
-
-      col.appendChild(block);
-    }
-
-    boardBody.appendChild(col);
-  }
-
-  shell.appendChild(gutter);
-  shell.appendChild(board);
-  grid.appendChild(shell);
-}
-
-function renderCalendarAgenda(grid, events, from, to) {
-  grid.className = "calendar-grid";
-  const days = [];
-  for (let d = from; d <= to; d = addDays(d, 1)) days.push(d);
-
-  const byDate = new Map();
-  for (const ev of events) {
-    if (!byDate.has(ev.date)) byDate.set(ev.date, []);
-    byDate.get(ev.date).push(ev);
-  }
-  for (const [k, v] of byDate) v.sort((a, b) => String(a.startTime || "").localeCompare(String(b.startTime || "")));
-
-  grid.innerHTML = days
-    .map((d) => {
-      const list = byDate.get(d) || [];
-      return `
-      <div class="file-card" style="margin-bottom:10px;">
-        <div style="font-weight:900; margin-bottom:6px;">${escapeHtml(d)}</div>
-      ${
-        list.length
-          ? list
-              .map(
-                (e) => `
-          <button type="button" class="agenda-row" data-id="${escapeHtml(e.id)}">
-            <span class="cal-badge">${escapeHtml(e.startTime || "")}</span>
-            <span style="font-weight:900;">${escapeHtml(e.title || "")}</span>
-            ${e.meetLink ? `<a href="${escapeHtml(e.meetLink)}" target="_blank" rel="noopener">Join</a>` : ""}
-          </button>
-        `
-              )
-              .join("")
-            : `<div class="muted">No events</div>`
-      }
-      </div>
-    `;
-    })
-    .join("");
-
-  grid.querySelectorAll(".agenda-row").forEach((row) => {
-    row.addEventListener("click", () => {
-      const id = row.getAttribute("data-id");
-      const base = (calEventsCache || []).find((x) => x.id === id);
-      if (base) openCalModal({ event: base, date: base.date || calSelected });
-    });
-  });
-}
-
-function renderMiniMonth() {
-  const miniGrid = document.getElementById("miniMonthGrid");
-  const miniLabel = document.getElementById("miniMonthLabel");
-  if (!miniGrid || !miniLabel) return;
-
-  const monthNames = [
-    "January","February","March","April","May","June",
-    "July","August","September","October","November","December"
-  ];
-
-  miniLabel.textContent = `${monthNames[calView.month]} ${calView.year}`;
-  miniGrid.innerHTML = "";
-
-  const first = new Date(calView.year, calView.month, 1);
-  const startDow = first.getDay();
-  const daysInMonth = new Date(calView.year, calView.month + 1, 0).getDate();
-
-  const todayStr = ymd(new Date());
-  const totalCells = 42;
-
-  for (let i = 0; i < totalCells; i++) {
-    const dayNum = i - startDow + 1;
-
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "mini-day";
-
-    if (dayNum < 1 || dayNum > daysInMonth) {
-      btn.classList.add("is-empty");
-      btn.disabled = true;
-      btn.textContent = "";
-      miniGrid.appendChild(btn);
-      continue;
-    }
-
-    const dateObj = new Date(calView.year, calView.month, dayNum);
-    const dateStr = ymd(dateObj);
-
-    btn.textContent = String(dayNum);
-    btn.dataset.date = dateStr;
-
-    if (dateStr === todayStr) btn.classList.add("is-today");
-    if (dateStr === calSelected) btn.classList.add("is-selected");
-
-    btn.addEventListener("click", async () => {
-      calSelected = dateStr;
-      calView.year = dateObj.getFullYear();
-      calView.month = dateObj.getMonth();
-      await renderCalendar();
-    });
-
-    miniGrid.appendChild(btn);
-  }
-}
-
-function renderCalendarDayList(listEl, events) {
-  const todays = events
-    .filter((e) => e.date === calSelected)
-    .sort((a, b) => String(a.startTime || "").localeCompare(String(b.startTime || "")));
-
-  listEl.innerHTML = `
-    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:10px;">
-      <div class="muted" style="font-weight:900;">Tasks & meetings</div>
-      <button class="icon-btn" id="calAddEventBtnSide" title="Add task/meeting"><i class="fa-solid fa-plus"></i></button>
-    </div>
-    <div id="calDayEventsInner"></div>
-  `;
-
-  document.getElementById("calAddEventBtnSide")?.addEventListener("click", () => openCalModal({ date: calSelected }));
-  const inner = document.getElementById("calDayEventsInner");
-  if (!inner) return;
-
-  if (!todays.length) {
-    inner.innerHTML = ``;
-    return;
-  }
-
-  inner.innerHTML = todays
-    .map(
-      (ev) => `
-    <div class="cal-event-card" draggable="true" data-id="${escapeHtml(ev._baseId || ev.id)}" data-date="${escapeHtml(ev.date)}">
-      <div class="cal-event-top">
-        <button class="cal-event-check" data-act="toggle">${ev.done ? "✅" : "⬜"}</button>
-        <div class="cal-event-title">
-          <span class="cal-chip-dot" style="background:${escapeHtml(ev.color || "#1a73e8")}"></span>
-          ${escapeHtml(ev.title || "Untitled")}${ev.notes ? " 📝" : ""}
-        </div>
-        <button class="cal-event-btn" data-act="edit"><i class="fa-solid fa-pen"></i></button>
-        <button class="cal-event-btn" data-act="del"><i class="fa-solid fa-trash"></i></button>
-      </div>
-      <div class="cal-event-meta muted">
-        <span>${escapeHtml(ev.startTime || "")}${ev.endTime ? "–" + escapeHtml(ev.endTime) : ""}</span>
-        ${ev.assigneeId ? `<span>• assignee: ${escapeHtml(ev.assigneeId)}</span>` : ""}
-        ${ev.meetLink ? `<span>• <a href="${escapeHtml(ev.meetLink)}" target="_blank" rel="noopener">Join</a></span>` : ""}
-      </div>
-      ${ev.notes ? `<div class="cal-event-notes">${escapeHtml(ev.notes)}</div>` : ""}
-    </div>
-  `
-    )
-    .join("");
-
-  inner.querySelectorAll(".cal-event-card").forEach((card) => {
-    card.addEventListener("click", (e) => {
-      const id = card.getAttribute("data-id");
-      const act =
-        e.target?.getAttribute?.("data-act") || e.target?.closest?.("[data-act]")?.getAttribute("data-act");
-      if (!act) return;
-      if (act === "del") return deleteCalendarEvent(id);
-      if (act === "edit") {
-        const ev = calEventsCache.find((x) => x.id === id);
-        if (ev) openCalModal({ event: ev, date: ev.date || calSelected });
-        return;
-      }
-      if (act === "toggle") return toggleCalendarDone(id);
-    });
-  });
-}
-
-document.addEventListener("dragstart", (e) => {
-  const card = e.target.closest && e.target.closest(".cal-event-card");
-  if (!card || !e.dataTransfer) return;
-  const id = card.getAttribute("data-id");
-  if (!id) return;
-  e.dataTransfer.setData("text/event-id", id);
-  e.dataTransfer.effectAllowed = "move";
-});
-
-async function deleteCalendarEvent(id) {
-  if (!confirm("Delete this task/event?")) return;
-  await fetchJSON(`/api/calendar/events/${encodeURIComponent(id)}`, {
-    method: "DELETE",
-    headers: { "x-user-id": getCurrentUserId() }
-  });
-  await renderCalendar();
-}
-
-async function toggleCalendarDone(id) {
-  const base = calEventsCache.find((e) => e.id === id);
-  if (!base) return;
-  await fetchJSON(`/api/calendar/events/${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json", "x-user-id": getCurrentUserId() },
-    body: JSON.stringify({ done: !base.done })
-  });
-  await renderCalendar();
-}
-
-
 async function renderNotificationsPanel() {
   const panel = document.getElementById("notificationsPanel");
   if (!panel) return;
@@ -6953,6 +5985,52 @@ async function openCurrentUserProfile() {
   await openUserProfile(name, avatarUrl, sessionUser || null);
 }
 
+function mountSchoolEmailUiToEmailPanel() {
+  if (!schoolEmailSettingsPage || !emailPanelBody) return;
+  if (schoolEmailHeaderActions && schoolEmailHeaderActions.parentElement !== emailPanelHeaderActions) {
+    emailPanelHeaderActions.replaceChildren(schoolEmailHeaderActions);
+  }
+  if (schoolSettingsHeaderToggle && schoolSettingsHeaderToggle.parentElement !== emailPanelToggle) {
+    emailPanelToggle.replaceChildren(schoolSettingsHeaderToggle);
+  }
+  if (schoolEmailSettingsPage.parentElement !== emailPanelBody) {
+    emailPanelBody.replaceChildren(schoolEmailSettingsPage);
+  }
+  document.body.classList.remove("no-school-scroll");
+  setSchoolEmailHeaderMode(false);
+}
+
+function restoreSchoolEmailUiToChatHeader() {
+  if (schoolEmailHeaderActions && schoolEmailHeaderActions.parentElement !== schoolEmailHeaderActionsHome) {
+    schoolEmailHeaderActionsHome?.appendChild(schoolEmailHeaderActions);
+  }
+  if (schoolSettingsHeaderToggle && schoolSettingsHeaderToggle.parentElement !== schoolSettingsHeaderToggleHome) {
+    schoolSettingsHeaderToggleHome?.appendChild(schoolSettingsHeaderToggle);
+  }
+  if (schoolEmailSettingsPage && schoolEmailSettingsPage.parentElement !== schoolEmailSettingsPageHome) {
+    schoolEmailSettingsPageHome?.appendChild(schoolEmailSettingsPage);
+  }
+  schoolEmailSettingsPage?.classList.add("hidden");
+  schoolEmailSettingsPage?.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("no-school-scroll");
+  setSchoolEmailHeaderMode(false);
+}
+
+function mountUserProfileCardToAdminPanel() {
+  if (!adminPanelContent || !userProfileInnerCard || !userProfileModal) return;
+  if (userProfileInnerCard.parentElement !== adminPanelContent) {
+    adminPanelContent.replaceChildren(userProfileInnerCard);
+  }
+  userProfileModal.classList.add("hidden");
+}
+
+function restoreUserProfileCardToModal() {
+  if (!userProfileModal || !userProfileInnerCard) return;
+  if (userProfileInnerCard.parentElement !== userProfileModal) {
+    userProfileModal.appendChild(userProfileInnerCard);
+  }
+}
+
 function toggleProfilePopover() {
   if (!profilePopover) return;
   const isHidden = profilePopover.hidden;
@@ -7052,10 +6130,16 @@ function initRailAndComposerListeners() {
     });
 
     const savedRail = localStorage.getItem(LAST_RAIL_VIEW_KEY) || "messages";
+    const selectRail =
+      savedRail === "admin" && !isAdminUser() ? "messages" : savedRail;
     const initialBtn =
-      document.querySelector(`.app-rail-btn[data-rail-id="${savedRail}"]`) || railButtons[0];
+      document.querySelector(`.app-rail-btn[data-rail-id="${selectRail}"]`) || railButtons[0];
     if (initialBtn) {
-      initialBtn.click();
+      openRailSection(initialBtn.dataset.railId || "messages");
+      document
+        .querySelectorAll(".app-rail-btn")
+        .forEach((b) => b.classList.remove("app-rail-btn-active"));
+      initialBtn.classList.add("app-rail-btn-active");
     } else {
       openRailSection("messages");
     }
@@ -7069,9 +6153,14 @@ function openRailSection(id) {
   const isChat = targetId === "messages";
   setChatColumnsVisibility(isChat);
   setAppFullScreenMode(!isChat);
+  if (targetId !== "admin" && superAdminLanding) {
+    setSuperAdminLanding(false);
+  }
+  const savedTargetId =
+    targetId === "admin" && !isAdminUser() ? "messages" : targetId;
   if (LAST_RAIL_VIEW_KEY) {
     try {
-      localStorage.setItem(LAST_RAIL_VIEW_KEY, targetId);
+      localStorage.setItem(LAST_RAIL_VIEW_KEY, savedTargetId);
     } catch (_err) {
       /* ignore */
     }
@@ -7093,8 +6182,14 @@ function openRailSection(id) {
     case "calendar":
       openCalendarPanel();
       break;
+    case "email":
+      void openEmailPanel();
+      break;
     case "ai":
       openAiAssistant();
+      break;
+    case "admin":
+      void openAdminProfilePanel();
       break;
     case "analytics":
       if (!isAdminUser()) return;
@@ -7102,10 +6197,6 @@ function openRailSection(id) {
       break;
     case "live":
       openLivePanel();
-      break;
-    case "admin":
-      if (!isAdminUser()) return;
-      openAdminDock();
       break;
     case "home":
     default:
@@ -7699,15 +6790,8 @@ function attachLiveEvents() {
   });
   if (openClassSettingsBtn) {
     openClassSettingsBtn.addEventListener("click", async () => {
-      try {
-        collapseClassSettingsView();
-        await selectChannel(SCHOOL_SETTINGS_CHANNEL_ID);
-        await loadEmailSettings();
-        await loadClassSettingsSchoolDetails();
-      } catch (err) {
-        console.error("Failed to load email settings", err);
-        showToast("Could not load settings");
-      }
+      collapseClassSettingsView();
+      await openEmailPanel();
     });
   }
   if (openClassSettingsListBtn) {
@@ -8092,16 +7176,30 @@ async function fetchClassSettingsMeta(channelId) {
   }
 }
 
+function resolveClassMetaChannelId(channelId) {
+  if (!channelId) return "";
+  if (isHomeworkNoteChannel(channelId)) {
+    const noteChannel = getChannelById(channelId);
+    return (
+      noteChannel?.parentClassId ||
+      homeworkParentByChannelId.get(String(channelId)) ||
+      ""
+    );
+  }
+  return String(channelId);
+}
+
 async function ensureClassMeta(channelId) {
-  if (!channelId) return null;
-  if (classMetaCache.has(channelId)) return classMetaCache.get(channelId);
+  const resolvedChannelId = resolveClassMetaChannelId(channelId);
+  if (!resolvedChannelId) return null;
+  if (classMetaCache.has(resolvedChannelId)) return classMetaCache.get(resolvedChannelId);
   if (!sessionUser) {
     const empty = {};
-    classMetaCache.set(channelId, empty);
+    classMetaCache.set(resolvedChannelId, empty);
     return empty;
   }
-  const meta = (await fetchClassSettingsMeta(channelId)) || {};
-  classMetaCache.set(channelId, meta);
+  const meta = (await fetchClassSettingsMeta(resolvedChannelId)) || {};
+  classMetaCache.set(resolvedChannelId, meta);
   return meta;
 }
 
@@ -8482,7 +7580,7 @@ function sesTplUpdatePreview() {
 }
 
 async function sesTplLoadList() {
-  const ws = sessionUser?.workspaceId || currentWorkspaceId || "default";
+  const ws = await resolveProfileWorkspaceId();
   const data = await fetchJSON(`/api/workspaces/${encodeURIComponent(ws)}/email-templates`, {
     headers: { "x-user-id": getCurrentUserId() }
   });
@@ -8546,7 +7644,7 @@ function sesTplSelect(templateKey) {
 
 async function sesTplSaveSelected() {
   if (!sesTplSelectedKey) return;
-  const ws = sessionUser?.workspaceId || currentWorkspaceId || "default";
+  const ws = await resolveProfileWorkspaceId();
   const subject = document.getElementById("sesTplSubject")?.value || "";
   const body_html = document.getElementById("sesTplBodyHtml")?.value || "";
   const status = document.getElementById("sesTplStatus");
@@ -8567,7 +7665,7 @@ async function sesTplSaveSelected() {
 
 async function sesTplResetSelected() {
   if (!sesTplSelectedKey) return;
-  const ws = sessionUser?.workspaceId || currentWorkspaceId || "default";
+  const ws = await resolveProfileWorkspaceId();
   const status = document.getElementById("sesTplStatus");
   try {
     status && (status.textContent = "Resetting...");
@@ -8585,7 +7683,7 @@ async function sesTplResetSelected() {
 
 async function sesTplSendTest() {
   if (!sesTplSelectedKey) return;
-  const ws = sessionUser?.workspaceId || currentWorkspaceId || "default";
+  const ws = await resolveProfileWorkspaceId();
   const to = document.getElementById("sesTplTestTo")?.value || "";
   const status = document.getElementById("sesTplStatus");
   try {
@@ -10965,6 +10063,8 @@ const schoolLogoButton = document.getElementById("schoolLogoButton");
 const schoolLogoInput = document.getElementById("schoolLogoInput");
 const schoolLogoImg = document.getElementById("schoolLogoImg");
 const schoolLogoFallback = document.getElementById("schoolLogoFallback");
+const schoolRailLogoImg = document.getElementById("schoolRailLogoImg");
+const schoolRailLogoFallback = document.getElementById("schoolRailLogoFallback");
 const densityButtons = document.querySelectorAll(".density-btn");
 
 const threadAttachBtn = document.getElementById("threadAttachBtn");
@@ -11014,6 +10114,14 @@ const liveAttendanceCancel = document.getElementById("liveAttendanceCancel");
 const liveAttendanceSave = document.getElementById("liveAttendanceSave");
 const SCHOOL_SETTINGS_CHANNEL_ID = "school-settings";
 const schoolEmailSettingsPage = document.getElementById("schoolEmailSettingsPage");
+const schoolEmailSettingsPageHome = schoolEmailSettingsPage?.parentElement || null;
+const schoolEmailHeaderActions = document.getElementById("schoolEmailHeaderActions");
+const schoolEmailHeaderActionsHome = schoolEmailHeaderActions?.parentElement || null;
+const schoolSettingsHeaderToggle = document.getElementById("schoolSettingsHeaderToggle");
+const schoolSettingsHeaderToggleHome = schoolSettingsHeaderToggle?.parentElement || null;
+const emailPanelHeaderActions = document.getElementById("emailPanelHeaderActions");
+const emailPanelToggle = document.getElementById("emailPanelToggle");
+const emailPanelBody = document.getElementById("emailPanelBody");
 const sesFormatBtn = document.getElementById("sesFormatBtn");
 const sesFormatCard = document.getElementById("sesFormatCard");
 const sesInboxBtn = document.getElementById("sesInboxBtn");
@@ -11321,15 +10429,74 @@ const typingIndicator = document.getElementById("typingIndicator");
 const newMsgsBtn = document.getElementById("newMsgsBtn");
 const chatPanel = document.querySelector(".chat-panel");
   const chatLayout = document.querySelector(".chat-layout");
-  const attLightbox = document.getElementById("attLightbox");
-  const attLightboxBackdrop = document.getElementById("attLightboxBackdrop");
-  const attLightboxClose = document.getElementById("attLightboxClose");
-  const attLightboxBody = document.getElementById("attLightboxBody");
-  const attLightboxOpen = document.getElementById("attLightboxOpen");
-  const attLightboxDownload = document.getElementById("attLightboxDownload");
-  const superAdminLanding = document.getElementById("superAdminLanding");
-
 const threadPanel = document.getElementById("threadPanel");
+const attLightbox = document.getElementById("attLightbox");
+const attLightboxBackdrop = document.getElementById("attLightboxBackdrop");
+const attLightboxClose = document.getElementById("attLightboxClose");
+const attLightboxBody = document.getElementById("attLightboxBody");
+const attLightboxOpen = document.getElementById("attLightboxOpen");
+const attLightboxDownload = document.getElementById("attLightboxDownload");
+const superAdminLanding = document.getElementById("superAdminLanding");
+const superAdminLandingClose = document.querySelector(".super-admin-landing-close");
+
+const toggleThreadColumnBtn = document.getElementById("toggleThreadColumnBtn");
+const threadCollapseBtn = document.getElementById("threadCollapseBtn");
+const THREAD_COLUMN_STORAGE_KEY = "worknestThreadColumnHidden";
+let threadColumnHidden = false;
+const toggleThreadColumnButtons = [toggleThreadColumnBtn, threadCollapseBtn].filter(Boolean);
+
+const getSavedThreadColumnHidden = () => {
+  if (typeof localStorage === "undefined") return false;
+  try {
+    return localStorage.getItem(THREAD_COLUMN_STORAGE_KEY) === "1";
+  } catch (_err) {
+    return false;
+  }
+};
+
+const saveThreadColumnPreference = (hidden) => {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(THREAD_COLUMN_STORAGE_KEY, hidden ? "1" : "0");
+  } catch (_err) {
+    /* ignore */
+  }
+};
+
+const updateThreadColumnToggleUI = () => {
+  const hidden = threadColumnHidden;
+  toggleThreadColumnButtons.forEach((btn) => {
+    btn.setAttribute("aria-pressed", hidden ? "true" : "false");
+    btn.setAttribute("aria-label", hidden ? "Show right column" : "Hide right column");
+    btn.setAttribute("title", hidden ? "Show right column" : "Hide right column");
+    btn.classList.toggle("is-collapsed", hidden);
+    const icon = btn.querySelector("i");
+    if (icon) {
+      icon.classList.toggle("fa-chevron-left", !hidden);
+      icon.classList.toggle("fa-chevron-right", hidden);
+    }
+  });
+};
+
+const applyThreadColumnHiddenState = () => {
+  if (chatLayout) {
+    chatLayout.classList.toggle("thread-column-hidden", threadColumnHidden);
+  }
+  if (threadPanel) {
+    threadPanel.setAttribute("aria-hidden", threadColumnHidden ? "true" : "false");
+  }
+  updateThreadColumnToggleUI();
+};
+
+threadColumnHidden = getSavedThreadColumnHidden();
+applyThreadColumnHiddenState();
+toggleThreadColumnButtons.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    threadColumnHidden = !threadColumnHidden;
+    applyThreadColumnHiddenState();
+    saveThreadColumnPreference(threadColumnHidden);
+  });
+});
 const closeThreadBtn = document.getElementById("closeThreadBtn");
 const threadParentContainer = document.getElementById("threadParentContainer");
 const threadRepliesContainer = document.getElementById("threadRepliesContainer");
@@ -11339,7 +10506,6 @@ const threadInput = document.getElementById("threadInput");
   const threadSendButton = document.getElementById("threadSendButtonMain");
   const threadPendingAttachments = document.getElementById("threadPendingAttachments");
   const adminDock = document.getElementById("adminDock");
-  const adminRailBtn = document.querySelector(".app-rail-btn-admin");
 
 // DM members modal
 const dmMembersModal = document.getElementById("dmMembersModal");
@@ -11356,6 +10522,10 @@ const dmCreateSave = document.getElementById("dmCreateSave");
 
 // User profile modal
 const userProfileModal = document.getElementById("userProfileModal");
+const userProfileInnerCard = userProfileModal
+  ? userProfileModal.querySelector(".user-profile-inner-card")
+  : null;
+const adminPanelContent = document.getElementById("adminPanelContent");
 const userProfileAvatar = document.getElementById("userProfileAvatar");
 const userProfileName = document.getElementById("userProfileName");
 const userProfileUsername = document.getElementById("userProfileUsername");
@@ -11691,8 +10861,6 @@ const typingAvatar = typingIndicator ? typingIndicator.querySelector(".typing-av
 const typingText = typingIndicator ? typingIndicator.querySelector(".typing-text") : null;
 
 // ===================== STATE =====================
-// drafts
-const DRAFT_KEY_PREFIX = "worknest_draft_";
 
 let releaseThreadTrap = null;
 let releaseAdminTrap = null;
@@ -13968,6 +13136,7 @@ async function openUserProfile(name, avatarUrl = "", msg = null) {
     minute: "2-digit"
   }).format(new Date());
   const role = user.role || (msg && msg.role) || "";
+  const normalizedRole = normalizeRole(role);
 
   if (userProfileName) userProfileName.textContent = displayName;
   setStatusInText(userProfileUsername, role, getRoleText(role, "Member"));
@@ -13976,7 +13145,7 @@ async function openUserProfile(name, avatarUrl = "", msg = null) {
   if (userProfileAccountEmail) userProfileAccountEmail.textContent = email;
   if (userProfileAccountRole) userProfileAccountRole.textContent = getRoleText(role, "Member");
   if (userProfileAccountJoined) userProfileAccountJoined.textContent = joined;
-  if (userProfileHeaderTime) userProfileHeaderTime.textContent = `Local time · ${localTime}`;
+  if (userProfileHeaderTime) userProfileHeaderTime.textContent = localTime;
 
   if (userProfileAvatar) {
     applyAvatarToNode(
@@ -13988,6 +13157,7 @@ async function openUserProfile(name, avatarUrl = "", msg = null) {
     );
   }
 
+  userProfileModal.classList.toggle("is-school-admin-profile", normalizedRole === "school_admin");
   userProfileModal.classList.remove("hidden");
   updateSchoolSectionVisibility();
   if (canEditWorkspaceProfile()) {
@@ -14010,9 +13180,28 @@ function getProfileWorkspaceId() {
   return (
     sessionUser?.workspaceId ||
     sessionUser?.workspace_id ||
+    window.selectedWorkspaceId ||
+    window.currentWorkspaceId ||
     currentWorkspaceId ||
     "default"
   );
+}
+
+async function resolveProfileWorkspaceId() {
+  const current = String(getProfileWorkspaceId() || "").trim();
+  if (current && current !== "default") return current;
+
+  try {
+    const me = await fetchJSON("/api/auth/me");
+    const authedUser = me?.user || null;
+    if (authedUser) {
+      persistSessionUser(authedUser);
+    }
+  } catch (err) {
+    console.warn("Could not refresh authenticated workspace for email settings", err);
+  }
+
+  return String(getProfileWorkspaceId() || "default").trim() || "default";
 }
 
 async function fetchWorkspaceProfile(workspaceId, options = {}) {
@@ -14310,7 +13499,13 @@ async function handleSchoolProfileSave() {
 }
 
 function closeUserProfile() {
-  if (userProfileModal) userProfileModal.classList.add("hidden");
+  if (!userProfileModal) return;
+  if (adminPanelContent && userProfileInnerCard?.parentElement === adminPanelContent) {
+    restoreUserProfileCardToModal();
+    showPanel("chatPanel");
+  }
+  userProfileModal.classList.add("hidden");
+  userProfileModal.classList.remove("is-school-admin-profile");
 }
 
 async function startDirectDmWithUser(user) {
@@ -16339,23 +15534,32 @@ function updateSchoolLabel() {
   const name = ws && ws.name ? ws.name : "School";
   schoolNameLabel.textContent = name;
 
-  if (!schoolLogoImg || !schoolLogoFallback || !schoolLogoButton) return;
-  const logoUrl = ws && ws.logoUrl ? String(ws.logoUrl).trim() : "";
-  if (logoUrl) {
-    schoolLogoImg.src = logoUrl;
-    schoolLogoImg.hidden = false;
-    schoolLogoFallback.hidden = true;
-  } else {
-    schoolLogoImg.hidden = true;
-    schoolLogoFallback.hidden = false;
-  }
+  const candidate =
+    (ws && (ws.logoUrl || ws.logo_url || ws.logo || "")) ||
+    (sessionUser && (sessionUser.avatarUrl || sessionUser.avatar_url || ""));
+  const logoUrl = candidate ? String(candidate).trim() : "";
+  const applyLogo = (imgEl, fallbackEl) => {
+    if (!imgEl || !fallbackEl) return;
+    if (logoUrl) {
+      imgEl.src = logoUrl;
+      imgEl.hidden = false;
+      fallbackEl.hidden = true;
+    } else {
+      imgEl.hidden = true;
+      fallbackEl.hidden = false;
+    }
+  };
+  applyLogo(schoolLogoImg, schoolLogoFallback);
+  applyLogo(schoolRailLogoImg, schoolRailLogoFallback);
 
-  const canEdit = isSchoolAdmin() || isSuperAdmin();
-  schoolLogoButton.classList.toggle("is-disabled", !canEdit);
-  schoolLogoButton.setAttribute(
-    "aria-label",
-    canEdit ? "Upload school logo" : "School logo"
-  );
+  if (schoolLogoButton) {
+    const canEdit = isSchoolAdmin() || isSuperAdmin();
+    schoolLogoButton.classList.toggle("is-disabled", !canEdit);
+    schoolLogoButton.setAttribute(
+      "aria-label",
+      canEdit ? "Upload school logo" : "School logo"
+    );
+  }
 }
 
 function readFileAsDataUrl(file) {
@@ -16773,11 +15977,13 @@ function refreshPrivacyHeaderMeta(channelId) {
 
 async function refreshChannelHeaderPrivacy(channelId, fallbackStatus = "public") {
   if (!headerChannelPrivacy || !channelId) return;
-  if (normalizeChannelCategory(getChannelById(channelId)?.category) !== "classes") {
+  const metaChannelId = resolveClassMetaChannelId(channelId);
+  const targetChannel = getChannelById(metaChannelId || channelId);
+  if (normalizeChannelCategory(targetChannel?.category) !== "classes") {
     applyChannelHeaderPrivacy(fallbackStatus);
     return;
   }
-  const meta = await ensureClassMeta(channelId);
+  const meta = await ensureClassMeta(metaChannelId);
   if (meta && meta.status) {
     applyChannelHeaderPrivacy(meta.status);
   } else {
@@ -22551,16 +21757,6 @@ if (superAdminQuickBtn) {
     openAdminDock();
   });
 }
-if (adminRailBtn) {
-  adminRailBtn.addEventListener("click", (event) => {
-    if (!isAdminUser()) {
-      showToast("Admin access is required");
-      return;
-    }
-    event.preventDefault();
-    openAdminDock();
-  });
-}
 if (adminLoginBtn) {
   adminLoginBtn.addEventListener("click", () => {
     const email = (adminEmailInput?.value || "").trim();
@@ -22576,6 +21772,16 @@ if (adminLoginBtn) {
     if (mainLoginPassword) mainLoginPassword.value = password;
     handleMainLogin();
   });
+}
+if (superAdminLanding) {
+  superAdminLanding.addEventListener("click", (event) => {
+    if (event.target === superAdminLanding) {
+      setSuperAdminLanding(false);
+    }
+  });
+}
+if (superAdminLandingClose) {
+  superAdminLandingClose.addEventListener("click", () => setSuperAdminLanding(false));
 }
 if (adminWsCreateBtn) {
   adminWsCreateBtn.addEventListener("click", adminCreateWorkspace);
@@ -24563,6 +23769,13 @@ async function completeLoginFlow(user) {
   adminLoggedIn = ADMIN_ROLE_VALUES.has(normalizedRole);
   adminLoggedInSuper = normalizedRole === "super_admin" || user.superAdmin === true;
   updateAdminButtonState();
+  const authenticatedWorkspaceId = String(
+    user.workspaceId ||
+    user.workspace_id ||
+    window.selectedWorkspaceId ||
+    currentWorkspaceId ||
+    "default"
+  ).trim();
 
   if (adminLoggedInSuper) {
     if (adminOverlay) {
@@ -24582,7 +23795,7 @@ async function completeLoginFlow(user) {
       } catch (_err) {
         storedWorkspace = null;
       }
-      currentWorkspaceId = storedWorkspace || workspaces[0]?.id || "default";
+      currentWorkspaceId = storedWorkspace || authenticatedWorkspaceId || workspaces[0]?.id || "default";
     }
     await loadWorkspace(currentWorkspaceId);
     setSuperAdminLanding(true);
@@ -24591,8 +23804,7 @@ async function completeLoginFlow(user) {
     return;
   }
 
-  const userWs = user.workspaceId || user.workspace_id || null;
-  currentWorkspaceId = userWs || "default";
+  currentWorkspaceId = authenticatedWorkspaceId || "default";
   await loadWorkspace(currentWorkspaceId);
 
   try {
@@ -24674,7 +23886,19 @@ function persistCurrentWorkspace() {
 async function loadWorkspace(workspaceId) {
   const candidate = String(workspaceId || "").trim();
   currentWorkspaceId = candidate || "default";
+  if (typeof window !== "undefined") {
+    window.currentWorkspaceId = currentWorkspaceId;
+    window.selectedWorkspaceId = currentWorkspaceId;
+  }
   persistCurrentWorkspace();
+  if (typeof window !== "undefined") {
+    window.__calendarWorkspaceReady = currentWorkspaceId || "";
+    window.dispatchEvent(
+      new CustomEvent("worknestWorkspaceReady", {
+        detail: { workspaceId: currentWorkspaceId }
+      })
+    );
+  }
 }
 
 async function tryAutoAuth() {
@@ -25169,6 +24393,12 @@ async function init() {
   renderDMs();
   renderWorkspaces();
   renderCommandLists();
+  let savedRailView = "messages";
+  try {
+    savedRailView = localStorage.getItem(LAST_RAIL_VIEW_KEY) || "messages";
+  } catch (_err) {
+    savedRailView = "messages";
+  }
   if (isPolicyAcceptanceRequired() && !policyAccepted) {
     await openPrivacyRulesChannel();
   }
@@ -25197,6 +24427,9 @@ async function init() {
   renderPinnedSidebar();
   setupDensityToggle();
   refreshMessageBadge();
+  if (savedRailView === "email") {
+    await openEmailPanel();
+  }
 }
 init();
 
