@@ -97,11 +97,31 @@
     >
       <img id="schoolLogoImg" class="school-logo-img" alt="School logo" hidden />
       <span id="schoolLogoFallback" class="sidebar-school-icon">🏛️</span>
+      <span
+        id="schoolLogoProfileBadge"
+        class="school-logo-profile-badge"
+        role="button"
+        tabindex="0"
+        aria-label="Open profile"
+        hidden
+      >
+        <img id="schoolLogoProfileBadgeImg" alt="Profile avatar" hidden />
+        <i id="schoolLogoProfileBadgeIcon" class="fa-solid fa-user" aria-hidden="true"></i>
+      </span>
     </button>
     <input id="schoolLogoInput" type="file" accept="image/*" hidden />
   </div>
 
   <!-- Primary Navigation -->
+  <button
+    class="app-rail-scroll-btn"
+    id="railScrollUpBtn"
+    type="button"
+    title="Scroll up"
+    aria-label="Scroll up"
+    hidden>
+    <i class="fa-solid fa-chevron-up" aria-hidden="true"></i>
+  </button>
   <div class="app-rail-icons" role="navigation">
 
     <!-- Super Admin shortcut -->
@@ -239,11 +259,6 @@
          aria-hidden="true"></i>
     </button>
 
-  </div>
-
-  <!-- Footer Actions -->
-  <div class="app-rail-footer">
-
     <!-- Theme Toggle -->
     <button
       class="app-rail-btn app-rail-btn-theme"
@@ -265,6 +280,21 @@
       <i class="fa-solid fa-shield-halved"
          aria-hidden="true"></i>
     </button>
+
+  </div>
+
+  <button
+    class="app-rail-scroll-btn"
+    id="railScrollDownBtn"
+    type="button"
+    title="Scroll down"
+    aria-label="Scroll down"
+    hidden>
+    <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
+  </button>
+
+  <!-- Footer Actions -->
+  <div class="app-rail-footer">
 
     <!-- Profile -->
     <button
@@ -680,7 +710,10 @@
     <!-- Private Chat -->
     <section class="sidebar-section" id="dmList" aria-label="Private chat">
       <div class="sidebar-section-header">
-        <span data-branch-accent="dm">💬 Private Chat</span>
+        <span class="section-accent section-accent-dm" data-branch-accent="dm">
+          <i class="fa-solid fa-comment-dots" aria-hidden="true"></i>
+          Private Chat
+        </span>
         <button type="button" class="icon-btn" id="addDmBtn" title="New DM" aria-label="New direct message">
           <i class="fa-solid fa-plus" aria-hidden="true"></i>
         </button>

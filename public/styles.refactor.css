@@ -62,7 +62,7 @@
     padding: 0;
     min-height: 100%;
     height: 100%;
-    overflow: auto;
+    overflow: hidden;
   }
   body {
     font-family: var(--font-sans);
@@ -72,7 +72,7 @@
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
     min-height: 100vh;
-    overflow: auto;
+    overflow: hidden;
   }
 
   body.modal-open,
@@ -110,18 +110,35 @@
   .muted {
     color: var(--text-soft);
   }
-  .helper-text {
-    font-size: 18px;
-    color: var(--text-soft);
-  }
+.helper-text {
+  font-size: 18px;
+  color: var(--text-soft);
+}
+
+.sidebar-section-empty {
+  margin-top: 8px;
+  padding: 10px 12px 10px 36px;
+  border-radius: 14px;
+  color: #7b8798;
+  font-size: 13px;
+  line-height: 1.4;
+  background: rgba(148, 163, 184, 0.08);
+}
+
+html[data-theme="dark"] .sidebar-section-empty {
+  background: rgba(148, 163, 184, 0.14);
+  color: #c7d0db;
+}
   /* ========== LAYOUT SHELL ========== */
 .app-shell {
   display: grid;
   grid-template-columns: 72px 260px minmax(0, 1fr);
-  min-height: 100vh;
+  min-height: 100dvh;
+  height: 100dvh;
   background: var(--bg-app);
   width: 100%;
   max-width: 100%;
+  overflow: hidden;
 }
 .password-banner {
   display: none;
@@ -192,9 +209,12 @@ body.app-fullscreen-mode .app-shell {
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding: 25px 0;
-    gap: 14px;
+    padding: 16px 0 10px;
+    gap: 12px;
     width: 80px;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
   }
   .app-rail-logo {
     width: 50px;
@@ -559,7 +579,12 @@ body.app-fullscreen-mode .app-shell {
     flex-direction: column;
     gap: 22px;
     margin-top: 5px;
-    margin-bottom: auto;
+    margin-bottom: 0;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-bottom: 8px;
   }
   .app-rail-btn-home,
   .app-rail-btn-notifications,
@@ -581,7 +606,9 @@ body.app-fullscreen-mode .app-shell {
     background: var(--bg-sidebar);
     border-right: 1px solid rgba(0, 0, 0, 0.08);
     min-width: 260px;
-    max-height: 100vh;
+    min-height: 0;
+    height: 100%;
+    max-height: none;
     box-shadow: inset -1px 0 0 rgba(0, 0, 0, 0.02);
     overflow: hidden;
   }
@@ -2016,11 +2043,11 @@ html[data-theme="dark"] .live-delete-btn{
   }
   /* Sidebar scrollable area */
   .sidebar-scroll {
-    flex: 1;
+    flex: 1 1 auto;
     overflow-y: auto;
-    padding: 6px 4px 6px;
+    padding: 6px 4px 24px;
     min-height: 0;
-    max-height: calc(100vh - 64px);
+    max-height: none;
   }
   /* Primary nav */
   .sidebar-nav {
@@ -2267,7 +2294,7 @@ html[data-theme="dark"] .live-delete-btn{
   min-width: 0;
   min-height: 0;
   height: 100%;
-  overflow: auto;
+  overflow: hidden;
 }
   /* Top header (channel bar) */
 .main-header {
@@ -12644,32 +12671,26 @@ html[data-theme="dark"] .sidebar-section .homework-connector::before{
 }
 
 .sidebar-school-label{
-  padding: 12px 14px 10px;
+  padding: 12px 10px 10px 8px;
   font-size: 20px;
   font-weight: 700;
   color: var(--text-secondary);
   display: flex;
   align-items: center;
   gap: 8px;
+  width: calc(100% - 6px);
+  box-sizing: border-box;
   position: sticky;
   top: 0;
   z-index: 3;
   background: var(--bg-sidebar);
-  border-right: 1px solid rgba(15, 23, 42, 0.2);
-  margin-right: -1px;
-  position: sticky;
+  border-right: none;
+  margin-right: 0;
   right: 0;
   z-index: 4;
 }
 .sidebar-school-label::after {
-  content: "";
-  position: absolute;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  width: 1px;
-  background: rgba(15, 23, 42, 0.2);
-  pointer-events: none;
+  content: none;
 }
 .sidebar-school-icon{
   font-size: 26px;
@@ -12689,6 +12710,8 @@ html[data-theme="dark"] .sidebar-section .homework-connector::before{
   padding: 0;
   cursor: pointer;
   box-shadow: var(--shadow-1);
+  position: relative;
+  overflow: visible;
 }
 .school-logo-btn:hover{
   border-color: var(--border-strong);
@@ -12715,9 +12738,75 @@ html[data-theme="dark"] .sidebar-section .homework-connector::before{
   flex-direction:column;
   align-items:center;
   gap:4px;
-  padding: 2px 0 8px;
-  margin-top: -11px;
+  padding: 0;
+  margin-top: 0;
   border-bottom: none;
+}
+
+.school-logo-profile-badge{
+  position: absolute;
+  right: -6px;
+  bottom: -6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 2px solid #ffffff;
+  background: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.18);
+  z-index: 2;
+}
+
+.school-logo-profile-badge img{
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.school-logo-profile-badge i{
+  font-size: 11px;
+  color: #475569;
+}
+
+.app-rail-btn-profile{
+  display: none !important;
+}
+
+/* Final override: Speaking Practice row should never stay filled */
+#appsContainer .sidebar-item[data-channel-name="Speaking Practice"],
+#appsContainer .sidebar-item[data-channel-name="Speaking Practice"].sidebar-item-active,
+body.speaking-practice-active #appsContainer .sidebar-item[data-channel-name="Speaking Practice"],
+html.speaking-practice-active #appsContainer .sidebar-item[data-channel-name="Speaking Practice"] {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+#appsContainer .sidebar-item[data-channel-name="Speaking Practice"]::before,
+#appsContainer .sidebar-item[data-channel-name="Speaking Practice"].sidebar-item-active::before,
+body.speaking-practice-active #appsContainer .sidebar-item[data-channel-name="Speaking Practice"]::before,
+html.speaking-practice-active #appsContainer .sidebar-item[data-channel-name="Speaking Practice"]::before {
+  display: none !important;
+}
+
+#appsContainer .sidebar-item[data-channel-name="Speaking Practice"] .sidebar-item-label,
+#appsContainer .sidebar-item[data-channel-name="Speaking Practice"].sidebar-item-active .sidebar-item-label,
+body.speaking-practice-active #appsContainer .sidebar-item[data-channel-name="Speaking Practice"] .sidebar-item-label,
+html.speaking-practice-active #appsContainer .sidebar-item[data-channel-name="Speaking Practice"] .sidebar-item-label {
+  color: inherit !important;
+  font-weight: 600 !important;
+}
+
+/* Make the top chat divider line meet the sidebar seam cleanly */
+.chat-panel .day-divider,
+.chat-panel .date-separator {
+  margin-left: -16px !important;
+  margin-right: -14px !important;
+  padding-left: 14px !important;
+  padding-right: 14px !important;
 }
 
 #adminToolsContainer .admin-tool-icon i{
@@ -12826,6 +12915,15 @@ html[data-theme="dark"] .sidebar-section-header .classes-header-label{
 
 .sidebar-section-header .section-accent-practice{
   color: #16a34a;
+}
+
+.sidebar-section-header .section-accent-dm{
+  color: #7c3aed;
+}
+
+.sidebar-section-header .section-accent-dm i{
+  color: #8b5cf6;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.75);
 }
 
 .sidebar-section-header .section-accent[data-branch-accent="teachers"]{
@@ -13895,8 +13993,8 @@ html[data-theme="dark"] .sidebar-item{
 }
 
 .main-area{
-  padding-left: 8px;
-  padding-right: 8px;
+  padding-left: 0;
+  padding-right: 0;
   box-sizing: border-box;
 }
 
@@ -13980,25 +14078,27 @@ html[data-theme="dark"] .sidebar-item{
     border-left: none !important;
   }
   .sidebar-scroll{
+    padding-right: 8px !important;
+    box-sizing: border-box;
     scrollbar-width: thin;
-    scrollbar-color: #0f172a transparent;
+    scrollbar-color: rgba(71, 85, 105, 0.72) transparent;
   }
   .sidebar-scroll::-webkit-scrollbar{
-    width: 10px;
+    width: 8px;
   }
   .sidebar-scroll::-webkit-scrollbar-track{
     background: transparent;
     border-radius: 999px;
-    margin: 6px 0;
+    margin: 8px 0;
   }
   .sidebar-scroll::-webkit-scrollbar-thumb{
-    background: #0f172a !important;
+    background: rgba(71, 85, 105, 0.72) !important;
     border-radius: 999px;
     min-height: 10px;
     height: 10px;
     max-height: 10px;
     border: 2px solid transparent;
-    background-clip: content-box;
+    background-clip: padding-box;
   }
 }
 
@@ -18008,20 +18108,33 @@ html[data-theme="dark"] #composer .composer-left .icon-pill:hover{
 .chat-layout{
   display:flex;
   flex-direction:column;
+  flex: 1 1 auto;
   min-height:0;
-  height:100%;
+  height:auto;
+  max-height:none;
+  overflow:hidden;
+}
+
+section.chat-layout.main-panel{
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+  max-height: none;
+  overflow: hidden;
 }
 .chat-panel{
   flex:1 1 auto;
   min-height:0;
   display:flex;
   flex-direction:column;
+  overflow:hidden;
 }
 .chat-panel .messages{
   flex:1 1 auto !important;
   min-height:0 !important;
   overflow-y:auto !important;
   overscroll-behavior: contain;
+  padding-bottom: 6px;
 }
 
 
@@ -18085,6 +18198,232 @@ html[data-theme="dark"] .modal-card.user-profile-card .profile-label{
   background: var(--field-bg) !important;
   border-radius: 14px !important;
   padding: 12px !important;
+}
+
+/* Keep the full chat view inside the current viewport */
+.main-header,
+#chatHeader {
+  padding: 8px 14px !important;
+}
+
+#composer {
+  flex: 0 0 auto !important;
+  padding: 8px 0 8px !important;
+}
+
+#composer .composer-editorWrap {
+  padding: 0 0 24px !important;
+}
+
+#composer #rteEditor {
+  min-height: 60px !important;
+  max-height: 180px !important;
+  padding: 8px 10px 6px !important;
+}
+
+/* Join the sidebar divider and chat header edge cleanly */
+.main-header,
+#chatHeader {
+  margin-left: 0;
+  padding-left: 14px !important;
+  border-left: none !important;
+}
+
+.app-shell.hide-sidebar .main-header,
+.app-shell.hide-sidebar #chatHeader,
+body.app-fullscreen-mode .main-header,
+body.app-fullscreen-mode #chatHeader {
+  margin-left: 0;
+  padding-left: 14px !important;
+  border-left: none !important;
+}
+
+/* Keep Speaking Practice styled like the other static tool rows */
+#appsContainer .sidebar-item[data-channel-name="Speaking Practice"].sidebar-item-active {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+#appsContainer .sidebar-item[data-channel-name="Speaking Practice"].sidebar-item-active:hover {
+  background: rgba(0, 0, 0, 0.03) !important;
+}
+
+/* School tools active rows should not stay filled like buttons */
+#appsContainer .sidebar-item-active,
+#appsChannelsContainer .sidebar-item-active {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+#appsContainer .sidebar-item-active::before,
+#appsChannelsContainer .sidebar-item-active::before {
+  display: none !important;
+}
+
+#appsContainer .sidebar-item-active .sidebar-item-label,
+#appsChannelsContainer .sidebar-item-active .sidebar-item-label {
+  color: inherit !important;
+  font-weight: 600 !important;
+}
+
+#appsContainer .sidebar-item-active .sidebar-item-icon,
+#appsContainer .sidebar-item-active .sidebar-item-meta,
+#appsChannelsContainer .sidebar-item-active .sidebar-item-icon,
+#appsChannelsContainer .sidebar-item-active .sidebar-item-meta {
+  color: inherit !important;
+}
+
+/* Shared sidebar polish */
+.sidebar-section {
+  margin-top: 8px;
+}
+
+.sidebar-section-header {
+  min-height: 34px;
+  padding: 4px 10px 8px;
+  gap: 10px;
+}
+
+.sidebar-section-header > span,
+.sidebar-section-header .classes-header-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.035em;
+}
+
+.sidebar-section-header .icon-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+}
+
+.sidebar-items {
+  gap: 3px;
+}
+
+.sidebar-item {
+  min-height: 40px;
+  padding: 6px 10px;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 500;
+  color: #334155;
+  transition:
+    background-color 0.16s ease,
+    color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.sidebar-item .sidebar-item-label {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: inherit;
+}
+
+.sidebar-item:hover {
+  background: rgba(148, 163, 184, 0.12);
+  color: #0f172a;
+}
+
+.sidebar-item-active {
+  background: rgba(37, 99, 235, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.1);
+}
+
+.sidebar-item-active .sidebar-item-label {
+  color: #1d4ed8;
+  font-weight: 700;
+}
+
+.sidebar-item-active:hover {
+  background: rgba(37, 99, 235, 0.14);
+}
+
+.sidebar-item-active::before {
+  left: 2px;
+  top: 7px;
+  bottom: 7px;
+}
+
+.sidebar-item-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  flex: 0 0 28px;
+  font-size: 16px;
+  color: #64748b;
+}
+
+.sidebar .sidebar-item-icon,
+.sidebar .sidebar-item-active .sidebar-item-icon {
+  background: transparent;
+}
+
+.sidebar-item-meta {
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.sidebar-group-title,
+#adminToolsSection .admin-group-title {
+  margin-top: 8px;
+  margin-bottom: 4px;
+  padding-left: 38px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #64748b;
+}
+
+.branch-row {
+  padding-left: 22px;
+  gap: 8px;
+}
+
+.branch-sub {
+  padding-left: 40px;
+}
+
+#appsSection .branch-sub {
+  padding-left: 34px;
+}
+
+.class-row {
+  padding-left: 14px;
+}
+
+.homework-row {
+  padding-left: 56px;
+  min-height: 34px;
+  font-size: 13px;
+}
+
+.homework-row .sidebar-item-label,
+.homework-note-row .sidebar-item-label,
+.exam-sub-row .sidebar-item-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.exam-sub-row {
+  padding-left: 96px;
+  min-height: 34px;
+}
+
+.sidebar-section-empty {
+  margin-top: 6px;
+  margin-left: 6px;
+  margin-right: 6px;
+  padding: 11px 14px 11px 38px;
+  border-radius: 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #7c8ca0;
+  background: rgba(148, 163, 184, 0.1);
 }
 
 /* =========================================================
@@ -22097,6 +22436,10 @@ html[data-theme="dark"] .task-input input{
   overflow-x: hidden;
   padding-bottom: 28px;
   position: relative;
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-self: flex-start;
 }
 
 .ses-form::-webkit-scrollbar {
@@ -22277,6 +22620,24 @@ html[data-theme="dark"] .task-input input{
 
 .ses-meta-column {
   gap: 16px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ses-body.ses-view-sent {
+  display: block;
+  align-items: start;
+}
+
+.ses-body.ses-view-sent .ses-form {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  flex: 1 1 auto;
+}
+
+.ses-body.ses-view-sent .ses-meta-column {
+  display: none;
 }
 
 .ses-preview {
@@ -22864,6 +23225,16 @@ html[data-theme="dark"] .task-input input{
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .ses-body.ses-view-sent {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ses-form {
+    width: 100%;
+    min-width: 0;
+    flex-basis: auto;
+  }
+
   .ses-meta-column {
     order: 2;
   }
@@ -23031,31 +23402,123 @@ html[data-theme="dark"] .task-input input{
 }
 
 @layer overrides {
-  .sidebar::after {
-    width: 1px !important;
-    right: 0 !important;
-    background: rgba(15, 23, 42, 0.2) !important;
-    display: block !important;
+  .app-rail-scroll-btn {
+    width: 32px !important;
+    height: 32px !important;
+    min-width: 32px !important;
+    min-height: 32px !important;
+    margin: 2px auto !important;
+    border: 1px solid rgba(15, 23, 42, 0.12) !important;
+    border-radius: 999px !important;
+    background: rgba(255, 255, 255, 0.94) !important;
+    color: #667085 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04) !important;
+    transition: background-color 0.18s ease, color 0.18s ease,
+      border-color 0.18s ease, opacity 0.18s ease !important;
   }
+
+  .app-rail-scroll-btn:hover {
+    background: #ffffff !important;
+    color: #344054 !important;
+    border-color: rgba(15, 23, 42, 0.18) !important;
+  }
+
+  .app-rail-scroll-btn.is-hidden,
+  .app-rail-scroll-btn[hidden] {
+    display: none !important;
+  }
+
+  .app-rail-scroll-btn i {
+    font-size: 14px !important;
+    line-height: 1 !important;
+  }
+
   .main-area {
     border-left: none !important;
   }
 
-  /* subtle divider between column 2 and column 3 */
+  .main-header,
+  #chatHeader {
+    margin-left: 4px !important;
+    border-left: 1px solid rgba(15, 23, 42, 0.16) !important;
+    border-bottom: 1px solid rgba(15, 23, 42, 0.16) !important;
+  }
+
   .sidebar {
-    position: relative;
     height: 100%;
+    border-right: 1px solid rgba(15, 23, 42, 0.16) !important;
   }
-  .sidebar::after {
-    content: "";
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: 1px;
-    background: rgba(15, 23, 42, 0.16);
-    pointer-events: none;
+
+  .app-rail-btn {
+    width: 48px !important;
+    height: 48px !important;
+    min-width: 48px !important;
+    min-height: 48px !important;
+    border-radius: 16px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    padding: 0 !important;
+    box-sizing: border-box !important;
   }
+
+  .app-rail-btn-home {
+    margin-top: 0 !important;
+  }
+
+  .app-rail-btn > i,
+  .app-rail-btn > img,
+  .app-rail-btn .rail-icon-img {
+    width: 28px !important;
+    height: 28px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    font-size: 28px !important;
+    line-height: 28px !important;
+    text-align: center !important;
+    object-fit: contain !important;
+  }
+
+  .app-rail-btn-active,
+  .app-rail-btn:hover {
+    border-radius: 16px !important;
+  }
+
+  .app-rail-btn-profile {
+    display: none !important;
+  }
+
+  .app-rail-btn-super-admin {
+    display: none !important;
+  }
+
+  .app-rail {
+    padding-top: 6px !important;
+    padding-bottom: 4px !important;
+  }
+
+  .app-rail-icons {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    margin-top: 4px !important;
+    padding-bottom: 8px !important;
+  }
+
+  .app-rail-footer {
+    margin-top: auto !important;
+    gap: 4px !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+  }
+
+  #railLogoutBtn {
+    margin-top: auto !important;
+  }
+
 }
 
 /* Calendar modal support */
