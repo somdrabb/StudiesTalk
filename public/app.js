@@ -2520,6 +2520,7 @@ function updateAdminButtonState() {
   }
   updateStaticChannelMoreVisibility();
   updatePrivacyRulesNavVisibility();
+  scheduleRailScrollControlsUpdate();
 
   // update footer user info
   const displayName =
@@ -2556,6 +2557,20 @@ function updateAdminButtonState() {
       railProfileAvatar.style.display = "none";
       if (railProfileIcon) railProfileIcon.style.display = "inline-block";
     }
+  }
+
+  if (schoolLogoProfileBadge && schoolLogoProfileBadgeImg) {
+    const badgeSrc = sessionUser && sessionUser.avatarUrl ? sessionUser.avatarUrl : "";
+    if (badgeSrc) {
+      schoolLogoProfileBadgeImg.src = badgeSrc;
+      schoolLogoProfileBadgeImg.hidden = false;
+      if (schoolLogoProfileBadgeIcon) schoolLogoProfileBadgeIcon.style.display = "none";
+    } else {
+      schoolLogoProfileBadgeImg.hidden = true;
+      schoolLogoProfileBadgeImg.removeAttribute("src");
+      if (schoolLogoProfileBadgeIcon) schoolLogoProfileBadgeIcon.style.display = "inline-flex";
+    }
+    schoolLogoProfileBadge.hidden = false;
   }
 
   refreshProfilePopover();
@@ -3775,19 +3790,29 @@ function openAnalyticsPanel() {
 }
 
 async function openEmailPanel() {
+  if (!canAccessSchoolMailbox()) {
+    if (!sessionUser) {
+      return;
+    }
+    showToast("Email is available for school admins and students only.", "info");
+    return;
+  }
   showPanel("emailPanel");
   closeAdminDock();
   setSuperAdminLanding(false);
   mountSchoolEmailUiToEmailPanel();
-  setSesSettingsView("sent");
+  updateSesMailboxPermissionsUI();
+  setSesSettingsView(getDefaultSesSettingsView());
   schoolEmailSettingsPage?.classList.remove("hidden");
   schoolEmailSettingsPage?.setAttribute("aria-hidden", "false");
-  try {
-    await loadEmailSettings();
-    await loadClassSettingsSchoolDetails();
-  } catch (err) {
-    console.error("Failed to load email settings", err);
-    showToast("Could not load settings");
+  if (canManageSchoolMailbox()) {
+    try {
+      await loadEmailSettings();
+      await loadClassSettingsSchoolDetails();
+    } catch (err) {
+      console.error("Failed to load email settings", err);
+      showToast("Could not load settings");
+    }
   }
 }
 
@@ -4436,7 +4461,10 @@ async function loadSesInboxMessages(options = {}) {
     sesCurrentMailboxFolder = String(options.folder).trim().toLowerCase() === "trash" ? "trash" : "inbox";
   }
   if (window.refreshGmailishInbox) {
-    return window.refreshGmailishInbox({ folder: sesCurrentMailboxFolder });
+    return window.refreshGmailishInbox({
+      folder: sesCurrentMailboxFolder,
+      sync: !!options?.sync
+    });
   }
   return;
 }
@@ -6884,7 +6912,8 @@ function attachLiveEvents() {
   wireSesTabButtons();
   wireSesInboxActions();
   wireSesInboxDetailControls();
-  setSesSettingsView("sent");
+  updateSesMailboxPermissionsUI();
+  setSesSettingsView(getDefaultSesSettingsView());
   [sesTestTo, sesSubjectPrefix, sesBodyText].forEach((input) => {
     if (!input) return;
     input.addEventListener("input", updateSesEmailPreview);
@@ -7343,10 +7372,78 @@ function toggleSesFormatView() {
   setSesFormatView(!sesFormatViewActive);
 }
 
+function canManageSchoolMailbox() {
+  return isAdminUser();
+}
+
+function canAccessSchoolMailbox() {
+  return canManageSchoolMailbox() || isStudentUser();
+}
+
+function getDefaultSesSettingsView() {
+  return canManageSchoolMailbox() ? "sent" : "inbox";
+}
+
+function normalizeSesSettingsView(view) {
+  const requested = String(view || "").trim().toLowerCase();
+  if (canManageSchoolMailbox()) {
+    if (["sent", "history", "format", "inbox", "trash"].includes(requested)) {
+      return requested;
+    }
+    return "sent";
+  }
+  if (["inbox", "trash"].includes(requested)) {
+    return requested;
+  }
+  return "inbox";
+}
+
+function updateSesMailboxPermissionsUI() {
+  const allowManagement = canManageSchoolMailbox();
+  const allowMailbox = canAccessSchoolMailbox();
+  const sentBtn = document.getElementById("sesSentBtn");
+  const historyBtn = document.getElementById("sesHistoryBtn");
+  const formatBtn = document.getElementById("sesFormatBtn");
+  const inboxBtn = document.getElementById("sesInboxBtn");
+  const trashBtn = document.getElementById("sesTrashBtn");
+  const headerActions = document.getElementById("schoolEmailHeaderActions");
+  const replyBtn = document.getElementById("detailReplyBtn");
+  const forwardBtn = document.getElementById("detailForwardBtn");
+  const emojiBtn = document.getElementById("detailEmojiBtn");
+  const replyPanel = document.getElementById("detailReplyPanel");
+  const replyActions = document.getElementById("detailReplyActions");
+
+  [sentBtn, historyBtn, formatBtn].forEach((btn) => {
+    if (!btn) return;
+    btn.classList.toggle("hidden", !allowManagement);
+    btn.setAttribute("aria-hidden", allowManagement ? "false" : "true");
+  });
+  [inboxBtn, trashBtn].forEach((btn) => {
+    if (!btn) return;
+    btn.classList.toggle("hidden", !allowMailbox);
+    btn.setAttribute("aria-hidden", allowMailbox ? "false" : "true");
+  });
+  if (headerActions) {
+    headerActions.classList.toggle("hidden", !allowMailbox);
+    headerActions.setAttribute("aria-hidden", allowMailbox ? "false" : "true");
+  }
+  if (replyBtn) replyBtn.hidden = !allowManagement;
+  if (forwardBtn) forwardBtn.hidden = !allowManagement;
+  if (emojiBtn) emojiBtn.hidden = !allowManagement;
+  if (!allowManagement) {
+    replyPanel?.classList.add("hidden");
+    replyActions?.classList.add("hidden");
+  }
+  if (!allowManagement && !["inbox", "trash"].includes(normalizeSesSettingsView(sesCurrentMailboxFolder))) {
+    sesCurrentMailboxFolder = "inbox";
+  }
+}
+
 // --- SES tab routing (Sent / History / Email format) ---
 function setSesSettingsView(view) {
   collapseClassSettingsView();
-  // view: "sent" | "history" | "format"
+  // view: "sent" | "history" | "format" | "inbox" | "trash"
+  view = normalizeSesSettingsView(view);
   const body = document.querySelector(".ses-body");
   const formCol = document.querySelector(".ses-form");
   const metaCol = document.querySelector(".ses-meta-column");
@@ -7390,10 +7487,12 @@ function setSesSettingsView(view) {
   setActive(inboxBtn, view === "inbox");
   setActive(trashBtn, view === "trash");
 
+  updateSesMailboxPermissionsUI();
+
   if (view === "sent") {
     body.classList.add("ses-view-sent");
     formCol.classList.remove("hidden");
-    metaCol.classList.remove("hidden");
+    metaCol.classList.add("hidden");
   } else if (view === "history") {
     body.classList.add("ses-view-history");
     metaCol.classList.remove("hidden");
@@ -7414,7 +7513,7 @@ function setSesSettingsView(view) {
     }
     historyPanel.classList.add("hidden");
     sesCurrentMailboxFolder = "inbox";
-    loadSesInboxMessages({ folder: "inbox" });
+    loadSesInboxMessages({ folder: "inbox", sync: false });
     renderSesInboxView();
   } else if (view === "trash") {
     body.classList.add("ses-view-trash");
@@ -7424,7 +7523,7 @@ function setSesSettingsView(view) {
     }
     historyPanel.classList.add("hidden");
     sesCurrentMailboxFolder = "trash";
-    loadSesInboxMessages({ folder: "trash" });
+    loadSesInboxMessages({ folder: "trash", sync: false });
     renderSesInboxView();
   }
 }
@@ -10081,6 +10180,9 @@ const schoolLogoButton = document.getElementById("schoolLogoButton");
 const schoolLogoInput = document.getElementById("schoolLogoInput");
 const schoolLogoImg = document.getElementById("schoolLogoImg");
 const schoolLogoFallback = document.getElementById("schoolLogoFallback");
+const schoolLogoProfileBadge = document.getElementById("schoolLogoProfileBadge");
+const schoolLogoProfileBadgeImg = document.getElementById("schoolLogoProfileBadgeImg");
+const schoolLogoProfileBadgeIcon = document.getElementById("schoolLogoProfileBadgeIcon");
 const schoolRailLogoImg = document.getElementById("schoolRailLogoImg");
 const schoolRailLogoFallback = document.getElementById("schoolRailLogoFallback");
 const densityButtons = document.querySelectorAll(".density-btn");
@@ -10398,6 +10500,8 @@ const threadComposerBody = document.querySelector("#threadComposer .tcomposer");
 const notificationBadge = document.getElementById("notificationBadge");
 const messageBadge = document.getElementById("messageBadge");
 const railIconsContainer = document.querySelector(".app-rail-icons");
+const railScrollUpBtn = document.getElementById("railScrollUpBtn");
+const railScrollDownBtn = document.getElementById("railScrollDownBtn");
 const superAdminQuickBtn = document.getElementById("superAdminQuickBtn");
 const allUnreadsView = document.getElementById("allUnreadsView");
 const allUnreadsList = document.getElementById("allUnreadsList");
@@ -11801,6 +11905,40 @@ function setMessageBadgeCount(count) {
 // rail drag + reorder (persisted)
 const RAIL_ORDER_KEY = "worknest_rail_order";
 let railDragging = null;
+let railScrollControlsRaf = 0;
+
+function setRailScrollButtonHidden(btn, hidden) {
+  if (!btn) return;
+  btn.hidden = hidden;
+  btn.classList.toggle("is-hidden", hidden);
+  btn.setAttribute("aria-hidden", hidden ? "true" : "false");
+  btn.tabIndex = hidden ? -1 : 0;
+}
+
+function updateRailScrollControls() {
+  if (!railIconsContainer) return;
+  const hasOverflow =
+    railIconsContainer.scrollHeight - railIconsContainer.clientHeight > 4;
+  if (!hasOverflow) {
+    setRailScrollButtonHidden(railScrollUpBtn, true);
+    setRailScrollButtonHidden(railScrollDownBtn, true);
+    return;
+  }
+  const atTop = railIconsContainer.scrollTop <= 2;
+  const atBottom =
+    railIconsContainer.scrollTop + railIconsContainer.clientHeight >=
+    railIconsContainer.scrollHeight - 2;
+  setRailScrollButtonHidden(railScrollUpBtn, atTop);
+  setRailScrollButtonHidden(railScrollDownBtn, atBottom);
+}
+
+function scheduleRailScrollControlsUpdate() {
+  if (railScrollControlsRaf) cancelAnimationFrame(railScrollControlsRaf);
+  railScrollControlsRaf = requestAnimationFrame(() => {
+    railScrollControlsRaf = 0;
+    updateRailScrollControls();
+  });
+}
 
 function saveRailOrder() {
   if (!railIconsContainer) return;
@@ -11873,6 +12011,7 @@ function initRailDrag() {
       if (railDragging) railDragging.classList.remove("rail-btn-dragging");
       railDragging = null;
       saveRailOrder();
+      scheduleRailScrollControlsUpdate();
     });
   });
 
@@ -11885,7 +12024,39 @@ function initRailDrag() {
     } else {
       railIconsContainer.insertBefore(railDragging, afterEl);
     }
+    scheduleRailScrollControlsUpdate();
   });
+
+  railIconsContainer.addEventListener("scroll", updateRailScrollControls, { passive: true });
+  if (railScrollUpBtn) {
+    railScrollUpBtn.addEventListener("click", () => {
+      railIconsContainer.scrollBy({ top: -180, behavior: "smooth" });
+    });
+  }
+  if (railScrollDownBtn) {
+    railScrollDownBtn.addEventListener("click", () => {
+      railIconsContainer.scrollBy({ top: 180, behavior: "smooth" });
+    });
+  }
+  if (typeof ResizeObserver !== "undefined") {
+    const railResizeObserver = new ResizeObserver(() => {
+      scheduleRailScrollControlsUpdate();
+    });
+    railResizeObserver.observe(railIconsContainer);
+  }
+  if (typeof MutationObserver !== "undefined") {
+    const railMutationObserver = new MutationObserver(() => {
+      scheduleRailScrollControlsUpdate();
+    });
+    railMutationObserver.observe(railIconsContainer, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["hidden", "style", "class"],
+    });
+  }
+  window.addEventListener("resize", scheduleRailScrollControlsUpdate);
+  scheduleRailScrollControlsUpdate();
 }
 
 function isUserActive(userId) {
@@ -13236,11 +13407,39 @@ async function fetchWorkspaceProfile(workspaceId, options = {}) {
   if (!options.force && workspaceProfileCache.has(workspaceId)) {
     return workspaceProfileCache.get(workspaceId);
   }
-  const profile = await fetchJSON(
+  const rawProfile = await fetchJSON(
     `/api/workspaces/${encodeURIComponent(workspaceId)}/profile`
   );
+  const profile = normalizeWorkspaceProfileRecord(rawProfile, workspaceId);
   workspaceProfileCache.set(workspaceId, profile);
   return profile;
+}
+
+function normalizeWorkspaceProfileRecord(profile = {}, workspaceId = "") {
+  const fallbackWorkspaceName =
+    String(profile.workspaceName || profile.name || getWorkspaceLabel(workspaceId)).trim() || "School";
+  const openingHoursDetails = Array.isArray(profile.openingHoursDetails)
+    ? profile.openingHoursDetails
+    : Array.isArray(profile.openingHoursDetails?.days)
+    ? profile.openingHoursDetails.days
+    : [];
+  return {
+    workspaceName: fallbackWorkspaceName,
+    adminEmail: String(profile.adminEmail || "").trim(),
+    platformContactEmail: String(profile.platformContactEmail || "").trim(),
+    street: String(profile.street || "").trim(),
+    houseNumber: String(profile.houseNumber || "").trim(),
+    postalCode: String(profile.postalCode || "").trim(),
+    city: String(profile.city || "").trim(),
+    state: String(profile.state || "").trim(),
+    country: String(profile.country || "").trim(),
+    phone: String(profile.phone || "").trim(),
+    website: String(profile.website || "").trim(),
+    openingHours: String(profile.openingHours || "").trim(),
+    openingHoursDetails,
+    registrationDetails: String(profile.registrationDetails || "").trim(),
+    usePlatformContactEmail: !!profile.usePlatformContactEmail
+  };
 }
 
 function showSchoolProfileStatus(message, isError = false) {
@@ -14073,6 +14272,30 @@ function normalizeChannelCategory(raw) {
   const value = String(raw || "").trim().toLowerCase();
   if (known.has(value)) return value;
   return "classes";
+}
+
+const SHARED_CHANNEL_TOPIC_DEFAULTS = {
+  "announcements": "Important school updates",
+  "learning materials": "Study guides and resources",
+  "speaking practice": "Speaking drills and prompts",
+  "listening practice": "Listening activities and audio",
+  "wordmeaning": "Word meaning discussion and usage",
+  "schedule": "Class schedule and timetable",
+  "exam registration": "Exam registration details",
+  "privacy & rules": "School privacy and communication guidelines",
+  "b1 mock test": "Mock exam practice",
+  "placement test": "Placement test preparation",
+  "final exam – march": "Final exam preparation"
+};
+
+function resolveSharedChannelTopic(channel) {
+  const rawTopic = String(channel?.topic || "").trim();
+  const normalizedName = String(channel?.name || "").trim().toLowerCase();
+  const sharedDefault = SHARED_CHANNEL_TOPIC_DEFAULTS[normalizedName] || "";
+  if (!sharedDefault) return rawTopic;
+  const isPlaceholder =
+    !rawTopic || rawTopic === "Describe this channel’s purpose…" || rawTopic === "Describe this channel's purpose...";
+  return isPlaceholder ? sharedDefault : rawTopic;
 }
 
 function getStaticChannelKey(name, category) {
@@ -15101,6 +15324,14 @@ function appendExamChannelRows(list) {
   });
 }
 
+function renderSidebarSectionEmpty(container, message) {
+  if (!container) return;
+  const empty = document.createElement("div");
+  empty.className = "sidebar-section-empty";
+  empty.textContent = message;
+  container.appendChild(empty);
+}
+
 let inlineChannelFormState = null;
 
 function getChannelFormContainer(category) {
@@ -15253,11 +15484,30 @@ async function renderChannels() {
   if (teachersChannelsContainer) teachersChannelsContainer.innerHTML = "";
   appendChannelRows(grouped.teachers, teachersChannelsContainer);
 
+  if (!visibleClasses.length) {
+    renderSidebarSectionEmpty(
+      channelsContainer,
+      shouldFilterClasses
+        ? "No class channels assigned yet."
+        : "No class channels yet."
+    );
+  }
+  if (conversationClubChannels && !grouped.clubs.length) {
+    renderSidebarSectionEmpty(conversationClubChannels, "No club channels yet.");
+  }
+  if (examGroupsChannels && !grouped.exams.length) {
+    renderSidebarSectionEmpty(examGroupsChannels, "No exam channels yet.");
+  }
+  if (teachersChannelsContainer && !grouped.teachers.length) {
+    renderSidebarSectionEmpty(teachersChannelsContainer, "No teacher channels yet.");
+  }
+
   const role = getUserRoleKey();
   const isTeacherLike = ["teacher", "school_admin", "super_admin"].includes(role);
 
   if (teachersSection) {
-    teachersSection.style.display = isTeacherLike && grouped.teachers.length ? "" : "none";
+    teachersSection.hidden = !isTeacherLike;
+    teachersSection.style.display = isTeacherLike ? "" : "none";
   }
 
   renderAnnouncements();
@@ -15275,11 +15525,7 @@ async function renderChannels() {
   }
 
   const classesSection = document.getElementById("channelList");
-  if (classesSection && shouldFilterClasses) {
-    const hasVisible = visibleClasses.length > 0;
-    const shouldShow = !currentUserClassesLoaded || hasVisible;
-    classesSection.style.display = shouldShow ? "" : "none";
-  } else if (classesSection) {
+  if (classesSection) {
     classesSection.style.display = "";
   }
 }
@@ -15867,7 +16113,7 @@ function renderChannelHeader(channelId) {
     headerChannelName.textContent = isPrivacy ? "" : ch.name;
   }
   if (headerChannelTopic) {
-    const rawTopic = isPrivacy ? "" : String(ch.topic || "").trim();
+    const rawTopic = isPrivacy ? "" : resolveSharedChannelTopic(ch);
     headerChannelTopic.textContent = rawTopic;
     headerChannelTopic.classList.toggle("hidden", !rawTopic);
   }
@@ -22043,12 +22289,26 @@ if (schoolRequestBtn) {
   schoolRequestBtn.addEventListener("click", handleSchoolRequest);
 }
 if (schoolLogoButton) {
-  schoolLogoButton.addEventListener("click", () => {
+  schoolLogoButton.addEventListener("click", (event) => {
+    if (schoolLogoProfileBadge && schoolLogoProfileBadge.contains(event.target)) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleProfilePopover();
+      return;
+    }
     if (!isSchoolAdmin() && !isSuperAdmin()) {
       showToast("Only school admins can update the logo");
       return;
     }
     if (schoolLogoInput) schoolLogoInput.click();
+  });
+}
+if (schoolLogoProfileBadge) {
+  schoolLogoProfileBadge.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      toggleProfilePopover();
+    }
   });
 }
 if (schoolLogoInput) {
@@ -22931,6 +23191,7 @@ document.addEventListener("click", (e) => {
   if (!profilePopover || profilePopover.hidden) return;
   const btn = document.querySelector(".app-rail-btn-profile");
   if (btn && (btn === e.target || btn.contains(e.target))) return;
+  if (schoolLogoProfileBadge && (schoolLogoProfileBadge === e.target || schoolLogoProfileBadge.contains(e.target))) return;
   if (!profilePopover.contains(e.target)) {
     profilePopover.hidden = true;
   }
@@ -27093,6 +27354,19 @@ document.addEventListener("DOMContentLoaded", () => {
     let currentFolder = "inbox";
     let currentTrashAction = null;
     const selected = new Set();
+    let mailboxBootstrapped = false;
+    let mailboxRequestSeq = 0;
+    let mailboxDataSignature = "";
+    let mailboxPollTimer = null;
+    let mailboxPollInFlight = false;
+
+    function canCurrentUserAccessMailbox() {
+      const role = normalizeRole(sessionUser?.role || sessionUser?.userRole || "");
+      return !!(
+        sessionUser &&
+        (role === "student" || role === "admin" || role === "school_admin" || role === "super_admin")
+      );
+    }
 
     function isTrashSelectionMode() {
       return currentFolder === "trash" && !!currentTrashAction;
@@ -27138,6 +27412,19 @@ document.addEventListener("DOMContentLoaded", () => {
       selected.clear();
       if (selectAllEl) selectAllEl.checked = false;
       updateMailboxModeUI();
+    }
+
+    function resetMailboxState() {
+      inbox = [];
+      filtered = [];
+      activeId = null;
+      currentTrashAction = null;
+      selected.clear();
+      if (selectAllEl) selectAllEl.checked = false;
+      renderDetail(null);
+      exitDetailView();
+      renderList();
+      updateBulkUI();
     }
 
     function fmtDate(ts) {
@@ -27466,9 +27753,89 @@ document.addEventListener("DOMContentLoaded", () => {
       updateMailboxModeUI();
     }
 
+    function buildMailboxDataSignature(rows) {
+      return JSON.stringify(
+        (Array.isArray(rows) ? rows : []).map((row) => [
+          String(row?.id || ""),
+          String(row?.folder || ""),
+          String(row?.received_at || ""),
+          String(row?.subject || ""),
+          Number(row?.is_read || 0),
+          Number(row?.attachmentsCount || 0)
+        ])
+      );
+    }
+
+    function isMailboxPanelVisible() {
+      return Boolean(
+        sesInboxPanel &&
+        !sesInboxPanel.classList.contains("hidden") &&
+        currentFolder &&
+        ["inbox", "trash"].includes(currentFolder)
+      );
+    }
+
+    function syncInboxInBackground(folder = currentFolder) {
+      const normalizedFolder = String(folder || "").trim().toLowerCase() === "trash" ? "trash" : "inbox";
+      if (!canManageSchoolMailbox() || normalizedFolder !== "inbox") return;
+      loadInbox({ sync: true, folder: normalizedFolder }).catch((error) => {
+        console.error("Inbox background sync failed", error);
+      });
+    }
+
+    function scheduleMailboxAutoRefresh(delayMs = 5000) {
+      if (mailboxPollTimer) {
+        clearTimeout(mailboxPollTimer);
+      }
+      mailboxPollTimer = setTimeout(async () => {
+        if (mailboxPollInFlight) {
+          scheduleMailboxAutoRefresh(delayMs);
+          return;
+        }
+        if (document.hidden || !isMailboxPanelVisible()) {
+          scheduleMailboxAutoRefresh(delayMs);
+          return;
+        }
+        mailboxPollInFlight = true;
+        try {
+          await loadInbox({ sync: false, folder: currentFolder });
+          syncInboxInBackground(currentFolder);
+        } catch (error) {
+          console.error("Mailbox auto-refresh failed", error);
+        } finally {
+          mailboxPollInFlight = false;
+          scheduleMailboxAutoRefresh(delayMs);
+        }
+      }, delayMs);
+    }
+
+    async function bootstrapMailbox(force = false) {
+      if (!canCurrentUserAccessMailbox()) {
+        mailboxBootstrapped = false;
+        resetMailboxState();
+        return;
+      }
+      if (mailboxBootstrapped && !force) return;
+      mailboxBootstrapped = true;
+      await loadInbox({ sync: false, folder: currentFolder });
+      syncInboxInBackground(currentFolder);
+    }
+
     async function loadInbox({ sync = false, folder } = {}) {
+      const previousFolder = currentFolder;
       if (folder) {
         currentFolder = String(folder).trim().toLowerCase() === "trash" ? "trash" : "inbox";
+      }
+      const folderChanged = previousFolder !== currentFolder;
+      if (!canCurrentUserAccessMailbox()) {
+        mailboxBootstrapped = false;
+        resetMailboxState();
+        return;
+      }
+      if (folderChanged) {
+        activeId = null;
+        renderDetail(null);
+        exitDetailView();
       }
       if (currentFolder !== "trash") {
         currentTrashAction = null;
@@ -27479,10 +27846,31 @@ document.addEventListener("DOMContentLoaded", () => {
       params.set("folder", currentFolder);
       if (sync) params.set("sync", "1");
       const url = `/api/admin/inbox?${params.toString()}`;
+      const requestSeq = ++mailboxRequestSeq;
+      const requestFolder = currentFolder;
       const res = await fetch(url, { credentials: "include" });
+      if (requestSeq !== mailboxRequestSeq || requestFolder !== currentFolder) {
+        return;
+      }
+      if (res.status === 401 || res.status === 403) {
+        mailboxBootstrapped = false;
+        resetMailboxState();
+        return;
+      }
+      if (!res.ok) {
+        throw new Error(`Inbox request failed (${res.status})`);
+      }
       const data = await res.json();
+      if (requestSeq !== mailboxRequestSeq || requestFolder !== currentFolder) {
+        return;
+      }
 
       const raw = Array.isArray(data) ? data : (Array.isArray(data?.rows) ? data.rows : []);
+      const nextSignature = buildMailboxDataSignature(raw);
+      if (!folderChanged && nextSignature === mailboxDataSignature) {
+        return;
+      }
+      mailboxDataSignature = nextSignature;
       inbox = raw.map((m) => {
         const { name, email } = parseSender(m.sender);
         return {
@@ -27664,7 +28052,12 @@ document.addEventListener("DOMContentLoaded", () => {
       showToast(`${data.deleted || 0} email${(data.deleted || 0) === 1 ? "" : "s"} deleted forever`, "success");
     }
 
-    refreshBtn?.addEventListener("click", () => loadInbox({ sync: true, folder: currentFolder }));
+    refreshBtn?.addEventListener("click", () => {
+      loadInbox({ sync: false, folder: currentFolder }).catch((error) => {
+        console.error("Inbox refresh failed", error);
+      });
+      syncInboxInBackground(currentFolder);
+    });
     searchEl?.addEventListener("input", () => applySearch());
     bulkDeleteBtn?.addEventListener("click", async () => {
       try {
@@ -27734,9 +28127,15 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     syncMailboxHeading();
-    loadInbox({ sync: false, folder: currentFolder }).catch((e) => {
+    bootstrapMailbox().catch((e) => {
       console.error("Inbox load failed", e);
     });
+    window.addEventListener("worknestWorkspaceReady", () => {
+      bootstrapMailbox(true).catch((e) => {
+        console.error("Inbox load failed", e);
+      });
+    });
+    scheduleMailboxAutoRefresh();
 
     detailCloseBtn?.addEventListener("click", () => {
       detailEmpty.hidden = false;

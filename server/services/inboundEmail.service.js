@@ -65,6 +65,24 @@ function formatAddressList(list) {
     .join(', ');
 }
 
+function normalizeEmailAddress(value = '') {
+  return String(value || '').trim().toLowerCase();
+}
+
+function extractPrimaryAddress(value) {
+  if (Array.isArray(value)) {
+    const first = value.find((entry) => entry && (entry.address || entry.name || entry.email));
+    if (!first) return '';
+    return String(first.address || first.email || '').trim();
+  }
+
+  const hint = String(value || '').trim();
+  if (!hint) return '';
+  const match = hint.match(/<([^>]+)>/);
+  const raw = match ? match[1] : hint;
+  return raw.replace(/^"+|"+$/g, '').trim();
+}
+
 function normalizeMessageId(value = '') {
   return String(value || '').trim();
 }
@@ -118,6 +136,94 @@ function resolveWorkspaceFromOutboundLog(dbInstance, parsed = {}) {
   }
 
   return { workspaceId: '', relatedEmailLogId: '' };
+}
+
+function resolveSenderWorkspace(dbInstance, parsed = {}, envelope = {}) {
+  if (!dbInstance) {
+    return { workspaceId: '', senderUserId: '', senderRole: '', senderEmail: '', matchStatus: 'missing-db' };
+  }
+
+  const senderEmail = normalizeEmailAddress(
+    extractPrimaryAddress(parsed.from?.value || envelope?.from || parsed.sender?.value || '')
+  );
+  if (!senderEmail) {
+    return { workspaceId: '', senderUserId: '', senderRole: '', senderEmail: '', matchStatus: 'missing-email' };
+  }
+
+  const matches = dbInstance
+    .prepare(
+      `
+      SELECT id, workspace_id, role, email
+      FROM users
+      WHERE lower(email) = ?
+    `
+    )
+    .all(senderEmail);
+
+  if (!Array.isArray(matches) || !matches.length) {
+    return {
+      workspaceId: '',
+      senderUserId: '',
+      senderRole: '',
+      senderEmail,
+      matchStatus: 'no-match'
+    };
+  }
+
+  const distinctWorkspaceIds = Array.from(
+    new Set(matches.map((row) => String(row?.workspace_id || '').trim()).filter(Boolean))
+  );
+  if (distinctWorkspaceIds.length !== 1) {
+    return {
+      workspaceId: '',
+      senderUserId: '',
+      senderRole: '',
+      senderEmail,
+      matchStatus: 'ambiguous'
+    };
+  }
+
+  const found = matches[0];
+
+  return {
+    workspaceId: String(found?.workspace_id || '').trim(),
+    senderUserId: String(found?.id || '').trim(),
+    senderRole: String(found?.role || '').trim().toLowerCase(),
+    senderEmail,
+    matchStatus: 'matched'
+  };
+}
+
+function resolveInboundWorkspaceAssignment(threadLink = {}, senderLink = {}) {
+  const threadWorkspaceId = String(threadLink?.workspaceId || '').trim();
+  const senderWorkspaceId = String(senderLink?.workspaceId || '').trim();
+
+  if (threadWorkspaceId && senderWorkspaceId && threadWorkspaceId !== senderWorkspaceId) {
+    return {
+      workspaceId: '',
+      relatedEmailLogId: '',
+      reason: 'workspace-mismatch'
+    };
+  }
+  if (threadWorkspaceId) {
+    return {
+      workspaceId: threadWorkspaceId,
+      relatedEmailLogId: String(threadLink?.relatedEmailLogId || '').trim(),
+      reason: 'thread'
+    };
+  }
+  if (senderWorkspaceId) {
+    return {
+      workspaceId: senderWorkspaceId,
+      relatedEmailLogId: '',
+      reason: 'sender'
+    };
+  }
+  return {
+    workspaceId: '',
+    relatedEmailLogId: '',
+    reason: String(senderLink?.matchStatus || 'unresolved')
+  };
 }
 
 function formatSnippet(text) {
@@ -325,9 +431,11 @@ async function syncInboundEmails(dbInstance, limit) {
       INSERT OR IGNORE INTO inbound_emails (
         workspace_id, message_id, sender, recipient, subject,
         text_body, html_body, in_reply_to, references_header, related_email_log_id,
-        received_at, attachments_json
+        folder, attachments_json, received_at, is_read,
+        mailbox_type, mailbox_owner_user_id, sender_user_id, recipient_user_id,
+        direction, visibility_scope, sender_role
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'inbox', ?, ?, 0, 'workspace', '', ?, '', 'inbound', 'workspace', ?)
     `);
   const existsStmt = dbInstance.prepare(`
       SELECT 1 FROM inbound_emails WHERE message_id = ? LIMIT 1
@@ -380,13 +488,15 @@ async function syncInboundEmails(dbInstance, limit) {
       const inReplyTo = normalizeMessageId(parsed.inReplyTo || '');
       const referencesHeader = joinReferenceHeader(parsed.references);
       const threadLink = resolveWorkspaceFromOutboundLog(dbInstance, parsed);
+      const senderLink = resolveSenderWorkspace(dbInstance, parsed, msg.envelope);
+      const assignment = resolveInboundWorkspaceAssignment(threadLink, senderLink);
       const attachmentsMeta = await persistAttachments(parsed.attachments);
       const attachmentsJson = JSON.stringify(attachmentsMeta);
       rows.push({
         uid,
         envelope: msg.envelope,
         parsed,
-        workspaceId: threadLink.workspaceId,
+        workspaceId: assignment.workspaceId,
         messageId,
         sender,
         recipient,
@@ -395,9 +505,13 @@ async function syncInboundEmails(dbInstance, limit) {
         bodyHtml,
         inReplyTo,
         referencesHeader,
-        relatedEmailLogId: threadLink.relatedEmailLogId,
+        relatedEmailLogId: assignment.relatedEmailLogId,
         receivedAt,
-        attachmentsJson
+        attachmentsJson,
+        senderUserId: senderLink.senderUserId,
+        senderRole: senderLink.senderRole,
+        routingReason: assignment.reason,
+        senderEmail: senderLink.senderEmail
       });
     }
     rows.sort((a, b) => {
@@ -405,6 +519,14 @@ async function syncInboundEmails(dbInstance, limit) {
       return a.receivedAt < b.receivedAt ? 1 : -1;
     });
     for (const row of rows) {
+      if (!row.workspaceId) {
+        console.warn('[InboundEmail] Skipping unroutable inbound email', {
+          messageId: row.messageId,
+          senderEmail: row.senderEmail,
+          reason: row.routingReason
+        });
+        continue;
+      }
       insertStmt.run(
         row.workspaceId,
         row.messageId,
@@ -416,8 +538,10 @@ async function syncInboundEmails(dbInstance, limit) {
         row.inReplyTo,
         row.referencesHeader,
         row.relatedEmailLogId,
+        row.attachmentsJson,
         row.receivedAt,
-        row.attachmentsJson
+        row.senderUserId,
+        row.senderRole
       );
       await client.messageFlagsAdd(row.uid, ['\\Seen']);
     }
@@ -440,10 +564,19 @@ async function syncInboundEmails(dbInstance, limit) {
 
 async function cleanupOrphanAttachments(dbInstance) {
   if (!dbInstance) return;
+  try {
+    const table = dbInstance
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'inbound_emails'")
+      .get();
+    if (!table) return;
+  } catch (err) {
+    console.warn('[InboundEmail] Failed to inspect inbound email table', err?.message || err);
+    return;
+  }
   let rows = [];
   try {
     rows = dbInstance
-      .prepare('SELECT attachments_json FROM inbound_emails WHERE attachments_json IS NOT NULL AND attachments_json != ""')
+      .prepare("SELECT attachments_json FROM inbound_emails WHERE attachments_json IS NOT NULL AND attachments_json != ''")
       .all();
   } catch (err) {
     console.warn('[InboundEmail] Failed to query attachments for cleanup', err?.message || err);

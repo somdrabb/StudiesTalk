@@ -261,6 +261,97 @@ function parseEmailAddress(fromHeader = '') {
   return raw.replace(/^"+|"+$/g, '').trim();
 }
 
+function normalizeMailboxRole(role = '') {
+  return String(role || '').trim().toLowerCase();
+}
+
+function isMailboxAdminRole(role = '') {
+  return ['admin', 'school_admin', 'super_admin'].includes(normalizeMailboxRole(role));
+}
+
+function isMailboxStudentRole(role = '') {
+  return normalizeMailboxRole(role) === 'student';
+}
+
+function normalizeMailboxFolder(folder = '') {
+  return String(folder || '').trim().toLowerCase() === 'trash' ? 'trash' : 'inbox';
+}
+
+function getMailboxViewer(user) {
+  const role = normalizeMailboxRole(user?.role || user?.userRole || '');
+  const userId = String(user?.id || user?.sub || '').trim();
+  const workspaceId = String(user?.workspaceId || user?.workspace_id || '').trim();
+  const isAdmin = isMailboxAdminRole(role);
+  const isStudent = isMailboxStudentRole(role);
+  return {
+    userId,
+    workspaceId,
+    role,
+    isAdmin,
+    isStudent,
+    canAccess: Boolean(userId && workspaceId && (isAdmin || isStudent))
+  };
+}
+
+function mailboxTypeSql(alias = '') {
+  return `COALESCE(NULLIF(${alias}mailbox_type, ''), 'workspace')`;
+}
+
+function mailboxVisibilitySql(alias = '') {
+  return `COALESCE(NULLIF(${alias}visibility_scope, ''), 'workspace')`;
+}
+
+function mailboxOwnerSql(alias = '') {
+  return `COALESCE(NULLIF(${alias}recipient_user_id, ''), NULLIF(${alias}mailbox_owner_user_id, ''), '')`;
+}
+
+function buildMailboxWhereClause(viewer, { alias = '', folder = null, ids = null, emailId = null } = {}) {
+  if (!viewer?.canAccess) {
+    return { where: '1 = 0', params: [] };
+  }
+
+  const conditions = [];
+  const params = [];
+
+  if (folder !== null) {
+    conditions.push(`${alias}folder = ?`);
+    params.push(normalizeMailboxFolder(folder));
+  }
+  if (emailId !== null && emailId !== undefined) {
+    conditions.push(`${alias}id = ?`);
+    params.push(emailId);
+  }
+  if (Array.isArray(ids) && ids.length) {
+    conditions.push(`${alias}id IN (${ids.map(() => '?').join(',')})`);
+    params.push(...ids);
+  }
+
+  conditions.push(`${alias}workspace_id = ?`);
+  params.push(viewer.workspaceId);
+
+  if (viewer.isAdmin) {
+    conditions.push(`${mailboxTypeSql(alias)} = 'workspace'`);
+    conditions.push(`${mailboxVisibilitySql(alias)} = 'workspace'`);
+  } else {
+    conditions.push(`${mailboxTypeSql(alias)} = 'user'`);
+    conditions.push(`${mailboxVisibilitySql(alias)} = 'user'`);
+    conditions.push(`${mailboxOwnerSql(alias)} = ?`);
+    params.push(viewer.userId);
+  }
+
+  return {
+    where: conditions.join(' AND '),
+    params
+  };
+}
+
+function findAccessibleMailboxRow(viewer, emailId) {
+  const parsedEmailId = Number.parseInt(String(emailId || '').trim(), 10);
+  if (!Number.isFinite(parsedEmailId)) return null;
+  const { where, params } = buildMailboxWhereClause(viewer, { emailId: parsedEmailId });
+  return db.prepare(`SELECT * FROM inbound_emails WHERE ${where} LIMIT 1`).get(...params) || null;
+}
+
 function buildQuotedText(original = {}) {
   const dt = original.received_at
     ? new Date(original.received_at).toLocaleString()
@@ -1459,7 +1550,7 @@ function findUserByEmail(email) {
   if (!normalized) return null;
   return db
     .prepare(
-      'SELECT id, workspace_id AS workspaceId, email, first_name, last_name, name FROM users WHERE lower(email) = ? LIMIT 1'
+      'SELECT id, workspace_id AS workspaceId, email, role, first_name, last_name, name FROM users WHERE lower(email) = ? LIMIT 1'
     )
     .get(normalized);
 }
@@ -1745,6 +1836,25 @@ function tryAlter(sql) {
   }
 }
 
+function hasTableColumn(tableName, columnName) {
+  try {
+    const rows = db.prepare(`PRAGMA table_info(${tableName})`).all();
+    return rows.some((row) => String(row?.name || '').toLowerCase() === String(columnName || '').toLowerCase());
+  } catch (_err) {
+    return false;
+  }
+}
+
+function ensureInboundEmailMailboxOwnerIndex() {
+  if (!hasTableColumn('inbound_emails', 'mailbox_type')) return;
+  if (!hasTableColumn('inbound_emails', 'recipient_user_id')) return;
+  if (!hasTableColumn('inbound_emails', 'folder')) return;
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_inbound_emails_mailbox_owner
+      ON inbound_emails(mailbox_type, recipient_user_id, folder)
+  `);
+}
+
 function recordEmailLog({
   id,
   workspaceId,
@@ -1773,6 +1883,103 @@ function recordEmailLog({
     errorMessage || '',
     messageId || '',
     new Date().toISOString()
+  );
+
+  if (String(status || '').trim().toLowerCase() === 'sent') {
+    mirrorEmailLogToStudentMailbox({
+      id,
+      workspaceId,
+      sentByUserId,
+      toEmail,
+      toName,
+      subject,
+      bodyText,
+      bodyHtml,
+      type,
+      messageId
+    });
+  }
+}
+
+function findWorkspaceUserByEmail(workspaceId, email) {
+  const normalizedWorkspaceId = String(workspaceId || '').trim();
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  if (!normalizedWorkspaceId || !normalizedEmail) return null;
+  return db
+    .prepare(
+      `
+      SELECT id, workspace_id AS workspaceId, email, role, first_name, last_name, name
+      FROM users
+      WHERE workspace_id = ?
+        AND lower(email) = ?
+      LIMIT 1
+    `
+    )
+    .get(normalizedWorkspaceId, normalizedEmail);
+}
+
+function buildMailboxSenderLabel({ workspaceId, sentByUserId }) {
+  const senderUser = sentByUserId
+    ? db.prepare('SELECT id, name, first_name, last_name, email, role FROM users WHERE id = ? LIMIT 1').get(sentByUserId)
+    : null;
+  const senderName =
+    senderUser?.name ||
+    `${senderUser?.first_name || ''} ${senderUser?.last_name || ''}`.trim() ||
+    getWorkspaceName(workspaceId) ||
+    'School Admin';
+  const senderEmail = String(senderUser?.email || getWorkspaceAdminEmail(workspaceId) || getInboundMailboxEmail() || '').trim();
+  if (senderEmail) {
+    return `${senderName} <${senderEmail}>`;
+  }
+  return senderName;
+}
+
+function mirrorEmailLogToStudentMailbox({
+  id,
+  workspaceId,
+  sentByUserId,
+  toEmail,
+  toName,
+  subject,
+  bodyText,
+  bodyHtml,
+  type,
+  messageId
+}) {
+  const recipient = findWorkspaceUserByEmail(workspaceId, toEmail);
+  if (!recipient || !isMailboxStudentRole(recipient.role)) {
+    return;
+  }
+
+  const senderUser = sentByUserId
+    ? db.prepare('SELECT id, role FROM users WHERE id = ? LIMIT 1').get(sentByUserId)
+    : null;
+
+  db.prepare(
+    `
+    INSERT OR IGNORE INTO inbound_emails (
+      workspace_id, message_id, sender, recipient, subject,
+      text_body, html_body, in_reply_to, references_header, related_email_log_id,
+      folder, attachments_json, received_at, is_read,
+      mailbox_type, mailbox_owner_user_id, sender_user_id, recipient_user_id,
+      direction, visibility_scope, sender_role
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, '', '', ?, 'inbox', '', ?, 0, 'user', ?, ?, ?, 'outbound', 'user', ?)
+  `
+  ).run(
+    workspaceId,
+    String(messageId || `mailbox-log:${id}`).trim(),
+    buildMailboxSenderLabel({ workspaceId, sentByUserId }),
+    String(toName || toEmail || '').trim(),
+    subject || '',
+    bodyText || '',
+    bodyHtml || '',
+    id || '',
+    new Date().toISOString(),
+    recipient.id,
+    sentByUserId || null,
+    recipient.id,
+    normalizeMailboxRole(senderUser?.role || '')
   );
 }
 
@@ -4694,7 +4901,14 @@ try {
       folder TEXT DEFAULT 'inbox',
       attachments_json TEXT DEFAULT '',
       received_at TEXT,
-      is_read INTEGER DEFAULT 0
+      is_read INTEGER DEFAULT 0,
+      mailbox_type TEXT DEFAULT 'workspace',
+      mailbox_owner_user_id TEXT DEFAULT '',
+      sender_user_id TEXT DEFAULT '',
+      recipient_user_id TEXT DEFAULT '',
+      direction TEXT DEFAULT 'inbound',
+      visibility_scope TEXT DEFAULT 'workspace',
+      sender_role TEXT DEFAULT ''
     );
 
     CREATE TABLE IF NOT EXISTS email_replies (
@@ -4709,6 +4923,9 @@ try {
       message_id TEXT PRIMARY KEY,
       deleted_at TEXT DEFAULT (datetime('now'))
     );
+
+    CREATE INDEX IF NOT EXISTS idx_inbound_emails_workspace_folder
+      ON inbound_emails(workspace_id, folder);
 
   `);
 
@@ -4804,12 +5021,24 @@ tryAlter("ALTER TABLE inbound_emails ADD COLUMN references_header TEXT DEFAULT '
 tryAlter("ALTER TABLE inbound_emails ADD COLUMN related_email_log_id TEXT DEFAULT ''");
 tryAlter("ALTER TABLE inbound_emails ADD COLUMN folder TEXT DEFAULT 'inbox'");
 tryAlter("ALTER TABLE inbound_emails ADD COLUMN attachments_json TEXT DEFAULT ''");
+tryAlter("ALTER TABLE inbound_emails ADD COLUMN mailbox_type TEXT DEFAULT 'workspace'");
+tryAlter("ALTER TABLE inbound_emails ADD COLUMN mailbox_owner_user_id TEXT DEFAULT ''");
+tryAlter("ALTER TABLE inbound_emails ADD COLUMN sender_user_id TEXT DEFAULT ''");
+tryAlter("ALTER TABLE inbound_emails ADD COLUMN recipient_user_id TEXT DEFAULT ''");
+tryAlter("ALTER TABLE inbound_emails ADD COLUMN direction TEXT DEFAULT 'inbound'");
+tryAlter("ALTER TABLE inbound_emails ADD COLUMN visibility_scope TEXT DEFAULT 'workspace'");
+tryAlter("ALTER TABLE inbound_emails ADD COLUMN sender_role TEXT DEFAULT ''");
 db.exec(`
   CREATE TABLE IF NOT EXISTS deleted_inbound_emails (
     message_id TEXT PRIMARY KEY,
     deleted_at TEXT DEFAULT (datetime('now'))
   )
 `);
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_inbound_emails_workspace_folder
+    ON inbound_emails(workspace_id, folder)
+`);
+ensureInboundEmailMailboxOwnerIndex();
 tryAlter("ALTER TABLE registration_links ADD COLUMN first_name TEXT");
 tryAlter("ALTER TABLE registration_links ADD COLUMN last_name TEXT");
 tryAlter("ALTER TABLE registration_links ADD COLUMN salutation TEXT DEFAULT ''");
@@ -9215,12 +9444,15 @@ app.get('/api/workspaces/:workspaceId/email-inbox', async (req, res) => {
   }
 });
 
-app.get('/api/admin/inbox', async (req, res) => {
+app.get('/api/admin/inbox', requireAccessToken, async (req, res) => {
+  const viewer = getMailboxViewer(req.auth);
+  if (!viewer.canAccess) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
   const shouldSync = String(req.query.sync || '0') === '1';
-  const folder = String(req.query.folder || 'inbox').trim().toLowerCase() === 'trash'
-    ? 'trash'
-    : 'inbox';
-  if (shouldSync && inboundEmailService.isConfigured()) {
+  const folder = normalizeMailboxFolder(req.query.folder || 'inbox');
+  if (shouldSync && viewer.isAdmin && inboundEmailService.isConfigured()) {
     try {
       await inboundEmailService.syncInboundEmails(db);
     } catch (err) {
@@ -9228,14 +9460,15 @@ app.get('/api/admin/inbox', async (req, res) => {
     }
   }
 
+  const { where, params } = buildMailboxWhereClause(viewer, { folder });
   const rows = db
     .prepare(`
       SELECT *
       FROM inbound_emails
-      WHERE folder = ?
+      WHERE ${where}
       ORDER BY received_at DESC
     `)
-    .all(folder);
+    .all(...params);
 
   const repliesStmt = db.prepare(`
     SELECT id, body, created_at
@@ -9313,31 +9546,31 @@ function deleteInboxRowsForever(rows = []) {
 app.post(
   '/api/admin/inbox/bulk-delete',
   requireAccessToken,
-  requireAdmin,
   express.json(),
   async (req, res) => {
     try {
+      const viewer = getMailboxViewer(req.auth);
+      if (!viewer.canAccess) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
       const ids = parseInboxBulkIds(req.body);
 
       if (!ids.length) {
         return res.status(400).json({ error: 'No inbox emails selected' });
       }
 
+      const scoped = buildMailboxWhereClause(viewer, { folder: 'inbox', ids });
       const selectStmt = db.prepare(
-        `SELECT id, message_id, attachments_json FROM inbound_emails WHERE id IN (${ids.map(() => '?').join(',')})`
+        `SELECT id, message_id, attachments_json FROM inbound_emails WHERE ${scoped.where}`
       );
-      const rows = selectStmt.all(...ids);
+      const rows = selectStmt.all(...scoped.params);
       if (!rows.length) {
         return res.status(404).json({ error: 'Selected inbox emails were not found' });
       }
 
-      for (const row of rows) {
-        void row;
-      }
-
       db.prepare(
-        `UPDATE inbound_emails SET folder = 'trash' WHERE id IN (${ids.map(() => '?').join(',')})`
-      ).run(...ids);
+        `UPDATE inbound_emails SET folder = 'trash' WHERE ${scoped.where}`
+      ).run(...scoped.params);
 
       res.json({ ok: true, deleted: rows.length, movedTo: 'trash' });
     } catch (err) {
@@ -9350,18 +9583,22 @@ app.post(
 app.post(
   '/api/admin/inbox/bulk-restore',
   requireAccessToken,
-  requireAdmin,
   express.json(),
   async (req, res) => {
     try {
+      const viewer = getMailboxViewer(req.auth);
+      if (!viewer.canAccess) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
       const ids = parseInboxBulkIds(req.body);
       if (!ids.length) {
         return res.status(400).json({ error: 'No trash emails selected' });
       }
 
+      const scoped = buildMailboxWhereClause(viewer, { folder: 'trash', ids });
       const restored = db.prepare(
-        `UPDATE inbound_emails SET folder = 'inbox' WHERE id IN (${ids.map(() => '?').join(',')}) AND folder = 'trash'`
-      ).run(...ids);
+        `UPDATE inbound_emails SET folder = 'inbox' WHERE ${scoped.where}`
+      ).run(...scoped.params);
 
       res.json({ ok: true, restored: Number(restored?.changes || 0) });
     } catch (err) {
@@ -9374,18 +9611,22 @@ app.post(
 app.post(
   '/api/admin/inbox/bulk-delete-forever',
   requireAccessToken,
-  requireAdmin,
   express.json(),
   async (req, res) => {
     try {
+      const viewer = getMailboxViewer(req.auth);
+      if (!viewer.canAccess) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
       const ids = parseInboxBulkIds(req.body);
       if (!ids.length) {
         return res.status(400).json({ error: 'No trash emails selected' });
       }
 
+      const scoped = buildMailboxWhereClause(viewer, { folder: 'trash', ids });
       const rows = db.prepare(
-        `SELECT id, message_id, attachments_json FROM inbound_emails WHERE id IN (${ids.map(() => '?').join(',')}) AND folder = 'trash'`
-      ).all(...ids);
+        `SELECT id, message_id, attachments_json FROM inbound_emails WHERE ${scoped.where}`
+      ).all(...scoped.params);
       if (!rows.length) {
         return res.status(404).json({ error: 'Selected trash emails were not found' });
       }
@@ -9406,20 +9647,24 @@ app.post(
 app.post(
   '/api/admin/inbox/empty-trash',
   requireAccessToken,
-  requireAdmin,
   express.json(),
-  async (_req, res) => {
+  async (req, res) => {
     try {
+      const viewer = getMailboxViewer(req.auth);
+      if (!viewer.canAccess) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+      const scoped = buildMailboxWhereClause(viewer, { folder: 'trash' });
       const rows = db
-        .prepare(`SELECT id, message_id, attachments_json FROM inbound_emails WHERE folder = 'trash'`)
-        .all();
+        .prepare(`SELECT id, message_id, attachments_json FROM inbound_emails WHERE ${scoped.where}`)
+        .all(...scoped.params);
 
       if (!rows.length) {
         return res.json({ ok: true, deleted: 0 });
       }
 
       deleteInboxRowsForever(rows);
-      db.prepare(`DELETE FROM inbound_emails WHERE folder = 'trash'`).run();
+      db.prepare(`DELETE FROM inbound_emails WHERE ${scoped.where}`).run(...scoped.params);
 
       res.json({ ok: true, deleted: rows.length });
     } catch (err) {
@@ -9432,15 +9677,22 @@ app.post(
 app.get(
   '/api/admin/inbox/:emailId/attachments/:attachmentId',
   requireAccessToken,
-  requireAdmin,
   (req, res) => {
+    const viewer = getMailboxViewer(req.auth);
+    if (!viewer.canAccess) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
     const emailId = String(req.params.emailId || '').trim();
     const attachmentId = String(req.params.attachmentId || '').trim();
     if (!emailId || !attachmentId) {
       return res.status(400).json({ error: 'Email and attachment IDs are required' });
     }
 
-    const found = findInboxAttachment(emailId, attachmentId);
+    const emailRow = findAccessibleMailboxRow(viewer, emailId);
+    if (!emailRow) {
+      return res.status(404).json({ error: 'Attachment not found' });
+    }
+    const found = findInboxAttachment(emailRow.id, attachmentId);
     if (!found) {
       return res.status(404).json({ error: 'Attachment not found' });
     }
@@ -9458,15 +9710,22 @@ app.get(
 app.get(
   '/api/admin/inbox/:emailId/attachments/:attachmentId/view',
   requireAccessToken,
-  requireAdmin,
   (req, res) => {
+    const viewer = getMailboxViewer(req.auth);
+    if (!viewer.canAccess) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
     const emailId = String(req.params.emailId || '').trim();
     const attachmentId = String(req.params.attachmentId || '').trim();
     if (!emailId || !attachmentId) {
       return res.status(400).json({ error: 'Email and attachment IDs are required' });
     }
 
-    const found = findInboxAttachment(emailId, attachmentId);
+    const emailRow = findAccessibleMailboxRow(viewer, emailId);
+    if (!emailRow) {
+      return res.status(404).json({ error: 'Attachment not found' });
+    }
+    const found = findInboxAttachment(emailRow.id, attachmentId);
     if (!found) {
       return res.status(404).json({ error: 'Attachment not found' });
     }
@@ -9491,16 +9750,20 @@ app.get(
 app.post(
   '/api/admin/inbox/:emailId/reply',
   requireAccessToken,
-  requireAdmin,
   express.json(),
   async (req, res) => {
     try {
+      const viewer = getMailboxViewer(req.auth);
+      if (!viewer.isAdmin) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+      const user = req.auth;
       const emailId = Number(String(req.params.emailId || '').trim());
       if (!Number.isFinite(emailId)) {
         return res.status(400).json({ error: 'Invalid email ID' });
       }
       const { text, attachments = [] } = req.body || {};
-      const row = db.prepare('SELECT * FROM inbound_emails WHERE id = ?').get(emailId);
+      const row = findAccessibleMailboxRow(viewer, emailId);
       if (!row) return res.status(404).json({ error: 'Email not found' });
 
       const to = parseEmailAddress(row.sender || row.from || '');
@@ -9549,6 +9812,7 @@ app.post(
         to,
         subject,
         text: finalText,
+        replyTo: getInboundMailboxEmail() || fromAddr,
         headers: {
           ...(inReplyTo ? { 'In-Reply-To': inReplyTo } : {}),
           ...(referencesHeader ? { References: referencesHeader } : {})
@@ -9560,6 +9824,20 @@ app.post(
         INSERT INTO email_replies (inbound_email_id, body, created_at)
         VALUES (?, ?, datetime('now'))
       `).run(emailId, replyText);
+
+      recordEmailLog({
+        id: uuid('elog'),
+        workspaceId: rowWorkspaceId,
+        sentByUserId: user.id,
+        toEmail: to,
+        toName: String(row.sender || '').trim(),
+        subject,
+        bodyText: finalText,
+        bodyHtml: '',
+        type: 'inbox_reply',
+        status: 'sent',
+        messageId: normalizeEmailMessageId(info?.messageId || '')
+      });
 
       return res.json({ ok: true, messageId: info.messageId || null });
     } catch (err) {
