@@ -571,6 +571,16 @@ CREATE TABLE IF NOT EXISTS payments (
   created_at INTEGER NOT NULL
 );
 `);
+safeAlter(`ALTER TABLE invoices ADD COLUMN student_user_id TEXT;`);
+safeAlter(`ALTER TABLE payments ADD COLUMN student_user_id TEXT;`);
+db.exec(`
+CREATE INDEX IF NOT EXISTS idx_invoices_ws_student
+  ON invoices(workspace_id, student_user_id);
+`);
+db.exec(`
+CREATE INDEX IF NOT EXISTS idx_payments_ws_student
+  ON payments(workspace_id, student_user_id);
+`);
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS workspace_settings_admin (
@@ -6732,6 +6742,10 @@ function ensureTaskChannels(workspaceId = 'default') {
     category: 'tasks',
     topic: 'Teacher task list'
   });
+  ensureNamedChannel(workspaceId, 'Student Tasks', {
+    category: 'tasks',
+    topic: 'Student task list'
+  });
 }
 
 ensureTaskChannels('default');
@@ -6962,6 +6976,7 @@ function normalizeChannelCategory(value) {
   if (val === 'clubs') return 'clubs';
   if (val === 'exams') return 'exams';
   if (val === 'tools') return 'tools';
+  if (val === 'tasks') return 'tasks';
   if (val === 'homework') return 'homework';
   return 'classes';
 }
@@ -10085,6 +10100,9 @@ app.get('/api/students/:studentId/attendance', (req, res) => {
 
   const workspaceId = getWorkspaceIdFromUser(user);
   const studentId = String(req.params.studentId || '');
+  if (!canViewStudentPerformance(user, workspaceId, studentId)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
   const limitParam = parseInt(String(req.query.limit || '50'), 10);
   const limit = Math.min(Number.isFinite(limitParam) ? limitParam : 50, 200);
 
@@ -10101,6 +10119,138 @@ app.get('/api/students/:studentId/attendance', (req, res) => {
     .all(workspaceId, studentId, limit);
 
   res.json({ records: rows });
+});
+
+app.get('/api/analytics/school-overview', authRequired, (req, res) => {
+  const user = req.auth;
+  const requestedWorkspaceId = String(req.query.workspaceId || user.workspaceId || 'default').trim() || 'default';
+  if (isSuperAdminRole(user) && String(req.query.workspaceId || '').trim() === '') {
+    return res.json({
+      summary: buildPlatformAnalyticsOverview(),
+      generatedAt: new Date().toISOString()
+    });
+  }
+  if (!canViewSchoolAnalytics(user, requestedWorkspaceId)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const summary = buildSchoolAnalyticsOverview(requestedWorkspaceId, user);
+  if (!summary) {
+    return res.status(404).json({ error: 'Workspace not found' });
+  }
+  return res.json({ summary, generatedAt: new Date().toISOString() });
+});
+
+app.get('/api/analytics/teacher-overview', authRequired, (req, res) => {
+  const user = req.auth;
+  const requestedWorkspaceId = String(req.query.workspaceId || user.workspaceId || 'default').trim() || 'default';
+  const teacherUserId = String(req.query.teacherId || user.id || user.sub || '').trim();
+  if (!canViewTeacherAnalytics(user, requestedWorkspaceId, teacherUserId)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const teacher = getWorkspaceScopedUser(requestedWorkspaceId, teacherUserId);
+  if (!teacher || getNormalizedUserRole(teacher) !== 'teacher') {
+    return res.status(404).json({ error: 'Teacher not found' });
+  }
+  const summary = buildTeacherAnalyticsOverview(requestedWorkspaceId, teacherUserId);
+  if (!summary) {
+    return res.status(404).json({ error: 'Analytics unavailable' });
+  }
+  return res.json({ summary, generatedAt: new Date().toISOString() });
+});
+
+app.get('/api/analytics/student-overview', authRequired, (req, res) => {
+  const user = req.auth;
+  const requestedWorkspaceId = String(req.query.workspaceId || user.workspaceId || 'default').trim() || 'default';
+  const studentUserId = String(req.query.studentId || user.id || user.sub || '').trim();
+  if (!canViewStudentPerformance(user, requestedWorkspaceId, studentUserId)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const student = getWorkspaceScopedUser(requestedWorkspaceId, studentUserId);
+  if (!student || getNormalizedUserRole(student) !== 'student') {
+    return res.status(404).json({ error: 'Student not found' });
+  }
+  const summary = buildStudentAnalyticsOverview(requestedWorkspaceId, studentUserId);
+  if (!summary) {
+    return res.status(404).json({ error: 'Analytics unavailable' });
+  }
+  return res.json({ summary, generatedAt: new Date().toISOString() });
+});
+
+app.get('/api/students/:studentId/performance', authRequired, (req, res) => {
+  const user = req.auth;
+  const workspaceId = String(req.query.workspaceId || user.workspaceId || 'default').trim() || 'default';
+  const studentId = String(req.params.studentId || '').trim();
+  if (!canViewStudentPerformance(user, workspaceId, studentId)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const summary = buildStudentPerformanceSummary(workspaceId, studentId);
+  if (!summary) {
+    return res.status(404).json({ error: 'Student not found' });
+  }
+  return res.json({
+    workspaceId,
+    studentId,
+    ...summary
+  });
+});
+
+app.get('/api/billing/me', authRequired, (req, res) => {
+  const user = req.auth;
+  const workspaceId = String(user.workspaceId || user.workspace_id || 'default').trim() || 'default';
+  const studentId = String(user.id || user.sub || '').trim();
+  if (!canViewStudentPayment(user, workspaceId, studentId)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  return res.json({
+    workspaceId,
+    studentId,
+    ...getStudentPaymentSummary(workspaceId, studentId)
+  });
+});
+
+app.get('/api/billing/students', authRequired, (req, res) => {
+  const user = req.auth;
+  const workspaceId = String(req.query.workspaceId || user.workspaceId || 'default').trim() || 'default';
+  if (!(isSuperAdminRole(user) || canViewSchoolAnalytics(user, workspaceId))) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const studentId = String(req.query.studentId || '').trim();
+  if (studentId) {
+    if (!canViewStudentPayment(user, workspaceId, studentId)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    return res.json({
+      workspaceId,
+      students: [
+        {
+          studentId,
+          payment: getStudentPaymentSummary(workspaceId, studentId)
+        }
+      ]
+    });
+  }
+  const rows = db
+    .prepare(
+      `
+      SELECT DISTINCT
+        u.id AS studentId,
+        u.name,
+        u.email
+      FROM users u
+      JOIN invoices i ON i.student_user_id = u.id AND i.workspace_id = u.workspace_id
+      WHERE u.workspace_id = ?
+        AND lower(COALESCE(u.role, '')) = 'student'
+      ORDER BY lower(COALESCE(u.name, u.email, u.id)) ASC
+    `
+    )
+    .all(workspaceId)
+    .map((row) => ({
+      studentId: row.studentId,
+      name: row.name || row.email || 'Student',
+      email: row.email || '',
+      payment: getStudentPaymentSummary(workspaceId, row.studentId)
+    }));
+  return res.json({ workspaceId, students: rows });
 });
 
 app.get('/api/workspaces/:workspaceId/email-logs', (req, res) => {
@@ -10159,6 +10309,31 @@ app.get('/api/workspaces/:workspaceId/email-logs/:logId', (req, res) => {
   }
   res.json({ log: row });
 });
+
+app.get(
+  '/api/workspaces/:workspaceId/analytics-summary',
+  authRequired,
+  requireWorkspaceAccess((req) => String(req.params.workspaceId || workspaceIdFromRequest(req) || 'default')),
+  (req, res) => {
+    const workspaceId = String(req.params.workspaceId || '').trim() || 'default';
+    const user = req.auth;
+    let summary = null;
+    if (canViewSchoolAnalytics(user, workspaceId)) {
+      summary = buildSchoolAnalyticsOverview(workspaceId, user);
+    } else if (canViewTeacherAnalytics(user, workspaceId, user.id || user.sub)) {
+      summary = buildTeacherAnalyticsOverview(workspaceId, user.id || user.sub);
+    } else if (canViewStudentPerformance(user, workspaceId, user.id || user.sub)) {
+      summary = buildStudentAnalyticsOverview(workspaceId, user.id || user.sub);
+    }
+    if (!summary) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    res.json({
+      summary,
+      generatedAt: new Date().toISOString()
+    });
+  }
+);
 
 app.get('/api/workspaces/:workspaceId/profile', (req, res) => {
   const user = getAuthedUser(req);
@@ -11274,7 +11449,7 @@ app.post('/api/auth/refresh', (req, res) => {
 // TASK CHANNEL APIs
 // =========================
 function getAuthContext(req) {
-  const u = req.user || req.auth || req.sessionUser || {};
+  const u = req.user || req.auth || req.sessionUser || getAuthedUser(req) || {};
   return {
     userId: u.id || u.userId || req.headers['x-user-id'],
     workspaceId: u.workspace_id || u.workspaceId || req.headers['x-workspace-id'],
@@ -11289,6 +11464,61 @@ function mustAuthTask(req, res) {
     return null;
   }
   return ctx;
+}
+
+function canAccessTaskChannelByName(role, name) {
+  const normalizedRole = String(role || '').trim().toLowerCase();
+  const normalizedName = String(name || '').trim().toLowerCase();
+  if (normalizedName === 'school task') {
+    return normalizedRole === 'school_admin' || normalizedRole === 'super_admin';
+  }
+  if (normalizedName === 'teachers task') {
+    return normalizedRole === 'teacher' || normalizedRole === 'school_admin' || normalizedRole === 'super_admin';
+  }
+  if (normalizedName === 'student tasks') {
+    return ['student', 'teacher', 'school_admin', 'super_admin'].includes(normalizedRole);
+  }
+  return true;
+}
+
+function isTaskChannelName(name) {
+  const normalizedName = String(name || '').trim().toLowerCase();
+  return normalizedName === 'school task' || normalizedName === 'teachers task' || normalizedName === 'student tasks';
+}
+
+function getTaskScopedChannel(workspaceId, channelId) {
+  return db
+    .prepare(`SELECT id, workspace_id, name, category FROM channels WHERE id = ?`)
+    .get(String(channelId || ''));
+}
+
+function assertTaskChannelAccess(workspaceId, channelId, role) {
+  try {
+    const row = getTaskScopedChannel(workspaceId, channelId);
+    if (!row) return false;
+    if (String(row.workspace_id) !== String(workspaceId)) return false;
+    return canAccessTaskChannelByName(role, row.name);
+  } catch (_e) {
+    return false;
+  }
+}
+
+function enforceTaskChannelRouteAccess(req, res, channelId) {
+  const row = getTaskScopedChannel(null, channelId);
+  if (!row) return true;
+  if (!isTaskChannelName(row.name)) {
+    return true;
+  }
+  const ctx = getAuthContext(req);
+  if (!ctx.userId || !ctx.workspaceId) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return false;
+  }
+  if (!assertTaskChannelAccess(ctx.workspaceId, channelId, ctx.role)) {
+    res.status(403).json({ error: 'Forbidden' });
+    return false;
+  }
+  return true;
 }
 
 function canManageTasks(role) {
@@ -11342,7 +11572,7 @@ app.get('/api/tasks', authRequired, (req, res) => {
 
   const channelId = String(req.query.channelId || '');
   if (!channelId) return res.status(400).json({ error: 'channelId required' });
-  if (!assertChannelInWorkspace(ctx.workspaceId, channelId)) {
+  if (!assertTaskChannelAccess(ctx.workspaceId, channelId, ctx.role)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
 
@@ -11440,7 +11670,7 @@ app.post('/api/tasks', authRequired, express.json(), (req, res) => {
 
   if (!channelId) return res.status(400).json({ error: 'channelId required' });
   if (!title) return res.status(400).json({ error: 'title required' });
-  if (!assertChannelInWorkspace(ctx.workspaceId, channelId)) {
+  if (!assertTaskChannelAccess(ctx.workspaceId, channelId, ctx.role)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
 
@@ -11481,6 +11711,9 @@ app.patch('/api/tasks/:id', authRequired, express.json(), (req, res) => {
   const taskId = String(req.params.id || '');
   const existing = db.prepare(`SELECT * FROM tasks WHERE id = ? AND workspace_id = ?`).get(taskId, ctx.workspaceId);
   if (!existing) return res.status(404).json({ error: 'Not found' });
+  if (!assertTaskChannelAccess(ctx.workspaceId, existing.channel_id, ctx.role)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
 
   const role = ctx.role;
   const canManage = canManageTasks(role);
@@ -11555,6 +11788,9 @@ app.post('/api/tasks/:id/comments', authRequired, express.json(), (req, res) => 
 
   const existing = db.prepare(`SELECT * FROM tasks WHERE id = ? AND workspace_id = ?`).get(taskId, ctx.workspaceId);
   if (!existing) return res.status(404).json({ error: 'Not found' });
+  if (!assertTaskChannelAccess(ctx.workspaceId, existing.channel_id, ctx.role)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
 
   const id = secId('tcom');
   const now = nowMs();
@@ -11579,6 +11815,9 @@ app.get('/api/tasks/:id/comments', authRequired, (req, res) => {
   const taskId = String(req.params.id || '');
   const existing = db.prepare(`SELECT * FROM tasks WHERE id = ? AND workspace_id = ?`).get(taskId, ctx.workspaceId);
   if (!existing) return res.status(404).json({ error: 'Not found' });
+  if (!assertTaskChannelAccess(ctx.workspaceId, existing.channel_id, ctx.role)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
 
   const rows = db
     .prepare(
@@ -11652,11 +11891,24 @@ app.post('/api/task-reactions/toggle', authRequired, express.json(), (req, res) 
   if (!emoji) return res.status(400).json({ error: 'emoji required' });
 
   if (targetType === 'task') {
-    const t = db.prepare(`SELECT id FROM tasks WHERE id = ? AND workspace_id = ?`).get(targetId, ctx.workspaceId);
+    const t = db.prepare(`SELECT id, channel_id FROM tasks WHERE id = ? AND workspace_id = ?`).get(targetId, ctx.workspaceId);
     if (!t) return res.status(404).json({ error: 'Not found' });
+    if (!assertTaskChannelAccess(ctx.workspaceId, t.channel_id, ctx.role)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
   } else {
-    const c = db.prepare(`SELECT id FROM task_comments WHERE id = ? AND workspace_id = ?`).get(targetId, ctx.workspaceId);
+    const c = db
+      .prepare(`
+        SELECT c.id, t.channel_id
+        FROM task_comments c
+        JOIN tasks t ON t.id = c.task_id
+        WHERE c.id = ? AND c.workspace_id = ? AND t.workspace_id = ?
+      `)
+      .get(targetId, ctx.workspaceId, ctx.workspaceId);
     if (!c) return res.status(404).json({ error: 'Not found' });
+    if (!assertTaskChannelAccess(ctx.workspaceId, c.channel_id, ctx.role)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
   }
 
   const existing = db.prepare(
@@ -12350,6 +12602,7 @@ app.get(
     if (workspaceId && workspaceId !== 'all') {
       ensureClubChannels(workspaceId);
       ensureToolChannels(workspaceId);
+      ensureTaskChannels(workspaceId);
       ensureExamChannels(workspaceId);
       ensureDefaultChannelMemberships(workspaceId);
       ensureHomeworkChannels(workspaceId);
@@ -12769,6 +13022,7 @@ function getMessagesForDm(dmId) {
 // GET messages in channel
 app.get('/api/channels/:channelId/messages', async (req, res) => {
   const { channelId } = req.params;
+  if (!enforceTaskChannelRouteAccess(req, res, channelId)) return;
   const channel = db
     .prepare('SELECT id, workspace_id AS workspaceId, name, topic FROM channels WHERE id = ?')
     .get(channelId);
@@ -12869,6 +13123,7 @@ app.get('/api/channels/:channelId/messages', async (req, res) => {
 
 app.delete('/api/channels/:channelId/messages/clear', (req, res) => {
   const { channelId } = req.params;
+  if (!enforceTaskChannelRouteAccess(req, res, channelId)) return;
   const user = getAuthedUser(req);
   if (!user) {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -13183,6 +13438,7 @@ app.get('/api/search', (req, res) => {
 // create a new message in a channel
 app.post('/api/channels/:channelId/messages', async (req, res) => {
   const { channelId } = req.params;
+  if (!enforceTaskChannelRouteAccess(req, res, channelId)) return;
   const { author = 'You', initials = 'YOU', text, avatarUrl, attachments = [] } = req.body || {};
   const requesterId = getRequesterId(req);
   const userLang = requesterId ? getUserNativeLanguage(requesterId) : 'en';
@@ -13668,6 +13924,864 @@ function isWorkspaceAdmin(user) {
 function canManageWorkspaceSettings(user) {
   const r = String(user?.role || "").toLowerCase();
   return ["admin", "school_admin", "super_admin"].includes(r);
+}
+
+function getNormalizedUserRole(user) {
+  return String(user?.role || user?.userRole || user?.user_role || "").trim().toLowerCase();
+}
+
+function isSuperAdminRole(user) {
+  return !!user?.superAdmin || getNormalizedUserRole(user) === "super_admin";
+}
+
+function isSchoolAdminRole(user) {
+  const role = getNormalizedUserRole(user);
+  return role === "admin" || role === "school_admin";
+}
+
+function isTeacherAnalyticsRole(user) {
+  return getNormalizedUserRole(user) === "teacher";
+}
+
+function isStudentAnalyticsRole(user) {
+  return getNormalizedUserRole(user) === "student";
+}
+
+function getWorkspaceScopedUser(workspaceId, userId) {
+  const normalizedWorkspaceId = String(workspaceId || "").trim();
+  const normalizedUserId = String(userId || "").trim();
+  if (!normalizedWorkspaceId || !normalizedUserId) return null;
+  return (
+    db
+      .prepare(
+        `
+        SELECT id, workspace_id AS workspaceId, name, email, username, role, status, course_level AS courseLevel
+        FROM users
+        WHERE id = ? AND workspace_id = ?
+        LIMIT 1
+      `
+      )
+      .get(normalizedUserId, normalizedWorkspaceId) || null
+  );
+}
+
+function getAssignedClassChannelsForTeacher(workspaceId, teacherUserId) {
+  const normalizedWorkspaceId = String(workspaceId || "").trim();
+  const normalizedTeacherUserId = String(teacherUserId || "").trim();
+  if (!normalizedWorkspaceId || !normalizedTeacherUserId) return [];
+  return db
+    .prepare(
+      `
+      SELECT c.id, c.name, c.topic, c.category, c.workspace_id AS workspaceId
+      FROM channel_members cm
+      JOIN channels c ON c.id = cm.channel_id
+      WHERE cm.user_id = ?
+        AND c.workspace_id = ?
+        AND lower(COALESCE(c.category, '')) IN ('class', 'classes')
+      ORDER BY lower(COALESCE(c.name, c.id)) ASC
+    `
+    )
+    .all(normalizedTeacherUserId, normalizedWorkspaceId);
+}
+
+function getAssignedStudentRowsForTeacher(workspaceId, teacherUserId) {
+  const normalizedWorkspaceId = String(workspaceId || "").trim();
+  const normalizedTeacherUserId = String(teacherUserId || "").trim();
+  if (!normalizedWorkspaceId || !normalizedTeacherUserId) return [];
+  return db
+    .prepare(
+      `
+      SELECT DISTINCT
+        u.id,
+        u.name,
+        u.email,
+        u.username,
+        u.role,
+        u.status,
+        u.course_level AS courseLevel
+      FROM channel_members teacher_cm
+      JOIN channels c ON c.id = teacher_cm.channel_id
+      JOIN channel_members student_cm ON student_cm.channel_id = c.id
+      JOIN users u ON u.id = student_cm.user_id
+      WHERE teacher_cm.user_id = ?
+        AND c.workspace_id = ?
+        AND lower(COALESCE(c.category, '')) IN ('class', 'classes')
+        AND u.workspace_id = ?
+        AND lower(COALESCE(u.role, '')) = 'student'
+      ORDER BY lower(COALESCE(u.name, u.username, u.email, u.id)) ASC
+    `
+    )
+    .all(normalizedTeacherUserId, normalizedWorkspaceId, normalizedWorkspaceId);
+}
+
+function getAssignedStudentIdsForTeacher(workspaceId, teacherUserId) {
+  return getAssignedStudentRowsForTeacher(workspaceId, teacherUserId).map((row) => String(row.id || ""));
+}
+
+function canViewSchoolAnalytics(user, workspaceId) {
+  const normalizedWorkspaceId = String(workspaceId || "").trim();
+  const userWorkspaceId = String(user?.workspaceId || user?.workspace_id || "").trim();
+  if (isSuperAdminRole(user)) return true;
+  if (!normalizedWorkspaceId || normalizedWorkspaceId !== userWorkspaceId) return false;
+  return isSchoolAdminRole(user);
+}
+
+function canViewTeacherAnalytics(user, workspaceId, teacherUserId = null) {
+  const normalizedWorkspaceId = String(workspaceId || "").trim();
+  const normalizedTeacherUserId = String(teacherUserId || user?.id || user?.sub || "").trim();
+  const userWorkspaceId = String(user?.workspaceId || user?.workspace_id || "").trim();
+  const currentUserId = String(user?.id || user?.sub || "").trim();
+  if (!normalizedWorkspaceId) return false;
+  if (isSuperAdminRole(user)) return true;
+  if (normalizedWorkspaceId !== userWorkspaceId) return false;
+  if (isSchoolAdminRole(user)) return true;
+  return isTeacherAnalyticsRole(user) && normalizedTeacherUserId === currentUserId;
+}
+
+function canViewStudentPerformance(user, workspaceId, studentUserId) {
+  const normalizedWorkspaceId = String(workspaceId || "").trim();
+  const normalizedStudentUserId = String(studentUserId || "").trim();
+  const userWorkspaceId = String(user?.workspaceId || user?.workspace_id || "").trim();
+  const currentUserId = String(user?.id || user?.sub || "").trim();
+  if (!normalizedWorkspaceId || !normalizedStudentUserId) return false;
+  if (isSuperAdminRole(user)) return true;
+  if (normalizedWorkspaceId !== userWorkspaceId) return false;
+  if (isSchoolAdminRole(user)) return true;
+  if (isStudentAnalyticsRole(user)) return normalizedStudentUserId === currentUserId;
+  if (!isTeacherAnalyticsRole(user)) return false;
+  return getAssignedStudentIdsForTeacher(normalizedWorkspaceId, currentUserId).includes(
+    normalizedStudentUserId
+  );
+}
+
+function canViewStudentPayment(user, workspaceId, studentUserId) {
+  const normalizedWorkspaceId = String(workspaceId || "").trim();
+  const normalizedStudentUserId = String(studentUserId || "").trim();
+  const userWorkspaceId = String(user?.workspaceId || user?.workspace_id || "").trim();
+  const currentUserId = String(user?.id || user?.sub || "").trim();
+  if (!normalizedWorkspaceId || !normalizedStudentUserId) return false;
+  if (isSuperAdminRole(user)) return true;
+  if (normalizedWorkspaceId !== userWorkspaceId) return false;
+  if (isSchoolAdminRole(user)) return true;
+  return isStudentAnalyticsRole(user) && normalizedStudentUserId === currentUserId;
+}
+
+function getLatestStudentProgress(workspaceId, studentId) {
+  return (
+    db
+      .prepare(
+        `
+        SELECT cefr_level AS cefrLevel, completion_pct AS completionPct, updated_at AS updatedAt
+        FROM student_progress
+        WHERE workspace_id = ? AND student_id = ?
+        ORDER BY datetime(updated_at) DESC, rowid DESC
+        LIMIT 1
+      `
+      )
+      .get(String(workspaceId || "").trim(), String(studentId || "").trim()) || null
+  );
+}
+
+function getStudentAttendanceSummary(workspaceId, studentId, classIds = null) {
+  const normalizedWorkspaceId = String(workspaceId || "").trim();
+  const normalizedStudentId = String(studentId || "").trim();
+  if (!normalizedWorkspaceId || !normalizedStudentId) {
+    return { total: 0, present: 0, absent: 0, attendanceRate: 0, recent: [] };
+  }
+  const filters = ["ar.workspace_id = ?", "ar.student_user_id = ?"];
+  const params = [normalizedWorkspaceId, normalizedStudentId];
+  const normalizedClassIds = Array.isArray(classIds)
+    ? classIds.map((id) => String(id || "").trim()).filter(Boolean)
+    : [];
+  if (normalizedClassIds.length) {
+    filters.push(`ar.channel_id IN (${normalizedClassIds.map(() => "?").join(",")})`);
+    params.push(...normalizedClassIds);
+  }
+  const rows = db
+    .prepare(
+      `
+      SELECT ar.status, s.session_date AS sessionDate, c.name AS className, ar.channel_id AS channelId
+      FROM attendance_records ar
+      JOIN attendance_sessions s ON s.id = ar.session_id
+      JOIN channels c ON c.id = ar.channel_id
+      WHERE ${filters.join(" AND ")}
+      ORDER BY s.session_date DESC
+      LIMIT 50
+    `
+    )
+    .all(...params);
+  const present = rows.filter((row) => String(row.status || "").toLowerCase() === "present").length;
+  const total = rows.length;
+  const absent = Math.max(0, total - present);
+  const attendanceRate = total ? Math.round((present / total) * 100) : 0;
+  return {
+    total,
+    present,
+    absent,
+    attendanceRate,
+    recent: rows.slice(0, 10)
+  };
+}
+
+function getStudentHomeworkSummary(workspaceId, studentId, classIds = null) {
+  const normalizedWorkspaceId = String(workspaceId || "").trim();
+  const normalizedStudentId = String(studentId || "").trim();
+  if (!normalizedWorkspaceId || !normalizedStudentId) {
+    return { totalItems: 0, completedItems: 0, pendingItems: 0, completionRate: 0 };
+  }
+  const filters = ["hi.workspace_id = ?", "coalesce(hi.is_archived, 0) = 0"];
+  const params = [normalizedWorkspaceId];
+  const normalizedClassIds = Array.isArray(classIds)
+    ? classIds.map((id) => String(id || "").trim()).filter(Boolean)
+    : [];
+  if (normalizedClassIds.length) {
+    filters.push(`hi.class_channel_id IN (${normalizedClassIds.map(() => "?").join(",")})`);
+    params.push(...normalizedClassIds);
+  }
+  const rows = db
+    .prepare(
+      `
+      SELECT hi.id,
+             hi.title,
+             hi.due_date AS dueDate,
+             hi.class_channel_id AS classChannelId,
+             c.name AS className,
+             CASE WHEN hc.student_id IS NULL THEN 0 ELSE 1 END AS completed
+      FROM homework_items hi
+      LEFT JOIN homework_completions hc
+        ON hc.homework_id = hi.id
+       AND hc.student_id = ?
+      LEFT JOIN channels c ON c.id = hi.class_channel_id
+      WHERE ${filters.join(" AND ")}
+      ORDER BY datetime(COALESCE(hi.due_date, hi.created_at)) DESC, hi.created_at DESC
+      LIMIT 100
+    `
+    )
+    .all(normalizedStudentId, ...params);
+  const completedItems = rows.filter((row) => Number(row.completed || 0) === 1).length;
+  const totalItems = rows.length;
+  return {
+    totalItems,
+    completedItems,
+    pendingItems: Math.max(0, totalItems - completedItems),
+    completionRate: totalItems ? Math.round((completedItems / totalItems) * 100) : 0,
+    items: rows.slice(0, 10)
+  };
+}
+
+function getStudentCertificateSummary(workspaceId, studentId, classIds = null) {
+  const normalizedWorkspaceId = String(workspaceId || "").trim();
+  const normalizedStudentId = String(studentId || "").trim();
+  const filters = ["workspace_id = ?", "student_id = ?"];
+  const params = [normalizedWorkspaceId, normalizedStudentId];
+  const normalizedClassIds = Array.isArray(classIds)
+    ? classIds.map((id) => String(id || "").trim()).filter(Boolean)
+    : [];
+  if (normalizedClassIds.length) {
+    filters.push(`class_channel_id IN (${normalizedClassIds.map(() => "?").join(",")})`);
+    params.push(...normalizedClassIds);
+  }
+  const rows = db
+    .prepare(
+      `
+      SELECT id, class_channel_id AS classChannelId, cefr_level AS cefrLevel, hours, issued_at AS issuedAt
+      FROM certificates
+      WHERE ${filters.join(" AND ")}
+      ORDER BY datetime(issued_at) DESC
+      LIMIT 20
+    `
+    )
+    .all(...params);
+  return {
+    totalCertificates: rows.length,
+    latestCertificateAt: rows[0]?.issuedAt || null,
+    certificates: rows.slice(0, 5)
+  };
+}
+
+function getStudentPaymentSummary(workspaceId, studentId) {
+  const normalizedWorkspaceId = String(workspaceId || "").trim();
+  const normalizedStudentId = String(studentId || "").trim();
+  const invoices = db
+    .prepare(
+      `
+      SELECT
+        id,
+        workspace_id AS workspaceId,
+        student_user_id AS studentUserId,
+        amount_cents AS amountCents,
+        currency,
+        description,
+        status,
+        due_date AS dueDate,
+        created_at AS createdAt,
+        paid_at AS paidAt
+      FROM invoices
+      WHERE workspace_id = ?
+        AND student_user_id = ?
+      ORDER BY created_at DESC
+      LIMIT 100
+    `
+    )
+    .all(normalizedWorkspaceId, normalizedStudentId);
+  const payments = db
+    .prepare(
+      `
+      SELECT
+        id,
+        invoice_id AS invoiceId,
+        workspace_id AS workspaceId,
+        student_user_id AS studentUserId,
+        amount_cents AS amountCents,
+        currency,
+        provider,
+        provider_ref AS providerRef,
+        created_at AS createdAt
+      FROM payments
+      WHERE workspace_id = ?
+        AND student_user_id = ?
+      ORDER BY created_at DESC
+      LIMIT 100
+    `
+    )
+    .all(normalizedWorkspaceId, normalizedStudentId);
+  const pendingInvoices = invoices.filter((row) => String(row.status || "").toLowerCase() === "open");
+  return {
+    invoices,
+    payments,
+    pendingCount: pendingInvoices.length,
+    pendingAmountCents: pendingInvoices.reduce((sum, row) => sum + Number(row.amountCents || 0), 0),
+    status: pendingInvoices.length ? "pending" : invoices.length ? "paid" : "clear"
+  };
+}
+
+function buildStudentPerformanceSummary(workspaceId, studentId, options = {}) {
+  const normalizedWorkspaceId = String(workspaceId || "").trim();
+  const normalizedStudentId = String(studentId || "").trim();
+  const student = getWorkspaceScopedUser(normalizedWorkspaceId, normalizedStudentId);
+  if (!student) return null;
+  const classIds = Array.isArray(options.classIds)
+    ? options.classIds.map((id) => String(id || "").trim()).filter(Boolean)
+    : null;
+  const progress = getLatestStudentProgress(normalizedWorkspaceId, normalizedStudentId);
+  const attendance = getStudentAttendanceSummary(normalizedWorkspaceId, normalizedStudentId, classIds);
+  const homework = getStudentHomeworkSummary(normalizedWorkspaceId, normalizedStudentId, classIds);
+  const certificates = getStudentCertificateSummary(normalizedWorkspaceId, normalizedStudentId, classIds);
+  return {
+    student: {
+      id: student.id,
+      name: student.name || student.username || student.email || "Student",
+      email: student.email || "",
+      courseLevel: student.courseLevel || ""
+    },
+    progress: {
+      cefrLevel: progress?.cefrLevel || student.courseLevel || "",
+      completionPct: Number(progress?.completionPct || homework.completionRate || 0),
+      updatedAt: progress?.updatedAt || null
+    },
+    attendance,
+    homework,
+    certificates
+  };
+}
+
+function buildPlatformAnalyticsOverview() {
+  const workspaceRows = db
+    .prepare(
+      `
+      SELECT id, name
+      FROM workspaces
+      ORDER BY lower(COALESCE(name, id)) ASC
+    `
+    )
+    .all();
+  const schools = workspaceRows.map((workspace) => {
+    const summary = buildWorkspaceDashboardSummary(workspace.id);
+    return {
+      workspaceId: workspace.id,
+      workspaceName: workspace.name || workspace.id,
+      students: Number(summary?.students || 0),
+      teachers: Number(summary?.teachers || 0),
+      admins: Number(summary?.admins || 0),
+      totalGroups: Number(summary?.totalGroups || 0)
+    };
+  });
+  return {
+    scope: "platform",
+    viewerRole: "super_admin",
+    workspaceId: "platform",
+    workspaceName: "Platform Overview",
+    students: schools.reduce((sum, row) => sum + Number(row.students || 0), 0),
+    teachers: schools.reduce((sum, row) => sum + Number(row.teachers || 0), 0),
+    admins: schools.reduce((sum, row) => sum + Number(row.admins || 0), 0),
+    totalGroups: schools.reduce((sum, row) => sum + Number(row.totalGroups || 0), 0),
+    schools
+  };
+}
+
+function buildSchoolAnalyticsOverview(workspaceId, user) {
+  const summary = buildWorkspaceDashboardSummary(workspaceId);
+  if (!summary) return null;
+  return {
+    ...summary,
+    scope: "school",
+    viewerRole: getNormalizedUserRole(user)
+  };
+}
+
+function buildTeacherAnalyticsOverview(workspaceId, teacherUserId) {
+  const normalizedWorkspaceId = String(workspaceId || "").trim();
+  const teacher = getWorkspaceScopedUser(normalizedWorkspaceId, teacherUserId);
+  if (!teacher) return null;
+  const classChannels = getAssignedClassChannelsForTeacher(normalizedWorkspaceId, teacherUserId);
+  const classIds = classChannels.map((row) => String(row.id || ""));
+  const students = getAssignedStudentRowsForTeacher(normalizedWorkspaceId, teacherUserId);
+  const performanceRows = students.map((student) =>
+    buildStudentPerformanceSummary(normalizedWorkspaceId, student.id, { classIds })
+  );
+  const validPerformanceRows = performanceRows.filter(Boolean);
+  const attendanceRate =
+    validPerformanceRows.length
+      ? Math.round(
+          validPerformanceRows.reduce(
+            (sum, row) => sum + Number(row.attendance?.attendanceRate || 0),
+            0
+          ) / validPerformanceRows.length
+        )
+      : 0;
+  const completionRate =
+    validPerformanceRows.length
+      ? Math.round(
+          validPerformanceRows.reduce(
+            (sum, row) => sum + Number(row.homework?.completionRate || 0),
+            0
+          ) / validPerformanceRows.length
+        )
+      : 0;
+  const courseCounts = students.reduce((acc, student) => {
+    const key = String(student.courseLevel || "").trim().toUpperCase() || "Unspecified";
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  const classRowsSorted = classChannels.map((channel) => {
+    const channelStudents = listClassStudents(normalizedWorkspaceId, channel.id);
+    const channelStudentIds = channelStudents.map((row) => String(row.user_id || ""));
+    const perStudentAttendance = channelStudentIds.map((studentId) =>
+      getStudentAttendanceSummary(normalizedWorkspaceId, studentId, [channel.id])
+    );
+    const perStudentHomework = channelStudentIds.map((studentId) =>
+      getStudentHomeworkSummary(normalizedWorkspaceId, studentId, [channel.id])
+    );
+    return {
+      id: channel.id,
+      name: channel.name || "Class",
+      students: channelStudentIds.length,
+      messages: perStudentAttendance.reduce((sum, row) => sum + Number(row.total || 0), 0),
+      homework: perStudentHomework.reduce((sum, row) => sum + Number(row.completedItems || 0), 0),
+      attendanceRate: perStudentAttendance.length
+        ? Math.round(
+            perStudentAttendance.reduce((sum, row) => sum + Number(row.attendanceRate || 0), 0) /
+              perStudentAttendance.length
+          )
+        : 0
+    };
+  });
+  const teacherName = teacher.name || teacher.username || teacher.email || "Teacher";
+  return {
+    scope: "teacher",
+    viewerRole: getNormalizedUserRole(teacher),
+    workspaceId: normalizedWorkspaceId,
+    workspaceName: getWorkspaceName(normalizedWorkspaceId),
+    teacher: {
+      id: teacher.id,
+      name: teacherName
+    },
+    students: students.length,
+    activeStudents: students.filter((row) => String(row.status || "").toLowerCase() === "active").length,
+    inactiveStudents: students.filter((row) => String(row.status || "").toLowerCase() !== "active").length,
+    teachers: 1,
+    admins: 0,
+    totalGroups: classChannels.length,
+    classRowsSorted,
+    teacherRows: [
+      {
+        name: teacherName,
+        messages: classRowsSorted.reduce((sum, row) => sum + Number(row.messages || 0), 0),
+        homeworkCount: classRowsSorted.reduce((sum, row) => sum + Number(row.homework || 0), 0),
+        last: "Assigned classes",
+        initials: analyticsInitialsForName(teacherName)
+      }
+    ],
+    homeworkCreated: classRowsSorted.reduce((sum, row) => sum + Number(row.homework || 0), 0),
+    avgSubmissions: students.length
+      ? Math.round(
+          validPerformanceRows.reduce((sum, row) => sum + Number(row.homework?.completedItems || 0), 0) /
+            students.length
+        )
+      : 0,
+    completionRate,
+    attendanceRate,
+    engagementCounts: {
+      high: validPerformanceRows.filter((row) => Number(row.homework?.completionRate || 0) >= 75).length,
+      medium: validPerformanceRows.filter((row) => {
+        const rate = Number(row.homework?.completionRate || 0);
+        return rate >= 40 && rate < 75;
+      }).length,
+      low: validPerformanceRows.filter((row) => Number(row.homework?.completionRate || 0) < 40).length
+    },
+    insights: [
+      `Assigned classes: ${classChannels.length}`,
+      `Average attendance across assigned students: ${attendanceRate}%`,
+      `Homework completion across assigned students: ${completionRate}%`
+    ],
+    courseCounts,
+    studentPerformance: validPerformanceRows
+  };
+}
+
+function buildStudentAnalyticsOverview(workspaceId, studentUserId) {
+  const normalizedWorkspaceId = String(workspaceId || "").trim();
+  const student = getWorkspaceScopedUser(normalizedWorkspaceId, studentUserId);
+  if (!student) return null;
+  const classRows = db
+    .prepare(
+      `
+      SELECT c.id, c.name
+      FROM channel_members cm
+      JOIN channels c ON c.id = cm.channel_id
+      WHERE cm.user_id = ?
+        AND c.workspace_id = ?
+        AND lower(COALESCE(c.category, '')) IN ('class', 'classes')
+      ORDER BY lower(COALESCE(c.name, c.id)) ASC
+    `
+    )
+    .all(String(studentUserId || "").trim(), normalizedWorkspaceId);
+  const classIds = classRows.map((row) => String(row.id || ""));
+  const performance = buildStudentPerformanceSummary(normalizedWorkspaceId, studentUserId, { classIds });
+  const payment = getStudentPaymentSummary(normalizedWorkspaceId, studentUserId);
+  return {
+    scope: "student",
+    viewerRole: getNormalizedUserRole(student),
+    workspaceId: normalizedWorkspaceId,
+    workspaceName: getWorkspaceName(normalizedWorkspaceId),
+    student: performance?.student || {
+      id: student.id,
+      name: student.name || student.username || student.email || "Student"
+    },
+    students: 1,
+    activeStudents: String(student.status || "").toLowerCase() === "active" ? 1 : 0,
+    inactiveStudents: String(student.status || "").toLowerCase() === "active" ? 0 : 1,
+    teachers: 0,
+    admins: 0,
+    totalGroups: classRows.length,
+    classRowsSorted: classRows.map((row) => ({
+      id: row.id,
+      name: row.name || "Class",
+      students: 1,
+      messages: Number(performance?.attendance?.total || 0),
+      homework: Number(performance?.homework?.completedItems || 0),
+      attendanceRate: Number(performance?.attendance?.attendanceRate || 0)
+    })),
+    homeworkCreated: Number(performance?.homework?.totalItems || 0),
+    avgSubmissions: Number(performance?.homework?.completedItems || 0),
+    completionRate: Number(performance?.homework?.completionRate || 0),
+    attendanceRate: Number(performance?.attendance?.attendanceRate || 0),
+    engagementCounts: {
+      high: Number(performance?.homework?.completionRate || 0) >= 75 ? 1 : 0,
+      medium:
+        Number(performance?.homework?.completionRate || 0) >= 40 &&
+        Number(performance?.homework?.completionRate || 0) < 75
+          ? 1
+          : 0,
+      low: Number(performance?.homework?.completionRate || 0) < 40 ? 1 : 0
+    },
+    insights: [
+      `Attendance rate: ${Number(performance?.attendance?.attendanceRate || 0)}%`,
+      `Homework completion: ${Number(performance?.homework?.completionRate || 0)}%`,
+      `Payment status: ${payment.status}`
+    ],
+    courseCounts: {
+      [String(student.courseLevel || "Current Level").trim().toUpperCase() || "Current Level"]: 1
+    },
+    studentPerformance: performance,
+    payment
+  };
+}
+
+const DASHBOARD_SUMMARY_CHANNEL_CATEGORIES = new Set(["classes", "clubs", "exams", "tools", "homework"]);
+
+function normalizeDashboardChannelCategory(raw = "") {
+  const value = String(raw || "").trim().toLowerCase();
+  return DASHBOARD_SUMMARY_CHANNEL_CATEGORIES.has(value) ? value : "classes";
+}
+
+function analyticsInitialsForName(name = "") {
+  return String(name || "")
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0] || "")
+    .join("")
+    .toUpperCase() || "T";
+}
+
+function buildWorkspaceDashboardSummary(workspaceId) {
+  const normalizedWorkspaceId = String(workspaceId || "").trim() || "default";
+  const workspaceRow = db
+    .prepare("SELECT id, name FROM workspaces WHERE id = ?")
+    .get(normalizedWorkspaceId);
+  if (!workspaceRow) return null;
+
+  const users = db
+    .prepare(
+      `
+      SELECT id, name, email, username, role, status, course_level AS courseLevel
+      FROM users
+      WHERE workspace_id = ?
+    `
+    )
+    .all(normalizedWorkspaceId);
+
+  const students = users.filter((user) => String(user.role || "").toLowerCase() === "student");
+  const teachers = users.filter((user) => String(user.role || "").toLowerCase() === "teacher");
+  const admins = users.filter((user) => ["school_admin", "super_admin", "admin"].includes(String(user.role || "").toLowerCase()));
+
+  const activeStudents = students.filter((user) => String(user.status || "").toLowerCase() === "active");
+  const inactiveStudents = students.filter((user) => String(user.status || "").toLowerCase() !== "active");
+
+  const courseCounts = students.reduce((acc, user) => {
+    const key = String(user.courseLevel || "").trim().toUpperCase() || "Unspecified";
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+
+  const channels = db
+    .prepare(
+      `
+      SELECT id, name, topic, category, members, workspace_id AS workspaceId
+      FROM channels
+      WHERE workspace_id = ?
+    `
+    )
+    .all(normalizedWorkspaceId)
+    .map((row) => ({
+      ...row,
+      normalizedCategory: normalizeDashboardChannelCategory(row.category)
+    }));
+
+  const channelCounts = { classes: 0, clubs: 0, exams: 0, tools: 0, homework: 0 };
+  channels.forEach((channel) => {
+    if (channelCounts[channel.normalizedCategory] !== undefined) {
+      channelCounts[channel.normalizedCategory] += 1;
+    }
+  });
+  const totalGroups =
+    channelCounts.classes + channelCounts.clubs + channelCounts.exams + channelCounts.tools;
+
+  const messageAggRows = db
+    .prepare(
+      `
+      SELECT
+        c.id AS channelId,
+        c.category AS category,
+        m.author AS author,
+        COUNT(*) AS messageCount,
+        MAX(m.time) AS lastTime
+      FROM channels c
+      LEFT JOIN messages m ON m.channel_id = c.id
+      WHERE c.workspace_id = ?
+      GROUP BY c.id, c.category, m.author
+    `
+    )
+    .all(normalizedWorkspaceId);
+
+  const messageCounts = new Map();
+  const authorCounts = new Map();
+  const authorLast = new Map();
+  const categoryCounts = { messages: 0, homework: 0, exams: 0 };
+
+  const userRoleLookup = new Map();
+  users.forEach((user) => {
+    const role = String(user.role || "").toLowerCase();
+    [user.name, user.email, user.username]
+      .map((value) => String(value || "").trim().toLowerCase())
+      .filter(Boolean)
+      .forEach((key) => userRoleLookup.set(key, role));
+  });
+
+  const homeworkSubmissionsByChannel = new Map();
+  const homeworkPostsByTeacher = new Map();
+
+  messageAggRows.forEach((row) => {
+    const channelId = String(row.channelId || "");
+    const count = Number(row.messageCount || 0);
+    if (!channelId || !count) return;
+
+    messageCounts.set(channelId, (messageCounts.get(channelId) || 0) + count);
+    categoryCounts.messages += count;
+
+    const normalizedCategory = normalizeDashboardChannelCategory(row.category);
+    if (normalizedCategory === "homework") {
+      categoryCounts.homework += count;
+    }
+    if (normalizedCategory === "exams") {
+      categoryCounts.exams += count;
+    }
+
+    const authorKey = String(row.author || "").trim();
+    if (!authorKey) return;
+
+    authorCounts.set(authorKey, (authorCounts.get(authorKey) || 0) + count);
+    const previousLast = String(authorLast.get(authorKey) || "");
+    const candidateLast = String(row.lastTime || "");
+    if (!previousLast || (candidateLast && candidateLast > previousLast)) {
+      authorLast.set(authorKey, candidateLast);
+    }
+
+    if (normalizedCategory !== "homework") return;
+    const roleKey = userRoleLookup.get(authorKey.toLowerCase()) || "";
+    if (roleKey === "student") {
+      homeworkSubmissionsByChannel.set(
+        channelId,
+        (homeworkSubmissionsByChannel.get(channelId) || 0) + count
+      );
+    }
+    if (["teacher", "school_admin", "super_admin", "admin"].includes(roleKey)) {
+      homeworkPostsByTeacher.set(
+        authorKey,
+        (homeworkPostsByTeacher.get(authorKey) || 0) + count
+      );
+    }
+  });
+
+  const classMemberRows = db
+    .prepare(
+      `
+      SELECT cm.channel_id AS channelId, COUNT(*) AS studentCount
+      FROM channel_members cm
+      JOIN users u ON u.id = cm.user_id
+      JOIN channels c ON c.id = cm.channel_id
+      WHERE c.workspace_id = ?
+        AND lower(COALESCE(u.role, '')) = 'student'
+      GROUP BY cm.channel_id
+    `
+    )
+    .all(normalizedWorkspaceId);
+  const classMemberCountMap = new Map(
+    classMemberRows.map((row) => [String(row.channelId || ""), Number(row.studentCount || 0)])
+  );
+
+  const homeworkChannelByClassId = new Map();
+  channels
+    .filter((channel) => channel.normalizedCategory === "homework")
+    .forEach((channel) => {
+      const topic = String(channel.topic || "").trim().toLowerCase();
+      const match = topic.match(/homework_for:([^\s]+)/);
+      if (match && match[1]) {
+        homeworkChannelByClassId.set(match[1], channel);
+      }
+    });
+
+  const classRowsSorted = channels
+    .filter((channel) => channel.normalizedCategory === "classes")
+    .map((channel) => {
+      const homeworkChannel = homeworkChannelByClassId.get(String(channel.id || ""));
+      return {
+        id: channel.id,
+        name: channel.name,
+        messages: Number(messageCounts.get(String(channel.id || "")) || 0),
+        homework: homeworkChannel ? Number(messageCounts.get(String(homeworkChannel.id || "")) || 0) : 0,
+        students: Math.max(
+          Number(classMemberCountMap.get(String(channel.id || "")) || 0),
+          Number(channel.members || 0)
+        )
+      };
+    })
+    .sort((a, b) => b.messages - a.messages);
+
+  const teacherRows = teachers.map((teacher) => {
+    const key = String(teacher.name || teacher.email || teacher.username || "").trim();
+    return {
+      name: teacher.name || teacher.email || "Teacher",
+      messages: Number(authorCounts.get(key) || 0),
+      homeworkCount: Number(homeworkPostsByTeacher.get(key) || 0),
+      last: String(authorLast.get(key) || "—"),
+      initials: analyticsInitialsForName(teacher.name || teacher.email || "Teacher")
+    };
+  });
+
+  const anyTeacherActive = teacherRows.some((teacher) => teacher.messages > 0);
+
+  const toolChannels = channels.filter((channel) => channel.normalizedCategory === "tools");
+  let mostUsedTool = "—";
+  if (toolChannels.length) {
+    const topTool = toolChannels
+      .slice()
+      .sort((a, b) => (messageCounts.get(String(b.id || "")) || 0) - (messageCounts.get(String(a.id || "")) || 0))[0];
+    if (topTool?.name) mostUsedTool = topTool.name;
+  }
+
+  const homeworkChannels = channels.filter((channel) => channel.normalizedCategory === "homework");
+  const homeworkCreated = homeworkChannels.length;
+  const totalHomeworkSubmissions = Array.from(homeworkSubmissionsByChannel.values()).reduce(
+    (sum, value) => sum + Number(value || 0),
+    0
+  );
+  const avgSubmissions =
+    homeworkCreated > 0 ? Math.round(totalHomeworkSubmissions / homeworkCreated) : 0;
+  const completionRate =
+    homeworkCreated > 0
+      ? Math.min(100, Math.round((avgSubmissions / Math.max(1, students.length)) * 100))
+      : 0;
+
+  const engagementCounts = students.reduce(
+    (acc, student) => {
+      const key = String(student.name || student.email || "").trim();
+      const count = Number(authorCounts.get(key) || 0);
+      if (count >= 5) acc.high += 1;
+      else if (count >= 1) acc.medium += 1;
+      else acc.low += 1;
+      return acc;
+    },
+    { high: 0, medium: 0, low: 0 }
+  );
+
+  const insights = [];
+  if (inactiveStudents.length) {
+    insights.push(`⚠️ ${inactiveStudents.length} students are currently inactive and may need follow-up.`);
+  }
+  if (classRowsSorted.some((row) => row.messages < 2)) {
+    insights.push("📉 Some classes show low message activity and may need teacher intervention.");
+  }
+  if (homeworkCreated === 0) {
+    insights.push("📌 No homework channels created yet for this workspace.");
+  }
+  if (!insights.length) {
+    insights.push("✅ Student and class activity looks healthy this week.");
+  }
+
+  return {
+    workspaceId: normalizedWorkspaceId,
+    workspaceName: workspaceRow.name || normalizedWorkspaceId,
+    students: students.length,
+    activeStudents: activeStudents.length,
+    inactiveStudents: inactiveStudents.length,
+    teachers: teachers.length,
+    admins: admins.length,
+    channelCounts,
+    categoryCounts,
+    totalGroups,
+    classRowsSorted,
+    teacherRows,
+    anyTeacherActive,
+    mostUsedTool,
+    homeworkCreated,
+    avgSubmissions,
+    completionRate,
+    engagementCounts,
+    insights,
+    courseCounts
+  };
 }
 
 function getWorkspaceAdminEmail(workspaceId) {
@@ -16676,6 +17790,7 @@ app.get('/api/admin/billing/:workspaceId', (req, res) => {
     SELECT
       id,
       workspace_id AS workspaceId,
+      student_user_id AS studentUserId,
       amount_cents AS amountCents,
       currency,
       description,
@@ -16694,6 +17809,7 @@ app.get('/api/admin/billing/:workspaceId', (req, res) => {
       id,
       invoice_id AS invoiceId,
       workspace_id AS workspaceId,
+      student_user_id AS studentUserId,
       amount_cents AS amountCents,
       currency,
       provider,
@@ -16712,9 +17828,16 @@ app.post('/api/admin/invoices', (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
 
-  const { workspaceId, amountCents, currency, description, dueDate } = req.body || {};
+  const { workspaceId, studentUserId, amountCents, currency, description, dueDate } = req.body || {};
   const ws = String(workspaceId || '').trim();
   if (!ws) return res.status(400).json({ error: 'workspaceId is required' });
+  const normalizedStudentUserId = String(studentUserId || '').trim() || null;
+  if (normalizedStudentUserId) {
+    const student = getWorkspaceScopedUser(ws, normalizedStudentUserId);
+    if (!student || getNormalizedUserRole(student) !== 'student') {
+      return res.status(400).json({ error: 'studentUserId must reference a student in the workspace' });
+    }
+  }
 
   const amount = Number(amountCents);
   if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'amountCents must be > 0' });
@@ -16722,11 +17845,11 @@ app.post('/api/admin/invoices', (req, res) => {
   const invId = generateAdminId('inv');
 
   db.prepare(`
-    INSERT INTO invoices (id, workspace_id, amount_cents, currency, description, status, due_date, created_at)
-    VALUES (?, ?, ?, ?, ?, 'open', ?, ?)
-  `).run(invId, ws, Math.floor(amount), String(currency || 'EUR'), description || null, dueDate || null, nowMs());
+    INSERT INTO invoices (id, workspace_id, student_user_id, amount_cents, currency, description, status, due_date, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)
+  `).run(invId, ws, normalizedStudentUserId, Math.floor(amount), String(currency || 'EUR'), description || null, dueDate || null, nowMs());
 
-  legacyAuditLog({ workspaceId: ws, actor: user.id, action: 'invoice.create', target: invId, payload: { amountCents: amount, currency, description, dueDate } });
+  legacyAuditLog({ workspaceId: ws, actor: user.id, action: 'invoice.create', target: invId, payload: { amountCents: amount, currency, description, dueDate, studentUserId: normalizedStudentUserId } });
 
   return res.json({ ok: true, id: invId });
 });
@@ -16737,7 +17860,7 @@ app.post('/api/admin/invoices/:invoiceId/mark-paid', (req, res) => {
 
   const invoiceId = String(req.params.invoiceId || '').trim();
   const invoice = db.prepare(`
-    SELECT id, workspace_id AS workspaceId, amount_cents AS amountCents, currency, status
+    SELECT id, workspace_id AS workspaceId, student_user_id AS studentUserId, amount_cents AS amountCents, currency, status
     FROM invoices
     WHERE id = ?
   `).get(invoiceId);
@@ -16752,9 +17875,9 @@ app.post('/api/admin/invoices/:invoiceId/mark-paid', (req, res) => {
       .run('paid', nowMs(), invoiceId);
 
     db.prepare(`
-      INSERT INTO payments (id, invoice_id, workspace_id, amount_cents, currency, provider, provider_ref, created_at)
-      VALUES (?, ?, ?, ?, ?, 'manual', NULL, ?)
-    `).run(paymentId, invoiceId, invoice.workspaceId, invoice.amountCents, invoice.currency, nowMs());
+      INSERT INTO payments (id, invoice_id, workspace_id, student_user_id, amount_cents, currency, provider, provider_ref, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'manual', NULL, ?)
+    `).run(paymentId, invoiceId, invoice.workspaceId, invoice.studentUserId || null, invoice.amountCents, invoice.currency, nowMs());
   });
 
   tx();
