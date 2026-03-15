@@ -34,6 +34,7 @@ let adminAssignSelectedUserId = null;
 let adminAssignSelectedWorkspaceId = null;
 let adminAssignSelectedChannelId = null;
 let eventSource = null;
+let uiNavigationToken = 0;
 let pendingUploads = []; // files uploaded but not yet sent in a message
 let threadPendingUploads = []; // files uploaded for thread replies
 let deepLinkTarget = null;
@@ -142,7 +143,7 @@ const REGISTRATION_MODAL_STATE_KEY = "worknest_registration_modal_state";
 let ACCESS_TOKEN = null;
 
 // ---- TASKS UI ----
-const TASKS_CHANNEL_IDS = new Set(["teachers-task", "school-task"]);
+const TASK_CHANNEL_NAMES = new Set(["school task", "teachers task", "student tasks"]);
 let tasksDock = null;
 let tasksBtn = null;
 let tasksOpen = false;
@@ -209,6 +210,49 @@ async function bootstrapAfterAuth(user, options = {}) {
   await loadChannels?.();
   await refreshAll?.();
 
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("worknestAuthReady", {
+        detail: {
+          user: actualUser,
+          workspaceId: authWorkspaceId
+        }
+      })
+    );
+  }
+
+  if (typeof window?.prefetchDashboardSummary === "function") {
+    void window.prefetchDashboardSummary({
+      userId: actualUser.id || actualUser.userId || "",
+      workspaceId: authWorkspaceId,
+      force: true
+    }).catch(() => null);
+  }
+
+  if (options.hydrateApp) {
+    didRestoreView = false;
+    isRestoringView = false;
+    await loadServerData();
+    await loadCurrentUserClasses(authWorkspaceId);
+    renderChannels();
+    renderDMs();
+    renderWorkspaces();
+    renderCommandLists();
+    renderPinnedSidebar();
+    setupRealtimeEvents();
+
+    if (deepLinkTarget) {
+      applyDeepLinkSelection();
+    } else {
+      const firstVisibleClassChannelId = getFirstVisibleClassChannelId();
+      if (firstVisibleClassChannelId) {
+        await selectChannel(firstVisibleClassChannelId);
+      } else {
+        showHomeView();
+      }
+    }
+  }
+
   if (options.showToastOnLogin) {
     showToast("Logged in");
   }
@@ -235,7 +279,7 @@ async function refreshAll() {
 }
 const teachersSection = document.getElementById("teachersSection");
 const teachersChannelsContainer = document.getElementById("teachersChannelsContainer");
-const known = new Set(["classes","clubs","exams","tools","homework","teachers"]);
+const known = new Set(["classes","clubs","exams","tools","homework","teachers","tasks"]);
 const ADMIN_ROLE_VALUES = new Set(["school_admin", "super_admin"]);
 // drafts
 const DRAFT_KEY_PREFIX = "worknest_draft_";
@@ -468,6 +512,15 @@ async function logout() {
   }
   try {
     localStorage.removeItem("currentWorkspaceId");
+  } catch (_err) {
+    // ignore
+  }
+  try {
+    if (typeof window?.clearCachedDashboardSummary === "function") {
+      window.clearCachedDashboardSummary({
+        userId: sessionUser?.id || sessionUser?.userId || ""
+      });
+    }
   } catch (_err) {
     // ignore
   }
@@ -2464,11 +2517,11 @@ function updateAdminButtonState() {
   const isAdmin = isAdminUser();
   const isSuper = isSuperAdmin();
   if (btn) {
-    btn.hidden = false;
-    btn.style.display = "grid";
-    btn.disabled = false;
-    btn.style.pointerEvents = "auto";
-    btn.classList.toggle("rail-btn-disabled", !isAdmin);
+    btn.hidden = !isAdmin;
+    btn.style.display = isAdmin ? "grid" : "none";
+    btn.disabled = !isAdmin;
+    btn.style.pointerEvents = isAdmin ? "auto" : "none";
+    btn.classList.toggle("rail-btn-disabled", false);
   }
 
   if (addChannelBtn) {
@@ -2507,10 +2560,12 @@ function updateAdminButtonState() {
   }
   const analyticsBtn = document.querySelector(".app-rail-btn-analytics");
   if (analyticsBtn) {
-    analyticsBtn.disabled = !isAdmin;
-    analyticsBtn.style.pointerEvents = isAdmin ? "auto" : "none";
-    analyticsBtn.classList.toggle("rail-btn-disabled", !isAdmin);
-    analyticsBtn.title = isAdmin ? "Analytics" : "Admins only";
+    analyticsBtn.hidden = false;
+    analyticsBtn.style.display = "";
+    analyticsBtn.disabled = false;
+    analyticsBtn.style.pointerEvents = "auto";
+    analyticsBtn.classList.toggle("rail-btn-disabled", false);
+    analyticsBtn.title = "Analytics";
   }
   if (superAdminQuickBtn) {
     superAdminQuickBtn.hidden = !isSuper;
@@ -2580,19 +2635,23 @@ function updateAdminButtonState() {
 function hidePageLoader() {
   const loader = document.getElementById("page-loader");
   if (!loader) return;
-  loader.hidden = true;
-  loader.style.display = "none";
+  document.body.classList.remove("startup-loading");
+  loader.classList.add("is-hiding");
+  window.setTimeout(() => {
+    loader.hidden = true;
+    loader.style.display = "none";
+    loader.classList.remove("is-hiding");
+  }, 240);
 }
 
 function showPageLoader() {
   const loader = document.getElementById("page-loader");
   if (!loader) return;
+  document.body.classList.add("startup-loading");
   loader.hidden = false;
   loader.style.display = "flex";
+  loader.classList.remove("is-hiding");
 }
-
-window.addEventListener("load", hidePageLoader);
-window.addEventListener("DOMContentLoaded", hidePageLoader);
 
 
 function isUserActive(userId) {
@@ -3192,19 +3251,16 @@ function openAiAssistant() {
 }
 
 function showHomeView() {
-  isHomeView = false;
+  isHomeView = true;
   try {
     localStorage.setItem(LAST_ACTIVE_VIEW_KEY, "chatPanel");
   } catch (err) {
     /* ignore */
   }
   openHomePanel();
-  // jump to the first channel by default when going Home
-  const firstChannelId = channels && channels[0] && channels[0].id ? channels[0].id : null;
-  const targetId = firstChannelId || currentChannelId;
-  if (targetId) {
-    selectChannel(targetId);
-  }
+  openAllUnreads().catch((err) => {
+    console.error("Failed to open home view", err);
+  });
 }
 
 function appendAiBubble(role, text) {
@@ -3710,13 +3766,108 @@ function updateAiContextBlock() {
   aiContextBlock.textContent = getAiSystemContext();
 }
 
+function isNavigationTokenCurrent(token, panelId) {
+  if (token !== uiNavigationToken) return false;
+  const panel = document.getElementById(panelId);
+  return !!(panel && !panel.classList.contains("hidden"));
+}
+
+function setEmailHeaderChromeVisible(visible) {
+  const nextVisible = Boolean(visible);
+  if (schoolEmailHeaderActions) {
+    schoolEmailHeaderActions.classList.toggle("hidden", !nextVisible);
+    schoolEmailHeaderActions.setAttribute("aria-hidden", nextVisible ? "false" : "true");
+  }
+  if (schoolSettingsHeaderToggle) {
+    schoolSettingsHeaderToggle.classList.toggle("hidden", !nextVisible);
+    schoolSettingsHeaderToggle.setAttribute("aria-hidden", nextVisible ? "false" : "true");
+  }
+}
+
+function clearSectionHeaderState() {
+  restoreSchoolEmailUiToChatHeader();
+  setEmailHeaderChromeVisible(false);
+  if (emailPanelHeaderActions) emailPanelHeaderActions.replaceChildren();
+  if (emailPanelToggle) emailPanelToggle.replaceChildren();
+  const chatHeaderEl = document.getElementById("chatHeader");
+  if (chatHeaderEl) {
+    chatHeaderEl.classList.remove(
+      "school-settings-header",
+      "privacy-channel-active",
+      "exam-registration-active",
+      "speaking-practice-active",
+      "schedule-channel-active",
+      "grammar-channel-active",
+      "listening-practice-active",
+      "school-task-header",
+      "teachers-task-header",
+      "student-task-header"
+    );
+    delete chatHeaderEl.dataset.channelId;
+  }
+  if (headerChannelName) headerChannelName.textContent = "";
+  if (headerChannelTopic) {
+    headerChannelTopic.textContent = "";
+    headerChannelTopic.classList.add("hidden");
+  }
+  if (headerChannelPrivacy) {
+    headerChannelPrivacy.textContent = "";
+    headerChannelPrivacy.classList.remove("is-private", "is-public", "privacy-badge");
+  }
+  if (privacyChannelHeader) {
+    privacyChannelHeader.classList.remove("visible");
+    privacyChannelHeader.classList.add("hidden");
+  }
+  if (channelHeaderNoteMeta) {
+    channelHeaderNoteMeta.classList.add("hidden");
+    channelHeaderNoteMeta.setAttribute("aria-hidden", "true");
+  }
+  if (channelHeaderNoteMetaType) channelHeaderNoteMetaType.textContent = "Shared note space";
+  if (channelHeaderNoteMetaUpdated) channelHeaderNoteMetaUpdated.textContent = "Last updated —";
+  if (channelHeaderNoteMetaPinned) channelHeaderNoteMetaPinned.textContent = "Pinned note";
+  if (channelHeaderNoteMetaAuthor) channelHeaderNoteMetaAuthor.textContent = "Created by class team";
+  const iconWrapper = document.querySelector(".channel-type-icon");
+  if (iconWrapper) {
+    iconWrapper.innerHTML = "";
+  }
+  if (headerStarBtn) headerStarBtn.hidden = true;
+  if (headerPinBtn) headerPinBtn.hidden = true;
+  if (toggleThreadColumnBtn) toggleThreadColumnBtn.hidden = true;
+  if (headerMuteBtn) headerMuteBtn.hidden = true;
+  if (channelAddMemberBtn) channelAddMemberBtn.classList.add("hidden");
+  if (channelAttendanceBtn) channelAttendanceBtn.classList.add("hidden");
+  if (tasksBtn) tasksBtn.classList.add("hidden");
+  if (headerClearCultureBtn) headerClearCultureBtn.classList.add("hidden");
+  if (channelRoleTabs) channelRoleTabs.classList.add("hidden");
+  document.getElementById("attendanceHeaderBtn")?.remove();
+  if (channelLevelButtons) {
+    channelLevelButtons.classList.add("hidden");
+    channelLevelButtons.setAttribute("aria-hidden", "true");
+  }
+  hideChannelSearchResults();
+  hideClearCulturePopup();
+  hideAnnouncementsPopup();
+  document.body?.classList.remove(
+    "speaking-practice-active",
+    "grammar-shell-active",
+    "wordmeaning-channel-active",
+    "announcements-channel-active",
+    "no-school-scroll"
+  );
+  document.documentElement?.classList.remove(
+    "speaking-practice-active",
+    "grammar-shell-active",
+    "wordmeaning-channel-active",
+    "announcements-channel-active"
+  );
+}
+
 function showPanel(panelId) {
+  const token = ++uiNavigationToken;
+  clearSectionHeaderState();
   setAppFullScreenMode(panelId !== "chatPanel");
   if (panelId !== "adminPanel") {
     restoreUserProfileCardToModal();
-  }
-  if (panelId !== "emailPanel") {
-    restoreSchoolEmailUiToChatHeader();
   }
   document.querySelectorAll(".main-panel").forEach((p) => {
     p.classList.add("hidden");
@@ -3740,6 +3891,8 @@ function showPanel(panelId) {
   if (chatHeader) {
     chatHeader.style.display = panelId === "chatPanel" ? "" : "none";
   }
+
+  return token;
 }
 
 function getLastActiveView() {
@@ -3754,39 +3907,42 @@ function restoreLastActivePanel(defaultPanel = "chatPanel") {
   const panelId = getLastActiveView();
   const target = panelId && document.getElementById(panelId) ? panelId : defaultPanel;
   showPanel(target);
+  if (target === "analyticsPanel" && typeof window.renderAnalyticsPanel === "function") {
+    void window.renderAnalyticsPanel();
+  }
 }
 
 function openNotificationsView() {
-  showPanel("notificationsPanel");
-  renderNotificationsPanel();
+  const token = showPanel("notificationsPanel");
+  renderNotificationsPanel(token);
 }
 function openProfilePanel() {
   showPanel("profilePanel");
 }
 
 function openFilesPanel() {
-  showPanel("filesPanel");
+  const token = showPanel("filesPanel");
   filesScopeMode = "all";
   if (!filesScopeChannelId) {
     const firstChannelId = channels && channels[0] && channels[0].id ? channels[0].id : null;
     const target = firstChannelId || currentChannelId;
     filesScopeChannelId = target != null ? String(target) : null;
   }
-  renderFilesPanel();
+  renderFilesPanel(token);
 }
 function openCalendarPanel() {
   showPanel("calendarPanel");
 }
 function openLivePanel() {
-  showPanel("livePanel");
+  const token = showPanel("livePanel");
   if (livePanel) livePanel.scrollTop = 0;
-  loadLiveSessions(liveScope);
+  loadLiveSessions(liveScope, token);
   setLiveJoinedState(false);
   updateLaunchButtonLabel();
 }
 function openAnalyticsPanel() {
-  showPanel("analyticsPanel");
-  renderAnalyticsPanel();
+  const token = showPanel("analyticsPanel");
+  renderAnalyticsPanel(token);
 }
 
 async function openEmailPanel() {
@@ -3797,7 +3953,7 @@ async function openEmailPanel() {
     showToast("Email is available for school admins and students only.", "info");
     return;
   }
-  showPanel("emailPanel");
+  const token = showPanel("emailPanel");
   closeAdminDock();
   setSuperAdminLanding(false);
   mountSchoolEmailUiToEmailPanel();
@@ -3808,9 +3964,12 @@ async function openEmailPanel() {
   if (canManageSchoolMailbox()) {
     try {
       await loadEmailSettings();
+      if (!isNavigationTokenCurrent(token, "emailPanel")) return;
       await loadClassSettingsSchoolDetails();
+      if (!isNavigationTokenCurrent(token, "emailPanel")) return;
     } catch (err) {
       console.error("Failed to load email settings", err);
+      if (!isNavigationTokenCurrent(token, "emailPanel")) return;
       showToast("Could not load settings");
     }
   }
@@ -4988,8 +5147,9 @@ async function collectAllAttachments() {
   return results;
 }
 
-async function renderFilesPanel() {
+async function renderFilesPanel(token = uiNavigationToken) {
   if (!filesList) return;
+  if (!isNavigationTokenCurrent(token, "filesPanel")) return;
   updateFilesExtraFilters();
   filesList.classList.toggle("files-grid-mode", filesCategoryFilter === "materials");
   if (filesSearchInput) {
@@ -4997,6 +5157,7 @@ async function renderFilesPanel() {
   }
   if (!isAdminUser() && (isStudentUser() || isTeacherUser()) && !currentUserClassesLoaded) {
     await loadCurrentUserClasses(currentWorkspaceId || "default");
+    if (!isNavigationTokenCurrent(token, "filesPanel")) return;
   }
 
   const scopeId = filesScopeMode !== "all" ? (filesScopeChannelId || currentChannelId) : null;
@@ -5029,6 +5190,7 @@ async function renderFilesPanel() {
   filesList.innerHTML = `<div class="muted" style="padding:10px;">Loading files…</div>`;
 
   const all = await collectAllAttachments();
+  if (!isNavigationTokenCurrent(token, "filesPanel")) return;
   let files = all.map((f) => {
     const meta = getFileCategoryMeta(f);
     const timeLabel = f.time || (f.ts ? formatRelativeTime(f.ts) : "");
@@ -5100,6 +5262,7 @@ async function renderFilesPanel() {
     qs.set("workspaceId", currentWorkspaceId || "default");
     if (filesScopeMode !== "all" && scopeId) qs.set("channelId", scopeId);
     const reg = await fetchJSON(`/api/files/registry?${qs.toString()}`);
+    if (!isNavigationTokenCurrent(token, "filesPanel")) return;
     (reg?.files || []).forEach((r) => {
       if (r && r.fileId) registryMap.set(String(r.fileId), r);
     });
@@ -5325,9 +5488,10 @@ async function renderFilesPanel() {
     .join("");
 }
 
-async function renderNotificationsPanel() {
+async function renderNotificationsPanel(token = uiNavigationToken) {
   const panel = document.getElementById("notificationsPanel");
   if (!panel) return;
+  if (!isNavigationTokenCurrent(token, "notificationsPanel")) return;
 
   const NOTIF_STORAGE_KEY = "worknest_notifs_v1";
   const NOTIF_READ_AT_KEY = "worknest_notifs_read_at";
@@ -5405,6 +5569,7 @@ async function renderNotificationsPanel() {
     const today = ymd(new Date());
     const to = addDays(today, 7);
     await fetchCalendarEvents(today, to);
+    if (!isNavigationTokenCurrent(token, "notificationsPanel")) return;
   } catch (_err) {
     /* ignore */
   }
@@ -5555,7 +5720,7 @@ async function renderNotificationsPanel() {
   if (markBtn) {
     markBtn.addEventListener("click", () => {
       setNotifReadAt(Date.now());
-      renderNotificationsPanel();
+      renderNotificationsPanel(token);
     });
   }
 
@@ -5596,9 +5761,10 @@ async function renderNotificationsPanel() {
   });
 }
 
-async function renderAnalyticsPanel() {
+async function renderAnalyticsPanel(token = uiNavigationToken) {
   const panel = document.getElementById("analyticsPanel");
   if (!panel) return;
+  if (!isNavigationTokenCurrent(token, "analyticsPanel")) return;
 
   panel.innerHTML = `<div class="analytics-wrap"><div class="muted">Loading school statistics…</div></div>`;
 
@@ -5607,6 +5773,7 @@ async function renderAnalyticsPanel() {
     const users = await fetchJSON(
       `/api/users?workspaceId=${encodeURIComponent(workspaceId)}`
     );
+    if (!isNavigationTokenCurrent(token, "analyticsPanel")) return;
     const list = Array.isArray(users) ? users : [];
     userDirectoryCache = list;
     userDirectoryLoaded = true;
@@ -6029,6 +6196,7 @@ function mountSchoolEmailUiToEmailPanel() {
   }
   document.body.classList.remove("no-school-scroll");
   setSchoolEmailHeaderMode(false);
+  setEmailHeaderChromeVisible(true);
 }
 
 function restoreSchoolEmailUiToChatHeader() {
@@ -6151,12 +6319,10 @@ function initRailAndComposerListeners() {
     const railButtons = document.querySelectorAll(".app-rail-btn[data-rail-id]");
 
     railButtons.forEach((btn) => {
-      btn.addEventListener("click", () => {
+      btn.addEventListener("click", (event) => {
+        event.preventDefault();
         const id = btn.dataset.railId;
         openRailSection(id);
-
-        document.querySelectorAll(".app-rail-btn").forEach((b) => b.classList.remove("app-rail-btn-active"));
-        btn.classList.add("app-rail-btn-active");
       });
     });
 
@@ -6181,6 +6347,10 @@ function initRailAndComposerListeners() {
 // ======================= FUNCTION HANDLER ========================
 function openRailSection(id) {
   const targetId = id || "messages";
+  const activeBtn = document.querySelector(`.app-rail-btn[data-rail-id="${targetId}"]`);
+  setActiveRailButton(activeBtn);
+  closeAllUnreads();
+  closeThread();
   const isChat = targetId === "messages";
   setChatColumnsVisibility(isChat);
   setAppFullScreenMode(!isChat);
@@ -6198,7 +6368,6 @@ function openRailSection(id) {
   }
   switch (targetId) {
     case "messages":
-      closeAllUnreads();
       showPanel("chatPanel");
       break;
     case "notifications":
@@ -6231,8 +6400,7 @@ function openRailSection(id) {
       break;
     case "home":
     default:
-      // default: return to main view
-      if (unreadsOverlay) unreadsOverlay.classList.add("hidden");
+      showHomeView();
   }
 }
 
@@ -6302,10 +6470,12 @@ function filterLiveSessions() {
     });
 }
 
-async function loadLiveSessions(scope = liveScope) {
+async function loadLiveSessions(scope = liveScope, token = uiNavigationToken) {
   if (!livePanel) return;
+  if (!isNavigationTokenCurrent(token, "livePanel")) return;
   try {
     const res = await fetchJSON(`/api/live-sessions?scope=${encodeURIComponent(scope)}`);
+    if (!isNavigationTokenCurrent(token, "livePanel")) return;
     liveSessions = Array.isArray(res) ? dedupeSessions(res) : [];
     renderLiveSchedule();
     renderLiveRecents();
@@ -6962,6 +7132,7 @@ function showSchoolSettingsCard() {
   releaseSchoolSettingsTrap = trapFocus(schoolEmailSettingsPage);
   document.body.classList.add("no-school-scroll");
   setSchoolEmailHeaderMode(true);
+  setEmailHeaderChromeVisible(true);
 }
 
 function showClassSettingsPage() {
@@ -10339,6 +10510,11 @@ const headerChannelName = document.getElementById("headerChannelName");
 const headerChannelPrivacy = document.getElementById("headerChannelPrivacy");
 const headerChannelLanguageBtn = document.getElementById("headerChannelLanguageBtn");
 const headerChannelTopic = document.getElementById("headerChannelTopic");
+const channelHeaderNoteMeta = document.getElementById("channelHeaderNoteMeta");
+const channelHeaderNoteMetaType = document.getElementById("channelHeaderNoteMetaType");
+const channelHeaderNoteMetaUpdated = document.getElementById("channelHeaderNoteMetaUpdated");
+const channelHeaderNoteMetaPinned = document.getElementById("channelHeaderNoteMetaPinned");
+const channelHeaderNoteMetaAuthor = document.getElementById("channelHeaderNoteMetaAuthor");
 const headerMemberCountStudents = document.getElementById("headerMemberCountStudents");
 const headerMemberCountTeachers = document.getElementById("headerMemberCountTeachers");
 const headerMemberCountAdmins = document.getElementById("headerMemberCountAdmins");
@@ -12619,6 +12795,25 @@ function setChannelRoleTabsVisible(visible) {
   channelRoleTabs.classList.toggle("hidden", !visible);
 }
 
+function isClassesScopedHeaderChannel(channelOrId) {
+  if (!channelOrId) return false;
+  const ch = typeof channelOrId === "string" ? getChannelById(channelOrId) : channelOrId;
+  if (!ch) return false;
+  if (typeof ch.id === "string" && ch.id.startsWith("dm:")) return false;
+  const category = normalizeChannelCategory(ch.category);
+  return category === "classes" || isHomeworkChannel(ch) || isHomeworkNoteChannel(ch.id) || category === "notes";
+}
+
+function canManageClassesHeaderControls(channelOrId) {
+  if (!isClassesScopedHeaderChannel(channelOrId)) return false;
+  return isAdminUser() || isTeacherUser();
+}
+
+function canOpenClassesHeaderMemberLists(channelOrId) {
+  if (!isClassesScopedHeaderChannel(channelOrId)) return true;
+  return canManageClassesHeaderControls(channelOrId);
+}
+
 function updateChannelRoleCounts(members = []) {
   if (!headerMemberCountStudents || !headerMemberCountTeachers || !headerMemberCountAdmins) return;
   const memberSet = new Set((members || []).map(String));
@@ -13153,6 +13348,7 @@ async function openChannelMembersModal(role) {
   if (!currentChannelId || String(currentChannelId).startsWith("dm:")) return;
   const ch = getChannelById(currentChannelId);
   if (!ch) return;
+  if (!canOpenClassesHeaderMemberLists(ch)) return;
   await loadUserDirectory();
   await fetchChannelMembers(ch.id);
   const roleLabel =
@@ -14258,6 +14454,62 @@ function isStudentUser() {
   return getUserRoleKey() === "student";
 }
 
+function getFirstVisibleClassChannelId() {
+  const workspaceId = currentWorkspaceId || "default";
+  const classChannels = (channels || []).filter((ch) => {
+    const sameWorkspace = String(ch.workspaceId || "default") === workspaceId;
+    return sameWorkspace && normalizeChannelCategory(ch.category) === "classes";
+  });
+  if (!classChannels.length) return "";
+  if (isStudentUser() || isTeacherUser()) {
+    const scoped = classChannels.filter((ch) => currentUserClassIds.has(String(ch.id)));
+    return String((scoped[0] || classChannels[0] || {}).id || "");
+  }
+  return String((classChannels[0] || {}).id || "");
+}
+
+function canAccessTaskChannelByName(name, role = getUserRoleKey()) {
+  const normalizedName = String(name || "").trim().toLowerCase();
+  const normalizedRole = String(role || "").trim().toLowerCase();
+  if (normalizedName === "school task") {
+    return normalizedRole === "school_admin" || normalizedRole === "super_admin";
+  }
+  if (normalizedName === "teachers task") {
+    return normalizedRole === "teacher" || normalizedRole === "school_admin" || normalizedRole === "super_admin";
+  }
+  if (normalizedName === "student tasks") {
+    return normalizedRole === "student" || normalizedRole === "teacher" || normalizedRole === "school_admin" || normalizedRole === "super_admin";
+  }
+  return true;
+}
+
+function isTaskChannelName(name) {
+  return TASK_CHANNEL_NAMES.has(String(name || "").trim().toLowerCase());
+}
+
+function canAccessTaskChannel(channelOrId, role = getUserRoleKey()) {
+  const ch = typeof channelOrId === "string" ? getChannelById(channelOrId) : channelOrId;
+  const channelName = ch?.name || channelOrId;
+  if (!isTaskChannelName(channelName)) return true;
+  return canAccessTaskChannelByName(channelName, role);
+}
+
+function updateTaskChannelVisibility() {
+  const tasksSection = document.getElementById("tasksSection");
+  const items = document.querySelectorAll('#tasksContainer .sidebar-item[data-static-channel="1"]');
+  let visibleCount = 0;
+  items.forEach((item) => {
+    const canView = canAccessTaskChannelByName(item.dataset.channelName || "");
+    item.hidden = !canView;
+    item.setAttribute("aria-hidden", canView ? "false" : "true");
+    if (canView) visibleCount += 1;
+  });
+  if (tasksSection) {
+    tasksSection.hidden = visibleCount === 0;
+    tasksSection.style.display = visibleCount === 0 ? "none" : "";
+  }
+}
+
 function canPostInChannel(channelId) {
   if (isPolicyAcceptanceRequired() && !policyAccepted) return false;
   if (isAnnouncementChannel(channelId)) return isAdminUser();
@@ -14754,12 +15006,26 @@ function findChannelByName(name, category) {
   const targetName = String(name || "").trim().toLowerCase();
   if (!targetName) return null;
   const targetCategory = normalizeChannelCategory(category);
+  const baseId = String(name || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
   const byCategory = channels.filter(
     (c) =>
       normalizeChannelCategory(c.category) === targetCategory &&
       String(c.name || "").trim().toLowerCase() === targetName
   );
   const preferredWs = currentWorkspaceId || "default";
+  if (targetCategory === "tasks") {
+    const inWorkspaceByExactId = channels.find(
+      (c) =>
+        (c.workspaceId || "default") === preferredWs &&
+        String(c.id || "").trim() === baseId &&
+        String(c.name || "").trim().toLowerCase() === targetName
+    );
+    if (inWorkspaceByExactId) return inWorkspaceByExactId;
+  }
   const inWorkspace = byCategory.find((c) => (c.workspaceId || "default") === preferredWs);
   if (inWorkspace) return inWorkspace;
   if (byCategory.length) return byCategory[0];
@@ -14775,6 +15041,7 @@ async function openStaticChannel(item) {
   const name = item?.dataset?.channelName || "";
   const category = item?.dataset?.channelCategory || "classes";
   if (!name) return;
+  if (!canAccessTaskChannelByName(name)) return;
 
   let ch = findChannelByName(name, category);
   if (!ch) {
@@ -14817,6 +15084,10 @@ async function openStaticChannel(item) {
 function syncStaticChannelItems() {
   const items = getStaticChannelItems();
   items.forEach((item) => {
+    if (isTaskChannelName(item.dataset.channelName || "") && !canAccessTaskChannelByName(item.dataset.channelName || "")) {
+      item.removeAttribute("data-channel-id");
+      return;
+    }
     const ch = findChannelByName(item.dataset.channelName, item.dataset.channelCategory);
     if (ch) {
       item.dataset.channelId = ch.id;
@@ -14837,6 +15108,7 @@ function attachStaticChannelMoreButtons() {
         "Wordmeaning",
         "School Task",
         "Teachers Task",
+        "Student Tasks",
         "Schedule",
         "Exam Registration",
         "B1 Mock Test",
@@ -15043,7 +15315,7 @@ function buildChannelRow(ch) {
   if (isAnnouncementChannel(ch)) {
     icon.innerHTML = '<i class="fa-solid fa-bullhorn"></i>';
   } else if (isClassChannel) {
-    icon.innerHTML = '<i class="fa-solid fa-book-open"></i>';
+    icon.innerHTML = '<i class="fa-solid fa-users-rectangle"></i>';
   } else if (isTeacherChannel) {
     icon.innerHTML = '<i class="fa-solid fa-chalkboard-user"></i>';
   } else if (isExamChannelRow) {
@@ -15184,7 +15456,7 @@ function buildHomeworkRow(hwChannel, classChannel) {
 
   const icon = document.createElement("span");
   icon.className = "sidebar-item-icon homework-icon";
-  icon.innerHTML = '<i class="fa-solid fa-clipboard-check"></i>';
+  icon.innerHTML = '<i class="fa-solid fa-list-check"></i>';
 
   const label = document.createElement("span");
   label.className = "sidebar-item-label";
@@ -15230,7 +15502,7 @@ function buildHomeworkNoteRow(hwChannel, classChannel) {
   connector.className = "homework-connector";
   const icon = document.createElement("span");
   icon.className = "sidebar-item-icon homework-icon";
-  icon.innerHTML = '<i class="fa-solid fa-sticky-note"></i>';
+  icon.innerHTML = '<i class="fa-solid fa-note-sticky"></i>';
 
   const label = document.createElement("span");
   label.className = "sidebar-item-label";
@@ -15492,12 +15764,6 @@ async function renderChannels() {
         : "No class channels yet."
     );
   }
-  if (conversationClubChannels && !grouped.clubs.length) {
-    renderSidebarSectionEmpty(conversationClubChannels, "No club channels yet.");
-  }
-  if (examGroupsChannels && !grouped.exams.length) {
-    renderSidebarSectionEmpty(examGroupsChannels, "No exam channels yet.");
-  }
   if (teachersChannelsContainer && !grouped.teachers.length) {
     renderSidebarSectionEmpty(teachersChannelsContainer, "No teacher channels yet.");
   }
@@ -15512,6 +15778,7 @@ async function renderChannels() {
 
   renderAnnouncements();
   renderStarred();
+  updateTaskChannelVisibility();
   syncStaticChannelItems();
   attachStaticChannelMoreButtons();
   updateStaticChannelMoreVisibility();
@@ -15729,9 +15996,7 @@ function renderDMs() {
   dmListDeduped.forEach((dm) => {
     const key = `dm:${dm.id}`;
     const div = document.createElement("div");
-    div.className = "sidebar-item";
-    div.style.gap = "0";
-    div.style.paddingLeft = "4px";
+    div.className = "sidebar-item dm-sidebar-item";
     div.setAttribute("role", "button");
     div.setAttribute("tabindex", "0");
 
@@ -15739,14 +16004,7 @@ function renderDMs() {
     const display = dmDisplayName(dm);
     const avatarWrap = document.createElement("div");
     avatarWrap.className = "sidebar-item-icon";
-    avatarWrap.style.width = "34px";
-    avatarWrap.style.height = "34px";
-    avatarWrap.style.marginRight = "6px";
-    avatarWrap.style.borderRadius = "8px";
     avatarWrap.style.overflow = "hidden";
-    avatarWrap.style.display = "flex";
-    avatarWrap.style.alignItems = "center";
-    avatarWrap.style.justifyContent = "center";
     avatarWrap.classList.add("avatar", "avatar-sm");
     const initials = generateInitials(display) || "DM";
     const avatarUrl =
@@ -16057,6 +16315,26 @@ function renderChannelHeader(channelId) {
   const ch = getChannelById(channelId);
   if (!ch) return;
   const normalizedChannelName = String(ch.name || "").trim().toLowerCase();
+  const isHomework = isHomeworkChannel(ch);
+  const isNoteChannel = isHomeworkNoteChannel(ch.id) || normalizeChannelCategory(ch.category) === "notes";
+  const homeworkParentClassId = isHomework ? homeworkParentByChannelId.get(String(ch.id)) || null : null;
+  const homeworkParentClass = homeworkParentClassId ? getChannelById(homeworkParentClassId) : null;
+  const homeworkParentName = String(homeworkParentClass?.name || "").trim();
+  const noteParentClassId = isNoteChannel
+    ? String(ch.parentClassId || homeworkParentByChannelId.get(String(ch.id)) || "").trim()
+    : "";
+  const noteParentClass = noteParentClassId ? getChannelById(noteParentClassId) : null;
+  const noteParentName = String(noteParentClass?.name || homeworkParentName || "").trim();
+  const noteHeaderTitle = String(ch.name || "").trim() || "Note";
+  const noteHeaderSubtitle = noteParentName ? `Notes for ${noteParentName}` : "Shared notes for this class";
+  const homeworkHeaderTitle =
+    isHomework && homeworkParentName
+      ? `${homeworkParentName} Homework`
+      : String(ch.name || "").trim() || "Homework";
+  const homeworkHeaderSubtitle =
+    isHomework && homeworkParentName
+      ? `Homework for ${homeworkParentName}`
+      : "Homework for this class";
   const chatHeaderEl = document.getElementById("chatHeader");
   if (chatHeaderEl) {
     chatHeaderEl.dataset.channelId = String(ch.id || channelId || "");
@@ -16108,31 +16386,81 @@ function renderChannelHeader(channelId) {
   if (chatHeaderEl) {
     chatHeaderEl.classList.toggle("school-settings-header", isSchoolSettings);
     chatHeaderEl.classList.toggle("privacy-channel-active", isPrivacy);
+    chatHeaderEl.classList.toggle("homework-channel-header", isHomework && !isPrivacy);
+    chatHeaderEl.classList.toggle("note-channel-header", isNoteChannel && !isPrivacy);
   }
   if (headerChannelName) {
-    headerChannelName.textContent = isPrivacy ? "" : ch.name;
+    headerChannelName.textContent = isPrivacy
+      ? ""
+      : isNoteChannel
+        ? noteHeaderTitle
+        : isHomework
+          ? homeworkHeaderTitle
+          : ch.name;
   }
   if (headerChannelTopic) {
-    const rawTopic = isPrivacy ? "" : resolveSharedChannelTopic(ch);
+    const rawTopic = isPrivacy
+      ? ""
+      : isNoteChannel
+        ? noteHeaderSubtitle
+      : isHomework
+        ? homeworkHeaderSubtitle
+        : resolveSharedChannelTopic(ch);
     headerChannelTopic.textContent = rawTopic;
     headerChannelTopic.classList.toggle("hidden", !rawTopic);
   }
+  if (channelHeaderNoteMeta) {
+    channelHeaderNoteMeta.classList.toggle("hidden", !(isNoteChannel && !isPrivacy));
+    channelHeaderNoteMeta.setAttribute("aria-hidden", isNoteChannel && !isPrivacy ? "false" : "true");
+    if (isNoteChannel && !isPrivacy) {
+      const noteMessages = Array.isArray(messagesByChannel[ch.id]) ? messagesByChannel[ch.id] : [];
+      const latestMessage = noteMessages.length ? noteMessages[noteMessages.length - 1] : null;
+      const latestTs = latestMessage?.ts || latestMessage?.createdAt || latestMessage?.created_at || null;
+      const updatedLabel = latestTs ? formatRelativeTime(latestTs) : "No updates yet";
+      const creatorLabel =
+        latestMessage?.authorName ||
+        latestMessage?.author ||
+        latestMessage?.username ||
+        (noteParentName ? `${noteParentName} team` : "class team");
+      if (channelHeaderNoteMetaType) channelHeaderNoteMetaType.textContent = "Shared note space";
+      if (channelHeaderNoteMetaUpdated) channelHeaderNoteMetaUpdated.textContent = `Last updated ${updatedLabel}`;
+      if (channelHeaderNoteMetaPinned) channelHeaderNoteMetaPinned.textContent = "Pinned note";
+      if (channelHeaderNoteMetaAuthor) channelHeaderNoteMetaAuthor.textContent = `Created by ${creatorLabel}`;
+    }
+  }
   const isSchoolTaskChannel = normalizedChannelName === "school task";
   const isTeacherTaskChannel = normalizedChannelName === "teachers task";
+  const isStudentTaskChannel = normalizedChannelName === "student tasks";
   const isAnnouncementsChannel = normalizedChannelName === "announcements";
   const isWordmeaning = isWordmeaningChannel(ch);
+  const isClassesScopedHeader = isClassesScopedHeaderChannel(ch);
+  const canManageClassesHeader = canManageClassesHeaderControls(ch);
   const showRoleTabs =
-    !isPrivacy && !isTeacherTaskChannel && !isWordmeaning && !isAnnouncementsChannel && !isSpeakingPracticeChannel;
+    !isPrivacy && !isTeacherTaskChannel && !isStudentTaskChannel && !isWordmeaning && !isAnnouncementsChannel && !isSpeakingPracticeChannel;
   setChannelRoleTabsVisible(showRoleTabs);
   if (channelRoleTabs) {
     channelRoleTabs.classList.toggle("hidden", !showRoleTabs);
+    channelRoleTabs.classList.toggle("channel-role-tabs-readonly", isClassesScopedHeader && !canManageClassesHeader);
     channelRoleTabs
       .querySelectorAll('[data-role="student"]')
-      .forEach((btn) => btn.classList.toggle("hidden", isSchoolTaskChannel));
+      .forEach((btn) => btn.classList.toggle("hidden", isSchoolTaskChannel || isStudentTaskChannel));
+    channelRoleTabs.querySelectorAll(".member-pill").forEach((btn) => {
+      const roleKey = String(btn.dataset.role || "").toLowerCase();
+      const hideForStudent = isClassesScopedHeader && !canManageClassesHeader && roleKey === "admin";
+      const makeReadonly =
+        isClassesScopedHeader &&
+        !canManageClassesHeader &&
+        (roleKey === "student" || roleKey === "teacher");
+      btn.classList.toggle("hidden", hideForStudent || (isSchoolTaskChannel && roleKey === "student"));
+      btn.classList.toggle("member-pill-readonly", makeReadonly);
+      btn.setAttribute("aria-disabled", makeReadonly ? "true" : "false");
+      btn.tabIndex = makeReadonly ? -1 : 0;
+    });
   }
   if (chatHeaderEl) {
     chatHeaderEl.classList.toggle("school-task-header", isSchoolTaskChannel);
     chatHeaderEl.classList.toggle("teachers-task-header", isTeacherTaskChannel);
+    chatHeaderEl.classList.toggle("student-task-header", isStudentTaskChannel);
   }
   updateChannelRoleCounts([]);
   if (bannerChannelName) bannerChannelName.textContent = `#${ch.name}`;
@@ -16168,9 +16496,11 @@ function renderChannelHeader(channelId) {
       "hidden",
       isSchoolTaskChannel ||
         isTeacherTaskChannel ||
+        isStudentTaskChannel ||
         isWordmeaning ||
         hideForAnnouncements ||
-        isSpeakingPracticeChannel
+        isSpeakingPracticeChannel ||
+        (isClassesScopedHeader && !canManageClassesHeader)
     );
   }
   if (tasksBtn) {
@@ -16178,6 +16508,7 @@ function renderChannelHeader(channelId) {
       "hidden",
       isSchoolTaskChannel ||
         isTeacherTaskChannel ||
+        isStudentTaskChannel ||
         isWordmeaning ||
         hideForAnnouncements ||
         isSpeakingPracticeChannel
@@ -16205,6 +16536,9 @@ function renderChannelHeader(channelId) {
     headerPinBtn.title = pinned ? "Unpin channel" : "Pin channel";
     headerPinBtn.setAttribute("aria-label", headerPinBtn.title);
   }
+  if (toggleThreadColumnBtn) {
+    toggleThreadColumnBtn.hidden = true;
+  }
   if (headerMuteBtn) {
     headerMuteBtn.hidden = isPrivacy;
     if (!isPrivacy) {
@@ -16219,7 +16553,12 @@ function renderChannelHeader(channelId) {
   }
   if (headerClearCultureBtn) {
     const showClearBtn =
-      isAdminUser() && !isDmChannel(ch.id) && !isPrivacy && !isWordmeaning && !isSpeakingPracticeChannel;
+      ((isClassesScopedHeader && canManageClassesHeader) ||
+        (!isClassesScopedHeader && isAdminUser())) &&
+      !isDmChannel(ch.id) &&
+      !isPrivacy &&
+      !isWordmeaning &&
+      !isSpeakingPracticeChannel;
     headerClearCultureBtn.classList.toggle("hidden", !showClearBtn);
   }
   const hideComposerControls = isWordmeaning || hideForAnnouncements || isSpeakingPracticeChannel;
@@ -16490,36 +16829,8 @@ function wireAttendanceModal() {
 wireAttendanceModal();
 
 function ensureAttendanceButtonInChannelHeader(ch) {
-  const actions = document.querySelector("#chatHeader .header-actions");
-  if (!actions) return;
-  const normalizedCategory = normalizeChannelCategory(ch?.category);
-  const isClass = normalizedCategory === "classes";
-  const canManage = isAdminUser() || isTeacherUser();
   const existing = document.getElementById("attendanceHeaderBtn");
-  const normalizedChannelName = String(ch?.name || "").trim().toLowerCase();
-  const isSchoolTaskChannel = normalizedChannelName === "school task";
-  const isTeacherTaskChannel = normalizedChannelName === "teachers task";
-  if (isSchoolTaskChannel) {
-    if (existing) existing.remove();
-    return;
-  }
-  if (isTeacherTaskChannel) {
-    if (existing) existing.remove();
-    return;
-  }
-  if (!isClass || !canManage) {
-    if (existing) existing.remove();
-    return;
-  }
-  if (existing) return;
-  const btn = document.createElement("button");
-  btn.id = "attendanceHeaderBtn";
-  btn.type = "button";
-  btn.className = "ses-header-btn attendance-header-btn";
-  btn.setAttribute("aria-pressed", "false");
-  btn.innerHTML = `<i class="fa-solid fa-clipboard-check" aria-hidden="true"></i><span>Attendance</span>`;
-  btn.addEventListener("click", openAttendanceForCurrentClass);
-  actions.appendChild(btn);
+  if (existing) existing.remove();
 }
 
 function renderDmHeader(dmId) {
@@ -16532,7 +16843,10 @@ function renderDmHeader(dmId) {
       .map((m) => m && (m.name || m.username || m.email))
       .filter(Boolean)
       .join(" | ") || "Direct message";
-  if (headerChannelTopic) headerChannelTopic.textContent = memberNames;
+  if (headerChannelTopic) {
+    headerChannelTopic.textContent = memberNames;
+    headerChannelTopic.classList.toggle("hidden", !memberNames);
+  }
   setChannelRoleTabsVisible(false);
   if (bannerChannelName) bannerChannelName.textContent = label;
   if (headerChannelPrivacy) {
@@ -16547,6 +16861,7 @@ function renderDmHeader(dmId) {
   syncChannelSearchForChannel(`dm:${dmId}`);
   if (headerStarBtn) headerStarBtn.hidden = true;
   if (headerPinBtn) headerPinBtn.hidden = true;
+  if (toggleThreadColumnBtn) toggleThreadColumnBtn.hidden = true;
   if (headerMuteBtn) headerMuteBtn.hidden = true;
   if (headerClearCultureBtn) headerClearCultureBtn.classList.add("hidden");
   persistLastView({ channelId: `dm:${dmId}`, threadMessageId: null, threadChannelId: null });
@@ -16603,7 +16918,10 @@ async function handleClearCultureChannel(channelId = currentChannelId) {
   if (!channelId) return;
   const ch = getChannelById(channelId);
   if (!ch) return;
-  if (!isAdminUser()) {
+  const canClear =
+    (isClassesScopedHeaderChannel(ch) && canManageClassesHeaderControls(ch)) ||
+    (!isClassesScopedHeaderChannel(ch) && isAdminUser());
+  if (!canClear) {
     showToast("Only admins can clear chat.");
     return;
   }
@@ -16829,9 +17147,11 @@ function renderMessages(channelId, options = {}) {
   const normalizedChannelName = normalizedChannelNameInitial;
   const isSchoolTaskChannel = normalizedChannelName === "school task";
   const isTeacherTaskChannel = normalizedChannelName === "teachers task";
-  const isTaskStyleChannel = isSchoolTaskChannel || isTeacherTaskChannel;
+  const isStudentTaskChannel = normalizedChannelName === "student tasks";
+  const isTaskStyleChannel = isSchoolTaskChannel || isTeacherTaskChannel || isStudentTaskChannel;
   messagesContainer.classList.toggle("school-task-chat", isSchoolTaskChannel);
   messagesContainer.classList.toggle("teachers-task-chat", isTeacherTaskChannel);
+  messagesContainer.classList.toggle("student-task-chat", isStudentTaskChannel);
   const isMaterialsChannel = normalizedChannelName === "learning materials";
   const canManageMaterialPdfs = isMaterialsChannel && (isAdminUser() || isTeacherUser());
   const { restoreScroll = true } = options;
@@ -17572,6 +17892,7 @@ function renderSavedMessages() {
   if (!messagesContainer) return;
   messagesContainer.classList.remove("school-task-chat");
   messagesContainer.classList.remove("teachers-task-chat");
+  messagesContainer.classList.remove("student-task-chat");
   messagesContainer.innerHTML = "";
 
   const savedList = Object.values(savedMessagesById);
@@ -17786,6 +18107,12 @@ function renderSavedMessages() {
 // ===================== CHANNEL SELECTION =====================
 
 async function selectChannel(channelId) {
+  const targetChannel = getChannelById(channelId);
+  if (targetChannel && !canAccessTaskChannel(targetChannel)) {
+    showToast("You do not have access to this task channel.");
+    return;
+  }
+  closeAllUnreads();
   collapseClassSettingsView();
   if (
     !policyRedirecting &&
@@ -17797,6 +18124,7 @@ async function selectChannel(channelId) {
     await openPrivacyRulesChannel();
     return;
   }
+  const panelToken = showPanel("chatPanel");
   const previousChannelId = currentChannelId;
   const isSchoolSettings = isSchoolSettingsChannel(channelId);
   if (isSchoolSettings && previousChannelId && !isSchoolSettingsChannel(previousChannelId)) {
@@ -17830,6 +18158,9 @@ async function selectChannel(channelId) {
       showToast("Could not load messages");
       return;
     }
+    if (!isNavigationTokenCurrent(panelToken, "chatPanel") || currentChannelId !== channelId) {
+      return;
+    }
   } else if (!messagesByChannel[channelId]) {
     messagesByChannel[channelId] = [];
   }
@@ -17837,6 +18168,9 @@ async function selectChannel(channelId) {
   const cultureChannelActive = isCultureExchangeChannel(channelId);
   if (cultureChannelActive) {
     await loadCultureReadLanguageForChannel(channelId);
+    if (!isNavigationTokenCurrent(panelToken, "chatPanel") || currentChannelId !== channelId) {
+      return;
+    }
   } else {
     cultureExchangeLanguage = null;
   }
@@ -17920,6 +18254,7 @@ async function selectDM(dmId) {
     await openPrivacyRulesChannel();
     return;
   }
+  const panelToken = showPanel("chatPanel");
   showSavedOnly = false;
   exitDirectoryView();
   currentDmId = dmId;
@@ -17944,6 +18279,9 @@ async function selectDM(dmId) {
     } catch (err) {
       console.error("Failed to load DM messages", err);
       showToast("Could not load messages");
+      return;
+    }
+    if (!isNavigationTokenCurrent(panelToken, "chatPanel") || currentChannelId !== key) {
       return;
     }
   }
@@ -17991,7 +18329,8 @@ async function selectDM(dmId) {
 }
 
 function isTasksChannel(channelId) {
-  return TASKS_CHANNEL_IDS.has(String(channelId || "").toLowerCase());
+  const ch = getChannelById(channelId);
+  return isTaskChannelName(ch?.name || "");
 }
 
 function fmtTime(iso) {
@@ -18012,7 +18351,7 @@ function fmtTime(iso) {
 
 async function loadTasks(channelId) {
   const list = await fetchJSON(`/api/tasks?channelId=${encodeURIComponent(channelId)}`);
-  tasksCacheByChannel[channelId] = Array.isArray(list) ? list : [];
+  tasksCacheByChannel[channelId] = Array.isArray(list) ? list : Array.isArray(list?.tasks) ? list.tasks : [];
   return tasksCacheByChannel[channelId];
 }
 
@@ -18044,7 +18383,7 @@ async function addTaskComment(taskId, text) {
 
 async function loadTaskComments(taskId) {
   const rows = await fetchJSON(`/api/tasks/${encodeURIComponent(taskId)}/comments`);
-  tasksCommentsCache[taskId] = Array.isArray(rows) ? rows : [];
+  tasksCommentsCache[taskId] = Array.isArray(rows) ? rows : Array.isArray(rows?.comments) ? rows.comments : [];
   return tasksCommentsCache[taskId];
 }
 
@@ -22886,8 +23225,10 @@ if (closeAllUnreadsBtn) {
 }
 
 if (messagesRailBtn) {
-  messagesRailBtn.addEventListener("click", () => {
-    openAllUnreads();
+  messagesRailBtn.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    openRailSection("messages");
   });
 }
 
@@ -22948,16 +23289,18 @@ if (aiInput) {
 
 // Rail buttons
 if (homeRailBtn) {
-  homeRailBtn.addEventListener("click", () => {
-    showHomeView();
-    setActiveRailButton(homeRailBtn);
+  homeRailBtn.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    openRailSection("home");
   });
 }
 
 if (aiRailBtn) {
-  aiRailBtn.addEventListener("click", () => {
-    openAiAssistant();
-    setActiveRailButton(aiRailBtn);
+  aiRailBtn.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    openRailSection("ai");
   });
 }
 
@@ -24145,7 +24488,7 @@ async function completeLoginFlow(user) {
   }
   updateAdminButtonState();
 
-  await bootstrapAfterAuth(user, { showToastOnLogin: true });
+  await bootstrapAfterAuth(user, { showToastOnLogin: true, hydrateApp: true });
 }
 
 async function handleMainLogin() {
@@ -24704,62 +25047,69 @@ function setupRealtimeEvents() {
 
 // ===================== INIT =====================
 async function init() {
-  loadDeepLinkTarget();
-  refreshCultureExchangeLanguagePreference();
-  updateAdminButtonState();
-  loadDensity();
-  loadSavedMessages();
-  initPinnedCollapse();
-  initSidebarSectionCollapsibles();
-  renderPendingAttachments();
-  processUploadQueue();
-  const hasSession = await tryAutoAuth();
-  if (!hasSession) {
-    updateAdminButtonState();
-    return;
-  }
-  updateAdminButtonState();
-  await loadServerData();
-  renderChannels();
-  renderDMs();
-  renderWorkspaces();
-  renderCommandLists();
-  let savedRailView = "messages";
+  showPageLoader();
   try {
-    savedRailView = localStorage.getItem(LAST_RAIL_VIEW_KEY) || "messages";
-  } catch (_err) {
-    savedRailView = "messages";
-  }
-  if (isPolicyAcceptanceRequired() && !policyAccepted) {
-    await openPrivacyRulesChannel();
-  }
-  if (sidebarScroll) {
-    const savedSidebarTop = loadSidebarScroll();
-    sidebarScroll.scrollTop = savedSidebarTop;
-  }
-  setupRealtimeEvents();
-  if (typeof initCalendarIfNeeded === "function") {
-    initCalendarIfNeeded();
-  }
-  if (typingIndicator) typingIndicator.style.opacity = "0.3";
-  if (recordingOverlay) recordingOverlay.hidden = true;
-  if (channels.length) {
-    if (!channels.some((c) => c.id === currentChannelId) && !isSchoolSettingsChannel(currentChannelId)) {
-      currentChannelId = channels[0].id;
+    loadDeepLinkTarget();
+    refreshCultureExchangeLanguagePreference();
+    updateAdminButtonState();
+    loadDensity();
+    loadSavedMessages();
+    initPinnedCollapse();
+    initSidebarSectionCollapsibles();
+    renderPendingAttachments();
+    processUploadQueue();
+    const hasSession = await tryAutoAuth();
+    if (!hasSession) {
+      updateAdminButtonState();
+      return;
     }
-    if (deepLinkTarget) {
-      applyDeepLinkSelection();
-    } else if (!didRestoreView) {
-      selectChannel(currentChannelId);
+    updateAdminButtonState();
+    await loadServerData();
+    renderChannels();
+    renderDMs();
+    renderWorkspaces();
+    renderCommandLists();
+    let savedRailView = "messages";
+    try {
+      savedRailView = localStorage.getItem(LAST_RAIL_VIEW_KEY) || "messages";
+    } catch (_err) {
+      savedRailView = "messages";
     }
-  } else if (messagesContainer) {
-    messagesContainer.innerHTML = "";
-  }
-  renderPinnedSidebar();
-  setupDensityToggle();
-  refreshMessageBadge();
-  if (savedRailView === "email") {
-    await openEmailPanel();
+    if (isPolicyAcceptanceRequired() && !policyAccepted) {
+      await openPrivacyRulesChannel();
+    }
+    if (sidebarScroll) {
+      const savedSidebarTop = loadSidebarScroll();
+      sidebarScroll.scrollTop = savedSidebarTop;
+    }
+    setupRealtimeEvents();
+    if (typeof initCalendarIfNeeded === "function") {
+      initCalendarIfNeeded();
+    }
+    if (typingIndicator) typingIndicator.style.opacity = "0.3";
+    if (recordingOverlay) recordingOverlay.hidden = true;
+    if (channels.length) {
+      if (!channels.some((c) => c.id === currentChannelId) && !isSchoolSettingsChannel(currentChannelId)) {
+        currentChannelId = channels[0].id;
+      }
+      if (deepLinkTarget) {
+        applyDeepLinkSelection();
+      } else if (!didRestoreView) {
+        showHomeView();
+      }
+    } else if (messagesContainer) {
+      messagesContainer.innerHTML = "";
+    }
+    renderPinnedSidebar();
+    setupDensityToggle();
+    refreshMessageBadge();
+    if (savedRailView === "email") {
+      await openEmailPanel();
+    } else if (savedRailView === "analytics") {
+      openAnalyticsPanel();
+    }
+  } finally {
+    hidePageLoader();
   }
 }
 init();
@@ -24846,6 +25196,9 @@ if (dmCreateSave) {
     channelRoleTabs.addEventListener("click", (e) => {
       const target = e.target.closest(".member-pill");
       if (!target) return;
+      if (target.classList.contains("member-pill-readonly") || target.getAttribute("aria-disabled") === "true") {
+        return;
+      }
       const role = target.dataset.role;
       if (!role) return;
       openChannelMembersModal(role);

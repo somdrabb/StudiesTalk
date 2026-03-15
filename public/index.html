@@ -43,7 +43,7 @@
 </head>
 
 
-<body>
+<body class="startup-loading">
   <!-- Accessibility: Skip navigation -->
 <a class="skip-link" href="#mainContent">Skip to messages</a>
 
@@ -55,17 +55,14 @@
   aria-live="polite"
   aria-label="Loading application"
 >
-  <div class="loader-wrap">
-    <img
-      src="assets/icons8-chat.gif"
-      class="loader-logo"
-      alt=""
-      aria-hidden="true"
-    />
-    <span class="loader-sheen" aria-hidden="true"></span>
+  <div class="loader-splash">
+    <div class="loader-bars" aria-hidden="true">
+      <span class="loader-bar loader-bar-black"></span>
+      <span class="loader-bar loader-bar-red"></span>
+      <span class="loader-bar loader-bar-gold"></span>
+    </div>
+    <div class="loader-copy">Wird geladen...</div>
   </div>
-
-  <span class="visually-hidden">Loading…</span>
 </div>
 
 
@@ -157,10 +154,8 @@
       type="button"
       title="Notifications"
       aria-label="Notifications">
-      <img src="assets/bell.png"
-           alt=""
-           class="rail-icon-img"
-           aria-hidden="true" />
+      <i class="fa-solid fa-bell rail-icon-img"
+         aria-hidden="true"></i>
       <span class="rail-badge"
             id="notificationBadge"
             aria-live="polite"
@@ -176,10 +171,8 @@
       type="button"
       title="Messages"
       aria-label="Messages">
-      <img src="assets/chat.png"
-           alt=""
-           class="rail-icon-img"
-           aria-hidden="true" />
+      <i class="fa-solid fa-comments rail-icon-img"
+         aria-hidden="true"></i>
       <span class="rail-badge rail-badge-blue"
             id="messageBadge"
             aria-live="polite"
@@ -195,10 +188,8 @@
       type="button"
       title="Files"
       aria-label="Files">
-      <img src="assets/Files.png"
-           alt=""
-           class="rail-icon-img"
-           aria-hidden="true" />
+      <i class="fa-solid fa-folder-open rail-icon-img"
+         aria-hidden="true"></i>
     </button>
 
     <!-- Calendar -->
@@ -208,10 +199,8 @@
       type="button"
       title="Calendar"
       aria-label="Calendar">
-      <img src="assets/calendar.png"
-           alt=""
-           class="rail-icon-img"
-           aria-hidden="true" />
+      <i class="fa-solid fa-calendar-days rail-icon-img"
+         aria-hidden="true"></i>
     </button>
 
     <!-- AI Assistant -->
@@ -232,10 +221,8 @@
       type="button"
       title="Analytics"
       aria-label="Analytics">
-      <img src="assets/visual-data.png"
-           alt=""
-           class="rail-icon-img"
-           aria-hidden="true" />
+      <i class="fa-solid fa-chart-column rail-icon-img"
+         aria-hidden="true"></i>
     </button>
 
     <!-- Live Class Hub -->
@@ -371,7 +358,7 @@
           class="classes-header-label section-accent section-accent-classes"
           data-branch-accent="classes"
         >
-          <span class="classes-header-icon">📚</span>
+          <span class="classes-header-icon"><i class="fa-solid fa-school" aria-hidden="true"></i></span>
           Classes
         </span>
 
@@ -393,7 +380,7 @@
 <section id="teachersSection" class="sidebar-section" data-collapsible="true" aria-label="Teachers" hidden>
   <header class="sidebar-section-header">
     <span class="section-accent" data-branch-accent="teachers">
-      <i class="fa-solid fa-user-tie" aria-hidden="true"></i>
+      <i class="fa-solid fa-chalkboard-user" aria-hidden="true"></i>
       <span>Teachers</span>
     </span>
   </header>
@@ -500,7 +487,7 @@
           data-static-channel="1"
         >
           <span class="branch-connector"></span>
-          <span class="sidebar-item-icon"><i class="fa-solid fa-pen-nib" aria-hidden="true"></i></span>
+          <span class="sidebar-item-icon"><i class="fa-solid fa-clipboard-check" aria-hidden="true"></i></span>
           <span class="sidebar-item-label">Mock Tests</span>
           <div class="sidebar-item-meta"></div>
         </div>
@@ -515,7 +502,7 @@
           data-static-channel="1"
         >
           <span class="branch-connector"></span>
-          <span class="sidebar-item-icon"><i class="fa-solid fa-file-lines" aria-hidden="true"></i></span>
+          <span class="sidebar-item-icon"><i class="fa-solid fa-file-pen" aria-hidden="true"></i></span>
           <span class="sidebar-item-label">Placement Test</span>
           <div class="sidebar-item-meta"></div>
         </div>
@@ -530,7 +517,7 @@
           data-static-channel="1"
         >
           <span class="branch-connector"></span>
-          <span class="sidebar-item-icon"><i class="fa-solid fa-clipboard-check" aria-hidden="true"></i></span>
+          <span class="sidebar-item-icon"><i class="fa-solid fa-graduation-cap" aria-hidden="true"></i></span>
           <span class="sidebar-item-label">Final Exams</span>
           <div class="sidebar-item-meta"></div>
         </div>
@@ -543,7 +530,7 @@
     <section class="sidebar-section" id="appsSection" aria-label="School tools">
       <div class="sidebar-section-header">
         <span data-branch-accent="tools">
-          <i class="fa-solid fa-toolbox" aria-hidden="true"></i>
+          <i class="fa-solid fa-screwdriver-wrench" aria-hidden="true"></i>
           School Tools
         </span>
 
@@ -571,7 +558,9 @@
           data-static-channel="1"
         >
           <span class="branch-connector"></span>
-          <span class="sidebar-item-icon school-tool-icon tool-announcements">📢</span>
+          <span class="sidebar-item-icon school-tool-icon tool-announcements">
+            <i class="fa-solid fa-bullhorn" aria-hidden="true"></i>
+          </span>
           <span class="sidebar-item-label">Announcements</span>
           <div class="sidebar-item-meta"></div>
         </div>
@@ -586,7 +575,9 @@
           data-static-channel="1"
         >
           <span class="branch-connector"></span>
-          <span class="sidebar-item-icon school-tool-icon tool-materials">📁</span>
+          <span class="sidebar-item-icon school-tool-icon tool-materials">
+            <i class="fa-solid fa-folder-open" aria-hidden="true"></i>
+          </span>
           <span class="sidebar-item-label">Learning Materials</span>
           <div class="sidebar-item-meta"></div>
         </div>
@@ -618,7 +609,9 @@
           data-static-channel="1"
         >
           <span class="branch-connector"></span>
-          <span class="sidebar-item-icon school-tool-icon tool-wordmeaning">📖</span>
+          <span class="sidebar-item-icon school-tool-icon tool-wordmeaning">
+            <i class="fa-solid fa-book-open" aria-hidden="true"></i>
+          </span>
           <span class="sidebar-item-label">Wordmeaning</span>
           <div class="sidebar-item-meta"></div>
         </div>
@@ -633,7 +626,9 @@
           data-static-channel="1"
         >
           <span class="branch-connector"></span>
-          <span class="sidebar-item-icon school-tool-icon tool-listening">🎧</span>
+          <span class="sidebar-item-icon school-tool-icon tool-listening">
+            <i class="fa-solid fa-headphones" aria-hidden="true"></i>
+          </span>
           <span class="sidebar-item-label">Listening Practice</span>
           <div class="sidebar-item-meta"></div>
         </div>
@@ -648,7 +643,9 @@
           data-static-channel="1"
         >
           <span class="branch-connector"></span>
-          <span class="sidebar-item-icon school-tool-icon tool-grammar">📝</span>
+          <span class="sidebar-item-icon school-tool-icon tool-grammar">
+            <i class="fa-solid fa-spell-check" aria-hidden="true"></i>
+          </span>
           <span class="sidebar-item-label">Grammar</span>
           <div class="sidebar-item-meta"></div>
         </div>
@@ -683,7 +680,7 @@
         >
           <span class="branch-connector"></span>
           <span class="sidebar-item-icon school-tool-icon tool-exam">
-            <i class="fa-solid fa-pen-to-square" aria-hidden="true"></i>
+            <i class="fa-solid fa-file-signature" aria-hidden="true"></i>
           </span>
           <span class="sidebar-item-label">Exam Registration</span>
           <div class="sidebar-item-meta"></div>
@@ -699,7 +696,9 @@
           data-static-channel="1"
         >
           <span class="branch-connector"></span>
-          <span class="sidebar-item-icon school-tool-icon tool-privacy">🔒</span>
+          <span class="sidebar-item-icon school-tool-icon tool-privacy">
+            <i class="fa-solid fa-lock" aria-hidden="true"></i>
+          </span>
           <span class="sidebar-item-label">Privacy &amp; Rules</span>
           <div class="sidebar-item-meta"></div>
         </div>
@@ -760,13 +759,28 @@
           <span class="sidebar-item-label">Teachers Task</span>
           <div class="sidebar-item-meta"></div>
         </div>
+
+        <div
+          class="sidebar-item branch-row branch-sub"
+          role="button"
+          tabindex="0"
+          aria-label="Student Tasks"
+          data-channel-name="Student Tasks"
+          data-channel-category="tasks"
+          data-static-channel="1"
+        >
+          <span class="branch-connector"></span>
+          <span class="sidebar-item-icon tool-student-task"><i class="fa-solid fa-user-graduate" aria-hidden="true"></i></span>
+          <span class="sidebar-item-label">Student Tasks</span>
+          <div class="sidebar-item-meta"></div>
+        </div>
       </div>
     </section>
 
     <!-- Administration -->
     <section class="sidebar-section" id="adminToolsSection" data-collapsible="true" aria-label="Administration">
       <div class="sidebar-section-header">
-        <span>⚙️ Administration</span>
+        <span><i class="fa-solid fa-user-shield" aria-hidden="true"></i> Administration</span>
       </div>
 
       <div class="sidebar-items" id="adminToolsContainer">
@@ -790,7 +804,7 @@
 
         <div class="sidebar-item admin-subitem branch-row branch-sub" id="openClassSettingsList" role="button" tabindex="0" aria-label="Class settings">
           <span class="branch-connector"></span>
-          <span class="sidebar-item-icon"><i class="fa-solid fa-chalkboard" aria-hidden="true"></i></span>
+          <span class="sidebar-item-icon"><i class="fa-solid fa-sliders" aria-hidden="true"></i></span>
           <span class="sidebar-item-label">Class settings</span>
           <div class="sidebar-item-meta"></div>
         </div>
@@ -806,14 +820,14 @@
 
         <div class="sidebar-item admin-subitem branch-row branch-sub" id="openStudentRegistration" role="button" tabindex="0" aria-label="Student Registration">
           <span class="branch-connector"></span>
-          <span class="sidebar-item-icon">➕</span>
+          <span class="sidebar-item-icon"><i class="fa-solid fa-user-plus" aria-hidden="true"></i></span>
           <span class="sidebar-item-label">Student Registration</span>
           <div class="sidebar-item-meta"></div>
         </div>
 
         <div class="sidebar-item admin-subitem branch-row branch-sub" id="openTeacherRegistration" role="button" tabindex="0" aria-label="Teacher Registration">
           <span class="branch-connector"></span>
-          <span class="sidebar-item-icon">➕</span>
+          <span class="sidebar-item-icon"><i class="fa-solid fa-user-pen" aria-hidden="true"></i></span>
           <span class="sidebar-item-label">Teacher Registration</span>
           <div class="sidebar-item-meta"></div>
         </div>
@@ -828,155 +842,264 @@
 <main class="main-area" id="mainContent" tabindex="-1" aria-label="Chat">
   <!-- Top bar with channel info + search + density toggle -->
   <header id="chatHeader" class="main-header chat-header">
-    <!-- Left: Channel meta -->
-    <div class="channel-meta">
-      <div class="channel-line-1">
-        <span class="channel-type-icon" aria-hidden="true"></span>
-        <h1 id="headerChannelName">general</h1>
+    <div class="channel-header">
+      <div class="channel-header-top">
+        <div class="channel-header-left channel-header-main channel-meta">
+          <div class="channel-line-1">
+            <div class="channel-title-group">
+              <span class="channel-type-icon" aria-hidden="true"></span>
+              <h1 id="headerChannelName">general</h1>
+              <span class="channel-pill" id="headerChannelPrivacy">Public</span>
+              <div
+                class="channel-level-buttons hidden"
+                id="channelLevelButtons"
+                role="group"
+                aria-label="Placement test levels"
+              >
+                <button type="button" class="channel-level-btn">A1</button>
+                <button type="button" class="channel-level-btn">A2</button>
+                <button type="button" class="channel-level-btn">B1</button>
+                <button type="button" class="channel-level-btn">B2</button>
+                <button type="button" class="channel-level-btn">C1</button>
+                <button type="button" class="channel-level-btn">C2</button>
+              </div>
 
-        <div class="school-email-header-actions" id="schoolEmailHeaderActions">
-          <button class="ses-header-btn" id="sesSentBtn" type="button">
-            <i class="fa-solid fa-pen" aria-hidden="true"></i>
-            Compose
-          </button>
+              <button
+                class="channel-pill channel-language-pill hidden"
+                id="headerChannelLanguageBtn"
+                type="button"
+                aria-label="Native language"
+              >
+                Language
+              </button>
+            </div>
 
-          <button class="ses-header-btn" id="sesHistoryBtn" type="button">
-            <i class="fa-solid fa-history" aria-hidden="true"></i>
-            <span>Sent</span>
-          </button>
+            <div class="school-email-header-actions" id="schoolEmailHeaderActions">
+              <button class="ses-header-btn" id="sesSentBtn" type="button">
+                <i class="fa-solid fa-pen" aria-hidden="true"></i>
+                Compose
+              </button>
 
-          <button class="ses-header-btn" id="sesFormatBtn" type="button">Email format</button>
-          <button class="ses-header-btn" id="sesInboxBtn" type="button">Inbox</button>
-          <button class="ses-header-btn" id="sesTrashBtn" type="button">
-            <i class="fa-regular fa-trash-can" aria-hidden="true"></i>
-            <span>Trash</span>
-          </button>
+              <button class="ses-header-btn" id="sesHistoryBtn" type="button">
+                <i class="fa-solid fa-history" aria-hidden="true"></i>
+                <span>Sent</span>
+              </button>
+
+              <button class="ses-header-btn" id="sesFormatBtn" type="button">Email format</button>
+              <button class="ses-header-btn" id="sesInboxBtn" type="button">Inbox</button>
+              <button class="ses-header-btn" id="sesTrashBtn" type="button">
+                <i class="fa-regular fa-trash-can" aria-hidden="true"></i>
+                <span>Trash</span>
+              </button>
+            </div>
+
+            <div class="channel-speaking-practice-badges" id="speakingPracticeHeaderBadges">
+              <span class="status-chip" id="aiBudgetChip">Budget: …</span>
+              <span class="status-chip status-chip--soft" id="aiStatusChip">Idle</span>
+            </div>
+          </div>
         </div>
 
-        <div class="channel-line-actions" id="headerLineActions">
-      <button
-        class="icon-btn channel-action-btn"
-        id="headerStarBtn"
-        type="button"
-        aria-label="Star channel"
-      >
-        <i class="fa-regular fa-star"></i>
-      </button>
+        <div class="channel-header-center">
+          <div class="channel-header-search">
+            <div class="channel-search topbar-search-shell">
+              <input
+                id="channelSearchInput"
+                type="text"
+                placeholder="Search this channel…"
+                autocomplete="off"
+              />
 
-      <button
-        class="icon-btn channel-action-btn"
-        id="headerPinBtn"
-        type="button"
-        aria-label="Pin channel"
-      >
-        <i class="fa-solid fa-thumbtack"></i>
-      </button>
+              <button
+                class="channel-search-btn"
+                id="channelSearchBtn"
+                type="button"
+                title="Search this channel"
+                aria-label="Search this channel"
+              >
+                <i class="fa-solid fa-magnifying-glass"></i>
+              </button>
 
-      <button
-        class="icon-btn channel-action-btn header-toggle-column"
-        id="toggleThreadColumnBtn"
-        type="button"
-        aria-label="Hide right column"
-        title="Hide right column"
-        aria-pressed="false"
-      >
-        <i class="fa-solid fa-chevron-left" aria-hidden="true"></i>
-      </button>
+              <div
+                id="channelSearchResults"
+                class="channel-search-results hidden"
+                role="listbox"
+                aria-live="polite"
+              ></div>
+            </div>
+          </div>
+        </div>
 
-          <span class="channel-pill" id="headerChannelPrivacy">Public</span>
+        <div class="channel-header-right header-actions">
+          <div class="channel-line-actions" id="headerLineActions">
+            <button
+              class="icon-btn channel-action-btn"
+              id="headerStarBtn"
+              type="button"
+              aria-label="Star channel"
+            >
+              <i class="fa-regular fa-star"></i>
+            </button>
+
+            <button
+              class="icon-btn channel-action-btn"
+              id="headerPinBtn"
+              type="button"
+              aria-label="Pin channel"
+            >
+              <i class="fa-solid fa-thumbtack"></i>
+            </button>
+
+            <button
+              class="icon-btn channel-action-btn header-toggle-column"
+              id="toggleThreadColumnBtn"
+              type="button"
+              aria-label="Hide right column"
+              title="Hide right column"
+              aria-pressed="false"
+            >
+              <i class="fa-solid fa-chevron-left" aria-hidden="true"></i>
+            </button>
+          </div>
+
           <div
-            class="channel-level-buttons hidden"
-            id="channelLevelButtons"
-            role="group"
-            aria-label="Placement test levels"
+            id="cultureHeaderControls"
+            class="culture-header-controls hidden"
+            aria-label="Culture language controls"
           >
-            <button type="button" class="channel-level-btn">A1</button>
-            <button type="button" class="channel-level-btn">A2</button>
-            <button type="button" class="channel-level-btn">B1</button>
-            <button type="button" class="channel-level-btn">B2</button>
-            <button type="button" class="channel-level-btn">C1</button>
-            <button type="button" class="channel-level-btn">C2</button>
+            <label class="culture-control">
+              <span class="culture-label">Read in</span>
+              <select id="cultureReadLangSelect"></select>
+            </label>
+
+            <label class="culture-control">
+              <span class="culture-label">I write in</span>
+              <select id="cultureWriteLangSelect"></select>
+            </label>
           </div>
 
           <button
-            class="channel-pill channel-language-pill hidden"
-            id="headerChannelLanguageBtn"
+            class="header-attendance-btn hidden"
+            id="channelAttendanceBtn"
             type="button"
-            aria-label="Native language"
+            title="Attendance"
+            aria-label="Attendance"
           >
-            Language
+            <i class="fa-solid fa-clipboard-check"></i>
+            <span>Attendance</span>
           </button>
-        </div>
-        <div class="channel-speaking-practice-badges" id="speakingPracticeHeaderBadges">
-          <span class="status-chip" id="aiBudgetChip">Budget: …</span>
-          <span class="status-chip status-chip--soft" id="aiStatusChip">Idle</span>
+
+          <button
+            class="clear-culture-btn hidden"
+            id="headerClearCultureBtn"
+            type="button"
+            title="Clear chat"
+            aria-label="Clear chat"
+          >
+            <i class="fa-solid fa-broom"></i>
+            <span>Clear chat</span>
+          </button>
+
+          <button
+            id="tasksBtn"
+            class="icon-pill"
+            type="button"
+            title="Tasks"
+            aria-label="Tasks"
+          >
+            <i class="fa-solid fa-list-check"></i>
+          </button>
+
+          <button
+            class="icon-btn"
+            id="headerMuteBtn"
+            type="button"
+            title="Mute channel"
+            aria-label="Mute channel"
+          >
+            <i class="fa-solid fa-volume-xmark"></i>
+          </button>
+
+          <button
+            class="icon-btn channel-add-btn hidden"
+            id="channelAddMemberBtn"
+            type="button"
+            title="Add members"
+            aria-label="Add members"
+          >
+            <i class="fa-solid fa-user-plus"></i>
+          </button>
+
+          <button
+            class="icon-btn dm-add-btn hidden"
+            id="dmAddMemberBtn"
+            title="Add people to this DM"
+            aria-label="Add people to this DM"
+            type="button"
+          >
+            <i class="fa-solid fa-user-plus"></i>
+          </button>
+
+          <button
+            class="icon-btn dm-add-btn hidden"
+            id="dmEditMemberBtn"
+            title="Edit members"
+            aria-label="Edit members"
+            type="button"
+          >
+            <i class="fa-solid fa-user-pen"></i>
+          </button>
         </div>
       </div>
 
-      <div class="channel-line-2">
-        <span id="headerChannelTopic">Welcome to WorkNest</span>
-
-        <div class="channel-role-tabs" id="channelRoleTabs">
-          <button
-            type="button"
-            class="member-pill"
-            data-role="student"
-            aria-label="View students"
-          >
-            <i class="fa-solid fa-user-graduate"></i>
-            <span id="headerMemberCountStudents">0</span> Students
-          </button>
-
-          <button
-            type="button"
-            class="member-pill"
-            data-role="teacher"
-            aria-label="View teachers"
-          >
-            <i class="fa-solid fa-chalkboard-user"></i>
-            <span id="headerMemberCountTeachers">0</span> Teachers
-          </button>
-
-          <button
-            type="button"
-            class="member-pill"
-            data-role="admin"
-            aria-label="View admins"
-          >
-            <i class="fa-solid fa-shield-halved"></i>
-            <span id="headerMemberCountAdmins">0</span> Admins
-          </button>
-
-          <button
-            type="button"
-            class="member-pill docs-pill hidden"
-            id="headerDocCountBtn"
-            aria-label="Learning materials document count"
-          >
-            <i class="fa-solid fa-file-lines"></i>
-            <span id="headerDocCountValue">0</span> Docs
-          </button>
+      <div class="channel-header-bottom">
+        <div class="channel-header-description channel-line-2">
+          <span id="headerChannelTopic">Welcome to WorkNest</span>
         </div>
 
-        <button
-          class="icon-btn dm-add-btn hidden"
-          id="dmAddMemberBtn"
-          title="Add people to this DM"
-          aria-label="Add people to this DM"
-          type="button"
-        >
-          <i class="fa-solid fa-user-plus"></i>
-        </button>
+        <div class="channel-header-meta">
+          <div class="channel-role-tabs" id="channelRoleTabs">
+            <button
+              type="button"
+              class="member-pill"
+              data-role="student"
+              aria-label="View students"
+            >
+              <i class="fa-solid fa-user-graduate"></i>
+              <span id="headerMemberCountStudents">0</span> Students
+            </button>
 
-        <button
-          class="icon-btn dm-add-btn hidden"
-          id="dmEditMemberBtn"
-          title="Edit members"
-          aria-label="Edit members"
-          type="button"
-        >
-          <i class="fa-solid fa-user-pen"></i>
-        </button>
+            <button
+              type="button"
+              class="member-pill"
+              data-role="teacher"
+              aria-label="View teachers"
+            >
+              <i class="fa-solid fa-chalkboard-user"></i>
+              <span id="headerMemberCountTeachers">0</span> Teachers
+            </button>
+
+            <button
+              type="button"
+              class="member-pill"
+              data-role="admin"
+              aria-label="View admins"
+            >
+              <i class="fa-solid fa-shield-halved"></i>
+              <span id="headerMemberCountAdmins">0</span> Admins
+            </button>
+
+            <button
+              type="button"
+              class="member-pill docs-pill hidden"
+              id="headerDocCountBtn"
+              aria-label="Learning materials document count"
+            >
+              <i class="fa-solid fa-file-lines"></i>
+              <span id="headerDocCountValue">0</span> Docs
+            </button>
+          </div>
+        </div>
       </div>
 
       <div class="privacy-channel-header hidden" id="privacyChannelHeader">
@@ -1033,103 +1156,6 @@
           <span>Enable live session email notifications</span>
         </label>
       </div>
-    </div>
-
-    <!-- Right: Header actions -->
-    <div class="header-actions">
-      <div class="channel-search">
-        <input
-          id="channelSearchInput"
-          type="text"
-          placeholder="Search this channel…"
-          autocomplete="off"
-        />
-
-        <button
-          class="channel-search-btn"
-          id="channelSearchBtn"
-          type="button"
-          title="Search this channel"
-          aria-label="Search this channel"
-        >
-          <i class="fa-solid fa-magnifying-glass"></i>
-        </button>
-
-        <div
-          id="channelSearchResults"
-          class="channel-search-results hidden"
-          role="listbox"
-          aria-live="polite"
-        ></div>
-      </div>
-
-      <div
-        id="cultureHeaderControls"
-        class="culture-header-controls hidden"
-        aria-label="Culture language controls"
-      >
-        <label class="culture-control">
-          <span class="culture-label">Read in</span>
-          <select id="cultureReadLangSelect"></select>
-        </label>
-
-        <label class="culture-control">
-          <span class="culture-label">I write in</span>
-          <select id="cultureWriteLangSelect"></select>
-        </label>
-      </div>
-
-      <button
-        class="header-attendance-btn hidden"
-        id="channelAttendanceBtn"
-        type="button"
-        title="Attendance"
-        aria-label="Attendance"
-      >
-        <i class="fa-solid fa-clipboard-check"></i>
-        <span>Attendance</span>
-      </button>
-
-      <button
-        class="clear-culture-btn hidden"
-        id="headerClearCultureBtn"
-        type="button"
-        title="Clear chat"
-        aria-label="Clear chat"
-      >
-        <i class="fa-solid fa-broom"></i>
-        <span>Clear chat</span>
-      </button>
-
-      <button
-        id="tasksBtn"
-        class="icon-pill"
-        type="button"
-        title="Tasks"
-        aria-label="Tasks"
-      >
-        <i class="fa-solid fa-list-check"></i>
-      </button>
-
-      <button
-        class="icon-btn"
-        id="headerMuteBtn"
-        type="button"
-        title="Mute channel"
-        aria-label="Mute channel"
-      >
-        <i class="fa-solid fa-volume-xmark"></i>
-      </button>
-
-      <button
-        class="icon-btn channel-add-btn hidden"
-        id="channelAddMemberBtn"
-        type="button"
-        title="Add members"
-        aria-label="Add members"
-      >
-        <i class="fa-solid fa-user-plus"></i>
-      </button>
     </div>
   </header>
 
@@ -1833,7 +1859,7 @@
       </div>
 
       <div class="mbx-actions">
-        <input class="mbx-search" id="mbxSearch" placeholder="Search mail" autocomplete="off" />
+        <input class="mbx-search topbar-search-input" id="mbxSearch" placeholder="Search mail" autocomplete="off" />
         <button class="btn-ghost" id="btnRefresh" type="button">Refresh</button>
         <button class="btn-ghost" id="btnMarkAllRead" type="button">Mark all read</button>
       </div>
@@ -1962,7 +1988,7 @@
             <input
               type="text"
               id="classSettingsSearch"
-              class="settings-search"
+              class="settings-search topbar-search-input"
               placeholder="Search class..."
             />
           </div>
@@ -2581,11 +2607,62 @@
   <!-- Analytics -->
   <section id="analyticsPanel" class="main-panel hidden">
     <div class="analytics-shell">
-      <div class="analytics-loading">
-        <div class="analytics-loading-card">
-          <div class="analytics-loading-title">Loading school analytics…</div>
-          <div class="analytics-loading-subtitle">
-            Preparing class health, teacher workload, and student engagement.
+      <div class="analytics-loading analytics-loading--dashboard">
+        <div class="analytics-skeleton-shell">
+          <div class="analytics-skeleton-topbar analytics-skeleton-block"></div>
+
+          <div class="analytics-skeleton-hero">
+            <div class="analytics-skeleton-hero-main analytics-skeleton-panel">
+              <div class="analytics-skeleton-line analytics-skeleton-line--sm analytics-skeleton-block"></div>
+              <div class="analytics-skeleton-line analytics-skeleton-line--xl analytics-skeleton-block"></div>
+              <div class="analytics-skeleton-line analytics-skeleton-line--lg analytics-skeleton-block"></div>
+              <div class="analytics-skeleton-pills">
+                <span class="analytics-skeleton-pill analytics-skeleton-block"></span>
+                <span class="analytics-skeleton-pill analytics-skeleton-block"></span>
+                <span class="analytics-skeleton-pill analytics-skeleton-block"></span>
+              </div>
+            </div>
+            <div class="analytics-skeleton-hero-side analytics-skeleton-panel">
+              <div class="analytics-skeleton-line analytics-skeleton-line--md analytics-skeleton-block"></div>
+              <div class="analytics-skeleton-control analytics-skeleton-block"></div>
+              <div class="analytics-skeleton-control analytics-skeleton-block"></div>
+              <div class="analytics-skeleton-control analytics-skeleton-block"></div>
+            </div>
+          </div>
+
+          <div class="analytics-skeleton-stats">
+            <div class="analytics-skeleton-stat analytics-skeleton-panel analytics-skeleton-block"></div>
+            <div class="analytics-skeleton-stat analytics-skeleton-panel analytics-skeleton-block"></div>
+            <div class="analytics-skeleton-stat analytics-skeleton-panel analytics-skeleton-block"></div>
+            <div class="analytics-skeleton-stat analytics-skeleton-panel analytics-skeleton-block"></div>
+          </div>
+
+          <div class="analytics-skeleton-row">
+            <div class="analytics-skeleton-chart analytics-skeleton-panel">
+              <div class="analytics-skeleton-line analytics-skeleton-line--lg analytics-skeleton-block"></div>
+              <div class="analytics-skeleton-chart-bars">
+                <span class="analytics-skeleton-bar analytics-skeleton-block"></span>
+                <span class="analytics-skeleton-bar analytics-skeleton-block"></span>
+                <span class="analytics-skeleton-bar analytics-skeleton-block"></span>
+                <span class="analytics-skeleton-bar analytics-skeleton-block"></span>
+                <span class="analytics-skeleton-bar analytics-skeleton-block"></span>
+                <span class="analytics-skeleton-bar analytics-skeleton-block"></span>
+                <span class="analytics-skeleton-bar analytics-skeleton-block"></span>
+              </div>
+            </div>
+            <div class="analytics-skeleton-highlights analytics-skeleton-panel">
+              <div class="analytics-skeleton-highlight analytics-skeleton-block"></div>
+              <div class="analytics-skeleton-highlight analytics-skeleton-block"></div>
+              <div class="analytics-skeleton-highlight analytics-skeleton-block"></div>
+            </div>
+          </div>
+
+          <div class="analytics-skeleton-table analytics-skeleton-panel">
+            <div class="analytics-skeleton-line analytics-skeleton-line--lg analytics-skeleton-block"></div>
+            <div class="analytics-skeleton-table-row analytics-skeleton-block"></div>
+            <div class="analytics-skeleton-table-row analytics-skeleton-block"></div>
+            <div class="analytics-skeleton-table-row analytics-skeleton-block"></div>
+            <div class="analytics-skeleton-table-row analytics-skeleton-block"></div>
           </div>
         </div>
       </div>
