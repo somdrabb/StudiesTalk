@@ -5,6 +5,12 @@ const DASHBOARD_SUMMARY_CACHE_PREFIX = "worknest_dashboard_summary_v1";
 const DASHBOARD_SUMMARY_MAX_AGE_MS = 10 * 60 * 1000;
 const dashboardSummaryInflight = new Map();
 
+function getAnalyticsSessionUser() {
+  if (typeof sessionUser !== "undefined" && sessionUser) return sessionUser;
+  if (typeof window !== "undefined" && window.currentUser) return window.currentUser;
+  return null;
+}
+
 function setAnalyticsContextSnapshot(data) {
   analyticsContextSnapshot = data || null;
 }
@@ -32,27 +38,29 @@ function saveAnalyticsLoadMs(ms) {
 }
 
 function getDashboardSummaryCacheContext(input = {}) {
+  const activeUser = getAnalyticsSessionUser();
   const userId = String(
     input.userId ||
-    sessionUser?.id ||
-    sessionUser?.userId ||
+    activeUser?.id ||
+    activeUser?.userId ||
     window.currentUser?.id ||
     ""
   ).trim();
   const workspaceId = String(
     input.workspaceId ||
     currentWorkspaceId ||
-    sessionUser?.workspaceId ||
-    sessionUser?.workspace_id ||
+    activeUser?.workspaceId ||
+    activeUser?.workspace_id ||
     "default"
   ).trim() || "default";
   return { userId, workspaceId };
 }
 
 function getAnalyticsViewerRole(input = {}) {
+  const activeUser = getAnalyticsSessionUser();
   return String(
     input.role ||
-    sessionUser?.role ||
+    activeUser?.role ||
     window.currentUser?.role ||
     ""
   ).trim().toLowerCase();
@@ -1046,7 +1054,8 @@ if (typeof window !== "undefined") {
     }
   });
 
-  if (sessionUser?.id || sessionUser?.userId) {
+  const activeUser = getAnalyticsSessionUser();
+  if (activeUser?.id || activeUser?.userId) {
     void prefetchDashboardSummary().catch(() => null);
   }
 }

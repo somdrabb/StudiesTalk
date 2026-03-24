@@ -4,6 +4,7 @@
   <!-- Basic -->
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <base href="/" />
   <title>WorkNest – Team Workspace</title>
 
   <!-- Icons -->
@@ -960,6 +961,17 @@
             >
               <i class="fa-solid fa-chevron-left" aria-hidden="true"></i>
             </button>
+
+            <button
+              class="icon-btn channel-action-btn"
+              id="headerFullscreenBtn"
+              type="button"
+              aria-label="Enter fullscreen"
+              title="Enter fullscreen"
+              aria-pressed="false"
+            >
+              <i class="fa-solid fa-expand" aria-hidden="true"></i>
+            </button>
           </div>
 
           <div
@@ -1267,311 +1279,36 @@
   <section class="chat-panel">
       <!-- Speaking Practice UI -->
       <section class="ai-voice-practice" id="aiVoicePracticeRoot" hidden>
-      <div class="ai-voice-practice__card ai-voice-practice__card--scenario">
+      <div class="ai-voice-practice__card ai-voice-practice__card--scenario" id="aiScenarioSection">
         <div class="ai-voice-practice__row">
           <label class="ai-label" for="aiScenario">Scenario</label>
-          <select id="aiScenario" class="ai-select" hidden>
-              <option value="free">Fremde kennenlernen</option>
-              <option value="restaurant">Bestell das Essen</option>
-              <option value="job">Vorstellungsgespräch üben</option>
-              <option value="travel">Hotel Check-in</option>
-              <option value="exam">TestDaF Sprechen</option>
-              <option value="business">Idee kurz vorstellen</option>
-              <option value="support">Kundenservice anrufen</option>
-              <option value="project">Projekt-Update geben</option>
-              <option value="networking">Kontakte knüpfen</option>
-              <option value="presentation">Präsentation halten</option>
-              <option value="feedback">Feedback annehmen</option>
-              <option value="story">Eine Geschichte erzählen</option>
-              <option value="negotiation">Verhandeln</option>
-              <option value="medical">Beim Arzt sprechen</option>
-              <option value="coldcall">Telefonischer Erstkontakt</option>
-              <option value="review">Deutsch korrigieren lassen</option>
-              <option value="academic">Uni-Gespräch</option>
-              <option value="tour">Stadt erklären</option>
-              <option value="emergency">Notfall melden</option>
-              <option value="booking">Termin vereinbaren</option>
-              <option value="debate">Diskutieren</option>
-              <option value="ceointerview">Interview mit Chef</option>
-              <option value="briefing">Tagesrückblick</option>
-              <option value="culture">Kultur austauschen</option>
-              <option value="recipe">Rezept erklären</option>
-              <option value="reviewer">Filmbesprechung</option>
-              <option value="podcast">Podcast starten</option>
-              <option value="onboarding">Neuen Kunden begrüßen</option>
-              <option value="salespitch">Etwas verkaufen</option>
-              <option value="mentorship">Jemanden coachen</option>
-              <option value="techsupport">Technik Problem lösen</option>
-              <option value="creative">Ideen sammeln</option>
-              <option value="finance">Finanzen besprechen</option>
-              <option value="policy">Regeln erklären</option>
-              <option value="wellness">Wie geht’s dir?</option>
-              <option value="event">Termin organisieren</option>
-              <option value="celebration">Dankesrede halten</option>
-              <option value="code">Code erklären</option>
-              <option value="crosscultural">Kulturelle Unterschiede</option>
-              <option value="holiday">Urlaub planen</option>
-              <option value="charity">Spendenaktion erklären</option>
-              <option value="bookclub">Buchclub Gespräch</option>
-              <option value="coach">Motivation & Ziele</option>
-              <option value="englishnews">Nachrichten zusammenfassen</option>
-              <option value="collaboration">Team Abstimmung</option>
-              <option value="feedbackpanel">Feedback geben</option>
-              <option value="inspection">Besichtigung</option>
-              <option value="science">Bericht erklären</option>
-              <option value="media">Interview mit Medien</option>
-          </select>
-          <div class="ai-voice-practice__scenario-options" role="list">
-            <button type="button" class="scenario-option" data-scenario="free" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-comments"></i></span>
-              <span class="scenario-option-label">Fremde kennenlernen</span>
-              <span class="scenario-option-subtitle">Small Talk & erster Eindruck</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="restaurant" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-utensils"></i></span>
-              <span class="scenario-option-label">Bestell das Essen</span>
-              <span class="scenario-option-subtitle">Essen & Getränke bestellen</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="job" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-briefcase"></i></span>
-              <span class="scenario-option-label">Vorstellungsgespräch üben</span>
-              <span class="scenario-option-subtitle">Typische Fragen beantworten</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="travel" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-plane"></i></span>
-              <span class="scenario-option-label">Hotel Check-in</span>
-              <span class="scenario-option-subtitle">Einchecken & Fragen klären</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="exam" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-graduation-cap"></i></span>
-              <span class="scenario-option-label">TestDaF Sprechen</span>
-              <span class="scenario-option-subtitle">Prüfungssimulation & Zeitdruck</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="business" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-bullhorn"></i></span>
-              <span class="scenario-option-label">Idee kurz vorstellen</span>
-              <span class="scenario-option-subtitle">Kurz & klar präsentieren</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="support" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-headset"></i></span>
-              <span class="scenario-option-label">Kundenservice anrufen</span>
-              <span class="scenario-option-subtitle">Problem erklären & Lösung finden</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="project" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-tasks"></i></span>
-              <span class="scenario-option-label">Projekt-Update geben</span>
-              <span class="scenario-option-subtitle">Fortschritt kurz zusammenfassen</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="networking" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-people-group"></i></span>
-              <span class="scenario-option-label">Kontakte knüpfen</span>
-              <span class="scenario-option-subtitle">Sich vorstellen & vernetzen</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="presentation" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-chalkboard"></i></span>
-              <span class="scenario-option-label">Präsentation halten</span>
-              <span class="scenario-option-subtitle">Sicher vortragen & erklären</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="feedback" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-comments"></i></span>
-              <span class="scenario-option-label">Feedback annehmen</span>
-              <span class="scenario-option-subtitle">Ruhig reagieren & nachfragen</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="story" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-book-open"></i></span>
-              <span class="scenario-option-label">Eine Geschichte erzählen</span>
-              <span class="scenario-option-subtitle">Ereignisse spannend beschreiben</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="negotiation" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-handshake-angle"></i></span>
-              <span class="scenario-option-label">Verhandeln</span>
-              <span class="scenario-option-subtitle">Preis/Termin/Optionen aushandeln</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="medical" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-stethoscope"></i></span>
-              <span class="scenario-option-label">Beim Arzt sprechen</span>
-              <span class="scenario-option-subtitle">Symptome erklären & Fragen beantworten</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="coldcall" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-phone"></i></span>
-              <span class="scenario-option-label">Telefonischer Erstkontakt</span>
-              <span class="scenario-option-subtitle">Anrufen, vorstellen, Anliegen sagen</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="review" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-pen"></i></span>
-              <span class="scenario-option-label">Deutsch korrigieren lassen</span>
-              <span class="scenario-option-subtitle">Fehler finden & besser formulieren</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="academic" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-university"></i></span>
-              <span class="scenario-option-label">Uni-Gespräch</span>
-              <span class="scenario-option-subtitle">Thema diskutieren & argumentieren</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="tour" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-map-location-dot"></i></span>
-              <span class="scenario-option-label">Stadt erklären</span>
-              <span class="scenario-option-subtitle">Orte beschreiben & Tipps geben</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="emergency" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-triangle-exclamation"></i></span>
-              <span class="scenario-option-label">Notfall melden</span>
-              <span class="scenario-option-subtitle">Hilfe rufen & Situation erklären</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="booking" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-calendar-check"></i></span>
-              <span class="scenario-option-label">Termin vereinbaren</span>
-              <span class="scenario-option-subtitle">Telefonisch buchen & bestätigen</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="debate" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-balance-scale-left"></i></span>
-              <span class="scenario-option-label">Diskutieren</span>
-              <span class="scenario-option-subtitle">Meinung begründen & widersprechen</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="ceointerview" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-user-tie"></i></span>
-              <span class="scenario-option-label">Interview mit Chef</span>
-              <span class="scenario-option-subtitle">Sehr formell & souverän</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="briefing" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-newspaper"></i></span>
-              <span class="scenario-option-label">Tagesrückblick</span>
-              <span class="scenario-option-subtitle">Kurz erzählen, was passiert ist</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="culture" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-earth-americas"></i></span>
-              <span class="scenario-option-label">Kultur austauschen</span>
-              <span class="scenario-option-subtitle">Traditionen erklären & vergleichen</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="recipe" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-utensils-alt"></i></span>
-              <span class="scenario-option-label">Rezept erklären</span>
-              <span class="scenario-option-subtitle">Schritte erklären & Mengen nennen</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="reviewer" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-film"></i></span>
-              <span class="scenario-option-label">Filmbesprechung</span>
-              <span class="scenario-option-subtitle">Meinung sagen & begründen</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="podcast" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-podcast"></i></span>
-              <span class="scenario-option-label">Podcast starten</span>
-              <span class="scenario-option-subtitle">Begrüßen & Thema vorstellen</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="onboarding" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-hands-holding"></i></span>
-              <span class="scenario-option-label">Neuen Kunden begrüßen</span>
-              <span class="scenario-option-subtitle">Ablauf erklären & Fragen klären</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="salespitch" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-money-bill-wave"></i></span>
-              <span class="scenario-option-label">Etwas verkaufen</span>
-              <span class="scenario-option-subtitle">Vorteile erklären & überzeugen</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="mentorship" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-person-chalkboard"></i></span>
-              <span class="scenario-option-label">Jemanden coachen</span>
-              <span class="scenario-option-subtitle">Tipps geben & motivieren</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="techsupport" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-computer"></i></span>
-              <span class="scenario-option-label">Technik Problem lösen</span>
-              <span class="scenario-option-subtitle">Problem beschreiben & Schritte folgen</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="creative" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-lightbulb"></i></span>
-              <span class="scenario-option-label">Ideen sammeln</span>
-              <span class="scenario-option-subtitle">Vorschläge machen & auswählen</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="finance" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-wallet"></i></span>
-              <span class="scenario-option-label">Finanzen besprechen</span>
-              <span class="scenario-option-subtitle">Ausgaben/Einnahmen erklären</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="policy" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-gavel"></i></span>
-              <span class="scenario-option-label">Regeln erklären</span>
-              <span class="scenario-option-subtitle">Richtlinien kurz zusammenfassen</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="wellness" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-heart-pulse"></i></span>
-              <span class="scenario-option-label">Wie geht’s dir?</span>
-              <span class="scenario-option-subtitle">Gefühle beschreiben & nachfragen</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="event" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-calendar-days"></i></span>
-              <span class="scenario-option-label">Termin organisieren</span>
-              <span class="scenario-option-subtitle">Planen, abstimmen, bestätigen</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="celebration" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-cake-candles"></i></span>
-              <span class="scenario-option-label">Dankesrede halten</span>
-              <span class="scenario-option-subtitle">Danke sagen & würdigen</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="code" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-code"></i></span>
-              <span class="scenario-option-label">Code erklären</span>
-              <span class="scenario-option-subtitle">Schritte erklären & Beispiele nennen</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="crosscultural" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-earth-europe"></i></span>
-              <span class="scenario-option-label">Kulturelle Unterschiede</span>
-              <span class="scenario-option-subtitle">Unterschiede vergleichen & erklären</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="holiday" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-sparkles"></i></span>
-              <span class="scenario-option-label">Urlaub planen</span>
-              <span class="scenario-option-subtitle">Plan machen & Optionen wählen</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="charity" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-hands-holding-heart"></i></span>
-              <span class="scenario-option-label">Spendenaktion erklären</span>
-              <span class="scenario-option-subtitle">Ziel erklären & um Hilfe bitten</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="bookclub" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-book"></i></span>
-              <span class="scenario-option-label">Buchclub Gespräch</span>
-              <span class="scenario-option-subtitle">Kapitel zusammenfassen & Meinung sagen</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="coach" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-person-running"></i></span>
-              <span class="scenario-option-label">Motivation & Ziele</span>
-              <span class="scenario-option-subtitle">Ziele setzen & dranbleiben</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="englishnews" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-newspaper"></i></span>
-              <span class="scenario-option-label">Nachrichten zusammenfassen</span>
-              <span class="scenario-option-subtitle">Kurz berichten & reagieren</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="collaboration" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-user-friends"></i></span>
-              <span class="scenario-option-label">Team Abstimmung</span>
-              <span class="scenario-option-subtitle">Aufgaben klären & nächste Schritte</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="feedbackpanel" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-comments"></i></span>
-              <span class="scenario-option-label">Feedback geben</span>
-              <span class="scenario-option-subtitle">Meinung äußern & verbessern</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="inspection" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-search"></i></span>
-              <span class="scenario-option-label">Besichtigung</span>
-              <span class="scenario-option-subtitle">Zustand beschreiben & Fragen stellen</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="science" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-flask"></i></span>
-              <span class="scenario-option-label">Bericht erklären</span>
-              <span class="scenario-option-subtitle">Ergebnisse erklären & Schluss ziehen</span>
-            </button>
-            <button type="button" class="scenario-option" data-scenario="media" aria-pressed="false">
-              <span class="scenario-option-icon"><i class="fa-solid fa-broadcast-tower"></i></span>
-              <span class="scenario-option-label">Interview mit Medien</span>
-              <span class="scenario-option-subtitle">Kurz antworten & ruhig bleiben</span>
-            </button>
-
-          </div>
+          <select id="aiScenario" class="ai-select" hidden></select>
+          <div class="ai-voice-practice__scenario-options" id="aiScenarioCards" role="list"></div>
         </div>
       </div>
-      <div class="ai-voice-practice__card" id="aiActionCard" hidden>
+      <div class="ai-voice-practice__card ai-speaking-session-panel" id="aiActionCard" hidden>
+        <div class="ai-speaking-session-panel__header">
+          <div class="ai-speaking-session-panel__meta">
+            <div class="ai-speaking-session-panel__eyebrow">Active speaking session</div>
+            <h3 class="ai-speaking-session-panel__title" id="aiSessionTitle">Speaking Practice</h3>
+            <p class="ai-speaking-session-panel__subtitle" id="aiSessionSubtitle">Focused speaking workspace</p>
+            <div class="ai-speaking-session-panel__roles">
+              <span class="ai-speaking-role-badge" id="aiSessionUserRole">Du: Lernender</span>
+              <span class="ai-speaking-role-badge" id="aiSessionAiRole">AI: Gespraechspartner</span>
+              <span class="status-chip status-chip--soft" id="aiSessionStatusChip">Idle</span>
+            </div>
+          </div>
+          <button
+            type="button"
+            class="ai-speaking-session-panel__close"
+            id="aiSessionCloseBtn"
+            aria-label="Zurueck zu den Szenarien"
+            title="Zurueck zu den Szenarien"
+          >
+            <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+          </button>
+        </div>
+        <div class="ai-speaking-session-panel__body">
         <div class="ai-voice-practice__budget" hidden>
             <div class="ai-voice-practice__budget-line">
               <span class="muted">Monthly cap</span>
@@ -1604,6 +1341,15 @@
             </button>
             <button
               type="button"
+              class="ai-btn ai-btn--ghost"
+              id="aiAudioUnlockBtn"
+              hidden
+            >
+              <i class="fa-solid fa-volume-high" aria-hidden="true"></i>
+              Enable audio
+            </button>
+            <button
+              type="button"
               class="ai-btn ai-btn--icon"
               id="aiTranscriptToggleBtn"
               aria-pressed="false"
@@ -1614,10 +1360,13 @@
             </button>
           </div>
 
-          <div class="ai-voice-practice__transcript" id="aiTranscript" hidden>
-            <div class="muted">Transcript will appear here…</div>
+          <div class="ai-speaking-transcript-shell">
+            <div class="ai-voice-practice__transcript" id="aiTranscript" hidden>
+              <div class="muted">Transcript will appear here…</div>
+            </div>
           </div>
         </div>
+      </div>
 
         <div class="ai-voice-practice__overlay ai-voice-practice__overlay--mode" id="aiModeOverlay" hidden>
           <div class="ai-voice-practice__overlay-card">
@@ -2671,66 +2420,330 @@
 
   <!-- ===================== LIVE CLASS HUB ===================== -->
   <section id="livePanel" class="main-panel hidden">
-    <div class="panel-header live-header">
-      <div>
-        <h2 class="panel-title">Live Class</h2>
+    <div id="liveHubView" class="live-panel-view">
+      <div class="panel-header live-header">
+        <div class="live-header-copy">
+          <span class="live-header-eyebrow">Classroom workspace</span>
+          <h2 class="panel-title">Live Class</h2>
+          <p class="panel-subtitle">Manage sessions and run your live room from one focused workspace.</p>
+        </div>
+
+        <div class="live-header-actions">
+          <button type="button" class="btn live-mode-toggle" id="liveModeToggleBtn" aria-pressed="false" title="Enter live mode">
+            <i class="fa-solid fa-sliders"></i>
+            Enter Live Mode
+          </button>
+          <button type="button" class="btn" id="liveHostBtn">
+            <i class="fa-solid fa-video"></i>
+            Host a Meeting
+          </button>
+          <button type="button" class="btn btn-primary" id="liveCreateBtn">
+            <i class="fa-solid fa-plus"></i>
+            Create Session
+          </button>
+        </div>
       </div>
 
-      <div class="live-header-actions">
-        <button type="button" class="btn btn-primary" id="liveCreateBtn">
-          <i class="fa-solid fa-plus"></i>
-          Create Session
-        </button>
+      <div class="live-layout">
+        <section class="live-list" aria-label="Live schedule">
+          <div class="live-panel-head">
+            <div>
+              <p class="live-panel-kicker">Session overview</p>
+              <h3 class="live-panel-title">Scheduled sessions</h3>
+            </div>
+          </div>
+          <div class="live-table" id="liveSessionsList"></div>
+        </section>
+
+        <aside class="live-workspace-card" aria-label="Live classroom workspace">
+          <div class="live-workspace-card-icon" aria-hidden="true">
+            <i class="fa-solid fa-screen-users"></i>
+          </div>
+          <div class="live-workspace-card-copy">
+            <p class="live-panel-kicker">Live room</p>
+            <h3 class="live-panel-title">Open a session in a new tab</h3>
+            <p class="live-workspace-card-text">Join any scheduled or instant session to open the meeting in your browser without changing the live session management tools here.</p>
+          </div>
+        </aside>
       </div>
     </div>
 
-    <div class="live-layout">
-      <section class="live-list" aria-label="Live schedule">
-        <div class="live-table" id="liveSessionsList"></div>
-      </section>
+    <div id="liveRoomView" class="live-panel-view live-room-view hidden" aria-hidden="true">
+      <div class="panel-header live-header live-room-header">
+        <div class="live-header-copy">
+          <span class="live-header-eyebrow">Live classroom</span>
+          <h2 class="panel-title" id="liveRoomSessionTitle">Live Class</h2>
+          <p class="panel-subtitle" id="liveRoomSessionMeta">Join a session to start the classroom.</p>
+        </div>
 
-      <div class="live-right">
-        <section class="live-meet" aria-label="Live meeting">
+        <div class="live-header-actions">
+          <button type="button" class="btn" id="liveRoomBackBtn">
+            <i class="fa-solid fa-arrow-left"></i>
+            Back
+          </button>
+          <button type="button" class="btn live-mode-toggle" id="liveFocusModeBtn" aria-pressed="false" title="Enter live mode">
+            <i class="fa-solid fa-sliders"></i>
+            Enter Live Mode
+          </button>
+          <button type="button" class="btn" id="liveMeetLeaveBtn">
+            <i class="fa-solid fa-phone-slash"></i>
+            Leave Session
+          </button>
+        </div>
+      </div>
+
+      <div class="live-room-layout">
+        <section class="live-meet" aria-label="Live room">
           <div class="live-meet-head">
-            <div class="live-meet-title">
-              <i class="fa-solid fa-video"></i>
-              Live room
+            <div class="live-meet-title-wrap">
+              <div class="live-meet-title-row">
+                <div class="live-meet-title">
+                <i class="fa-solid fa-video"></i>
+                Live room
+                </div>
+                <span class="live-domain-badge hidden" id="liveDomainModeBadge" aria-live="polite"></span>
+              </div>
+              <p class="live-meet-subtitle" id="liveRoomSessionContext">Meeting opens inside your classroom workspace.</p>
             </div>
-            <div class="live-meet-actions">
-              <button class="btn btn-ghost" id="liveRecStartBtn" type="button">Record</button>
-              <button class="btn btn-ghost" id="liveRecStopBtn" type="button" hidden>Stop</button>
-              <button type="button" class="btn btn-ghost" id="liveMeetLeaveBtn">Leave</button>
+            <div class="live-meet-actions hidden" id="liveMeetFallbackActions">
+              <button type="button" class="btn btn-ghost" id="liveMeetRetryBtn">
+                <i class="fa-solid fa-rotate-right"></i>
+                Retry
+              </button>
+              <a class="btn btn-primary" id="liveMeetOpenExternalBtn" href="#" rel="noopener noreferrer" target="_blank">
+                <i class="fa-solid fa-arrow-up-right-from-square"></i>
+                Open in new tab
+              </a>
             </div>
           </div>
-          <div id="liveMeetContainer" class="live-meet-embed">
-            <div class="muted" style="padding:14px;">Join a session to start video.</div>
+          <div class="live-meet-embed" id="liveMeetContainer">
+            <div class="live-room-empty">
+              <div class="live-room-empty-icon" aria-hidden="true">
+                <i class="fa-solid fa-video"></i>
+              </div>
+              <div class="live-room-empty-title">Join or launch a session to start the live room</div>
+              <div class="live-room-empty-text muted">The meeting will open here without leaving the platform.</div>
+            </div>
           </div>
         </section>
 
-        <section class="live-slides" aria-label="Slides">
-          <div class="live-slides-head">
-            <div class="live-slides-title">
-              <i class="fa-solid fa-file-pdf"></i>
-              Slides
+        <div class="live-right">
+          <section class="live-slides" aria-label="Slides">
+            <div class="live-slides-head">
+              <div class="live-slides-title">
+                <i class="fa-solid fa-file-pdf"></i>
+                Slides
+              </div>
+              <div class="live-slides-actions">
+                <button class="btn btn-ghost" id="slidePrevBtn" type="button">Prev</button>
+                <button class="btn btn-ghost" id="slideNextBtn" type="button">Next</button>
+                <span class="slidesPagePill" id="slidePagePill">1 / 1</span>
+              </div>
             </div>
-            <div class="live-slides-actions">
-              <button class="btn btn-ghost" id="slidePrevBtn" type="button">Prev</button>
-              <button class="btn btn-ghost" id="slideNextBtn" type="button">Next</button>
-              <span class="slidesPagePill" id="slidePagePill">1 / 1</span>
+            <div class="live-slides-body">
+              <canvas id="slidesCanvas"></canvas>
+              <div class="muted slidesEmpty" id="slidesEmpty">No slides yet.</div>
             </div>
-          </div>
-          <div class="live-slides-body">
-            <canvas id="slidesCanvas"></canvas>
-            <div class="muted slidesEmpty" id="slidesEmpty">No slides yet.</div>
-          </div>
-        </section>
+          </section>
+        </div>
       </div>
     </div>
 
     <script>
-      window.__JITSI_DOMAIN__ = window.__JITSI_DOMAIN__ || "meet.jit.si";
+      window.__JITSI_DOMAIN__ = window.__JITSI_DOMAIN__ || "";
     </script>
   </section>
+
+  <div class="modal-overlay hidden" id="liveSessionModal" role="dialog" aria-modal="true" aria-labelledby="liveModalTitle">
+    <div class="modal-card live-modal">
+      <div class="modal-header">
+        <h3 id="liveModalTitle">Create live session</h3>
+        <button type="button" class="icon-btn" id="liveModalClose" aria-label="Close live session modal">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <form id="liveSessionForm" class="live-form">
+          <input id="liveSessionId" type="hidden" />
+
+          <div class="live-form-row">
+            <label for="liveClassSelect">Class or audience</label>
+            <select id="liveClassSelect" required>
+              <option value="">Select a class</option>
+            </select>
+          </div>
+
+          <div class="live-form-row">
+            <label for="liveTitleInput">Session title</label>
+            <input id="liveTitleInput" type="text" placeholder="Live Class" maxlength="120" />
+          </div>
+
+          <div class="live-form-grid">
+            <div class="live-form-row">
+              <label for="liveDateInput">Date</label>
+              <input id="liveDateInput" type="date" required />
+            </div>
+            <div class="live-form-row">
+              <label for="liveStartInput">Start time</label>
+              <input id="liveStartInput" type="time" required />
+            </div>
+            <div class="live-form-row">
+              <label for="liveEndInput">End time</label>
+              <input id="liveEndInput" type="time" required />
+            </div>
+          </div>
+
+          <div class="live-form-row">
+            <label for="liveUrlInput">Meeting link</label>
+            <input id="liveUrlInput" type="text" readonly value="Generated after you create the session" />
+          </div>
+
+          <div class="live-form-grid-two">
+            <div class="live-form-row">
+              <label for="liveAutopostSelect">Post meeting card</label>
+              <select id="liveAutopostSelect">
+                <option value="channel">Post immediately in selected class</option>
+                <option value="none">Do not auto-post</option>
+              </select>
+            </div>
+            <div class="live-form-row">
+              <label for="livePassInput">Meeting password</label>
+              <input id="livePassInput" type="text" placeholder="Optional" maxlength="120" />
+            </div>
+          </div>
+
+          <div class="live-form-row">
+            <label for="liveStudentNotesInput">Notes for students</label>
+            <textarea id="liveStudentNotesInput" rows="4" placeholder="Add class notes or instructions"></textarea>
+          </div>
+
+          <div class="live-form-row">
+            <label class="checkbox-label" for="liveNotifyEmail">
+              <input id="liveNotifyEmail" type="checkbox" />
+              <span>Send class email notification</span>
+            </label>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer live-modal-footer">
+        <div class="live-footer-start">
+          <div class="live-danger" id="liveModalDanger" hidden>
+            <button type="button" class="live-delete-btn" id="liveDeleteBtn">
+              <i class="fa-solid fa-trash"></i>
+              Delete
+            </button>
+          </div>
+        </div>
+        <div class="live-footer-end">
+          <button type="button" class="live-cancel-btn" id="liveModalCancel">Cancel</button>
+          <button type="submit" form="liveSessionForm" class="live-save-btn" id="liveModalSave">
+            <i class="fa-solid fa-check"></i>
+            Save session
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay hidden" id="liveDeleteConfirmModal" role="dialog" aria-modal="true" aria-labelledby="liveDeleteConfirmTitle">
+    <div class="delete-confirm-card">
+      <div class="modal-header">
+        <h3 id="liveDeleteConfirmTitle">Delete live session</h3>
+        <button type="button" class="icon-btn" id="liveDeleteConfirmClose" aria-label="Close delete confirmation">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        This will remove the live session and its meeting link from the schedule.
+      </div>
+      <div class="modal-footer delete-confirm-footer">
+        <button type="button" class="live-cancel-btn" id="liveDeleteConfirmCancel">Cancel</button>
+        <button type="button" class="live-delete-btn" id="liveDeleteConfirmOk">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay hidden" id="liveHostModal" role="dialog" aria-modal="true" aria-labelledby="liveHostTitle">
+    <div class="modal-card live-modal">
+      <div class="modal-header">
+        <h3 id="liveHostTitle">Host a meeting</h3>
+        <button type="button" class="icon-btn" id="liveHostClose" aria-label="Close host meeting modal">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <form id="liveHostForm" class="live-form">
+          <div class="live-form-row">
+            <label for="liveHostTitleInput">Meeting title</label>
+            <input id="liveHostTitleInput" type="text" placeholder="Hosted Meeting" maxlength="120" />
+          </div>
+
+          <div class="live-form-grid">
+            <div class="live-form-row">
+              <label for="liveHostDateInput">Date</label>
+              <input id="liveHostDateInput" type="date" required />
+            </div>
+            <div class="live-form-row">
+              <label for="liveHostStartInput">Start time</label>
+              <input id="liveHostStartInput" type="time" required />
+            </div>
+            <div class="live-form-row">
+              <label for="liveHostEndInput">End time</label>
+              <input id="liveHostEndInput" type="time" required />
+            </div>
+          </div>
+
+          <div class="live-form-row">
+            <label for="liveHostMemberSearch">Add school members</label>
+            <input id="liveHostMemberSearch" type="text" placeholder="Search school admins, teachers, students" />
+          </div>
+
+          <div class="live-form-row">
+            <label>Allowed members</label>
+            <div class="live-host-member-picker" id="liveHostMemberPicker"></div>
+          </div>
+
+          <div class="live-form-row">
+            <label for="liveHostNotesInput">Notes</label>
+            <textarea id="liveHostNotesInput" rows="3" placeholder="Optional meeting instructions"></textarea>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer live-modal-footer">
+        <div class="live-footer-end">
+          <button type="button" class="live-cancel-btn" id="liveHostCancel">Cancel</button>
+          <button type="submit" form="liveHostForm" class="live-save-btn" id="liveHostSave">
+            <i class="fa-solid fa-circle-play"></i>
+            Start meeting
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay hidden" id="liveAttendanceModal" role="dialog" aria-modal="true" aria-labelledby="liveAttendanceTitle">
+    <div class="modal-card live-modal">
+      <div class="modal-header">
+        <h3 id="liveAttendanceTitle">Attendance</h3>
+        <button type="button" class="icon-btn" id="liveAttendanceClose" aria-label="Close attendance modal">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="muted" id="liveAttendanceMeta"></div>
+        <div class="live-att-list" id="liveAttendanceList"></div>
+      </div>
+      <div class="modal-footer live-modal-footer">
+        <div class="live-footer-end">
+          <button type="button" class="live-cancel-btn" id="liveAttendanceCancel">Close</button>
+          <button type="button" class="live-save-btn" id="liveAttendanceSave">
+            <i class="fa-solid fa-check"></i>
+            Save attendance
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- Notifications -->
   <section id="notificationsPanel" class="main-panel hidden">
@@ -5182,6 +5195,7 @@
 <script src="Announcements/announcements.js"></script>
 
 <!-- ✅ If your real folder is /AIvoicepractice/, keep this. -->
+<script src="/AIvoicepractice/scenarioConfig.js"></script>
 <script src="/AIvoicepractice/aiVoicePractice.js"></script>
 <script src="/analytics/analytics.js"></script>
 <script src="/integration-assets/integration.js"></script>

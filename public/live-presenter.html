@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Live Presenter</title>
+  <link rel="stylesheet" href="/live-presenter.css" />
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.js"></script>
+  <script defer src="/live-presenter.js"></script>
+</head>
+<body class="live-presenter-surface live-presenter-lite">
+  <main class="presenter-shell">
+    <header class="presenter-bar">
+      <div class="presenter-copy">
+        <p class="presenter-kicker">Live Presenter</p>
+        <h1 class="presenter-title" id="presenterTitle">Live session</h1>
+        <p class="presenter-meta" id="presenterMeta">Share this tab in your meeting for a cleaner presentation surface.</p>
+      </div>
+      <div class="presenter-status" id="presenterStatus">Waiting for session</div>
+    </header>
+
+    <section class="presenter-stage" aria-label="Presentation content">
+      <div class="presenter-canvas-wrap" id="presenterCanvasWrap">
+        <canvas id="presenterCanvas"></canvas>
+        <div class="presenter-empty" id="presenterEmpty">
+          <div class="presenter-empty-title">No slides yet</div>
+          <div class="presenter-empty-copy">Add a PDF deck in the live session controls and it will appear here automatically.</div>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

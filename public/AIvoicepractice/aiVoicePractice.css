@@ -53,7 +53,23 @@
   border-radius: 18px;
   box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
   padding: 16px;
-  width: min(460px, 100%);
+  width: min(1220px, 100%);
+}
+
+#aiActionCard{
+  width: min(1080px, 100%);
+  margin-inline: auto;
+  padding: 20px;
+  height: calc(100vh - 210px);
+  max-height: calc(100vh - 210px);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+body.ai-speaking-active #aiVoicePracticeRoot {
+  min-height: 0;
 }
 
 .ai-voice-practice__row {
@@ -69,13 +85,37 @@
   gap: 12px;
   margin-top: 12px;
   justify-content: center;
+  align-content: flex-start;
+  width: 100%;
+  max-height: calc(100vh - 240px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 8px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 116, 139, 0.72) transparent;
+}
+
+.ai-voice-practice__scenario-options::-webkit-scrollbar {
+  width: 10px;
+}
+
+.ai-voice-practice__scenario-options::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 999px;
+}
+
+.ai-voice-practice__scenario-options::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.72);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 
 .scenario-option {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 12px;
+  gap: 8px;
+  padding: 14px 14px 12px;
   border-radius: 12px;
   border: 1px solid var(--scenario-border, rgba(148, 163, 184, 0.35));
   background: var(--scenario-bg, rgba(248, 250, 252, 0.9));
@@ -86,6 +126,10 @@
   transition: transform 200ms ease, box-shadow 200ms ease, border-color 200ms ease, background 200ms ease;
   flex: 1 1 200px;
   min-width: 140px;
+  min-height: 188px;
+  max-height: 188px;
+  justify-content: flex-start;
+  overflow: hidden;
 }
 
 .scenario-option[data-scenario] {
@@ -121,74 +165,108 @@
   color: inherit !important;
 }
 
-.scenario-option[data-scenario="free"] {
-  --scenario-bg: linear-gradient(135deg, #eef2ff, #f3f4ff);
-  --scenario-color: #4c1d95;
-  --scenario-icon-bg: rgba(124, 58, 237, 0.2);
+.scenario-option[data-theme="violet"] {
+  --scenario-bg: linear-gradient(135deg, #eef2ff, #f5f3ff);
+  --scenario-color: #5b21b6;
+  --scenario-icon-bg: rgba(124, 58, 237, 0.18);
   --scenario-icon-color: #7c3aed;
   --scenario-border-selected: #a855f7;
-  --scenario-selected-bg: linear-gradient(135deg, rgba(168, 85, 247, 0.15), rgba(59, 130, 246, 0.08));
-  --scenario-shadow: rgba(79, 70, 229, 0.3);
+  --scenario-selected-bg: linear-gradient(135deg, rgba(168, 85, 247, 0.15), rgba(99, 102, 241, 0.08));
+  --scenario-shadow: rgba(124, 58, 237, 0.28);
 }
 
-.scenario-option[data-scenario="restaurant"] {
-  --scenario-bg: linear-gradient(135deg, #fff7ed, #fff4e6);
+.scenario-option[data-theme="orange"] {
+  --scenario-bg: linear-gradient(135deg, #fff7ed, #ffedd5);
   --scenario-color: #c2410c;
-  --scenario-icon-bg: rgba(234, 88, 12, 0.2);
+  --scenario-icon-bg: rgba(249, 115, 22, 0.16);
   --scenario-icon-color: #ea580c;
   --scenario-border-selected: #fb923c;
   --scenario-selected-bg: linear-gradient(135deg, rgba(251, 146, 60, 0.15), rgba(251, 191, 36, 0.08));
-  --scenario-shadow: rgba(249, 115, 22, 0.35);
+  --scenario-shadow: rgba(249, 115, 22, 0.28);
 }
 
-.scenario-option[data-scenario="job"] {
-  --scenario-bg: linear-gradient(135deg, #ecfeff, #f0f9ff);
+.scenario-option[data-theme="sky"] {
+  --scenario-bg: linear-gradient(135deg, #ecfeff, #e0f2fe);
   --scenario-color: #075985;
-  --scenario-icon-bg: rgba(14, 165, 233, 0.15);
-  --scenario-icon-color: #0ea5e9;
+  --scenario-icon-bg: rgba(14, 165, 233, 0.16);
+  --scenario-icon-color: #0284c7;
   --scenario-border-selected: #38bdf8;
-  --scenario-selected-bg: linear-gradient(135deg, rgba(14, 165, 233, 0.15), rgba(59, 130, 246, 0.08));
-  --scenario-shadow: rgba(14, 165, 233, 0.35);
+  --scenario-selected-bg: linear-gradient(135deg, rgba(14, 165, 233, 0.14), rgba(59, 130, 246, 0.08));
+  --scenario-shadow: rgba(14, 165, 233, 0.28);
 }
 
-.scenario-option[data-scenario="travel"] {
-  --scenario-bg: linear-gradient(135deg, #ecfccb, #fef9c3);
-  --scenario-color: #4d7c0f;
-  --scenario-icon-bg: rgba(132, 204, 22, 0.2);
-  --scenario-icon-color: #84cc16;
-  --scenario-border-selected: #a3e635;
-  --scenario-selected-bg: linear-gradient(135deg, rgba(132, 204, 22, 0.15), rgba(16, 185, 129, 0.08));
-  --scenario-shadow: rgba(16, 185, 129, 0.35);
+.scenario-option[data-theme="lime"],
+.scenario-option[data-theme="green"] {
+  --scenario-bg: linear-gradient(135deg, #ecfccb, #dcfce7);
+  --scenario-color: #3f6212;
+  --scenario-icon-bg: rgba(132, 204, 22, 0.16);
+  --scenario-icon-color: #4d7c0f;
+  --scenario-border-selected: #84cc16;
+  --scenario-selected-bg: linear-gradient(135deg, rgba(132, 204, 22, 0.16), rgba(34, 197, 94, 0.08));
+  --scenario-shadow: rgba(34, 197, 94, 0.24);
 }
 
-.scenario-option[data-scenario="exam"] {
-  --scenario-bg: linear-gradient(135deg, #fdf2f8, #fce7f3);
+.scenario-option[data-theme="pink"],
+.scenario-option[data-theme="rose"] {
+  --scenario-bg: linear-gradient(135deg, #fdf2f8, #ffe4e6);
   --scenario-color: #be185d;
-  --scenario-icon-bg: rgba(236, 72, 153, 0.15);
-  --scenario-icon-color: #ec4899;
+  --scenario-icon-bg: rgba(236, 72, 153, 0.16);
+  --scenario-icon-color: #db2777;
   --scenario-border-selected: #f472b6;
-  --scenario-selected-bg: linear-gradient(135deg, rgba(236, 72, 153, 0.15), rgba(239, 68, 68, 0.08));
-  --scenario-shadow: rgba(236, 72, 153, 0.35);
+  --scenario-selected-bg: linear-gradient(135deg, rgba(236, 72, 153, 0.14), rgba(244, 63, 94, 0.08));
+  --scenario-shadow: rgba(236, 72, 153, 0.24);
 }
 
-.scenario-option[data-scenario="business"] {
-  --scenario-bg: linear-gradient(135deg, #ecfccb, #e9fbcf);
-  --scenario-color: #15803d;
-  --scenario-icon-bg: rgba(16, 185, 129, 0.15);
-  --scenario-icon-color: #16a34a;
-  --scenario-border-selected: #22c55e;
-  --scenario-selected-bg: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(34, 197, 94, 0.08));
-  --scenario-shadow: rgba(16, 185, 129, 0.35);
-}
-
-.scenario-option[data-scenario="support"] {
-  --scenario-bg: linear-gradient(135deg, #f0fdfa, #ecfeff);
+.scenario-option[data-theme="teal"],
+.scenario-option[data-theme="emerald"] {
+  --scenario-bg: linear-gradient(135deg, #ecfeff, #d1fae5);
   --scenario-color: #0f766e;
-  --scenario-icon-bg: rgba(20, 184, 166, 0.15);
+  --scenario-icon-bg: rgba(20, 184, 166, 0.16);
   --scenario-icon-color: #0d9488;
   --scenario-border-selected: #2dd4bf;
-  --scenario-selected-bg: linear-gradient(135deg, rgba(20, 184, 166, 0.15), rgba(6, 182, 212, 0.08));
-  --scenario-shadow: rgba(20, 184, 166, 0.35);
+  --scenario-selected-bg: linear-gradient(135deg, rgba(20, 184, 166, 0.14), rgba(16, 185, 129, 0.08));
+  --scenario-shadow: rgba(20, 184, 166, 0.24);
+}
+
+.scenario-option[data-theme="indigo"] {
+  --scenario-bg: linear-gradient(135deg, #eef2ff, #e0e7ff);
+  --scenario-color: #3730a3;
+  --scenario-icon-bg: rgba(99, 102, 241, 0.15);
+  --scenario-icon-color: #4338ca;
+  --scenario-border-selected: #818cf8;
+  --scenario-selected-bg: linear-gradient(135deg, rgba(99, 102, 241, 0.14), rgba(59, 130, 246, 0.08));
+  --scenario-shadow: rgba(79, 70, 229, 0.24);
+}
+
+.scenario-option[data-theme="amber"],
+.scenario-option[data-theme="yellow"] {
+  --scenario-bg: linear-gradient(135deg, #fef3c7, #fef9c3);
+  --scenario-color: #92400e;
+  --scenario-icon-bg: rgba(245, 158, 11, 0.15);
+  --scenario-icon-color: #f59e0b;
+  --scenario-border-selected: #fbbf24;
+  --scenario-selected-bg: linear-gradient(135deg, rgba(245, 158, 11, 0.14), rgba(251, 191, 36, 0.08));
+  --scenario-shadow: rgba(245, 158, 11, 0.24);
+}
+
+.scenario-option[data-theme="red"] {
+  --scenario-bg: linear-gradient(135deg, #fee2e2, #fecdd3);
+  --scenario-color: #991b1b;
+  --scenario-icon-bg: rgba(239, 68, 68, 0.15);
+  --scenario-icon-color: #dc2626;
+  --scenario-border-selected: #f87171;
+  --scenario-selected-bg: linear-gradient(135deg, rgba(239, 68, 68, 0.14), rgba(244, 63, 94, 0.08));
+  --scenario-shadow: rgba(239, 68, 68, 0.24);
+}
+
+.scenario-option[data-theme="blue"] {
+  --scenario-bg: linear-gradient(135deg, #e0f2fe, #dbeafe);
+  --scenario-color: #1d4ed8;
+  --scenario-icon-bg: rgba(37, 99, 235, 0.15);
+  --scenario-icon-color: #2563eb;
+  --scenario-border-selected: #60a5fa;
+  --scenario-selected-bg: linear-gradient(135deg, rgba(37, 99, 235, 0.14), rgba(96, 165, 250, 0.08));
+  --scenario-shadow: rgba(37, 99, 235, 0.24);
 }
 
 .scenario-option:hover,
@@ -209,12 +287,12 @@
 }
 
 .scenario-option-icon {
-  font-size: 1.2rem;
+  font-size: 1rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
   background: var(--scenario-icon-bg, rgba(59, 130, 246, 0.12));
   color: var(--scenario-icon-color, #2563eb);
@@ -224,311 +302,57 @@
   color: inherit;
 }
 
+.scenario-option-label {
+  line-height: 1.2;
+  font-size: 1rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .scenario-option-subtitle {
   font-size: 11px;
   color: #475569;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
-
-.scenario-option[data-scenario="project"] {
-  --scenario-bg: linear-gradient(135deg, #eef2ff, #e0e7ff);
-  --scenario-color: #312e81;
-  --scenario-icon-bg: rgba(79, 70, 229, 0.15);
-  --scenario-icon-color: #4338ca;
+.scenario-option-rolehint {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: auto;
+  padding-top: 4px;
 }
 
-.scenario-option[data-scenario="networking"] {
-  --scenario-bg: linear-gradient(135deg, #fff7ed, #fff1f2);
-  --scenario-color: #b91c1c;
-  --scenario-icon-bg: rgba(239, 68, 68, 0.15);
-  --scenario-icon-color: #dc2626;
+.scenario-option-rolepair {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.52);
+  color: color-mix(in srgb, var(--scenario-color, #0f172a) 92%, #0f172a 8%);
+  font-size: 9.5px;
+  line-height: 1.1;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.scenario-option[data-scenario="presentation"] {
-  --scenario-bg: linear-gradient(135deg, #fef3c7, #fef9c3);
-  --scenario-color: #92400e;
-  --scenario-icon-bg: rgba(245, 158, 11, 0.15);
-  --scenario-icon-color: #f97316;
+.scenario-option-rolelabel {
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.7;
 }
 
-.scenario-option[data-scenario="feedback"] {
-  --scenario-bg: linear-gradient(135deg, #ede9fe, #ede9fe);
-  --scenario-color: #312e81;
-  --scenario-icon-bg: rgba(79, 70, 229, 0.15);
-  --scenario-icon-color: #312e81;
-}
-
-.scenario-option[data-scenario="story"] {
-  --scenario-bg: linear-gradient(135deg, #fee2e2, #fef2f2);
-  --scenario-color: #b91c1c;
-  --scenario-icon-bg: rgba(239, 68, 68, 0.15);
-  --scenario-icon-color: #dc2626;
-}
-
-.scenario-option[data-scenario="negotiation"] {
-  --scenario-bg: linear-gradient(135deg, #fefce8, #fef9c3);
-  --scenario-color: #854d0e;
-  --scenario-icon-bg: rgba(251, 191, 36, 0.15);
-  --scenario-icon-color: #ea580c;
-}
-
-.scenario-option[data-scenario="medical"] {
-  --scenario-bg: linear-gradient(135deg, #ecfeff, #f0fdfa);
-  --scenario-color: #164e63;
-  --scenario-icon-bg: rgba(14, 165, 233, 0.15);
-  --scenario-icon-color: #0ea5e9;
-}
-
-.scenario-option[data-scenario="coldcall"] {
-  --scenario-bg: linear-gradient(135deg, #e0f2fe, #eff6ff);
-  --scenario-color: #0c4a6e;
-  --scenario-icon-bg: rgba(59, 130, 246, 0.15);
-  --scenario-icon-color: #2563eb;
-}
-
-.scenario-option[data-scenario="review"] {
-  --scenario-bg: linear-gradient(135deg, #f0fdfa, #d1fae5);
-  --scenario-color: #0f766e;
-  --scenario-icon-bg: rgba(16, 185, 129, 0.15);
-  --scenario-icon-color: #14b8a6;
-}
-
-.scenario-option[data-scenario="academic"] {
-  --scenario-bg: linear-gradient(135deg, #f3f4f6, #eef2ff);
-  --scenario-color: #312e81;
-  --scenario-icon-bg: rgba(79, 70, 229, 0.15);
-  --scenario-icon-color: #312e81;
-}
-
-.scenario-option[data-scenario="tour"] {
-  --scenario-bg: linear-gradient(135deg, #ecfccb, #e9f7fe);
-  --scenario-color: #3f6212;
-  --scenario-icon-bg: rgba(132, 204, 22, 0.15);
-  --scenario-icon-color: #4d7c0f;
-}
-
-.scenario-option[data-scenario="emergency"] {
-  --scenario-bg: linear-gradient(135deg, #fee2e2, #fecdd3);
-  --scenario-color: #991b1b;
-  --scenario-icon-bg: rgba(248, 113, 113, 0.15);
-  --scenario-icon-color: #ef4444;
-}
-
-.scenario-option[data-scenario="booking"] {
-  --scenario-bg: linear-gradient(135deg, #e0f2fe, #dbeafe);
-  --scenario-color: #0c4a6e;
-  --scenario-icon-bg: rgba(37, 99, 235, 0.15);
-  --scenario-icon-color: #2563eb;
-}
-
-.scenario-option[data-scenario="debate"] {
-  --scenario-bg: linear-gradient(135deg, #ede9fe, #e0e7ff);
-  --scenario-color: #4338ca;
-  --scenario-icon-bg: rgba(99, 102, 241, 0.15);
-  --scenario-icon-color: #4338ca;
-}
-
-.scenario-option[data-scenario="ceointerview"] {
-  --scenario-bg: linear-gradient(135deg, #eff6ff, #eef2ff);
-  --scenario-color: #1d4ed8;
-  --scenario-icon-bg: rgba(37, 99, 235, 0.15);
-  --scenario-icon-color: #1d4ed8;
-}
-
-.scenario-option[data-scenario="briefing"] {
-  --scenario-bg: linear-gradient(135deg, #fefce8, #fffbeb);
-  --scenario-color: #92400e;
-  --scenario-icon-bg: rgba(245, 158, 11, 0.15);
-  --scenario-icon-color: #ea580c;
-}
-
-.scenario-option[data-scenario="culture"] {
-  --scenario-bg: linear-gradient(135deg, #ecfccb, #dcfce7);
-  --scenario-color: #15803d;
-  --scenario-icon-bg: rgba(34, 197, 94, 0.15);
-  --scenario-icon-color: #16a34a;
-}
-
-.scenario-option[data-scenario="recipe"] {
-  --scenario-bg: linear-gradient(135deg, #fff1f2, #ffe4e6);
-  --scenario-color: #be185d;
-  --scenario-icon-bg: rgba(236, 72, 153, 0.15);
-  --scenario-icon-color: #ec4899;
-}
-
-.scenario-option[data-scenario="reviewer"] {
-  --scenario-bg: linear-gradient(135deg, #e0f2fe, #dbeafe);
-  --scenario-color: #0c4a6e;
-  --scenario-icon-bg: rgba(37, 99, 235, 0.15);
-  --scenario-icon-color: #2563eb;
-}
-
-.scenario-option[data-scenario="podcast"] {
-  --scenario-bg: linear-gradient(135deg, #fef3c7, #fdba74);
-  --scenario-color: #c2410c;
-  --scenario-icon-bg: rgba(245, 158, 11, 0.15);
-  --scenario-icon-color: #ea580c;
-}
-
-.scenario-option[data-scenario="onboarding"] {
-  --scenario-bg: linear-gradient(135deg, #fefce8, #fdfff4);
-  --scenario-color: #7c2d12;
-  --scenario-icon-bg: rgba(217, 119, 6, 0.15);
-  --scenario-icon-color: #a16207;
-}
-
-.scenario-option[data-scenario="salespitch"] {
-  --scenario-bg: linear-gradient(135deg, #fff1f2, #fee2e2);
-  --scenario-color: #b91c1c;
-  --scenario-icon-bg: rgba(239, 68, 68, 0.15);
-  --scenario-icon-color: #dc2626;
-}
-
-.scenario-option[data-scenario="mentorship"] {
-  --scenario-bg: linear-gradient(135deg, #f5f3ff, #ede9fe);
-  --scenario-color: #5b21b6;
-  --scenario-icon-bg: rgba(79, 70, 229, 0.15);
-  --scenario-icon-color: #4c1d95;
-}
-
-.scenario-option[data-scenario="techsupport"] {
-  --scenario-bg: linear-gradient(135deg, #ecfeff, #f0fdfa);
-  --scenario-color: #0f766e;
-  --scenario-icon-bg: rgba(6, 182, 212, 0.15);
-  --scenario-icon-color: #0d9488;
-}
-
-.scenario-option[data-scenario="creative"] {
-  --scenario-bg: linear-gradient(135deg, #ffedd5, #fef3c7);
-  --scenario-color: #c2410c;
-  --scenario-icon-bg: rgba(249, 115, 22, 0.15);
-  --scenario-icon-color: #ea580c;
-}
-
-.scenario-option[data-scenario="finance"] {
-  --scenario-bg: linear-gradient(135deg, #ecfccb, #dcfce7);
-  --scenario-color: #15803d;
-  --scenario-icon-bg: rgba(16, 185, 129, 0.15);
-  --scenario-icon-color: #16a34a;
-}
-
-.scenario-option[data-scenario="policy"] {
-  --scenario-bg: linear-gradient(135deg, #ede9fe, #e0e7ff);
-  --scenario-color: #4338ca;
-  --scenario-icon-bg: rgba(99, 102, 241, 0.15);
-  --scenario-icon-color: #4338ca;
-}
-
-.scenario-option[data-scenario="wellness"] {
-  --scenario-bg: linear-gradient(135deg, #ecfccb, #dcfce7);
-  --scenario-color: #15803d;
-  --scenario-icon-bg: rgba(134, 239, 172, 0.15);
-  --scenario-icon-color: #16a34a;
-}
-
-.scenario-option[data-scenario="event"] {
-  --scenario-bg: linear-gradient(135deg, #e0f2fe, #f5f3ff);
-  --scenario-color: #1d4ed8;
-  --scenario-icon-bg: rgba(37, 99, 235, 0.15);
-  --scenario-icon-color: #1d4ed8;
-}
-
-.scenario-option[data-scenario="celebration"] {
-  --scenario-bg: linear-gradient(135deg, #fff1f2, #fee2e2);
-  --scenario-color: #be185d;
-  --scenario-icon-bg: rgba(236, 72, 153, 0.15);
-  --scenario-icon-color: #ec4899;
-}
-
-.scenario-option[data-scenario="code"] {
-  --scenario-bg: linear-gradient(135deg, #e0f2fe, #dbeafe);
-  --scenario-color: #0c4a6e;
-  --scenario-icon-bg: rgba(37, 99, 235, 0.15);
-  --scenario-icon-color: #2563eb;
-}
-
-.scenario-option[data-scenario="crosscultural"] {
-  --scenario-bg: linear-gradient(135deg, #ecfccb, #dcfce7);
-  --scenario-color: #15803d;
-  --scenario-icon-bg: rgba(16, 185, 129, 0.15);
-  --scenario-icon-color: #16a34a;
-}
-
-.scenario-option[data-scenario="holiday"] {
-  --scenario-bg: linear-gradient(135deg, #fffbeb, #fef3c7);
-  --scenario-color: #92400e;
-  --scenario-icon-bg: rgba(245, 158, 11, 0.15);
-  --scenario-icon-color: #f97316;
-}
-
-.scenario-option[data-scenario="charity"] {
-  --scenario-bg: linear-gradient(135deg, #ecfeff, #f0fdfa);
-  --scenario-color: #0f766e;
-  --scenario-icon-bg: rgba(16, 185, 129, 0.15);
-  --scenario-icon-color: #16a34a;
-}
-
-.scenario-option[data-scenario="englishnews"] {
-  --scenario-bg: linear-gradient(135deg, #fff7ed, #fff1f2);
-  --scenario-color: #b91c1c;
-  --scenario-icon-bg: rgba(239, 68, 68, 0.15);
-  --scenario-icon-color: #dc2626;
-}
-
-.scenario-option[data-scenario="collaboration"] {
-  --scenario-bg: linear-gradient(135deg, #e0f2fe, #dbeafe);
-  --scenario-color: #0c4a6e;
-  --scenario-icon-bg: rgba(37, 99, 235, 0.15);
-  --scenario-icon-color: #2563eb;
-}
-
-.scenario-option[data-scenario="feedbackpanel"] {
-  --scenario-bg: linear-gradient(135deg, #ede9fe, #e0e7ff);
-  --scenario-color: #4338ca;
-  --scenario-icon-bg: rgba(99, 102, 241, 0.15);
-  --scenario-icon-color: #4338ca;
-}
-
-.scenario-option[data-scenario="inspection"] {
-  --scenario-bg: linear-gradient(135deg, #ecfccb, #dcfce7);
-  --scenario-color: #15803d;
-  --scenario-icon-bg: rgba(16, 185, 129, 0.15);
-  --scenario-icon-color: #16a34a;
-}
-
-.scenario-option[data-scenario="science"] {
-  --scenario-bg: linear-gradient(135deg, #e0f2fe, #dbeafe);
-  --scenario-color: #0c4a6e;
-  --scenario-icon-bg: rgba(37, 99, 235, 0.15);
-  --scenario-icon-color: #2563eb;
-}
-
-.scenario-option[data-scenario="media"] {
-  --scenario-bg: linear-gradient(135deg, #fef3c7, #fef9c3);
-  --scenario-color: #92400e;
-  --scenario-icon-bg: rgba(245, 158, 11, 0.15);
-  --scenario-icon-color: #f97316;
-}
-.scenario-option[data-scenario="bookclub"] {
-  --scenario-bg: linear-gradient(135deg, #f5f3ff, #ede9fe);
-  --scenario-color: #5b21b6;
-  --scenario-icon-bg: rgba(79, 70, 229, 0.15);
-  --scenario-icon-color: #4c1d95;
-}
-
-.scenario-option[data-scenario="coach"] {
-  --scenario-bg: linear-gradient(135deg, #e0f2fe, #dbeafe);
-  --scenario-color: #0c4a6e;
-  --scenario-icon-bg: rgba(37, 99, 235, 0.15);
-  --scenario-icon-color: #2563eb;
-}
-
-.scenario-option[data-scenario="news"] {
-  --scenario-bg: linear-gradient(135deg, #fff7ed, #fff1f2);
-  --scenario-color: #b91c1c;
-  --scenario-icon-bg: rgba(239, 68, 68, 0.15);
-  --scenario-icon-color: #dc2626;
-}
 
 .ai-mode {
   display: flex;
@@ -606,25 +430,39 @@
 .ai-voice-practice__actions--primary {
   justify-content: center;
   width: 100%;
+  flex-shrink: 0;
 }
 
 .ai-voice-practice__actions--secondary {
   justify-content: center;
   gap: 12px;
   width: 100%;
+  flex-shrink: 0;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  margin-top: 12px;
+  padding-top: 12px;
+  background: linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,0.92) 22%, rgba(255,255,255,0.98));
+}
+
+.ai-speaking-transcript-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .ai-voice-practice__overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
+  position: fixed;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(15, 23, 42, 0.25);
-  z-index: 10;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.22);
+  z-index: 120;
 }
 
 .ai-voice-practice__overlay-card {
@@ -679,6 +517,108 @@
   box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
 }
 
+.ai-speaking-session-panel__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding-bottom: 12px;
+  background: var(--bg-surface, rgba(255, 255, 255, 0.94));
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.ai-speaking-session-panel__body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ai-speaking-session-panel__eyebrow {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #6366f1;
+  margin-bottom: 8px;
+}
+
+.ai-speaking-session-panel__title {
+  margin: 0;
+  font-size: clamp(1.4rem, 2vw, 1.9rem);
+  color: #0f172a;
+}
+
+.ai-speaking-session-panel__subtitle {
+  margin: 6px 0 0;
+  color: #475569;
+}
+
+.ai-speaking-session-panel__roles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.ai-speaking-role-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(99, 102, 241, 0.08);
+  border: 1px solid rgba(99, 102, 241, 0.16);
+  color: #3730a3;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ai-speaking-session-panel__close {
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(255, 255, 255, 0.92);
+  color: #475569;
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.08);
+}
+
+.ai-speaking-session-panel__close:hover {
+  color: #0f172a;
+  border-color: rgba(99, 102, 241, 0.32);
+}
+
+.ai-speaking-active #aiScenarioSection {
+  display: none;
+}
+
+.ai-speaking-active #aiActionCard {
+  display: block;
+}
+
+@media (max-width: 900px) {
+  .ai-voice-practice__scenario-options {
+    max-height: calc(100vh - 210px);
+    padding-right: 4px;
+  }
+
+  #aiActionCard{
+    width: min(100%, calc(100vw - 20px));
+    height: calc(100vh - 170px);
+    max-height: calc(100vh - 170px);
+  }
+}
+
 .ai-btn {
   border: none;
   background: linear-gradient(135deg, #a855f7, #3b82f6);
@@ -710,6 +650,11 @@
   box-shadow: none;
 }
 
+#aiAudioUnlockBtn {
+  border-color: rgba(59, 130, 246, 0.28);
+  background: rgba(59, 130, 246, 0.08);
+}
+
 .ai-btn--icon {
   padding: 10px 12px;
   background: rgba(148, 163, 184, 0.1);
@@ -731,9 +676,12 @@
   border: 1px solid rgba(148, 163, 184, 0.25);
   background: rgba(255, 255, 255, 0.7);
   padding: 12px;
-  min-height: 140px;
-  max-height: 360px;
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
+  max-height: none;
   overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .ai-voice-practice__mode-panel {

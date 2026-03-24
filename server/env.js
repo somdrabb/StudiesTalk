@@ -66,10 +66,10 @@ const FFMPEG_MODE = optional('FFMPEG_MODE', 'auto').trim().toLowerCase();
 const FFMPEG_PATH = optional('FFMPEG_PATH', '');
 const FFMPEG_STRICT = bool('FFMPEG_STRICT', false);
 const OPENAI_API_KEY = optional('OPENAI_API_KEY', '');
-const OPENAI_REALTIME_MODEL = optional('OPENAI_REALTIME_MODEL', 'gpt-4o-mini');
+const OPENAI_REALTIME_MODEL = optional('OPENAI_REALTIME_MODEL', 'gpt-4o-mini-realtime-preview');
 const OPENAI_REALTIME_URL = optional(
   'OPENAI_REALTIME_URL',
-  'https://api.openai.com/realtime/client_secrets'
+  'https://api.openai.com/v1/realtime/client_secrets'
 );
 const OPENAI_REALTIME_VOICE = optional('OPENAI_REALTIME_VOICE', 'alloy');
 const AI_INPUT_TOKEN_RATE_EUR = optional('AI_INPUT_TOKEN_RATE_EUR', '0.000015');

@@ -34,10 +34,13 @@ let adminAssignSelectedUserId = null;
 let adminAssignSelectedWorkspaceId = null;
 let adminAssignSelectedChannelId = null;
 let eventSource = null;
+let realtimeRetryTimer = null;
+let realtimeRetryDelayMs = 3000;
 let uiNavigationToken = 0;
 let pendingUploads = []; // files uploaded but not yet sent in a message
 let threadPendingUploads = []; // files uploaded for thread replies
 let deepLinkTarget = null;
+let liveRoomRouteTarget = null;
 let mediaRecorder = null;
 let recordedChunks = [];
 let recordingKind = null; // "audio" | "video"
@@ -131,6 +134,7 @@ function getCurrentWorkspaceId() {
 }
 const CURRENT_CHANNEL_STORAGE_KEY = "worknest_current_channel";
 const LAST_VIEW_STORAGE_KEY = "worknest_last_view";
+const LOGIN_LAND_HOMEWORK_FLAG = "worknest_login_land_homework_once";
 const LAST_ACTIVE_VIEW_KEY = "worknest_last_active_view";
 const SCROLL_STATE_STORAGE_KEY = "worknest_scroll_state";
 const SIDEBAR_SCROLL_KEY = "worknest_sidebar_scroll_v1";
@@ -141,6 +145,121 @@ const STAR_KEY = "worknest_starred_channels_v1";
 const DM_LAST_VISIT_KEY = "worknest_dm_last_visit_v1";
 const REGISTRATION_MODAL_STATE_KEY = "worknest_registration_modal_state";
 let ACCESS_TOKEN = null;
+let isChannelFullscreen = false;
+let isLiveRoomFocusMode = false;
+
+function withNoopMethod(target, methodName, returnValue = null) {
+  if (!target || typeof target[methodName] !== "function") return;
+  try {
+    target[methodName] = () => returnValue;
+  } catch (_err) {}
+}
+
+function shutdownLiveVisionWorkloads() {
+  const candidates = [
+    window.human,
+    window.Human,
+    window.faceapi,
+    window.tf,
+    window.__humanInstance,
+    window.__faceDetectionWorker,
+    window.__faceLandmarkWorker,
+    window.__visionWorker
+  ].filter(Boolean);
+
+  candidates.forEach((candidate) => {
+    try { candidate.stop?.(); } catch (_err) {}
+    try { candidate.reset?.(); } catch (_err) {}
+    try { candidate.dispose?.(); } catch (_err) {}
+    try { candidate.terminate?.(); } catch (_err) {}
+  });
+
+  withNoopMethod(window.human, "detect", null);
+  withNoopMethod(window.human, "load", null);
+  withNoopMethod(window.human, "warmup", null);
+  withNoopMethod(window.Human?.prototype || null, "detect", null);
+  withNoopMethod(window.Human?.prototype || null, "load", null);
+  withNoopMethod(window.Human?.prototype || null, "warmup", null);
+}
+
+function setLiveSessionActivity(active = false) {
+  const isActive = !!active;
+  window.__liveSessionActive = isActive;
+  window.__disableHumanDuringLive = isActive;
+  window.__shouldSkipHumanForLiveSession = () => !!window.__liveSessionActive;
+  document.body.classList.toggle("live-session-active", isActive);
+  document.documentElement.classList.toggle("live-session-active", isActive);
+  if (isActive) {
+    shutdownLiveVisionWorkloads();
+  }
+}
+
+function normalizeComparableUrl(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw, window.location.origin);
+    url.hash = "";
+    return url.toString();
+  } catch (_err) {
+    return raw;
+  }
+}
+
+function buildLivePresenterPath(channelId, sessionId) {
+  const safeChannelId = String(channelId || "session").trim() || "session";
+  const safeSessionId = String(sessionId || "").trim();
+  if (!safeSessionId) return "/";
+  return `/channels/${encodeURIComponent(safeChannelId)}/live/${encodeURIComponent(safeSessionId)}/presenter`;
+}
+
+function buildLiveMeetingLaunchUrl(meetingUrl, options = {}) {
+  const rawUrl = String(meetingUrl || "").trim();
+  if (!rawUrl) return "";
+  const jwt = String(options.jwt || "").trim();
+  const startWithVideoMuted = options.startWithVideoMuted !== false;
+  const disablePrejoin = options.disablePrejoin !== false;
+  try {
+    const url = new URL(rawUrl, window.location.origin);
+    if (jwt) {
+      url.searchParams.set("jwt", jwt);
+    }
+    const hashParams = new URLSearchParams(String(url.hash || "").replace(/^#/, ""));
+    if (disablePrejoin) {
+      hashParams.set("config.prejoinPageEnabled", "false");
+      hashParams.set("config.requireDisplayName", "false");
+    }
+    if (startWithVideoMuted) {
+      hashParams.set("config.startWithVideoMuted", "true");
+    }
+    hashParams.set("config.disableDeepLinking", "true");
+    hashParams.set("config.startSilent", "true");
+    url.hash = hashParams.toString() ? `#${hashParams.toString()}` : "";
+    return url.toString();
+  } catch (_err) {
+    return rawUrl;
+  }
+}
+
+function getLiveRoomRouteTargetFromLocation() {
+  return null;
+}
+
+function loadLiveRoomRouteTarget() {
+  liveRoomRouteTarget = getLiveRoomRouteTargetFromLocation();
+}
+
+function isLiveRoomRouteActive() {
+  return !!getLiveRoomRouteTargetFromLocation();
+}
+
+function syncBrowserToLiveRoomPath(channelId, sessionId, { replace = false } = {}) {
+  return;
+}
+
+function clearBrowserLiveRoomPath({ replace = true } = {}) {
+  return;
+}
 
 // ---- TASKS UI ----
 const TASK_CHANNEL_NAMES = new Set(["school task", "teachers task", "student tasks"]);
@@ -244,9 +363,9 @@ async function bootstrapAfterAuth(user, options = {}) {
     if (deepLinkTarget) {
       applyDeepLinkSelection();
     } else {
-      const firstVisibleClassChannelId = getFirstVisibleClassChannelId();
-      if (firstVisibleClassChannelId) {
-        await selectChannel(firstVisibleClassChannelId);
+      const defaultLandingChannelId = getDefaultLandingChannelId(authWorkspaceId);
+      if (defaultLandingChannelId) {
+        await selectChannel(defaultLandingChannelId);
       } else {
         showHomeView();
       }
@@ -1011,12 +1130,13 @@ async function loadServerData() {
 
     // 2) then channels for the selected workspace
     await loadChannelsForWorkspace(currentWorkspaceId);
+    await loadCurrentUserClasses(currentWorkspaceId);
     loadCurrentChannelId();
     scrollState = loadScrollState();
     scrollAnchors = loadScrollAnchors();
-    const lastView = loadLastView();
+    const lastView = liveRoomRouteTarget || loadLastView();
     if (!currentChannelId && channels.length) {
-      currentChannelId = channels[0].id;
+      currentChannelId = getDefaultLandingChannelId() || channels[0].id;
     }
 
     // 3) DMs (filtered by membership/creator)
@@ -1031,6 +1151,7 @@ async function loadServerData() {
     const targetChannel =
       (lastView && lastView.channelId && findChannelById(lastView.channelId)) ||
       findChannelById(currentChannelId) ||
+      findChannelById(getDefaultLandingChannelId()) ||
       channels[0];
     if (targetChannel) {
       currentChannelId = targetChannel.id;
@@ -1102,7 +1223,7 @@ async function restoreLastView(lastView = null) {
   }
 }
 
-const LIVE_MANAGER_ROLES = new Set(["teacher", "school_admin", "super_admin"]);
+const LIVE_MANAGER_ROLES = new Set(["teacher", "admin", "school_admin", "super_admin"]);
 
 function canCurrentUserManageLive() {
   if (!sessionUser) return false;
@@ -1112,6 +1233,7 @@ function canCurrentUserManageLive() {
 function updateLiveCreateVisibility() {
   if (!liveCreateBtn) return;
   liveCreateBtn.hidden = !canCurrentUserManageLive();
+  if (liveHostBtn) liveHostBtn.hidden = !canCurrentUserManageLive();
 }
 
 /* ---------- Admin helpers ---------- */
@@ -1334,7 +1456,7 @@ function resetCultureTranslationState() {
 async function loadUserDirectory() {
   if (userDirectoryLoaded) return userDirectoryCache;
   const role = normalizeRole(sessionUser?.role || sessionUser?.userRole || "");
-  const canReadDirectory = role === "admin" || role === "school_admin" || role === "super_admin";
+  const canReadDirectory = role === "teacher" || role === "admin" || role === "school_admin" || role === "super_admin";
   if (!canReadDirectory) {
     userDirectoryCache = [];
     userDirectoryLoaded = true;
@@ -2408,10 +2530,14 @@ function loadLastView() {
       ...parsed,
       channelId: parsed.channelId ? String(parsed.channelId) : null,
       threadChannelId: parsed.threadChannelId ? String(parsed.threadChannelId) : null,
-      threadMessageId: parsed.threadMessageId ? String(parsed.threadMessageId) : null
+      threadMessageId: parsed.threadMessageId ? String(parsed.threadMessageId) : null,
+      liveSessionId: parsed.liveSessionId ? String(parsed.liveSessionId) : null,
+      liveChannelId: parsed.liveChannelId ? String(parsed.liveChannelId) : null
     };
 
     if (
+      view.viewMode !== "live-room" &&
+      view.viewMode !== "live-presenter" &&
       view.channelId &&
       !findChannelById(view.channelId) &&
       !isDmChannel(view.channelId)
@@ -2449,7 +2575,9 @@ function persistLastView(state = {}) {
       threadMessageId: state.threadMessageId ? String(state.threadMessageId) : null,
       threadChannelId: state.threadChannelId ? String(state.threadChannelId) : null,
       viewMode,
-      directoryRole
+      directoryRole,
+      liveSessionId: state.liveSessionId ? String(state.liveSessionId) : null,
+      liveChannelId: state.liveChannelId ? String(state.liveChannelId) : null
     };
     localStorage.setItem(LAST_VIEW_STORAGE_KEY, JSON.stringify(payload));
   } catch (err) {
@@ -3234,7 +3362,7 @@ function openHomePanel() {
   showPanel("chatPanel");
 }
 
-function openAiAssistant() {
+async function openAiAssistant() {
   showPanel("aiPanel");
 
   if (headerChannelName) headerChannelName.textContent = "AI Assistant";
@@ -3248,6 +3376,8 @@ function openAiAssistant() {
   aiMode = defaultTab?.getAttribute("data-ai-mode") || "assistant";
   renderAiActions();
   updateAiContextBlock();
+  await loadAiConversationHistory();
+  if (!aiMessages?.querySelector(".ai-row")) renderAiEmptyState();
 }
 
 function showHomeView() {
@@ -3265,6 +3395,7 @@ function showHomeView() {
 
 function appendAiBubble(role, text) {
   if (!aiMessages) return;
+  removeAiEmptyState();
   const row = document.createElement("div");
   row.className = `ai-row ai-row-${role}`;
   const bubble = document.createElement("div");
@@ -3277,7 +3408,24 @@ function appendAiBubble(role, text) {
 
 function sanitizeAiReplyText(value) {
   if (!value) return "";
-  return value.replace(/^\s*\*\s+/gm, "• ").replace(/\n\s*\*\s+/gm, "\n• ");
+  return String(value)
+    .replace(/\r\n?/g, "\n")
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/^\s*[-+*]\s+/gm, "• ")
+    .replace(/^\s*(\d+)\s*[\)\.]\s+/gm, "$1. ")
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/__(.*?)__/g, "$1")
+    .replace(/(^|[^\*])\*(?!\s)([^*\n]+?)\*(?!\*)/g, "$1$2")
+    .replace(/(^|[^_])_([^_\n]+?)_(?!_)/g, "$1$2")
+    .replace(/`{1,3}([^`\n]+)`{1,3}/g, "$1")
+    .replace(/^\s*>\s?/gm, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n•(?=\S)/g, "\n• ")
+    .replace(/\n(\d+)\.(?=\S)/g, "\n$1. ")
+    .replace(/[ \t]+$/gm, "")
+    .trim();
 }
 
 
@@ -3343,6 +3491,7 @@ async function typeIntoBubble({ bubble, text, state }) {
 function appendAiStreamingBubble() {
   const host = document.getElementById("aiMessages");
   if (!host) return null;
+  removeAiEmptyState();
 
   const row = document.createElement("div");
   row.className = "ai-row ai-row-assistant";
@@ -3403,6 +3552,233 @@ function buildAiUserContext() {
   };
 }
 
+const aiEmptySuggestions = {
+  teacher: [
+    "Create attendance overview for my class",
+    "Summarize class progress",
+    "Draft homework for this week",
+    "Create quick grammar quiz",
+    "Prepare speaking exercise",
+    "Generate lesson summary",
+    "Write parent update message",
+    "Create exam practice questions",
+    "Summarize weak topics in my class",
+    "Draft classroom announcement"
+  ],
+  admin: [
+    "Draft school announcement",
+    "Create attendance overview",
+    "Summarize payment status",
+    "Write student registration reply",
+    "Prepare teacher update notice",
+    "Draft fee reminder email",
+    "Summarize school activity",
+    "Generate weekly admin report",
+    "Create exam reminder message",
+    "Draft class schedule update",
+    "Summarize pending registrations",
+    "Write holiday notice",
+    "Prepare parent information message",
+    "Review school communication draft",
+    "Generate school operations summary"
+  ],
+  student: [
+    "Show my attendance overview",
+    "Show my learning progress",
+    "Show my payment overview",
+    "Show next exam registration date",
+    "Summarize my homework",
+    "Help me practice grammar",
+    "Create quiz from my lesson",
+    "Explain today's class simply",
+    "Help me prepare for next exam",
+    "Show my pending tasks"
+  ]
+};
+
+function getAiSuggestionRoleBucket() {
+  const role = String(getAiExplicitRole() || "").toLowerCase();
+  if (role.includes("admin")) return "admin";
+  if (role === "teacher" || role === "owner") return "teacher";
+  return "student";
+}
+
+function fillAiPrompt(prompt) {
+  if (!aiInput) return;
+  aiInput.value = prompt;
+  aiInput.focus();
+}
+
+function submitAiPrompt(prompt) {
+  if (!prompt) return;
+  fillAiPrompt(prompt);
+  sendAiMessage();
+}
+
+function removeAiEmptyState() {
+  aiMessages?.querySelector(".ai-empty-state")?.remove();
+}
+
+function getAiHistoryScopeKey() {
+  const workspaceId = String(sessionUser?.workspaceId || currentWorkspaceId || "default").trim() || "default";
+  const userId = String(sessionUser?.userId || sessionUser?.id || sessionUser?.email || "anon").trim() || "anon";
+  return `${workspaceId}::${userId}`;
+}
+
+function getAiConversationStorageKey() {
+  return `studiestalk_ai_conversation_${getAiHistoryScopeKey()}`;
+}
+
+function readStoredAiConversationId() {
+  try {
+    return localStorage.getItem(getAiConversationStorageKey()) || "";
+  } catch (_err) {
+    return "";
+  }
+}
+
+function storeAiConversationId(conversationId) {
+  try {
+    const key = getAiConversationStorageKey();
+    if (conversationId) localStorage.setItem(key, String(conversationId));
+    else localStorage.removeItem(key);
+  } catch (_err) {
+    /* ignore */
+  }
+}
+
+function clearAiMessages() {
+  if (aiMessages) aiMessages.innerHTML = "";
+}
+
+function renderAiHistoryMessages(messages = []) {
+  if (!aiMessages) return;
+  clearAiMessages();
+  const safeItems = Array.isArray(messages) ? messages : [];
+  safeItems.forEach((item) => {
+    const role = String(item?.role || "").trim().toLowerCase();
+    const rawContent = String(item?.content || "").trim();
+    const content = role === "assistant" ? sanitizeAiReplyText(rawContent) : rawContent;
+    if (!content || !["user", "assistant"].includes(role)) return;
+    const row = document.createElement("div");
+    row.className = `ai-row ai-row-${role}`;
+    const bubble = document.createElement("div");
+    bubble.className = `ai-bubble ai-bubble-${role}`;
+    bubble.textContent = content;
+    row.appendChild(bubble);
+    aiMessages.appendChild(row);
+  });
+  if (!safeItems.length) renderAiEmptyState();
+  if (aiMessages) aiMessages.scrollTop = aiMessages.scrollHeight;
+}
+
+async function saveAiConversationMessages(items = []) {
+  if (!aiConversationId || !Array.isArray(items) || !items.length) return;
+  const messages = items
+    .map((item) => ({
+      role: String(item?.role || "").trim().toLowerCase(),
+      content: String(item?.content || "").trim()
+    }))
+    .filter((item) => item.content && ["user", "assistant"].includes(item.role));
+  if (!messages.length) return;
+  try {
+    await apiFetch(`/api/ai/conversation/${encodeURIComponent(aiConversationId)}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ messages })
+    });
+  } catch (err) {
+    console.error("Failed to save AI conversation messages", err);
+  }
+}
+
+async function ensureAiConversation() {
+  if (aiConversationId) return aiConversationId;
+  try {
+    const resp = await apiFetch("/api/ai/conversation/start", {
+      method: "POST",
+      body: JSON.stringify({ scenario: "chat", mode: aiMode || "assistant" })
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    aiConversationId = String(data?.conversation_id || "").trim() || null;
+    storeAiConversationId(aiConversationId || "");
+  } catch (err) {
+    console.error("Failed to create AI conversation", err);
+  }
+  return aiConversationId;
+}
+
+async function loadAiConversationHistory(force = false) {
+  if (!aiMessages) return;
+  const scopeKey = getAiHistoryScopeKey();
+  if (!force && aiHistoryLoadedForKey === scopeKey) return;
+  try {
+    const preferredId = readStoredAiConversationId();
+    const targetUrl = preferredId
+      ? `/api/ai/conversation/${encodeURIComponent(preferredId)}`
+      : "/api/ai/conversation/latest";
+    let resp = await apiFetch(targetUrl);
+    if (preferredId && resp.status === 404) {
+      storeAiConversationId("");
+      resp = await apiFetch("/api/ai/conversation/latest");
+    }
+    if (resp.status === 401) {
+      storeAiConversationId("");
+      clearAiMessages();
+      renderAiEmptyState();
+      return;
+    }
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    aiConversationId = String(data?.conversation?.id || "").trim() || null;
+    storeAiConversationId(aiConversationId || "");
+    renderAiHistoryMessages(Array.isArray(data?.messages) ? data.messages : []);
+  } catch (err) {
+    console.error("Failed to load AI conversation history", err);
+    clearAiMessages();
+    renderAiEmptyState();
+  } finally {
+    aiHistoryLoadedForKey = scopeKey;
+  }
+}
+
+function renderAiEmptyState() {
+  if (!aiMessages) return;
+  if (aiMessages.querySelector(".ai-row")) {
+    removeAiEmptyState();
+    return;
+  }
+  const roleBucket = getAiSuggestionRoleBucket();
+  const suggestions = aiEmptySuggestions[roleBucket] || aiEmptySuggestions.student;
+  let emptyState = aiMessages.querySelector(".ai-empty-state");
+  if (!emptyState) {
+    emptyState = document.createElement("div");
+    emptyState.className = "ai-empty-state";
+    aiMessages.appendChild(emptyState);
+  }
+  emptyState.dataset.aiRole = roleBucket;
+  emptyState.innerHTML = `
+    <div class="ai-empty-state-head">Suggested actions</div>
+    <div class="ai-empty-state-sub">Choose a prompt starter to begin faster.</div>
+    <div class="ai-empty-suggestions">
+      ${suggestions
+        .map(
+          (label) => `
+            <button type="button" class="ai-empty-suggestion" data-ai-suggestion="${escapeHtml(label)}" title="${escapeHtml(label)}">
+              ${escapeHtml(label)}
+            </button>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+  emptyState.querySelectorAll(".ai-empty-suggestion").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      submitAiPrompt(btn.getAttribute("data-ai-suggestion") || "");
+    });
+  });
+}
+
 
 const aiTemplates = {
   assistant: [
@@ -3455,10 +3831,7 @@ function renderAiActions() {
 
   aiActionsContainer.querySelectorAll(".ai-action").forEach((btn) => {
     btn.addEventListener("click", () => {
-      const prompt = btn.getAttribute("data-ai-prompt") || "";
-      if (!aiInput) return;
-      aiInput.value = prompt;
-      aiInput.focus();
+      fillAiPrompt(btn.getAttribute("data-ai-prompt") || "");
     });
   });
 }
@@ -3486,7 +3859,9 @@ function renderAiActions() {
     aiActiveController = null;
   }
 
+  await ensureAiConversation();
   appendAiBubble("user", text);
+  await saveAiConversationMessages([{ role: "user", content: text }]);
   aiInput.value = "";
 
   const sendBtn = document.getElementById("aiSendBtn");
@@ -3574,10 +3949,9 @@ function renderAiActions() {
 
   try {
     hideAiServerError();
-    const resp = await fetch("/api/ai/chat_stream", {
+    const resp = await apiFetch("/api/ai/chat_stream", {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
         "x-user-id": getCurrentUserId(),
         "x-user-role": userRoleHeader()
       },
@@ -3616,8 +3990,14 @@ function renderAiActions() {
     const finalMeta = bubble?.querySelector(".ai-meta");
     if (finalMeta) finalMeta.remove();
     if (state.caretEl) state.caretEl.remove();
-    if (bubble && !state.full.trim() && !gotAnyChunk) {
+    const streamError = parseAiStreamError(state.full);
+    if (streamError) {
+      if (bubble) bubble.remove();
+      showAiServerError(streamError);
+    } else if (bubble && !state.full.trim() && !gotAnyChunk) {
       bubble.textContent = "I couldn't generate a reply.";
+    } else if (state.full.trim()) {
+      await saveAiConversationMessages([{ role: "assistant", content: sanitizeAiReplyText(state.full) }]);
     }
   } catch (err) {
     console.error("AI streaming error", err);
@@ -3833,6 +4213,7 @@ function clearSectionHeaderState() {
   if (headerStarBtn) headerStarBtn.hidden = true;
   if (headerPinBtn) headerPinBtn.hidden = true;
   if (toggleThreadColumnBtn) toggleThreadColumnBtn.hidden = true;
+  if (headerFullscreenBtn) headerFullscreenBtn.hidden = true;
   if (headerMuteBtn) headerMuteBtn.hidden = true;
   if (channelAddMemberBtn) channelAddMemberBtn.classList.add("hidden");
   if (channelAttendanceBtn) channelAttendanceBtn.classList.add("hidden");
@@ -3865,6 +4246,20 @@ function clearSectionHeaderState() {
 function showPanel(panelId) {
   const token = ++uiNavigationToken;
   clearSectionHeaderState();
+  if (panelId !== "chatPanel" && document.fullscreenElement && document.fullscreenElement === getChannelFullscreenTarget()) {
+    document.exitFullscreen?.().catch?.(() => {});
+  }
+  if (panelId !== "livePanel") {
+    setLiveRoomFocusMode(false);
+    setLivePresenterMode(false);
+    if (liveRoomView && !liveRoomView.classList.contains("hidden")) {
+      try {
+        if (typeof leaveLiveMeetingEmbed === "function") leaveLiveMeetingEmbed();
+      } catch (_err) {}
+      setLivePanelView("hub");
+    }
+    clearBrowserLiveRoomPath();
+  }
   setAppFullScreenMode(panelId !== "chatPanel");
   if (panelId !== "adminPanel") {
     restoreUserProfileCardToModal();
@@ -3893,6 +4288,307 @@ function showPanel(panelId) {
   }
 
   return token;
+}
+
+function setLivePanelView(mode = "hub") {
+  const showRoom = mode === "room";
+  if (liveHubView) {
+    liveHubView.classList.toggle("hidden", showRoom);
+    liveHubView.setAttribute("aria-hidden", showRoom ? "true" : "false");
+  }
+  if (liveRoomView) {
+    liveRoomView.classList.toggle("hidden", !showRoom);
+    liveRoomView.setAttribute("aria-hidden", showRoom ? "false" : "true");
+  }
+  if (!showRoom) {
+    setLiveRoomFocusMode(false);
+    setLiveSessionActivity(false);
+  }
+}
+
+function setLivePresenterMode(active = false) {
+  document.body.classList.toggle("live-presenter-mode", !!active);
+  document.documentElement.classList.toggle("live-presenter-mode", !!active);
+}
+
+function updateLiveFocusModeButton() {
+  liveModeToggleButtons.forEach((btn) => {
+    btn.setAttribute("aria-pressed", isLiveRoomFocusMode ? "true" : "false");
+    btn.setAttribute("title", isLiveRoomFocusMode ? "Exit live mode" : "Enter live mode");
+    btn.innerHTML = `${isLiveRoomFocusMode
+      ? '<i class="fa-solid fa-table-cells-large"></i> Exit Live Mode'
+      : '<i class="fa-solid fa-sliders"></i> Enter Live Mode'}`;
+    const icon = btn.querySelector("i");
+    if (icon) icon.setAttribute("aria-hidden", "true");
+  });
+}
+
+function setLiveRoomFocusMode(active = false) {
+  isLiveRoomFocusMode = !!active;
+  document.body.classList.toggle("live-active", isLiveRoomFocusMode);
+  livePanel?.classList.toggle("live-room-focus-mode", isLiveRoomFocusMode);
+  appShell?.classList.toggle("hide-sidebar", isLiveRoomFocusMode);
+  setLiveSessionActivity(isLiveRoomFocusMode);
+  updateLiveFocusModeButton();
+}
+
+function resolveLiveRouteChannelId(session = null, fallbackChannelId = null) {
+  return String(
+    fallbackChannelId ||
+    session?.channel_id ||
+    session?.channelId ||
+    currentChannelId ||
+    session?.audience ||
+    "session"
+  ).trim() || "session";
+}
+
+function getLiveSessionById(sessionId) {
+  return liveSessions.find((session) => String(session.id) === String(sessionId)) || null;
+}
+
+async function ensureLiveSessionsLoadedForRouting() {
+  if (Array.isArray(liveSessions) && liveSessions.length) return liveSessions;
+  try {
+    const res = await fetchJSON(`/api/live-sessions?scope=${encodeURIComponent("all")}`);
+    liveSessions = Array.isArray(res) ? dedupeSessions(res) : [];
+  } catch (err) {
+    console.error("Failed to load live sessions for routing", err);
+  }
+  return liveSessions;
+}
+
+async function resolveLiveAnnouncementRouteTarget(linkEl) {
+  if (!linkEl) return null;
+  const directSessionId = String(linkEl.getAttribute("data-live-session-id") || "").trim();
+  const directChannelId = String(linkEl.getAttribute("data-live-channel-id") || "").trim();
+  if (directSessionId) {
+    return { sessionId: directSessionId, channelId: directChannelId || null };
+  }
+
+  const href = normalizeComparableUrl(linkEl.getAttribute("href") || "");
+  const card = linkEl.closest(".live-announcement-card");
+  const title = String(card?.querySelector(".live-announcement-title")?.textContent || "").trim();
+  const sessions = await ensureLiveSessionsLoadedForRouting();
+  if (!Array.isArray(sessions) || !sessions.length) return null;
+
+  const currentChannel = String(currentChannelId || "").trim();
+  const byMeetingUrl = sessions.filter((session) => {
+    const meetingUrl = normalizeComparableUrl(session?.meeting_url || "");
+    const roomName = String(session?.room_name || "").trim();
+    return (
+      (href && meetingUrl && href === meetingUrl) ||
+      (href && roomName && href.includes(roomName))
+    );
+  });
+
+  const candidates = byMeetingUrl.length
+    ? byMeetingUrl
+    : sessions.filter((session) => String(session?.title || "").trim() === title);
+  if (!candidates.length) return null;
+
+  const preferred =
+    candidates.find((session) => String(session?.channel_id || "") === currentChannel) ||
+    candidates[0];
+
+  if (!preferred?.id) return null;
+  return {
+    sessionId: String(preferred.id),
+    channelId: resolveLiveRouteChannelId(preferred, currentChannel || directChannelId || null)
+  };
+}
+
+function primeLiveAnnouncementLinks(root) {
+  if (!root) return;
+  root.querySelectorAll(".live-announcement-card .live-announcement-cta").forEach((linkEl) => {
+    if (!(linkEl instanceof HTMLAnchorElement)) return;
+    linkEl.setAttribute("target", "_blank");
+    linkEl.setAttribute("rel", "noopener noreferrer");
+  });
+}
+
+function formatLiveSessionScheduleLabel(session) {
+  if (!session || !session.date) return "";
+  const [year, month, day] = String(session.date || "").split("-");
+  let dateLabel = session.date;
+  if (year && month && day) {
+    const parsed = new Date(Number(year), Number(month) - 1, Number(day));
+    if (!Number.isNaN(parsed.getTime())) {
+      dateLabel = parsed.toLocaleDateString("en-US", {
+        weekday: "short",
+        month: "short",
+        day: "numeric"
+      });
+    }
+  }
+  const timeParts = [];
+  if (session.start_time) timeParts.push(session.start_time);
+  if (session.end_time) timeParts.push(session.end_time);
+  const timeLabel = timeParts.join(" - ");
+  return [dateLabel, timeLabel].filter(Boolean).join(" · ");
+}
+
+function renderLiveRoomHeader(session = null, routeChannelId = null) {
+  const fallbackTitle = "Live Class";
+  const channel = session?.channel_id ? getChannelById(session.channel_id) : null;
+  const roleLabel = normalizeRole(sessionUser?.role || sessionUser?.userRole || "student").replace(/_/g, " ");
+  const audienceLabel = getAudienceLabel(session?.audience);
+  const classLabel = session?.channel_name || channel?.name || audienceLabel || "Classroom";
+  const scheduleLabel = session ? formatLiveSessionScheduleLabel(session) : "Join a session to start the classroom.";
+
+  if (liveRoomSessionTitle) {
+    liveRoomSessionTitle.textContent = session?.title || fallbackTitle;
+  }
+  if (liveRoomSessionMeta) {
+    liveRoomSessionMeta.textContent = session
+      ? `${classLabel} • ${scheduleLabel}`
+      : "Join a session to start the classroom.";
+  }
+  if (liveRoomSessionContext) {
+    const roomName = session?.room_name || "live-room";
+    liveRoomSessionContext.textContent = `Room ${roomName} • ${roleLabel}`;
+  }
+  if (liveRoomBackBtn) {
+    liveRoomBackBtn.dataset.channelId = session?.channel_id || routeChannelId || "";
+  }
+  updateLiveFocusModeButton();
+}
+
+async function openLiveSessionExternally(sessionOrId) {
+  const session = typeof sessionOrId === "object" && sessionOrId ? sessionOrId : getLiveSessionById(sessionOrId);
+  const sessionId = String(session?.id || sessionOrId || "").trim();
+  let meetingUrl = String(session?.meeting_url || "").trim();
+  let meetingJwt = "";
+
+  if (sessionId) {
+    try {
+      const joinData = await fetchJSON(`/api/live-sessions/${encodeURIComponent(sessionId)}/join`, { method: "POST" });
+      const joinedSession = joinData?.session || session || null;
+      meetingUrl = String(joinData?.jitsi?.meetingUrl || joinedSession?.meeting_url || meetingUrl || "").trim();
+      meetingJwt = String(joinData?.jitsi?.jwt || "").trim();
+    } catch (err) {
+      console.error("Failed to prepare external live session", err);
+      if (!meetingUrl) {
+        showToast(err?.message || "Could not open live session.");
+        return;
+      }
+    }
+  }
+
+  if (!meetingUrl) {
+    showToast("This session is not ready yet.");
+    return;
+  }
+
+  setLiveSessionActivity(true);
+  const launchUrl = buildLiveMeetingLaunchUrl(meetingUrl, {
+    jwt: meetingJwt,
+    startWithVideoMuted: isTeacherUser?.() || isAdminUser?.(),
+    disablePrejoin: true
+  });
+  const opened = window.open(launchUrl, "_blank", "noopener,noreferrer");
+  if (!opened) {
+    showToast("Popup blocked. Allow popups to open the live session.");
+  }
+}
+
+function openLivePresenterWindow(session) {
+  const sessionId = String(session?.id || "").trim();
+  if (!sessionId) {
+    showToast("Presenter view is not ready yet.");
+    return;
+  }
+  setLiveSessionActivity(true);
+  const presenterUrl = buildLivePresenterPath(resolveLiveRouteChannelId(session, currentChannelId || null), sessionId);
+  const presenterWindow = window.open(presenterUrl, "_blank", "noopener,noreferrer");
+  if (!presenterWindow) {
+    showToast("Popup blocked. Allow popups to open presenter view.");
+  }
+}
+
+async function openLiveRoomView({ sessionId, channelId = null, replaceHistory = false, source = "navigate" } = {}) {
+  const safeSessionId = String(sessionId || "").trim();
+  if (!safeSessionId) return;
+
+  const token = showPanel("livePanel");
+  if (livePanel) livePanel.scrollTop = 0;
+  setLivePresenterMode(false);
+  setLivePanelView("room");
+
+  let session = getLiveSessionById(safeSessionId);
+  if (!session) {
+    await loadLiveSessions(liveScope, token);
+    session = getLiveSessionById(safeSessionId);
+  }
+
+  const routeChannelId = resolveLiveRouteChannelId(session, channelId);
+  renderLiveRoomHeader(session, routeChannelId);
+  persistLastView({
+    channelId: session?.channel_id || (findChannelById(routeChannelId) ? routeChannelId : null),
+    threadMessageId: null,
+    threadChannelId: null,
+    viewMode: "live-room",
+    liveSessionId: safeSessionId,
+    liveChannelId: routeChannelId
+  });
+  syncBrowserToLiveRoomPath(routeChannelId, safeSessionId, { replace: replaceHistory || source === "restore" });
+  if (!isNavigationTokenCurrent(token, "livePanel")) return;
+
+  if (typeof openLiveSessionInsideApp === "function") {
+    await openLiveSessionInsideApp(safeSessionId, { session, routeChannelId });
+  }
+}
+
+async function openLivePresenterView({ sessionId, channelId = null, replaceHistory = false, source = "navigate" } = {}) {
+  const safeSessionId = String(sessionId || "").trim();
+  if (!safeSessionId) return;
+
+  const token = showPanel("livePanel");
+  if (livePanel) livePanel.scrollTop = 0;
+  setLivePanelView("room");
+  setLivePresenterMode(true);
+
+  try {
+    if (typeof leaveLiveMeetingEmbed === "function") leaveLiveMeetingEmbed();
+  } catch (_err) {}
+
+  let session = getLiveSessionById(safeSessionId);
+  if (!session) {
+    await loadLiveSessions(liveScope, token);
+    session = getLiveSessionById(safeSessionId);
+  }
+
+  const routeChannelId = resolveLiveRouteChannelId(session, channelId);
+  renderLiveRoomHeader(session, routeChannelId);
+  if (liveRoomSessionContext) {
+    liveRoomSessionContext.textContent = "Presenter view • Share this tab or window from Jitsi to avoid the mirrored meeting effect.";
+  }
+  persistLastView({
+    channelId: session?.channel_id || (findChannelById(routeChannelId) ? routeChannelId : null),
+    threadMessageId: null,
+    threadChannelId: null,
+    viewMode: "live-presenter",
+    liveSessionId: safeSessionId,
+    liveChannelId: routeChannelId
+  });
+  syncBrowserToLivePresenterPath(routeChannelId, safeSessionId, { replace: replaceHistory || source === "restore" });
+  if (!isNavigationTokenCurrent(token, "livePanel")) return;
+
+  if (typeof activeLiveSessionId !== "undefined") {
+    activeLiveSessionId = safeSessionId;
+  }
+  if (typeof setSlidesControlsVisibility === "function") {
+    setSlidesControlsVisibility();
+  }
+  if (typeof loadInitialSlideState === "function") {
+    await loadInitialSlideState(safeSessionId);
+  }
+  if (typeof startSlidesSse === "function") {
+    startSlidesSse(safeSessionId);
+  }
+  if (typeof setLiveJoinedState === "function") {
+    setLiveJoinedState(true);
+  }
 }
 
 function getLastActiveView() {
@@ -3936,8 +4632,13 @@ function openCalendarPanel() {
 function openLivePanel() {
   const token = showPanel("livePanel");
   if (livePanel) livePanel.scrollTop = 0;
+  setLivePresenterMode(false);
+  try {
+    if (typeof leaveLiveMeetingEmbed === "function") leaveLiveMeetingEmbed();
+  } catch (_err) {}
+  setLivePanelView("hub");
+  clearBrowserLiveRoomPath();
   loadLiveSessions(liveScope, token);
-  setLiveJoinedState(false);
   updateLaunchButtonLabel();
 }
 function openAnalyticsPanel() {
@@ -4953,14 +5654,29 @@ async function pinFile(fileId, pinned) {
 }
 
 function showAiServerError(message) {
+  const raw = String(message || "").trim();
+  const lower = raw.toLowerCase();
+  const is404 = lower.includes("404") || lower.includes("not found");
+  const isOffline =
+    lower.includes("failed to fetch") ||
+    lower.includes("connection refused") ||
+    lower.includes("networkerror") ||
+    lower.includes("load failed");
+  const title = is404 ? "AI Service Not Found" : "AI Service Unavailable";
+  const uiMessage = is404
+    ? "The local AI endpoint could not be found. Check that the AI server is running and that the configured route is available, then try again."
+    : isOffline
+      ? "The local app server is not reachable on port 3000. Start the app with Node 20 and try again."
+      : raw || "The local AI server could not be reached. Please check that Ollama is running and try again.";
   hideAiServerError();
   const card = document.createElement("div");
   card.id = "aiErrorCard";
-  card.className = "ai-error-card";
+  card.className = `ai-error-card${is404 ? " is-not-found" : ""}`;
   card.innerHTML = `
     <div class="ai-error-card-inner">
-      <h3>AI Service Unavailable</h3>
-      <p>${escapeHtml(message || "The local AI server could not be reached. Please check that Ollama is running and try again.")}</p>
+      <div class="ai-error-badge">${is404 ? "404" : "AI"}</div>
+      <h3>${escapeHtml(title)}</h3>
+      <p>${escapeHtml(uiMessage)}</p>
       <div class="ai-error-actions">
         <button class="retry" type="button">Retry</button>
         <button class="close" type="button">Dismiss</button>
@@ -4978,6 +5694,14 @@ function showAiServerError(message) {
 function hideAiServerError() {
   const existing = document.getElementById("aiErrorCard");
   if (existing) existing.remove();
+}
+
+function parseAiStreamError(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (text.startsWith("[AI error]")) return text.replace(/^\[AI error\]\s*/i, "").trim();
+  if (text.startsWith("[Ollama error")) return text.replace(/^\[Ollama error[^\]]*\]\s*/i, "").trim() || text;
+  return "";
 }
 
 async function deleteFile(fileId) {
@@ -6460,6 +7184,171 @@ function dedupeSessions(list = []) {
   return results;
 }
 
+function parseLiveSessionDateTimeValue(session, field) {
+  const date = String(session?.date || "").trim();
+  const time = String(session?.[field] || "").trim();
+  if (!date || !time) return null;
+  const parsed = new Date(`${date}T${time}:00`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function isLiveSessionExpired(session) {
+  if (session?.is_expired) return true;
+  const endAt = parseLiveSessionDateTimeValue(session, "end_time");
+  return Boolean(endAt && Date.now() > endAt.getTime());
+}
+
+function normalizeLiveAutopostMode(mode) {
+  const raw = String(mode || "").trim().toLowerCase();
+  if (raw === "0" || raw === "channel" || raw === "class" || raw === "immediate") {
+    return "channel";
+  }
+  return "none";
+}
+
+function getDefaultLiveSessionRange() {
+  const now = new Date();
+  now.setMinutes(Math.ceil(now.getMinutes() / 5) * 5, 0, 0);
+  const end = new Date(now.getTime() + 60 * 60 * 1000);
+  const pad = (value) => String(value).padStart(2, "0");
+  return {
+    date: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,
+    start: `${pad(now.getHours())}:${pad(now.getMinutes())}`,
+    end: `${pad(end.getHours())}:${pad(end.getMinutes())}`,
+  };
+}
+
+function getCurrentLiveChannelSelection() {
+  const current = channels.find((ch) => String(ch.id || "") === String(currentChannelId || ""));
+  const category = normalizeChannelCategory(current?.category);
+  return category === "classes" || category === "teachers" ? String(current.id) : "";
+}
+
+function getHostMeetingCandidates() {
+  return (userDirectoryCache || [])
+    .filter((user) => String(user.workspaceId || currentWorkspaceId || "").trim() === String(currentWorkspaceId || "").trim())
+    .filter((user) => String(user.id || "").trim() !== String(sessionUser?.id || "").trim())
+    .sort((a, b) => String(a.name || a.username || a.email || "").localeCompare(String(b.name || b.username || b.email || "")));
+}
+
+function renderHostMemberPicker() {
+  if (!liveHostMemberPicker) return;
+  const term = String(liveHostMemberSearch?.value || "").trim().toLowerCase();
+  const candidates = getHostMeetingCandidates().filter((user) => {
+    if (!term) return true;
+    const haystack = [
+      user.name,
+      user.username,
+      user.email,
+      user.role,
+      user.firstName,
+      user.lastName
+    ]
+      .map((value) => String(value || "").toLowerCase())
+      .join(" ");
+    return haystack.includes(term);
+  });
+  if (!candidates.length) {
+    liveHostMemberPicker.innerHTML = '<div class="muted">No school members found.</div>';
+    return;
+  }
+  liveHostMemberPicker.innerHTML = "";
+  candidates.forEach((user) => {
+    const id = String(user.id || "").trim();
+    if (!id) return;
+    const row = document.createElement("label");
+    row.className = "live-host-member-row";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = liveHostMemberIds.has(id);
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) {
+        liveHostMemberIds.add(id);
+      } else {
+        liveHostMemberIds.delete(id);
+      }
+    });
+    const meta = document.createElement("div");
+    meta.className = "live-host-member-meta";
+    meta.innerHTML = `
+      <div class="live-host-member-name">${escapeHtml(user.name || user.username || user.email || "Member")}</div>
+      <div class="live-host-member-sub">${escapeHtml(getRoleText(user.role || user.userRole || "member", "Member"))}${user.email ? ` · ${escapeHtml(user.email)}` : ""}</div>
+    `;
+    row.appendChild(checkbox);
+    row.appendChild(meta);
+    liveHostMemberPicker.appendChild(row);
+  });
+}
+
+async function openHostMeetingModal() {
+  if (!liveHostModal) return;
+  if (!canCurrentUserManageLive()) {
+    showToast("Only school admins and teachers can host meetings.");
+    return;
+  }
+  const defaults = getDefaultLiveSessionRange();
+  liveHostMemberIds = new Set();
+  if (liveHostTitleInput) liveHostTitleInput.value = "Hosted Meeting";
+  if (liveHostDateInput) liveHostDateInput.value = defaults.date;
+  if (liveHostStartInput) liveHostStartInput.value = defaults.start;
+  if (liveHostEndInput) liveHostEndInput.value = defaults.end;
+  if (liveHostNotesInput) liveHostNotesInput.value = "";
+  if (liveHostMemberSearch) liveHostMemberSearch.value = "";
+  await loadUserDirectory();
+  renderHostMemberPicker();
+  liveHostModal.classList.remove("hidden");
+}
+
+function closeHostMeetingModal() {
+  if (!liveHostModal) return;
+  liveHostModal.classList.add("hidden");
+}
+
+async function submitHostMeeting() {
+  if (!liveHostForm) return;
+  const date = liveHostDateInput?.value || "";
+  const start_time = liveHostStartInput?.value || "";
+  const end_time = liveHostEndInput?.value || "";
+  const startAt = new Date(`${date}T${start_time}:00`);
+  const endAt = new Date(`${date}T${end_time}:00`);
+  if (!date || !start_time || !end_time || Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime()) || endAt <= startAt) {
+    showToast("Set a valid meeting date and time.");
+    return;
+  }
+  const invitedUserIds = [...liveHostMemberIds];
+  if (!invitedUserIds.length) {
+    showToast("Select at least one school member.");
+    return;
+  }
+  try {
+    const created = await fetchJSON("/api/live-sessions", {
+      method: "POST",
+      body: JSON.stringify({
+        title: liveHostTitleInput?.value.trim() || "Hosted Meeting",
+        date,
+        start_time,
+        end_time,
+        student_notes: liveHostNotesInput?.value.trim() || "",
+        status: "scheduled",
+        autopost_mode: "none",
+        invited_user_ids: invitedUserIds
+      })
+    });
+    const joinData = created?.id
+      ? await fetchJSON(`/api/live-sessions/${encodeURIComponent(created.id)}/join`, { method: "POST" })
+      : null;
+    closeHostMeetingModal();
+    await loadLiveSessions(liveScope);
+    if (created?.id) {
+      await openLiveSessionExternally(created);
+    }
+    showToast("Meeting hosted. Only selected school members can join.");
+  } catch (err) {
+    console.error("Failed to host meeting", err);
+    showToast(err?.message || "Could not host meeting.");
+  }
+}
+
 function filterLiveSessions() {
   return liveSessions
     .slice()
@@ -6494,7 +7383,11 @@ function renderLiveSchedule() {
   if (!list.length) {
     liveSessionsList.innerHTML = `
       <div class="live-empty-state">
-        <p>No sessions scheduled</p>
+        <div class="live-empty-state-icon" aria-hidden="true">
+          <i class="fa-solid fa-video"></i>
+        </div>
+        <p class="live-empty-state-title">No sessions scheduled</p>
+        <p class="live-empty-state-copy">Start a class instantly or create a scheduled session.</p>
 
         <button id="launchLiveNowBtn" class="btn btn-primary live-launch-btn" type="button">
           <i class="fa-solid fa-bolt"></i>
@@ -6531,7 +7424,8 @@ function renderLiveSchedule() {
     meta.innerHTML = `<span>${dateText}</span><span>${session.start_time || ""}${session.end_time ? ` - ${session.end_time}` : ""}</span>`;
     const linkInfo = document.createElement("div");
     linkInfo.className = "live-row-detail";
-    linkInfo.innerHTML = `<span>${session.meeting_url ? "Link ready" : "Link missing"}</span>`;
+    const sessionExpired = isLiveSessionExpired(session);
+    linkInfo.innerHTML = `<span>${sessionExpired ? "Link expired" : session.meeting_url ? "Link ready" : "Link missing"}</span>`;
     details.appendChild(head);
     details.appendChild(meta);
     details.appendChild(linkInfo);
@@ -6566,8 +7460,21 @@ function renderLiveSchedule() {
     joinBtn.type = "button";
     joinBtn.className = "live-btn primary live-btn-join";
     joinBtn.innerHTML = '<i class="fa-solid fa-video"></i>';
-    joinBtn.addEventListener("click", () => joinLiveSession(session.id));
+    joinBtn.disabled = sessionExpired;
+    joinBtn.title = sessionExpired ? "This session has expired" : "Join live session";
+    joinBtn.addEventListener("click", () => {
+      void openLiveSessionExternally(session);
+    });
     actions.appendChild(joinBtn);
+    if (isAdminUser() || isTeacherUser()) {
+      const presenterBtn = document.createElement("button");
+      presenterBtn.type = "button";
+      presenterBtn.className = "live-btn ghost";
+      presenterBtn.innerHTML = '<i class="fa-solid fa-display"></i>';
+      presenterBtn.title = "Open presenter view";
+      presenterBtn.addEventListener("click", () => openLivePresenterWindow(session));
+      actions.appendChild(presenterBtn);
+    }
     let editWrapper = null;
     if (isAdminUser() || isTeacherUser()) {
       editWrapper = document.createElement("div");
@@ -6596,6 +7503,11 @@ function renderLiveSchedule() {
 
 async function launchLiveNow() {
   try {
+    const inChannel = currentChannelId && String(currentChannelId).trim();
+    if (!inChannel && !isAdminUser()) {
+      showToast("Choose one of your classes before launching live.");
+      return;
+    }
     const now = new Date();
     const pad = (n) => String(n).padStart(2, "0");
 
@@ -6606,21 +7518,20 @@ async function launchLiveNow() {
 
     const payload = {
       workspace_id: currentWorkspaceId || "default",
-      audience: "general",
-
       title: "Instant Live Session",
       description: "Instant live class started by teacher",
       date,
       start_time,
       end_time,
-
-      meeting_url: `https://meet.jit.si/studistalk-live-${Date.now()}`,
-      meeting_pass: "",
       student_notes: "Instant live session",
-
       status: "scheduled",
-      autopost_mode: "none"
+      autopost_mode: "channel"
     };
+    if (inChannel) {
+      payload.channel_id = String(inChannel);
+    } else {
+      payload.audience = "general";
+    }
 
     const created = await fetchJSON("/api/live-sessions", {
       method: "POST",
@@ -6628,7 +7539,7 @@ async function launchLiveNow() {
     });
 
     await loadLiveSessions(liveScope);
-    if (created?.id) await joinLiveSession(created.id);
+    if (created?.id) await openLiveSessionExternally(created);
   } catch (err) {
     console.error(err);
     showToast("Failed to start live session.");
@@ -6673,7 +7584,18 @@ function renderLiveRecents() {
     joinBtn.type = "button";
     joinBtn.className = "live-btn ghost";
     joinBtn.textContent = "View";
+    joinBtn.addEventListener("click", () => {
+      void openLiveSessionExternally(session);
+    });
     actions.appendChild(joinBtn);
+    if (isAdminUser() || isTeacherUser()) {
+      const presenterBtn = document.createElement("button");
+      presenterBtn.type = "button";
+      presenterBtn.className = "live-btn ghost";
+      presenterBtn.textContent = "Presenter";
+      presenterBtn.addEventListener("click", () => openLivePresenterWindow(session));
+      actions.appendChild(presenterBtn);
+    }
     row.appendChild(title);
     row.appendChild(actions);
     liveRecentList.appendChild(row);
@@ -6682,21 +7604,23 @@ function renderLiveRecents() {
 
 function openLiveSessionModal(session = null) {
   if (!liveSessionModal) return;
+  populateLiveClassOptions();
   liveActiveSession = session;
   liveModalTitle.textContent = session ? "Edit live session" : "Create live session";
+  const defaults = getDefaultLiveSessionRange();
   liveSessionIdInput.value = session?.id || "";
   if (liveClassSelect) {
-    const classValue = session?.channel_id || "";
+    const classValue = session?.channel_id || getCurrentLiveChannelSelection();
     const audienceKey = session?.audience ? normalizeLiveAudience(session.audience) : null;
     liveClassSelect.value = classValue || (audienceKey ? `audience:${audienceKey}` : "");
   }
-  liveTitleInput.value = session?.title || "";
-  liveDateInput.value = session?.date || "";
-  liveStartInput.value = session?.start_time || "";
-  liveEndInput.value = session?.end_time || "";
-  liveUrlInput.value = session?.meeting_url || "";
+  liveTitleInput.value = session?.title || "Live Class";
+  liveDateInput.value = session?.date || defaults.date;
+  liveStartInput.value = session?.start_time || defaults.start;
+  liveEndInput.value = session?.end_time || defaults.end;
+  liveUrlInput.value = session?.meeting_url || "Generated after you create the session";
   livePassInput.value = session?.meeting_pass || "";
-  liveAutopostSelect.value = session?.autopost_mode ?? "0";
+  liveAutopostSelect.value = normalizeLiveAutopostMode(session?.autopost_mode || "channel");
   liveStudentNotesInput.value = session?.student_notes || "";
   if (liveNotifyEmail) {
     liveNotifyEmail.checked = Boolean(session?.notify_email);
@@ -6734,9 +7658,8 @@ async function saveLiveSession() {
     date: liveDateInput?.value,
     start_time: liveStartInput?.value,
     end_time: liveEndInput?.value,
-    meeting_url: liveUrlInput?.value.trim(),
     meeting_pass: livePassInput?.value.trim(),
-    autopost_mode: liveAutopostSelect?.value || "none",
+    autopost_mode: selectedChannelId ? "channel" : (liveAutopostSelect?.value || "none"),
     notify_email: liveNotifyEmail?.checked ? 1 : 0,
     student_notes: liveStudentNotesInput?.value.trim(),
     audience: selectedAudience
@@ -6745,8 +7668,14 @@ async function saveLiveSession() {
     showToast("Please choose a class or an audience.");
     return;
   }
-  if (!payload.title || !payload.date || !payload.start_time || !payload.end_time || !payload.meeting_url) {
+  if (!payload.title || !payload.date || !payload.start_time || !payload.end_time) {
     showToast("Please fill in required fields.");
+    return;
+  }
+  const startAt = new Date(`${payload.date}T${payload.start_time}:00`);
+  const endAt = new Date(`${payload.date}T${payload.end_time}:00`);
+  if (Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime()) || endAt <= startAt) {
+    showToast("End time must be after start time.");
     return;
   }
   try {
@@ -6873,6 +7802,7 @@ function closeAttendanceModal() {
 
 function populateLiveClassOptions() {
   if (!liveClassSelect) return;
+  const canCreateAudienceSessions = isAdminUser();
   const classChannels = channels
     .filter((ch) => normalizeChannelCategory(ch.category) === "classes")
     .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
@@ -6887,10 +7817,10 @@ function populateLiveClassOptions() {
     .join("");
   liveClassSelect.innerHTML = `
     <option value="">Select a class</option>
-    <option value="audience:general">General (all users)</option>
-    <option value="audience:teachers">Teachers only</option>
+    ${canCreateAudienceSessions ? '<option value="audience:general">General (all users)</option>' : ""}
+    ${canCreateAudienceSessions ? '<option value="audience:teachers">Teachers only</option>' : ""}
     ${teacherOptions ? `<optgroup label="Teacher channels">${teacherOptions}</optgroup>` : ""}
-    ${classOptions}
+    ${classOptions ? `<optgroup label="Classes">${classOptions}</optgroup>` : ""}
   `;
 }
 
@@ -6958,9 +7888,19 @@ function attachLiveEvents() {
   if (liveCreateBtn) {
     liveCreateBtn.addEventListener("click", () => openLiveSessionModal());
   }
+  if (liveHostBtn) {
+    liveHostBtn.addEventListener("click", () => {
+      void openHostMeetingModal();
+    });
+  }
   if (liveModalClose) liveModalClose.addEventListener("click", closeLiveSessionModal);
   if (liveModalCancel) liveModalCancel.addEventListener("click", closeLiveSessionModal);
-  if (liveModalSave) liveModalSave.addEventListener("click", saveLiveSession);
+  if (liveSessionForm) {
+    liveSessionForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      saveLiveSession();
+    });
+  }
   if (liveDeleteBtn) liveDeleteBtn.addEventListener("click", showDeleteConfirm);
   if (liveSessionModal) {
     liveSessionModal.addEventListener("click", (e) => {
@@ -6982,6 +7922,22 @@ function attachLiveEvents() {
     liveDeleteConfirmModal.addEventListener("click", (e) => {
       if (e.target === liveDeleteConfirmModal) hideDeleteConfirm();
     });
+  }
+  if (liveHostClose) liveHostClose.addEventListener("click", closeHostMeetingModal);
+  if (liveHostCancel) liveHostCancel.addEventListener("click", closeHostMeetingModal);
+  if (liveHostForm) {
+    liveHostForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      void submitHostMeeting();
+    });
+  }
+  if (liveHostModal) {
+    liveHostModal.addEventListener("click", (e) => {
+      if (e.target === liveHostModal) closeHostMeetingModal();
+    });
+  }
+  if (liveHostMemberSearch) {
+    liveHostMemberSearch.addEventListener("input", renderHostMemberPicker);
   }
   liveTabs.forEach((tab) => {
     tab.addEventListener("click", () => {
@@ -10368,9 +11324,19 @@ const examGroupsChannels = document.getElementById("examGroupsChannels");
 const appsChannelsContainer = document.getElementById("appsChannelsContainer");
 const dmsContainer = document.getElementById("dmsContainer");
 const sidebarScroll = document.querySelector(".sidebar-scroll");
+const appShell = document.getElementById("appShell");
 const livePanel = document.getElementById("livePanel");
+const liveHubView = document.getElementById("liveHubView");
+const liveRoomView = document.getElementById("liveRoomView");
+const liveHostBtn = document.getElementById("liveHostBtn");
 const liveCreateBtn = document.getElementById("liveCreateBtn");
 const liveSessionsList = document.getElementById("liveSessionsList");
+const liveRoomBackBtn = document.getElementById("liveRoomBackBtn");
+const liveFocusModeBtn = document.getElementById("liveFocusModeBtn");
+const liveModeToggleButtons = document.querySelectorAll(".live-mode-toggle");
+const liveRoomSessionTitle = document.getElementById("liveRoomSessionTitle");
+const liveRoomSessionMeta = document.getElementById("liveRoomSessionMeta");
+const liveRoomSessionContext = document.getElementById("liveRoomSessionContext");
 const liveRecentMeta = document.getElementById("liveRecentMeta");
 const liveRecentList = document.getElementById("liveRecentList");
 const liveTabs = document.querySelectorAll(".live-tab");
@@ -10403,6 +11369,17 @@ const liveAttendanceList = document.getElementById("liveAttendanceList");
 const liveAttendanceClose = document.getElementById("liveAttendanceClose");
 const liveAttendanceCancel = document.getElementById("liveAttendanceCancel");
 const liveAttendanceSave = document.getElementById("liveAttendanceSave");
+const liveHostModal = document.getElementById("liveHostModal");
+const liveHostForm = document.getElementById("liveHostForm");
+const liveHostClose = document.getElementById("liveHostClose");
+const liveHostCancel = document.getElementById("liveHostCancel");
+const liveHostTitleInput = document.getElementById("liveHostTitleInput");
+const liveHostDateInput = document.getElementById("liveHostDateInput");
+const liveHostStartInput = document.getElementById("liveHostStartInput");
+const liveHostEndInput = document.getElementById("liveHostEndInput");
+const liveHostNotesInput = document.getElementById("liveHostNotesInput");
+const liveHostMemberSearch = document.getElementById("liveHostMemberSearch");
+const liveHostMemberPicker = document.getElementById("liveHostMemberPicker");
 const SCHOOL_SETTINGS_CHANNEL_ID = "school-settings";
 const schoolEmailSettingsPage = document.getElementById("schoolEmailSettingsPage");
 const schoolEmailSettingsPageHome = schoolEmailSettingsPage?.parentElement || null;
@@ -10494,6 +11471,7 @@ let liveScope = "all";
 let liveSessions = [];
 let liveAttendanceData = [];
 let liveActiveSession = null;
+let liveHostMemberIds = new Set();
 let schoolSettingsPreviousChannelId = null;
 let releaseSchoolSettingsTrap = null;
 let classSettingsPreviousChannelId = null;
@@ -10532,8 +11510,10 @@ const headerClearCultureCancel = document.getElementById("headerClearCultureCanc
 const channelSearchInput = document.getElementById("channelSearchInput");
 const channelSearchBtn = document.getElementById("channelSearchBtn");
 const channelSearchResults = document.getElementById("channelSearchResults");
+const mainContent = document.getElementById("mainContent");
 const chatHeader = document.getElementById("chatHeader");
 const headerLineActions = document.getElementById("headerLineActions");
+const headerFullscreenBtn = document.getElementById("headerFullscreenBtn");
 const privacyChannelHeader = document.getElementById("privacyChannelHeader");
 const privacyHeaderControls = document.getElementById("privacyHeaderControls");
 const privacyHeaderSchoolName = document.getElementById("privacyHeaderSchoolName");
@@ -10561,6 +11541,39 @@ function restoreHeaderActionsFromPrivacy() {
   headerLineActionsPlaceholder.replaceWith(headerLineActions);
   headerLineActionsPlaceholder = null;
   headerLineActions.classList.remove("privacy-actions-docked");
+}
+
+function getChannelFullscreenTarget() {
+  return document.documentElement;
+}
+
+function updateChannelFullscreenButton() {
+  if (!headerFullscreenBtn) return;
+  const activeElement = document.fullscreenElement;
+  isChannelFullscreen = !!activeElement;
+  const label = isChannelFullscreen ? "Exit fullscreen" : "Enter fullscreen";
+  headerFullscreenBtn.setAttribute("aria-label", label);
+  headerFullscreenBtn.setAttribute("title", label);
+  headerFullscreenBtn.setAttribute("aria-pressed", isChannelFullscreen ? "true" : "false");
+  headerFullscreenBtn.innerHTML = isChannelFullscreen
+    ? '<i class="fa-solid fa-compress" aria-hidden="true"></i>'
+    : '<i class="fa-solid fa-expand" aria-hidden="true"></i>';
+}
+
+async function toggleChannelFullscreen() {
+  const target = getChannelFullscreenTarget();
+  if (!target) return;
+  try {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen?.();
+    } else if (typeof target.requestFullscreen === "function") {
+      await target.requestFullscreen();
+    }
+  } catch (err) {
+    console.error("Failed to toggle channel fullscreen", err);
+  } finally {
+    updateChannelFullscreenButton();
+  }
 }
 const bannerChannelName = document.getElementById("bannerChannelName");
 const dmAddMemberBtn = document.getElementById("dmAddMemberBtn");
@@ -10621,7 +11634,15 @@ if (headerChannelLanguageBtn) {
 if (headerClearCultureBtn) {
   headerClearCultureBtn.addEventListener("click", (ev) => {
     ev.stopPropagation();
-    showClearCulturePopup();
+    if (clearCulturePopup) {
+      showClearCulturePopup();
+      return;
+    }
+    const channelName = String(getChannelById(currentChannelId)?.name || "this channel");
+    const confirmed = window.confirm(`Clear all chat history in #${channelName}?`);
+    if (confirmed) {
+      handleClearCultureChannel(currentChannelId);
+    }
   });
 }
 if (headerClearCultureConfirm) {
@@ -10725,6 +11746,8 @@ const aiContextBlock = document.getElementById("aiContextBlock");
 let aiMode = "assistant";
 let aiContext = "calendar";
 let aiActiveController = null;
+let aiConversationId = null;
+let aiHistoryLoadedForKey = "";
 const typingIndicator = document.getElementById("typingIndicator");
 const newMsgsBtn = document.getElementById("newMsgsBtn");
 const chatPanel = document.querySelector(".chat-panel");
@@ -14463,9 +15486,42 @@ function getFirstVisibleClassChannelId() {
   if (!classChannels.length) return "";
   if (isStudentUser() || isTeacherUser()) {
     const scoped = classChannels.filter((ch) => currentUserClassIds.has(String(ch.id)));
-    return String((scoped[0] || classChannels[0] || {}).id || "");
+    return String((scoped[0] || {}).id || "");
   }
   return String((classChannels[0] || {}).id || "");
+}
+
+function getFirstVisibleHomeworkChannelId() {
+  const firstClassId = getFirstVisibleClassChannelId();
+  if (!firstClassId) return "";
+  const homeworkChannel = getHomeworkChannelForClassId(firstClassId);
+  return String(homeworkChannel?.id || "");
+}
+
+function getAnnouncementsChannelId(workspaceId = currentWorkspaceId || "default") {
+  const workspaceKey = String(workspaceId || "default");
+  const channel = (channels || []).find((ch) => {
+    return (
+      String(ch.workspaceId || "default") === workspaceKey &&
+      isAnnouncementChannel(ch)
+    );
+  });
+  return String(channel?.id || "");
+}
+
+function getDefaultLandingChannelId(workspaceId = currentWorkspaceId || "default") {
+  const workspaceKey = String(workspaceId || "default");
+  const classChannels = (channels || []).filter((ch) => {
+    const sameWorkspace = String(ch.workspaceId || "default") === workspaceKey;
+    return sameWorkspace && normalizeChannelCategory(ch.category) === "classes";
+  });
+  if (isStudentUser() || isTeacherUser()) {
+    const scoped = classChannels.filter((ch) => currentUserClassIds.has(String(ch.id)));
+    if (scoped.length) return String(scoped[0].id || "");
+    return getAnnouncementsChannelId(workspaceKey);
+  }
+  if (classChannels.length) return String(classChannels[0].id || "");
+  return getAnnouncementsChannelId(workspaceKey);
 }
 
 function canAccessTaskChannelByName(name, role = getUserRoleKey()) {
@@ -16539,6 +17595,10 @@ function renderChannelHeader(channelId) {
   if (toggleThreadColumnBtn) {
     toggleThreadColumnBtn.hidden = true;
   }
+  if (headerFullscreenBtn) {
+    headerFullscreenBtn.hidden = false;
+    updateChannelFullscreenButton();
+  }
   if (headerMuteBtn) {
     headerMuteBtn.hidden = isPrivacy;
     if (!isPrivacy) {
@@ -17226,6 +18286,7 @@ function renderMessages(channelId, options = {}) {
       : null;
   let newDividerInserted = false;
     const cultureChannelActive = isCultureExchangeChannel(channelId);
+  let prevGroupTimestampKey = "";
   console.log("[ReadLang] render ->", {
     channelId,
     culture: cultureChannelActive,
@@ -17243,19 +18304,15 @@ function renderMessages(channelId, options = {}) {
       "";
     const parsedDate = parseChatDate(timestampRaw);
     const dayKey = parsedDate ? parsedDate.toDateString() : "";
-    if (dayKey && dayKey !== prevDateKey) {
-      const separator = document.createElement("div");
-      separator.className = "date-separator";
-      separator.textContent = formatRelativeDay(parsedDate);
-      messagesContainer.appendChild(separator);
-      prevDateKey = dayKey;
-    }
+    const dayChanged = !!(dayKey && prevDateKey && dayKey !== prevDateKey);
 
     // Insert "New" divider before the first unread message
-    if (
+    const insertsNewDividerHere =
       !newDividerInserted &&
       lastReadIndex !== null &&
-      index === lastReadIndex + 1
+      index === lastReadIndex + 1;
+    if (
+      insertsNewDividerHere
     ) {
       const divider = document.createElement("div");
       divider.className = "new-divider";
@@ -17267,11 +18324,21 @@ function renderMessages(channelId, options = {}) {
     const resolvedRoleRaw = msg.role || resolveUserRole(msg.author, msg.initials);
     const displayRole = getMessageRoleDisplay(msg, isMaterialsChannel, resolvedRoleRaw);
     const normalizedAuthorName = normalizeAuthor(msg.author);
+    const timestampParts = getMessageTimestampParts(msg);
+    const timestampGroupKey = timestampParts.stamp || timestampParts.time || "";
+    const isSystemStyledMessage =
+      String(msg.author || "").toLowerCase() === "system";
     const isContinuationGroup =
       considerContinuation &&
+      !dayChanged &&
+      !isSystemStyledMessage &&
       normalizedAuthorName &&
       prevGroupAuthor &&
       normalizedAuthorName === prevGroupAuthor;
+    const shouldShowContinuationStamp =
+      isContinuationGroup &&
+      !!timestampGroupKey &&
+      timestampGroupKey !== prevGroupTimestampKey;
     let group = null;
     if (considerContinuation) {
       if (!isContinuationGroup) {
@@ -17292,6 +18359,8 @@ function renderMessages(channelId, options = {}) {
       (msg.text.includes("policy-doc") || msg.text.includes("privacy-rules")) &&
       String(msg.author || "").toLowerCase() === "system";
     const shouldShowHeader = !isPolicyDocument && !isContinuationGroup;
+    const shouldShowContinuationMeta =
+      !isPolicyDocument && isContinuationGroup && shouldShowContinuationStamp;
 
     const text = document.createElement("div");
     text.className = "message-text";
@@ -17405,6 +18474,10 @@ function renderMessages(channelId, options = {}) {
       applyCultureMessageText(false);
 
     }
+    const isLiveAnnouncementCard = !!text.querySelector(".live-announcement-card");
+    if (isLiveAnnouncementCard) {
+      primeLiveAnnouncementLinks(text);
+    }
     const hasAudioCard = !!text.querySelector(".att-card.att-card-audio");
     if (isMaterialsChannel) {
       text.classList.add("message-text-grid");
@@ -17446,6 +18519,7 @@ function renderMessages(channelId, options = {}) {
       }
     });
     row.classList.toggle("message-row-continued", isContinuationGroup);
+    row.classList.toggle("message-row-live-announcement", isLiveAnnouncementCard);
 
     // avatar column
     const avatarCol = document.createElement("div");
@@ -17485,6 +18559,9 @@ function renderMessages(channelId, options = {}) {
     if (isContinuationGroup && avatarDisplayTarget) {
       avatarDisplayTarget.classList.add("message-avatar-hidden");
     }
+    if (isLiveAnnouncementCard && avatarDisplayTarget) {
+      avatarDisplayTarget.classList.add("message-avatar-hidden");
+    }
     if (hasAudioCard) {
       bubble.classList.add("message-with-audio-card");
     }
@@ -17493,39 +18570,39 @@ function renderMessages(channelId, options = {}) {
 
     const isAdminOrTeacher = isAdminUser() || isTeacherUser();
 
-
-    const timestampParts = getMessageTimestampParts(msg);
     let header = null;
     let timeEl = null;
     if (!isPolicyDocument) {
       header = document.createElement("div");
       header.className = "message-header";
+      if (!isContinuationGroup && !isLiveAnnouncementCard) {
         const author = document.createElement("span");
         author.className = "message-author user-link";
         author.textContent = msg.author;
-      author.style.cursor = "pointer";
-      const tooltipParts = [msg.author];
-      if (displayRole) tooltipParts.push(displayRole);
-      author.setAttribute("title", tooltipParts.filter(Boolean).join(" • "));
-      author.addEventListener("click", () => {
-        openUserProfile(msg.author, msg.avatarUrl, msg);
-      });
-      header.appendChild(author);
+        author.style.cursor = "pointer";
+        const tooltipParts = [msg.author];
+        if (displayRole) tooltipParts.push(displayRole);
+        author.setAttribute("title", tooltipParts.filter(Boolean).join(" • "));
+        author.addEventListener("click", () => {
+          openUserProfile(msg.author, msg.avatarUrl, msg);
+        });
+        header.appendChild(author);
 
-      const roleBadge = document.createElement("span");
-      roleBadge.className = "message-role-badge";
-      applyRoleLabel(roleBadge, displayRole);
-      if (roleBadge.textContent) {
-        header.appendChild(roleBadge);
+        const roleBadge = document.createElement("span");
+        roleBadge.className = "message-role-badge";
+        applyRoleLabel(roleBadge, displayRole);
+        if (roleBadge.textContent) {
+          header.appendChild(roleBadge);
+        }
       }
 
       timeEl = document.createElement("span");
       timeEl.className = "message-time";
-      timeEl.textContent = timestampParts.time || "";
+      timeEl.textContent = timestampParts.stamp || "";
       if (timeEl.textContent) {
-        appendHeaderSegment(header, timeEl);
+        header.appendChild(timeEl);
       }
-      if (cultureChannelActive) {
+      if (cultureChannelActive && !isContinuationGroup) {
         const badge = document.createElement("span");
         badge.className = "culture-badge";
 
@@ -17540,6 +18617,9 @@ function renderMessages(channelId, options = {}) {
           : `<i class="fa-solid fa-globe"></i><span>Culture</span>`;
         badge.title = `Original: ${getCultureLanguageLabel(originalLang)}`;
         appendHeaderSegment(header, badge);
+      }
+      if (isContinuationGroup) {
+        header.classList.add("message-header-compact");
       }
     }
 
@@ -17770,10 +18850,10 @@ function renderMessages(channelId, options = {}) {
       footer.appendChild(footerActions);
       if (commenters) footer.appendChild(commenters);
 
-      if (translationControls && header) {
+      if (translationControls && header && !isContinuationGroup) {
         header.appendChild(translationControls);
       }
-      if (considerContinuation) {
+      if (considerContinuation && !isContinuationGroup) {
         const continuationGroup = continuationGroups.get(currentContinuationRootId);
         if (continuationGroup && header) {
           if (!continuationGroup.toggleBtn) {
@@ -17799,14 +18879,11 @@ function renderMessages(channelId, options = {}) {
       if (shouldShowHeader && header) {
         bubbleContentTarget.appendChild(header);
       }
-      if (!shouldShowHeader && translationControls) {
-        bubbleContentTarget.appendChild(translationControls);
+      if (shouldShowContinuationMeta && header) {
+        bubbleContentTarget.appendChild(header);
       }
-      if (isContinuationGroup && timeEl?.textContent) {
-        const timeInline = document.createElement("div");
-        timeInline.className = "message-time-inline";
-        timeInline.textContent = timestampParts.time;
-        bubbleContentTarget.appendChild(timeInline);
+      if (!shouldShowHeader && translationControls && !isContinuationGroup) {
+        bubbleContentTarget.appendChild(translationControls);
       }
       if (replyPreview) bubbleContentTarget.appendChild(replyPreview);
       bubbleContentTarget.appendChild(text);
@@ -17847,7 +18924,13 @@ function renderMessages(channelId, options = {}) {
       }
     }
 
-    prevGroupAuthor = normalizedAuthorName;
+    prevGroupAuthor =
+      isSystemStyledMessage || isPolicyDocument ? null : normalizedAuthorName;
+    prevGroupTimestampKey =
+      isSystemStyledMessage || isPolicyDocument ? "" : timestampGroupKey;
+    if (dayKey) {
+      prevDateKey = dayKey;
+    }
   });
 
   renderUniversalEmptyState(channelId, msgs.length);
@@ -17906,6 +18989,7 @@ function renderSavedMessages() {
 
   savedList.forEach((entry) => {
     const { channelId, channelName, message } = entry;
+    const isLiveAnnouncementCard = /live-announcement-card/.test(String(message?.text || ""));
     const row = document.createElement("div");
     row.className = "message-row";
     row.dataset.messageId = message.id;
@@ -17950,6 +19034,9 @@ function renderSavedMessages() {
     const savedRole = message.role || resolveUserRole(message.author, message.initials);
     applyAvatarToNode(avatar, message.initials, savedAvatar, message.author, savedRole);
     avatarCol.appendChild(avatar);
+    if (isLiveAnnouncementCard) {
+      avatarCol.classList.add("message-avatar-hidden");
+    }
 
     const bubble = document.createElement("div");
     bubble.className = "message-bubble";
@@ -18016,10 +19103,7 @@ function renderSavedMessages() {
     const timestampParts = getMessageTimestampParts(message);
     const timeEl = document.createElement("span");
     timeEl.className = "message-time";
-    timeEl.textContent = timestampParts.time || "";
-    const dateEl = document.createElement("span");
-    dateEl.className = "message-date";
-    dateEl.textContent = timestampParts.dateLabel || "";
+    timeEl.textContent = timestampParts.stamp || "";
 
     const channelLabel = channelName ? `#${channelName}` : channelId ? `#${channelId}` : "";
     const showChannelLabel = !isSpeakingClubChannel(channelId);
@@ -18027,16 +19111,20 @@ function renderSavedMessages() {
     channelEl.className = "message-channel";
     channelEl.textContent = channelLabel;
 
-    header.appendChild(author);
-    if (savedStatusEl.textContent?.trim()) appendHeaderSegment(header, savedStatusEl);
-    if (timeEl.textContent) appendHeaderSegment(header, timeEl);
-    if (dateEl.textContent) appendHeaderSegment(header, dateEl);
+    if (!isLiveAnnouncementCard) {
+      header.appendChild(author);
+      if (savedStatusEl.textContent?.trim()) appendHeaderSegment(header, savedStatusEl);
+    }
+    if (timeEl.textContent) header.appendChild(timeEl);
     if (channelEl.textContent) appendHeaderSegment(header, channelEl);
 
 
     const text = document.createElement("div");
     text.className = "message-text";
     text.innerHTML = message.text;
+    if (isLiveAnnouncementCard) {
+      primeLiveAnnouncementLinks(text);
+    }
     hydrateEmojiImages(text);
     annotateAudioCards(text, message.id, channelId);
     setupAudioCardOptions(text);
@@ -18045,6 +19133,7 @@ function renderSavedMessages() {
       bubble.classList.add("message-with-audio-card");
       row.classList.add("row-with-audio-card");
     }
+    row.classList.toggle("message-row-live-announcement", isLiveAnnouncementCard);
 
     const footer = document.createElement("div");
     footer.className = "message-footer";
@@ -19943,14 +21032,9 @@ function getMessageTimestampParts(msg = {}) {
     msg.time ||
     "";
   const parsed = parseChatDate(raw);
-  const dateLabel =
-    parsed &&
-    parsed.toLocaleDateString([], {
-      month: "short",
-      day: "numeric",
-      year: "numeric"
-    });
-  return { time, dateLabel };
+  const dateLabel = parsed ? formatRelativeDay(parsed) : "";
+  const stamp = [dateLabel, time].filter(Boolean).join(" ");
+  return { time, dateLabel, stamp };
 }
 
 function appendHeaderSegment(header, element) {
@@ -19979,7 +21063,7 @@ function formatRelativeDay(date) {
     date.getFullYear() === now.getFullYear()
       ? { month: "short", day: "numeric" }
       : { month: "short", day: "numeric", year: "numeric" };
-  return date.toLocaleDateString([], opts);
+  return date.toLocaleDateString("en-GB", opts);
 }
 
 
@@ -24483,12 +25567,13 @@ async function completeLoginFlow(user) {
 
   try {
     localStorage.removeItem(CURRENT_CHANNEL_STORAGE_KEY);
+    localStorage.removeItem(LAST_VIEW_STORAGE_KEY);
+    sessionStorage.setItem(LOGIN_LAND_HOMEWORK_FLAG, "1");
   } catch (err) {
     console.warn("Could not persist workspace selection", err);
   }
   updateAdminButtonState();
-
-  await bootstrapAfterAuth(user, { showToastOnLogin: true, hydrateApp: true });
+  window.location.reload();
 }
 
 async function handleMainLogin() {
@@ -24636,6 +25721,11 @@ function setupRealtimeEvents() {
     return;
   }
 
+  if (realtimeRetryTimer) {
+    clearTimeout(realtimeRetryTimer);
+    realtimeRetryTimer = null;
+  }
+
   if (eventSource) {
     try {
       eventSource.close();
@@ -24650,19 +25740,26 @@ function setupRealtimeEvents() {
   eventSource = es;
 
   es.addEventListener("open", () => {
+    realtimeRetryDelayMs = 3000;
     console.log("Realtime connected");
   });
 
   es.addEventListener("error", () => {
-    console.warn("Realtime connection lost, retrying…");
+    const retryIn = realtimeRetryDelayMs;
+    console.warn(`Realtime connection lost, retrying in ${Math.round(retryIn / 1000)}s…`);
     try {
       es.close();
     } catch (err) {
       // ignore
     }
     eventSource = null;
-    // simple retry
-    setTimeout(setupRealtimeEvents, 3000);
+    if (!realtimeRetryTimer) {
+      realtimeRetryTimer = setTimeout(() => {
+        realtimeRetryTimer = null;
+        setupRealtimeEvents();
+      }, retryIn);
+    }
+    realtimeRetryDelayMs = Math.min(realtimeRetryDelayMs * 2, 30000);
   });
 
   // New channel message from ANY user
@@ -25049,7 +26146,17 @@ function setupRealtimeEvents() {
 async function init() {
   showPageLoader();
   try {
+    let landOnHomeworkAfterLogin = false;
+    try {
+      landOnHomeworkAfterLogin = sessionStorage.getItem(LOGIN_LAND_HOMEWORK_FLAG) === "1";
+      if (landOnHomeworkAfterLogin) {
+        sessionStorage.removeItem(LOGIN_LAND_HOMEWORK_FLAG);
+      }
+    } catch (_err) {
+      landOnHomeworkAfterLogin = false;
+    }
     loadDeepLinkTarget();
+    loadLiveRoomRouteTarget();
     refreshCultureExchangeLanguagePreference();
     updateAdminButtonState();
     loadDensity();
@@ -25090,12 +26197,24 @@ async function init() {
     if (recordingOverlay) recordingOverlay.hidden = true;
     if (channels.length) {
       if (!channels.some((c) => c.id === currentChannelId) && !isSchoolSettingsChannel(currentChannelId)) {
-        currentChannelId = channels[0].id;
+        currentChannelId = getDefaultLandingChannelId() || channels[0].id;
       }
       if (deepLinkTarget) {
         applyDeepLinkSelection();
+      } else if (landOnHomeworkAfterLogin) {
+        const defaultLandingChannelId = getDefaultLandingChannelId();
+        if (defaultLandingChannelId) {
+          await selectChannel(defaultLandingChannelId);
+        } else {
+          showHomeView();
+        }
       } else if (!didRestoreView) {
-        showHomeView();
+        const defaultLandingChannelId = getDefaultLandingChannelId();
+        if (defaultLandingChannelId) {
+          await selectChannel(defaultLandingChannelId);
+        } else {
+          showHomeView();
+        }
       }
     } else if (messagesContainer) {
       messagesContainer.innerHTML = "";
@@ -25288,6 +26407,16 @@ if (headerMuteBtn) {
     renderChannelHeader(ch.id);
   });
 }
+
+if (headerFullscreenBtn) {
+  headerFullscreenBtn.addEventListener("click", () => {
+    toggleChannelFullscreen();
+  });
+}
+
+document.addEventListener("fullscreenchange", () => {
+  updateChannelFullscreenButton();
+});
 
 if (channelSearchInput) {
   channelSearchInput.addEventListener("input", () => {
@@ -27021,7 +28150,13 @@ function updateSesSignaturePreview({
 
 /* Attach listeners safely AFTER page load */
 document.addEventListener("DOMContentLoaded", () => {
-  restoreLastActivePanel();
+  updateChannelFullscreenButton();
+  if (isLiveRoomRouteActive()) {
+    showPanel("livePanel");
+    setLivePanelView("room");
+  } else {
+    restoreLastActivePanel();
+  }
   [
     "sesSchoolName",
     "schoolProfileStreet",
@@ -27056,7 +28191,44 @@ document.addEventListener("DOMContentLoaded", () => {
   updateSesBodyChrome().catch(() => {});
   const liveMeetLeaveBtn = document.getElementById("liveMeetLeaveBtn");
   if (liveMeetLeaveBtn) {
-    liveMeetLeaveBtn.addEventListener("click", leaveLiveMeetingEmbed);
+    liveMeetLeaveBtn.addEventListener("click", () => {
+      setLiveRoomFocusMode(false);
+      setLiveSessionActivity(false);
+      if (typeof leaveLiveMeetingEmbed === "function") leaveLiveMeetingEmbed();
+      showToast("You left the session.");
+    });
+  }
+  if (liveModeToggleButtons.length) {
+    liveModeToggleButtons.forEach((btn) => btn.addEventListener("click", () => {
+      setLiveRoomFocusMode(!isLiveRoomFocusMode);
+    }));
+    updateLiveFocusModeButton();
+  }
+  if (liveRoomBackBtn) {
+    liveRoomBackBtn.addEventListener("click", async () => {
+      const targetChannelId = String(liveRoomBackBtn.dataset.channelId || currentChannelId || "").trim();
+      setLiveRoomFocusMode(false);
+      setLivePresenterMode(false);
+      setLiveSessionActivity(false);
+      if (typeof leaveLiveMeetingEmbed === "function") leaveLiveMeetingEmbed();
+      setLivePanelView("hub");
+      clearBrowserLiveRoomPath();
+      if (targetChannelId && findChannelById(targetChannelId)) {
+        await selectChannel(targetChannelId);
+      } else {
+        openLivePanel();
+      }
+    });
+  }
+});
+
+window.addEventListener("popstate", () => {
+  if (liveRoomView && !liveRoomView.classList.contains("hidden")) {
+    setLiveRoomFocusMode(false);
+    setLivePresenterMode(false);
+    setLiveSessionActivity(false);
+    if (typeof leaveLiveMeetingEmbed === "function") leaveLiveMeetingEmbed();
+    setLivePanelView("hub");
   }
 });
 
@@ -27712,6 +28884,7 @@ document.addEventListener("DOMContentLoaded", () => {
     let mailboxDataSignature = "";
     let mailboxPollTimer = null;
     let mailboxPollInFlight = false;
+    let mailboxFailureCount = 0;
 
     function canCurrentUserAccessMailbox() {
       const role = normalizeRole(sessionUser?.role || sessionUser?.userRole || "");
@@ -28153,11 +29326,16 @@ document.addEventListener("DOMContentLoaded", () => {
         try {
           await loadInbox({ sync: false, folder: currentFolder });
           syncInboxInBackground(currentFolder);
+          mailboxFailureCount = 0;
         } catch (error) {
           console.error("Mailbox auto-refresh failed", error);
+          mailboxFailureCount = Math.min(mailboxFailureCount + 1, 6);
         } finally {
           mailboxPollInFlight = false;
-          scheduleMailboxAutoRefresh(delayMs);
+          const nextDelay = mailboxFailureCount
+            ? Math.min(delayMs * Math.pow(2, mailboxFailureCount), 60000)
+            : delayMs;
+          scheduleMailboxAutoRefresh(nextDelay);
         }
       }, delayMs);
     }
@@ -28201,7 +29379,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const url = `/api/admin/inbox?${params.toString()}`;
       const requestSeq = ++mailboxRequestSeq;
       const requestFolder = currentFolder;
-      const res = await fetch(url, { credentials: "include" });
+      const res = await apiFetch(url);
       if (requestSeq !== mailboxRequestSeq || requestFolder !== currentFolder) {
         return;
       }

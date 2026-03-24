@@ -759,6 +759,56 @@ html[data-theme="dark"] #calendarPanel .cal-week-day{
   border-left-color: rgba(148,163,184,0.14);
   background: rgba(148,163,184,0.05);
 }
+
+html[data-theme="dark"] #calendarPanel .planner-side,
+html[data-theme="dark"] #calendarPanel .ps-list,
+html[data-theme="dark"] #calendarPanel .calendar-grid,
+html[data-theme="dark"] #calendarPanel .cal-week-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(100, 116, 139, 0.5) transparent;
+}
+
+html[data-theme="dark"] #calendarPanel .planner-side::-webkit-scrollbar,
+html[data-theme="dark"] #calendarPanel .ps-list::-webkit-scrollbar,
+html[data-theme="dark"] #calendarPanel .calendar-grid::-webkit-scrollbar,
+html[data-theme="dark"] #calendarPanel .cal-week-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+html[data-theme="dark"] #calendarPanel .planner-side::-webkit-scrollbar-track,
+html[data-theme="dark"] #calendarPanel .ps-list::-webkit-scrollbar-track,
+html[data-theme="dark"] #calendarPanel .calendar-grid::-webkit-scrollbar-track,
+html[data-theme="dark"] #calendarPanel .cal-week-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+html[data-theme="dark"] #calendarPanel .planner-side::-webkit-scrollbar-thumb,
+html[data-theme="dark"] #calendarPanel .ps-list::-webkit-scrollbar-thumb,
+html[data-theme="dark"] #calendarPanel .calendar-grid::-webkit-scrollbar-thumb,
+html[data-theme="dark"] #calendarPanel .cal-week-scroll::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.42);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  min-height: 36px;
+}
+
+html[data-theme="dark"] #calendarPanel .planner-side::-webkit-scrollbar-thumb:hover,
+html[data-theme="dark"] #calendarPanel .ps-list::-webkit-scrollbar-thumb:hover,
+html[data-theme="dark"] #calendarPanel .calendar-grid::-webkit-scrollbar-thumb:hover,
+html[data-theme="dark"] #calendarPanel .cal-week-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.52);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+html[data-theme="dark"] #calendarPanel .planner-side::-webkit-scrollbar-corner,
+html[data-theme="dark"] #calendarPanel .ps-list::-webkit-scrollbar-corner,
+html[data-theme="dark"] #calendarPanel .calendar-grid::-webkit-scrollbar-corner,
+html[data-theme="dark"] #calendarPanel .cal-week-scroll::-webkit-scrollbar-corner {
+  background: transparent;
+}
 html[data-theme="dark"] #calendarPanel .cal-slot{
   border-top-color: rgba(148,163,184,0.14);
 }

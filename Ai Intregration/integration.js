@@ -3,6 +3,7 @@
 // ---- Live session end guard ----
 let liveJitsiApi = null;
 let liveEndSent = false;
+let lastLiveJoinDetails = null;
 
 function resetLiveEndGuard() {
   liveEndSent = false;
@@ -105,17 +106,118 @@ function parseJitsiRoomFromUrl(url) {
   }
 }
 
-async function openLiveMeetingEmbed(meetingUrl) {
+function isPublicMeetDomain(domain = "") {
+  return String(domain || "").trim().toLowerCase() === "meet.jit.si";
+}
+
+function updateLiveDomainModeBadge(domain = "") {
+  const badge = document.getElementById("liveDomainModeBadge");
+  if (!badge) return;
+  const normalized = String(domain || "").trim().toLowerCase();
+  if (!normalized) {
+    badge.classList.add("hidden");
+    badge.textContent = "";
+    badge.classList.remove("live-domain-badge-demo", "live-domain-badge-selfhosted");
+    return;
+  }
+  badge.classList.remove("hidden", "live-domain-badge-demo", "live-domain-badge-selfhosted");
+  if (isPublicMeetDomain(normalized)) {
+    badge.classList.add("live-domain-badge-demo");
+    badge.textContent = "Demo mode";
+  } else {
+    badge.classList.add("live-domain-badge-selfhosted");
+    badge.textContent = "Configured domain";
+  }
+}
+
+function updateLiveExternalFallback(details = {}, options = {}) {
+  const fallbackWrap = document.getElementById("liveMeetFallbackActions");
+  const openBtn = document.getElementById("liveMeetOpenExternalBtn");
+  if (!fallbackWrap || !openBtn) return;
+  const meetingUrl = String(details.meetingUrl || details.meeting_url || "").trim();
+  const jwt = String(details.jwt || details.token || "").trim();
+  let openUrl = meetingUrl;
+  if (meetingUrl && jwt) {
+    try {
+      const url = new URL(meetingUrl);
+      url.searchParams.set("jwt", jwt);
+      openUrl = url.toString();
+    } catch (_err) {
+      openUrl = `${meetingUrl}${meetingUrl.includes("?") ? "&" : "?"}jwt=${encodeURIComponent(jwt)}`;
+    }
+  }
+  if (openUrl) {
+    openBtn.href = openUrl;
+    openBtn.classList.remove("hidden");
+  } else {
+    openBtn.href = "#";
+    openBtn.classList.add("hidden");
+  }
+  fallbackWrap.classList.toggle("hidden", !options.show);
+}
+
+function renderLiveEmbedFallback(details = {}, message = "") {
+  const container = document.getElementById("liveMeetContainer");
+  if (!container) return;
+  const copy = message || "The embedded meeting could not start in this browser. You can retry or open the meeting in a new tab.";
+  updateLiveExternalFallback(details, { show: true });
+  container.innerHTML = `
+    <div class="live-embed-fallback">
+      <div class="live-room-empty-icon" aria-hidden="true">
+        <i class="fa-solid fa-triangle-exclamation"></i>
+      </div>
+      <div class="live-embed-fallback-title">Embed unavailable</div>
+      <div class="live-embed-fallback-copy">${copy}</div>
+      <div class="live-embed-fallback-actions">
+        <button type="button" class="btn btn-ghost" id="liveMeetInlineRetryBtn">
+          <i class="fa-solid fa-rotate-right"></i>
+          Retry
+        </button>
+      </div>
+    </div>
+  `;
+  const retryInlineBtn = document.getElementById("liveMeetInlineRetryBtn");
+  retryInlineBtn?.addEventListener("click", () => {
+    retryLiveMeetingEmbed();
+  });
+}
+
+function retryLiveMeetingEmbed() {
+  if (!lastLiveJoinDetails) return;
+  openLiveMeetingEmbed(lastLiveJoinDetails).catch((err) => {
+    console.error("Retry live embed failed", err);
+    renderLiveEmbedFallback(lastLiveJoinDetails, "The embed still could not start. Use the new-tab fallback if needed.");
+  });
+}
+
+function applyLiveMeetIframePermissions(container) {
+  const iframe = container?.querySelector?.("iframe");
+  if (!iframe) return false;
+  iframe.setAttribute("allow", "camera; microphone; fullscreen; display-capture");
+  iframe.setAttribute("allowfullscreen", "true");
+  return true;
+}
+
+async function openLiveMeetingEmbed(details = {}) {
   const container = document.getElementById("liveMeetContainer");
   if (!container) return;
 
   resetLiveEndGuard();
   resetRecordingButtons();
 
-  const domain = window.__JITSI_DOMAIN__ || "meet.jit.si";
-  const roomName = parseJitsiRoomFromUrl(meetingUrl);
+  const meetingUrl = details.meetingUrl || details.meeting_url || "";
+  const domain = details.domain || window.__JITSI_DOMAIN__ || "";
+  const roomName = details.roomName || details.room_name || parseJitsiRoomFromUrl(meetingUrl);
+  lastLiveJoinDetails = {
+    ...details,
+    meetingUrl,
+    domain,
+    roomName
+  };
+  updateLiveDomainModeBadge(domain);
+  updateLiveExternalFallback(lastLiveJoinDetails, { show: false });
 
-  if (!roomName) {
+  if (!roomName || !domain) {
     container.innerHTML = `<div class="muted" style="padding:14px;">Invalid meeting URL.</div>`;
     return;
   }
@@ -136,14 +238,26 @@ async function openLiveMeetingEmbed(meetingUrl) {
     parentNode: container,
     width: "100%",
     height: "100%",
+    jwt: details.jwt || details.token || undefined,
     userInfo: {
       displayName: sessionUser?.name || sessionUser?.displayName || "Student"
     },
     configOverwrite: {
       disableInviteFunctions: true,
-      enableWelcomePage: false
+      enableWelcomePage: false,
+      prejoinPageEnabled: false
+    },
+    interfaceConfigOverwrite: {
+      MOBILE_APP_PROMO: false,
+      HIDE_DEEP_LINKING_LOGO: true
     }
   });
+
+  applyLiveMeetIframePermissions(container) ||
+    requestAnimationFrame(() => {
+      applyLiveMeetIframePermissions(container);
+      setTimeout(() => applyLiveMeetIframePermissions(container), 300);
+    });
 
   wireJitsiSessionEvents(liveJitsiApi, activeLiveSessionId);
 }
@@ -165,15 +279,26 @@ function leaveLiveMeetingEmbed() {
   if (container) {
     container.innerHTML = `<div class="muted" style="padding:14px;">Join a session to start video.</div>`;
   }
+  updateLiveExternalFallback({}, { show: false });
+  updateLiveDomainModeBadge(window.__JITSI_DOMAIN__ || "");
   setLiveJoinedState(false);
   resetRecordingButtons();
 }
 
 async function joinLiveSession(sessionId) {
+  if (typeof openLiveSessionExternally === "function") {
+    const session = liveSessions?.find((s) => String(s.id) === String(sessionId)) || { id: sessionId };
+    await openLiveSessionExternally(session);
+    return;
+  }
+  return openLiveSessionInsideApp(sessionId);
+}
+
+async function openLiveSessionInsideApp(sessionId, options = {}) {
   try {
-    const session = liveSessions?.find((s) => String(s.id) === String(sessionId));
+    const session = options.session || liveSessions?.find((s) => String(s.id) === String(sessionId));
     if (!session?.meeting_url) {
-      showToast("This session has no meeting link.");
+      showToast("This session is not ready yet.");
       return;
     }
 
@@ -181,8 +306,17 @@ async function joinLiveSession(sessionId) {
     setSlidesControlsVisibility();
     liveEndSent = false;
 
-    await fetchJSON(`/api/live-sessions/${sessionId}/join`, { method: "POST" });
-    await openLiveMeetingEmbed(session.meeting_url);
+    const joinData = await fetchJSON(`/api/live-sessions/${sessionId}/join`, { method: "POST" });
+    const joinedSession = joinData?.session || session;
+    if (typeof renderLiveRoomHeader === "function") {
+      renderLiveRoomHeader(joinedSession, options.routeChannelId || joinedSession?.channel_id || null);
+    }
+    await openLiveMeetingEmbed({
+      meetingUrl: joinData?.jitsi?.meetingUrl || joinedSession?.meeting_url,
+      domain: joinData?.jitsi?.domain || joinedSession?.meeting_domain,
+      roomName: joinData?.jitsi?.roomName || joinedSession?.room_name,
+      jwt: joinData?.jitsi?.jwt || null,
+    });
 
     await loadInitialSlideState(sessionId);
     startSlidesSse(sessionId);
@@ -191,7 +325,8 @@ async function joinLiveSession(sessionId) {
     showToast("Joined session.");
   } catch (err) {
     console.error("Failed to join session", err);
-    showToast("Could not join session.");
+    renderLiveEmbedFallback(lastLiveJoinDetails || {}, err?.message || "Could not start the embedded meeting.");
+    showToast(err?.message || "Could not join session.");
   }
 }
 
@@ -218,8 +353,8 @@ function setSlidesControlsVisibility() {
 }
 
 function setLiveJoinedState(joined) {
-  const slidesEl = document.querySelector(".live-slides");
-  const rightCol = document.querySelector(".live-right");
+  const slidesEl = document.querySelector("#liveRoomView .live-slides");
+  const rightCol = document.querySelector("#liveRoomView .live-right");
   if (slidesEl) slidesEl.style.display = joined ? "" : "none";
   if (rightCol) {
     rightCol.style.gridTemplateRows = joined ? "1fr 0.72fr" : "1fr";
@@ -227,14 +362,17 @@ function setLiveJoinedState(joined) {
 }
 
 function canUseRecording() {
-  const domain = window.__JITSI_DOMAIN__ || "";
-  return domain.includes("studistalk.de");
+  return false;
 }
 
 function resetRecordingButtons() {
   if (liveRecStartBtn) liveRecStartBtn.hidden = !canUseRecording();
   if (liveRecStopBtn) liveRecStopBtn.hidden = true;
 }
+
+document.getElementById("liveMeetRetryBtn")?.addEventListener("click", () => {
+  retryLiveMeetingEmbed();
+});
 
 function updateSlidePill() {
   if (!slidePagePill) return;

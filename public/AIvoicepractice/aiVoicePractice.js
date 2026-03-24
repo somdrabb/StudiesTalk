@@ -11,6 +11,500 @@
   const CONV_MSG_ENDPOINT = (id) => `/api/ai/conversation/${encodeURIComponent(id)}/messages`;
   const CONV_END_ENDPOINT = (id) => `/api/ai/conversation/${encodeURIComponent(id)}/end`;
   const $ = (id) => document.getElementById(id);
+  const LEGACY_SPEAKING_TOPIC_ALIASES = {
+    free: "smalltalk",
+    job: "interview",
+    feedbackpanel: "feedback",
+    culture: "culture",
+    crosscultural: "culture",
+    mentorship: "coach",
+    coach: "coach",
+    briefing: "briefing",
+    englishnews: "briefing",
+    event: "booking",
+    ceointerview: "interview",
+    business: "presentation",
+    reviewer: "debate",
+    salespitch: "sales",
+    news: "briefing"
+  };
+  const LEGACY_SPEAKING_TOPICS = [
+    {
+      id: "smalltalk",
+      title: "Small Talk starten",
+      subtitle: "Locker kennenlernen & Eis brechen",
+      icon: "fa-solid fa-handshake",
+      category: "everyday",
+      levels: ["A1", "A2"],
+      skills: ["introducing", "small_talk", "follow_up_questions"],
+      objective: "Eine lockere erste Unterhaltung beginnen und am Laufen halten.",
+      aiContext: "friendly first meeting, short natural questions, introductions, hobbies, gentle corrections",
+      theme: "violet"
+    },
+    {
+      id: "restaurant",
+      title: "Essen bestellen",
+      subtitle: "Bestellen, nachfragen & höflich reagieren",
+      icon: "fa-solid fa-utensils",
+      category: "everyday",
+      levels: ["A1", "A2"],
+      skills: ["ordering", "politeness", "clarifying"],
+      objective: "Sicher Essen und Getränke bestellen und auf Rückfragen reagieren.",
+      aiContext: "restaurant roleplay, waiter and customer, polite requests, menu vocabulary, short turns",
+      theme: "orange"
+    },
+    {
+      id: "interview",
+      title: "Vorstellungsgespraech",
+      subtitle: "Antworten strukturiert & selbstsicher geben",
+      icon: "fa-solid fa-user-tie",
+      category: "work",
+      levels: ["B1", "B2"],
+      skills: ["self_presentation", "professional_answers", "confidence"],
+      objective: "Berufliche Fragen klar, strukturiert und glaubwürdig beantworten.",
+      aiContext: "job interview coach, experience, strengths, motivation, follow-up questions, concise feedback",
+      theme: "sky"
+    },
+    {
+      id: "travel",
+      title: "Hotel Check-in",
+      subtitle: "Einchecken, fragen & Probleme loesen",
+      icon: "fa-solid fa-plane-departure",
+      category: "practical",
+      levels: ["A2", "B1"],
+      skills: ["travel_language", "requesting_help", "clarifying"],
+      objective: "Reisesituationen am Hotel sicher und höflich lösen.",
+      aiContext: "hotel front desk roleplay, reservations, room questions, practical travel conversation",
+      theme: "lime"
+    },
+    {
+      id: "exam",
+      title: "TestDaF Sprechen",
+      subtitle: "Pruefungsnah antworten & Zeit gut nutzen",
+      icon: "fa-solid fa-graduation-cap",
+      category: "academic",
+      levels: ["B2", "C1"],
+      skills: ["exam_fluency", "structuring", "timed_speaking"],
+      objective: "Prüfungsnahe Antworten mit klarer Struktur und passendem Tempo geben.",
+      aiContext: "exam simulator, time pressure, structured answers, academic tone, light correction after response",
+      theme: "pink"
+    },
+    {
+      id: "support",
+      title: "Kundenservice Gespraech",
+      subtitle: "Probleme erklaeren & Loesungen finden",
+      icon: "fa-solid fa-headset",
+      category: "work",
+      levels: ["A2", "B1"],
+      skills: ["problem_description", "clarification", "service_language"],
+      objective: "Ein Problem ruhig beschreiben und gemeinsam eine Lösung finden.",
+      aiContext: "service call roleplay, issue explanation, troubleshooting, polite support language",
+      theme: "teal"
+    },
+    {
+      id: "project",
+      title: "Projekt-Update geben",
+      subtitle: "Fortschritt, Risiken & naechste Schritte",
+      icon: "fa-solid fa-list-check",
+      category: "work",
+      levels: ["B1", "B2"],
+      skills: ["status_reporting", "summarizing", "planning"],
+      objective: "Fortschritt klar zusammenfassen und nächste Schritte benennen.",
+      aiContext: "team update, deadlines, blockers, concise project language, one question at a time",
+      theme: "indigo"
+    },
+    {
+      id: "networking",
+      title: "Kontakte knuepfen",
+      subtitle: "Sich vorstellen & professionell vernetzen",
+      icon: "fa-solid fa-user-group",
+      category: "social",
+      levels: ["A2", "B1"],
+      skills: ["introducing", "networking", "small_talk"],
+      objective: "Sich natürlich vorstellen und ein Gespräch professionell weiterführen.",
+      aiContext: "networking event, introductions, interests, work background, friendly but professional tone",
+      theme: "rose"
+    },
+    {
+      id: "presentation",
+      title: "Praesentation halten",
+      subtitle: "Ideen klar vorstellen & erklaeren",
+      icon: "fa-solid fa-person-chalkboard",
+      category: "work",
+      levels: ["B1", "B2"],
+      skills: ["presenting", "explaining", "signposting"],
+      objective: "Eine Idee oder ein Thema strukturiert und verständlich präsentieren.",
+      aiContext: "presentation audience, signposting, transitions, explaining visuals, confident speaking",
+      theme: "amber"
+    },
+    {
+      id: "feedback",
+      title: "Feedback geben & annehmen",
+      subtitle: "Verbessern, reagieren & gemeinsam loesen",
+      icon: "fa-solid fa-comment-dots",
+      category: "social",
+      levels: ["B1", "B2"],
+      skills: ["feedback", "responding", "polite_disagreement"],
+      objective: "Konstruktives Feedback geben und offen darauf reagieren.",
+      aiContext: "feedback conversation, praise plus improvement, tactful wording, calm responses",
+      theme: "violet"
+    },
+    {
+      id: "story",
+      title: "Eine Geschichte erzaehlen",
+      subtitle: "Erlebnisse lebendig und spannend schildern",
+      icon: "fa-solid fa-book-open",
+      category: "everyday",
+      levels: ["A2", "B1"],
+      skills: ["narration", "past_tense", "detail"],
+      objective: "Ein Erlebnis lebendig erzählen und wichtige Details einbauen.",
+      aiContext: "storytelling partner, ask for details, sequence events, encourage vivid language",
+      theme: "red"
+    },
+    {
+      id: "negotiation",
+      title: "Verhandeln",
+      subtitle: "Optionen abwaegen & Kompromisse finden",
+      icon: "fa-solid fa-handshake-angle",
+      category: "work",
+      levels: ["B1", "B2"],
+      skills: ["persuasion", "compromise", "clarifying_terms"],
+      objective: "Preise, Termine oder Optionen flexibel verhandeln.",
+      aiContext: "negotiation roleplay, options, trade-offs, persuasive but polite language",
+      theme: "yellow"
+    },
+    {
+      id: "medical",
+      title: "Beim Arzt sprechen",
+      subtitle: "Symptome erklaeren & Rueckfragen verstehen",
+      icon: "fa-solid fa-stethoscope",
+      category: "practical",
+      levels: ["A2", "B1"],
+      skills: ["symptoms", "medical_vocabulary", "clarification"],
+      objective: "Symptome verständlich erklären und Nachfragen beantworten.",
+      aiContext: "doctor appointment roleplay, symptoms, duration, advice, patient-friendly questions",
+      theme: "cyan"
+    },
+    {
+      id: "coldcall",
+      title: "Telefonischer Erstkontakt",
+      subtitle: "Anrufen, vorstellen & Anliegen nennen",
+      icon: "fa-solid fa-phone-volume",
+      category: "work",
+      levels: ["A2", "B1"],
+      skills: ["phone_language", "introducing", "purpose"],
+      objective: "Ein Gespräch telefonisch klar eröffnen und zum Punkt kommen.",
+      aiContext: "phone call opener, formal greetings, purpose of call, polite clarification",
+      theme: "blue"
+    },
+    {
+      id: "review",
+      title: "Deutsch verbessern",
+      subtitle: "Fehler erkennen & bessere Formulierungen finden",
+      icon: "fa-solid fa-pen-to-square",
+      category: "learning",
+      levels: ["A2", "B2"],
+      skills: ["self_correction", "rephrasing", "accuracy"],
+      objective: "Eigene Sätze verbessern und natürlichere Formulierungen üben.",
+      aiContext: "language coach, rephrase learner sentences, explain corrections simply, encourage retries",
+      theme: "emerald"
+    },
+    {
+      id: "academic",
+      title: "Uni-Diskussion",
+      subtitle: "Standpunkte klar darstellen & begruenden",
+      icon: "fa-solid fa-building-columns",
+      category: "academic",
+      levels: ["B2", "C1"],
+      skills: ["argumentation", "opinion", "academic_language"],
+      objective: "Ein Thema an der Uni diskutieren und mit Gründen untermauern.",
+      aiContext: "academic seminar partner, discuss arguments, examples, contrast, formal tone",
+      theme: "indigo"
+    },
+    {
+      id: "tour",
+      title: "Stadt erklaeren",
+      subtitle: "Orte beschreiben & Tipps geben",
+      icon: "fa-solid fa-map-location-dot",
+      category: "everyday",
+      levels: ["A2", "B1"],
+      skills: ["describing_places", "recommending", "giving_directions"],
+      objective: "Eine Stadt oder Gegend anschaulich beschreiben und empfehlen.",
+      aiContext: "city guide roleplay, landmarks, directions, recommendations, practical follow-up questions",
+      theme: "lime"
+    },
+    {
+      id: "emergency",
+      title: "Notfall melden",
+      subtitle: "Schnell, klar & ruhig Hilfe holen",
+      icon: "fa-solid fa-triangle-exclamation",
+      category: "practical",
+      levels: ["A2", "B1"],
+      skills: ["urgency", "describing_situation", "clear_speech"],
+      objective: "In einer Notlage klar erklären, was passiert ist und was gebraucht wird.",
+      aiContext: "emergency call roleplay, short urgent questions, location, people involved, immediate needs",
+      theme: "red"
+    },
+    {
+      id: "booking",
+      title: "Termin vereinbaren",
+      subtitle: "Planen, bestaetigen & umplanen",
+      icon: "fa-solid fa-calendar-check",
+      category: "practical",
+      levels: ["A1", "A2"],
+      skills: ["scheduling", "confirming", "rescheduling"],
+      objective: "Einen Termin sicher planen, bestätigen oder verschieben.",
+      aiContext: "appointment scheduling, time slots, confirmations, polite date and time language",
+      theme: "blue"
+    },
+    {
+      id: "debate",
+      title: "Diskutieren",
+      subtitle: "Meinung begruenden & widersprechen",
+      icon: "fa-solid fa-scale-balanced",
+      category: "social",
+      levels: ["B1", "B2"],
+      skills: ["opinion", "agreement", "disagreement"],
+      objective: "Eine Meinung klar vertreten und auf Gegenargumente reagieren.",
+      aiContext: "structured discussion, reasons, counterarguments, respectful disagreement, concise follow-up",
+      theme: "indigo"
+    },
+    {
+      id: "briefing",
+      title: "Nachrichten zusammenfassen",
+      subtitle: "Wichtiges kurz erklaeren & einordnen",
+      icon: "fa-solid fa-newspaper",
+      category: "media",
+      levels: ["B1", "B2"],
+      skills: ["summarizing", "reporting", "main_points"],
+      objective: "Ereignisse oder Tagesrückblicke knapp und verständlich zusammenfassen.",
+      aiContext: "news briefing, summarize key points, explain relevance, short follow-up questions",
+      theme: "amber"
+    },
+    {
+      id: "culture",
+      title: "Kultur vergleichen",
+      subtitle: "Traditionen erklaeren & Unterschiede besprechen",
+      icon: "fa-solid fa-earth-europe",
+      category: "social",
+      levels: ["B1", "B2"],
+      skills: ["comparison", "explaining_customs", "reflection"],
+      objective: "Kulturelle Unterschiede respektvoll vergleichen und erklären.",
+      aiContext: "cross-cultural discussion, traditions, differences, similarities, respectful tone",
+      theme: "green"
+    },
+    {
+      id: "recipe",
+      title: "Ein Rezept erklaeren",
+      subtitle: "Schritte, Reihenfolge & Mengen nennen",
+      icon: "fa-solid fa-list-ol",
+      category: "everyday",
+      levels: ["A2", "B1"],
+      skills: ["sequencing", "instructions", "quantities"],
+      objective: "Ein Rezept oder einen Ablauf Schritt für Schritt erklären.",
+      aiContext: "recipe explanation, sequence words, quantities, kitchen actions, clarity over complexity",
+      theme: "pink"
+    },
+    {
+      id: "podcast",
+      title: "Podcast starten",
+      subtitle: "Begruessen, Thema setzen & weiterfuehren",
+      icon: "fa-solid fa-podcast",
+      category: "media",
+      levels: ["B1", "B2"],
+      skills: ["hosting", "introducing_topics", "flow"],
+      objective: "Ein Gespräch wie in einem Podcast eröffnen und moderieren.",
+      aiContext: "podcast host style, opening lines, transitions, inviting the other speaker in",
+      theme: "orange"
+    },
+    {
+      id: "onboarding",
+      title: "Neue Kunden begruessen",
+      subtitle: "Ablauf erklaeren & Sicherheit geben",
+      icon: "fa-solid fa-handshake-simple",
+      category: "work",
+      levels: ["A2", "B1"],
+      skills: ["welcoming", "explaining_process", "reassurance"],
+      objective: "Neue Kunden freundlich begrüßen und den Ablauf klar erklären.",
+      aiContext: "customer onboarding, welcoming tone, explain next steps, answer basic questions",
+      theme: "yellow"
+    },
+    {
+      id: "sales",
+      title: "Etwas verkaufen",
+      subtitle: "Vorteile erklaeren & Interesse wecken",
+      icon: "fa-solid fa-store",
+      category: "work",
+      levels: ["B1", "B2"],
+      skills: ["persuasion", "benefits", "objection_handling"],
+      objective: "Ein Angebot verständlich vorstellen und auf Einwände reagieren.",
+      aiContext: "sales conversation, explain benefits, ask needs questions, handle objections politely",
+      theme: "rose"
+    },
+    {
+      id: "coach",
+      title: "Coachen & motivieren",
+      subtitle: "Tipps geben & zum Weitermachen ermutigen",
+      icon: "fa-solid fa-person-chalkboard",
+      category: "social",
+      levels: ["B1", "B2"],
+      skills: ["advice", "motivation", "goal_setting"],
+      objective: "Jemanden motivieren, beraten und nächste Schritte formulieren.",
+      aiContext: "coach conversation, encouragement, goals, actionable advice, supportive tone",
+      theme: "violet"
+    },
+    {
+      id: "techsupport",
+      title: "Technikproblem loesen",
+      subtitle: "Fehler beschreiben & Schritte durchgehen",
+      icon: "fa-solid fa-laptop-code",
+      category: "practical",
+      levels: ["A2", "B1"],
+      skills: ["problem_description", "step_by_step", "clarifying"],
+      objective: "Ein technisches Problem erklären und Lösungsschritte besprechen.",
+      aiContext: "tech support roleplay, issue details, troubleshooting steps, confirmation after each step",
+      theme: "teal"
+    },
+    {
+      id: "creative",
+      title: "Ideen sammeln",
+      subtitle: "Vorschlaege machen & gemeinsam waehlen",
+      icon: "fa-solid fa-lightbulb",
+      category: "creative",
+      levels: ["A2", "B1"],
+      skills: ["brainstorming", "suggesting", "choosing"],
+      objective: "Mehrere Ideen entwickeln und zusammen eine auswählen.",
+      aiContext: "brainstorming partner, offer options, ask preferences, encourage variety and selection",
+      theme: "orange"
+    },
+    {
+      id: "finance",
+      title: "Finanzen besprechen",
+      subtitle: "Kosten, Budget & Prioritaeten erklaeren",
+      icon: "fa-solid fa-wallet",
+      category: "work",
+      levels: ["B1", "B2"],
+      skills: ["budgeting", "numbers", "priorities"],
+      objective: "Ausgaben, Einnahmen und Prioritäten nachvollziehbar besprechen.",
+      aiContext: "finance discussion, budget limits, costs, trade-offs, clear numeric language",
+      theme: "green"
+    },
+    {
+      id: "policy",
+      title: "Regeln erklaeren",
+      subtitle: "Richtlinien kurz & klar zusammenfassen",
+      icon: "fa-solid fa-gavel",
+      category: "work",
+      levels: ["B1", "B2"],
+      skills: ["explaining_rules", "formal_language", "clarity"],
+      objective: "Regeln oder Richtlinien klar und verständlich erklären.",
+      aiContext: "policy explanation, formal but simple wording, explain reasons and examples",
+      theme: "indigo"
+    },
+    {
+      id: "wellness",
+      title: "Ueber Gefuehle sprechen",
+      subtitle: "Befinden beschreiben & empathisch nachfragen",
+      icon: "fa-solid fa-heart-pulse",
+      category: "everyday",
+      levels: ["A2", "B1"],
+      skills: ["feelings", "empathy", "follow_up_questions"],
+      objective: "Gefühle ausdrücken und empathisch auf andere reagieren.",
+      aiContext: "well-being conversation, feelings, empathy, support, calm patient replies",
+      theme: "green"
+    },
+    {
+      id: "holiday",
+      title: "Urlaub planen",
+      subtitle: "Optionen vergleichen & Entscheidungen treffen",
+      icon: "fa-solid fa-suitcase-rolling",
+      category: "everyday",
+      levels: ["A2", "B1"],
+      skills: ["planning", "preferences", "comparing_options"],
+      objective: "Eine Reise planen und zwischen Möglichkeiten entscheiden.",
+      aiContext: "travel planning, destinations, budget, dates, compare options and choose",
+      theme: "amber"
+    },
+    {
+      id: "charity",
+      title: "Spendenaktion erklaeren",
+      subtitle: "Ziel beschreiben & um Hilfe bitten",
+      icon: "fa-solid fa-hands-holding-heart",
+      category: "social",
+      levels: ["B1", "B2"],
+      skills: ["persuasion", "purpose", "call_to_action"],
+      objective: "Ein soziales Anliegen erklären und um Unterstützung bitten.",
+      aiContext: "charity pitch, explain cause, impact, appeal for support, sincere tone",
+      theme: "teal"
+    },
+    {
+      id: "bookclub",
+      title: "Buchclub Gespraech",
+      subtitle: "Inhalte zusammenfassen & Meinung teilen",
+      icon: "fa-solid fa-book",
+      category: "academic",
+      levels: ["B1", "B2"],
+      skills: ["summarizing", "opinion", "discussion"],
+      objective: "Ein Kapitel oder Buch zusammenfassen und darüber diskutieren.",
+      aiContext: "book club discussion, summarize chapter, favorite parts, interpretation questions",
+      theme: "violet"
+    },
+    {
+      id: "collaboration",
+      title: "Team-Abstimmung",
+      subtitle: "Aufgaben klaeren & naechste Schritte planen",
+      icon: "fa-solid fa-people-arrows",
+      category: "work",
+      levels: ["B1", "B2"],
+      skills: ["coordination", "planning", "task_assignment"],
+      objective: "Im Team Aufgaben verteilen und den nächsten Plan abstimmen.",
+      aiContext: "team coordination, responsibilities, deadlines, next steps, concise collaboration language",
+      theme: "blue"
+    },
+    {
+      id: "inspection",
+      title: "Besichtigung",
+      subtitle: "Zustand beschreiben & gezielt nachfragen",
+      icon: "fa-solid fa-magnifying-glass",
+      category: "practical",
+      levels: ["A2", "B1"],
+      skills: ["observing", "asking_questions", "describing_condition"],
+      objective: "Bei einer Besichtigung Beobachtungen formulieren und Fragen stellen.",
+      aiContext: "inspection walk-through, condition, details, follow-up questions, practical vocabulary",
+      theme: "green"
+    },
+    {
+      id: "science",
+      title: "Ergebnisse erklaeren",
+      subtitle: "Daten einordnen & Schluessen ziehen",
+      icon: "fa-solid fa-flask",
+      category: "academic",
+      levels: ["B2", "C1"],
+      skills: ["explaining_results", "evidence", "conclusions"],
+      objective: "Ergebnisse klar erklären und daraus Schlüsse ableiten.",
+      aiContext: "science explanation, findings, evidence, interpretation, clear structured phrasing",
+      theme: "sky"
+    },
+    {
+      id: "media",
+      title: "Interview mit Medien",
+      subtitle: "Kurz, ruhig & praezise antworten",
+      icon: "fa-solid fa-microphone-lines",
+      category: "media",
+      levels: ["B2", "C1"],
+      skills: ["interviewing", "concise_answers", "public_speaking"],
+      objective: "Medienfragen kurz, professionell und kontrolliert beantworten.",
+      aiContext: "media interview roleplay, concise answers, stay calm, bridge back to key message",
+      theme: "amber"
+    }
+  ];
+  const SHARED_SCENARIO_CONFIG = globalThis.AI_SPEAKING_SCENARIO_CONFIG || {};
+  const SPEAKING_TOPIC_ALIASES = SHARED_SCENARIO_CONFIG.aliases || LEGACY_SPEAKING_TOPIC_ALIASES;
+  const SPEAKING_TOPICS = Array.isArray(SHARED_SCENARIO_CONFIG.topics) && SHARED_SCENARIO_CONFIG.topics.length
+    ? SHARED_SCENARIO_CONFIG.topics
+    : LEGACY_SPEAKING_TOPICS;
+  const SPEAKING_TOPIC_MAP = new Map(SPEAKING_TOPICS.map((topic) => [topic.id, topic]));
+  const DEFAULT_TOPIC_ID = SPEAKING_TOPICS[0]?.id || "smalltalk";
 
   let budgetSummary = { monthly_cap_eur: 0, used_eur: 0 };
   let buttonsWired = false;
@@ -26,10 +520,83 @@
   let scenarioOptionsWired = false;
   let modeOverlayWired = false;
   let startOverlayWired = false;
+  let debugStreamRows = new Map();
+  let aiAudioUnlockWired = false;
 
   function formatEUR(value) {
     const v = Number(value || 0);
     return `€${v.toFixed(2)}`;
+  }
+
+  function logRealtimeDebug(message, detail = null) {
+    if (detail === null || detail === undefined) {
+      console.debug("[AI Realtime]", message);
+      return;
+    }
+    console.debug("[AI Realtime]", message, detail);
+  }
+
+  function normalizeScenarioId(value) {
+    const raw = String(value || "").trim().toLowerCase();
+    if (!raw) return DEFAULT_TOPIC_ID;
+    const normalized = SPEAKING_TOPIC_ALIASES[raw] || raw;
+    return SPEAKING_TOPIC_MAP.has(normalized) ? normalized : DEFAULT_TOPIC_ID;
+  }
+
+  function getScenarioConfig(value) {
+    return SPEAKING_TOPIC_MAP.get(normalizeScenarioId(value)) || SPEAKING_TOPIC_MAP.get(DEFAULT_TOPIC_ID) || null;
+  }
+
+  function renderTopicSelectOptions() {
+    const select = $("aiScenario");
+    if (!select) return;
+    select.innerHTML = SPEAKING_TOPICS
+      .map((topic) => {
+        const levels = Array.isArray(topic.levels) ? topic.levels.join(",") : "";
+        return `<option value="${escapeHtml(topic.id)}" data-category="${escapeHtml(topic.category)}" data-levels="${escapeHtml(levels)}">${escapeHtml(topic.title)}</option>`;
+      })
+      .join("");
+  }
+
+  function renderTopicCards() {
+    const container = $("aiScenarioCards");
+    if (!container) return;
+    container.innerHTML = SPEAKING_TOPICS
+      .map((topic) => {
+        const levels = Array.isArray(topic.levels) ? topic.levels.join(" • ") : "";
+        return `
+          <button
+            type="button"
+            class="scenario-option"
+            data-scenario="${escapeHtml(topic.id)}"
+            data-theme="${escapeHtml(topic.theme || "blue")}"
+            data-category="${escapeHtml(topic.category)}"
+            data-levels="${escapeHtml(levels)}"
+            aria-pressed="false"
+            title="${escapeHtml(topic.objective)}"
+          >
+            <span class="scenario-option-icon"><i class="${escapeHtml(topic.icon)}"></i></span>
+            <span class="scenario-option-label">${escapeHtml(topic.title)}</span>
+            <span class="scenario-option-subtitle">${escapeHtml(topic.subtitle)}</span>
+            <span class="scenario-option-rolehint" aria-hidden="true">
+              <span class="scenario-option-rolepair">
+                <span class="scenario-option-rolelabel">Du:</span>
+                <span>${escapeHtml(topic.userRole || "Lernender")}</span>
+              </span>
+              <span class="scenario-option-rolepair">
+                <span class="scenario-option-rolelabel">AI:</span>
+                <span>${escapeHtml(topic.aiRole || "Gespraechspartner")}</span>
+              </span>
+            </span>
+          </button>
+        `;
+      })
+      .join("");
+  }
+
+  function renderTopics() {
+    renderTopicSelectOptions();
+    renderTopicCards();
   }
 
   function getWorkspaceId() {
@@ -84,6 +651,37 @@
   function setStatus(text) {
     const status = $("aiStatusChip");
     if (status) status.textContent = text || "Idle";
+    const sessionStatus = $("aiSessionStatusChip");
+    if (sessionStatus) sessionStatus.textContent = text || "Idle";
+  }
+
+  function updateSpeakingSessionPanel(value) {
+    const scenario = getScenarioConfig(value);
+    if (!scenario) return;
+    const title = $("aiSessionTitle");
+    const subtitle = $("aiSessionSubtitle");
+    const userRole = $("aiSessionUserRole");
+    const aiRole = $("aiSessionAiRole");
+    if (title) title.textContent = scenario.title || "Speaking Practice";
+    if (subtitle) subtitle.textContent = scenario.subtitle || "Focused speaking workspace";
+    if (userRole) userRole.textContent = `Du: ${scenario.userRole || "Lernender"}`;
+    if (aiRole) aiRole.textContent = `AI: ${scenario.aiRole || "Gespraechspartner"}`;
+  }
+
+  function setSpeakingSessionActive(show) {
+    const root = $(ROOT_ID);
+    if (!root) return;
+    root.classList.toggle("ai-speaking-active", Boolean(show));
+    document.body.classList.toggle("ai-speaking-active", Boolean(show));
+    setActionCardVisible(Boolean(show));
+    if (show) {
+      const scenarioSelect = $("aiScenario");
+      updateSpeakingSessionPanel(scenarioSelect?.value || DEFAULT_TOPIC_ID);
+      setTranscriptVisibility(true);
+    } else {
+      setTranscriptVisibility(false);
+      setStatus("Idle");
+    }
   }
 
   function setActiveControlsVisible(show) {
@@ -139,11 +737,12 @@
   }
 
   function setScenarioValue(value) {
-    const normalized = String(value || "free");
+    const normalized = normalizeScenarioId(value);
     const select = $("aiScenario");
     if (select && select.value !== normalized) {
       select.value = normalized;
     }
+    updateSpeakingSessionPanel(normalized);
     const options = document.querySelectorAll(".scenario-option");
     options.forEach((option) => {
       const isActive = option.dataset.scenario === normalized;
@@ -153,19 +752,19 @@
   }
 
   function initScenarioOptions() {
-    if (scenarioOptionsWired) return;
+    renderTopics();
+    scenarioOptionsWired = false;
     const options = document.querySelectorAll(".scenario-option");
     if (!options.length) return;
     options.forEach((option) => {
       option.addEventListener("click", () => {
         setScenarioValue(option.dataset.scenario);
-        setActionCardVisible(true);
         showModeOverlay();
       });
     });
     scenarioOptionsWired = true;
     const select = $("aiScenario");
-    setScenarioValue(select?.value || "free");
+    setScenarioValue(select?.value || DEFAULT_TOPIC_ID);
   }
 
   function setModeValue(value) {
@@ -222,6 +821,34 @@
     toggleBtn.classList.toggle("is-active", show);
   }
 
+  function scrollTranscriptToBottom() {
+    const box = $("aiTranscript");
+    if (!box || box.hidden) return;
+    requestAnimationFrame(() => {
+      box.scrollTop = box.scrollHeight;
+    });
+  }
+
+  function normalizeCapturedSpeech(value) {
+    return String(value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[.,!?;:()[\]{}"'`´’“”]+/g, " ")
+      .replace(/\s+/g, " ");
+  }
+
+  function isMeaningfulSpeech(value) {
+    const normalized = normalizeCapturedSpeech(value);
+    if (!normalized) return false;
+    const fillerSet = new Set(["uh", "umm", "um", "ah", "eh", "hmm", "hm", "mmm", "mm", "uhh", "ahh", "..."]);
+    if (fillerSet.has(normalized)) return false;
+    if (normalized.length < 3) return false;
+    const tokens = normalized.split(" ").filter(Boolean);
+    const meaningfulTokens = tokens.filter((token) => !fillerSet.has(token) && /[a-zA-ZäöüÄÖÜß]/.test(token));
+    if (!meaningfulTokens.length) return false;
+    return meaningfulTokens.join(" ").length >= 4;
+  }
+
   function initTranscriptToggle() {
     if (transcriptToggleWired) return;
     const toggleBtn = $("aiTranscriptToggleBtn");
@@ -242,7 +869,27 @@
     row.style.margin = "8px 0";
     row.innerHTML = `<strong>${who}:</strong> ${escapeHtml(text)}`;
     box.appendChild(row);
-    box.scrollTop = box.scrollHeight;
+    scrollTranscriptToBottom();
+  }
+
+  function upsertTranscriptStream(streamKey, who, text, { replace = false } = {}) {
+    const box = $("aiTranscript");
+    if (!box) return;
+    const safeKey = String(streamKey || who || "stream");
+    let row = debugStreamRows.get(safeKey);
+    if (!row || !box.contains(row)) {
+      row = document.createElement("div");
+      row.style.margin = "8px 0";
+      row.dataset.streamKey = safeKey;
+      row.innerHTML = `<strong>${escapeHtml(who)}:</strong> <span class="ai-stream-text"></span>`;
+      box.appendChild(row);
+      debugStreamRows.set(safeKey, row);
+    }
+    const span = row.querySelector(".ai-stream-text");
+    if (!span) return;
+    if (replace) span.textContent = String(text || "");
+    else span.textContent += String(text || "");
+    scrollTranscriptToBottom();
   }
 
   function escapeHtml(value) {
@@ -302,6 +949,35 @@
     return document.querySelector('input[name="aiMode"]:checked')?.value || "vad";
   }
 
+  function setAudioUnlockVisible(visible) {
+    const btn = $("aiAudioUnlockBtn");
+    if (!btn) return;
+    btn.hidden = !visible;
+  }
+
+  function wireAudioUnlock() {
+    const btn = $("aiAudioUnlockBtn");
+    if (!btn || aiAudioUnlockWired) return;
+    aiAudioUnlockWired = true;
+    btn.addEventListener("click", async () => {
+      if (!realtimeConnection?.resumeAudioPlayback) return;
+      try {
+        await realtimeConnection.resumeAudioPlayback();
+        setAudioUnlockVisible(false);
+      } catch (err) {
+        console.warn("[AI Realtime] manual audio resume failed", err);
+      }
+    });
+  }
+
+  function emitRealtimeEvent(conn, payload, label = payload?.type || "event") {
+    const safePayload = payload && typeof payload === "object"
+      ? JSON.parse(JSON.stringify(payload))
+      : payload;
+    logRealtimeDebug(`sending ${label}`, safePayload);
+    return conn?.sendEvent?.(payload);
+  }
+
   function appendAIDelta(delta) {
     const box = $("aiTranscript");
     if (!box) return;
@@ -314,7 +990,7 @@
     }
     if (!aiDeltaEl) return;
     aiDeltaEl.textContent += String(delta || "");
-    box.scrollTop = box.scrollHeight;
+    scrollTranscriptToBottom();
   }
 
   function resetAIDelta() {
@@ -322,11 +998,12 @@
   }
 
   async function startConversation({ scenario, mode }) {
+    const normalizedScenario = normalizeScenarioId(scenario);
     const r = await fetch(CONV_START_ENDPOINT, {
       method: "POST",
       headers: jsonHeaders(),
       credentials: "include",
-      body: JSON.stringify({ scenario, mode })
+      body: JSON.stringify({ scenario: normalizedScenario, mode })
     });
 
     const data = await r.json().catch(() => ({}));
@@ -371,39 +1048,70 @@
     conversationId = null;
   }
 
-  function applyVADConfig(conn) {
-    conn.sendEvent({
+  function applyVADConfig(conn, voice = "alloy") {
+    emitRealtimeEvent(conn, {
       type: "session.update",
       session: {
-        turn_detection: {
-          type: "server_vad",
-          threshold: 0.5,
-          prefix_padding_ms: 300,
-          silence_duration_ms: 650,
-          create_response: true,
-          interrupt_response: true
+        type: "realtime",
+        output_modalities: ["audio"],
+        audio: {
+          input: {
+            transcription: {
+              model: "gpt-4o-mini-transcribe"
+            },
+            turn_detection: {
+              type: "server_vad",
+              threshold: 0.5,
+              prefix_padding_ms: 300,
+              silence_duration_ms: 650,
+              create_response: true,
+              interrupt_response: true
+            }
+          },
+          output: {
+            voice: voice || "alloy"
+          }
         }
       }
-    });
+    }, "session.update (vad)");
   }
 
-  function applyPTTConfig(conn) {
-    conn.sendEvent({
+  function applyPTTConfig(conn, voice = "alloy") {
+    emitRealtimeEvent(conn, {
       type: "session.update",
-      session: { turn_detection: null }
-    });
+      session: {
+        type: "realtime",
+        output_modalities: ["audio"],
+        audio: {
+          input: {
+            transcription: {
+              model: "gpt-4o-mini-transcribe"
+            },
+            turn_detection: null
+          },
+          output: {
+            voice: voice || "alloy"
+          }
+        }
+      }
+    }, "session.update (ptt)");
   }
 
   function wirePushToTalk(startBtn, conn) {
     if (!conn?.localTrack) return;
     conn.localTrack.enabled = false;
     startBtn.textContent = "Hold to talk";
+    let latestCommittedTranscript = "";
+
+    const suppressClickWhileLive = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    };
 
     const onDown = () => {
       if (!conn) return;
-      conn.sendEvent({ type: "input_audio_buffer.clear" });
-      conn.sendEvent({ type: "response.cancel" });
-      conn.sendEvent({ type: "output_audio_buffer.clear" });
+      logRealtimeDebug("mic start");
+      emitRealtimeEvent(conn, { type: "input_audio_buffer.clear" }, "input_audio_buffer.clear");
       resetAIDelta();
       conn.localTrack.enabled = true;
       setStatus("Listening (hold)…");
@@ -412,11 +1120,26 @@
 
     const onUp = () => {
       if (!conn) return;
-      conn.localTrack.enabled = false;
+      logRealtimeDebug("mic stop");
       setStatus("Thinking…");
       startBtn.textContent = "Hold to talk";
-      conn.sendEvent({ type: "input_audio_buffer.commit" });
-      conn.sendEvent({ type: "response.create" });
+      logRealtimeDebug("input committed");
+      emitRealtimeEvent(conn, { type: "input_audio_buffer.commit" }, "input_audio_buffer.commit");
+      conn.localTrack.enabled = false;
+      setTimeout(() => {
+        if (!isMeaningfulSpeech(latestCommittedTranscript)) {
+          logRealtimeDebug("response skipped because no meaningful speech was detected", latestCommittedTranscript);
+          setStatus("Ready (push-to-talk)");
+          return;
+        }
+        logRealtimeDebug("response requested");
+        emitRealtimeEvent(conn, {
+          type: "response.create",
+          response: {
+            output_modalities: ["audio"]
+          }
+        }, "response.create");
+      }, 180);
     };
 
     const onLeave = (event) => {
@@ -427,16 +1150,21 @@
     startBtn.addEventListener("pointerup", onUp);
     startBtn.addEventListener("pointercancel", onUp);
     startBtn.addEventListener("pointerleave", onLeave);
+    startBtn.addEventListener("click", suppressClickWhileLive, true);
 
     pttListeners.push({ el: startBtn, type: "pointerdown", handler: onDown });
     pttListeners.push({ el: startBtn, type: "pointerup", handler: onUp });
     pttListeners.push({ el: startBtn, type: "pointercancel", handler: onUp });
     pttListeners.push({ el: startBtn, type: "pointerleave", handler: onLeave });
+    pttListeners.push({ el: startBtn, type: "click", handler: suppressClickWhileLive, options: true });
+    conn.__setLatestCommittedTranscript = (text) => {
+      latestCommittedTranscript = String(text || "");
+    };
   }
 
   function unwindPushToTalk() {
-    for (const { el, type, handler } of pttListeners) {
-      el.removeEventListener(type, handler);
+    for (const { el, type, handler, options } of pttListeners) {
+      el.removeEventListener(type, handler, options);
     }
     pttListeners = [];
   }
@@ -459,17 +1187,71 @@
 
   function handleRealtimeEvent(evt) {
     if (!evt || typeof evt !== "object") return;
+    logRealtimeDebug(`event:${evt.type}`, evt);
 
     if (evt.type === "input_audio_buffer.speech_started") setStatus("Speaking…");
     if (evt.type === "input_audio_buffer.speech_stopped") setStatus("Thinking…");
-
-    if (evt.type?.includes("transcript") && evt.transcript) {
-      bufferMessage("user", evt.transcript);
+    if (evt.type === "input_audio_buffer.committed") {
+      logRealtimeDebug("input audio appended and committed", evt);
+    }
+    if (evt.type === "session.updated") {
+      logRealtimeDebug("session updated", evt.session || evt);
+    }
+    if (evt.type === "response.created") {
+      logRealtimeDebug("response created", evt.response || evt);
+    }
+    if (evt.type === "error") {
+      console.error("[AI Realtime] server event error", evt.error || evt);
+      return;
     }
 
-    if (evt.type === "response.output_audio_transcript.delta") {
+    if (evt.type === "conversation.item.input_audio_transcription.delta" && evt.delta) {
+      logRealtimeDebug("transcript received (user delta)", evt.delta);
+      upsertTranscriptStream(`user:${evt.item_id || "live"}`, "You", evt.delta);
+    }
+
+    if (evt.type === "conversation.item.input_audio_transcription.completed" && evt.transcript) {
+      logRealtimeDebug("transcript received (user final)", evt.transcript);
+      upsertTranscriptStream(`user:${evt.item_id || "live"}`, "You", evt.transcript, { replace: true });
+      realtimeConnection?.__setLatestCommittedTranscript?.(evt.transcript);
+      if (isMeaningfulSpeech(evt.transcript)) {
+        bufferMessage("user", evt.transcript);
+      } else {
+        logRealtimeDebug("ignored filler/noise transcript", evt.transcript);
+      }
+    }
+
+    if (evt.type === "response.output_audio_transcript.delta" && evt.delta) {
+      logRealtimeDebug("assistant response received (audio transcript delta)", evt.delta);
       const t = String(evt.delta || "");
       if (t) appendAIDelta(t);
+    }
+
+    if (evt.type === "response.output_audio_transcript.done" && evt.transcript) {
+      logRealtimeDebug("assistant response received (audio transcript final)", evt.transcript);
+      upsertTranscriptStream(`assistant:${evt.item_id || "live"}`, "AI", evt.transcript, { replace: true });
+      bufferMessage("assistant", evt.transcript);
+      resetAIDelta();
+      flushTranscriptToServer().catch(() => {});
+      scrollTranscriptToBottom();
+    }
+
+    if (evt.type === "response.output_text.delta" && evt.delta) {
+      logRealtimeDebug("assistant response received (text delta)", evt.delta);
+      appendAIDelta(evt.delta);
+    }
+
+    if (evt.type === "response.output_text.done" && evt.text) {
+      logRealtimeDebug("assistant response received (text final)", evt.text);
+      upsertTranscriptStream(`assistant:${evt.item_id || "text"}`, "AI", evt.text, { replace: true });
+      bufferMessage("assistant", evt.text);
+      resetAIDelta();
+      flushTranscriptToServer().catch(() => {});
+      scrollTranscriptToBottom();
+    }
+
+    if (evt.type === "response.output_audio.delta") {
+      logRealtimeDebug("assistant audio chunk received", evt);
     }
 
     if (evt.type === "response.done") {
@@ -479,6 +1261,7 @@
         resetAIDelta();
       }
       flushTranscriptToServer().catch(() => {});
+      scrollTranscriptToBottom();
     }
   }
 
@@ -523,9 +1306,29 @@
     const audioEl = document.createElement("audio");
     audioEl.autoplay = true;
     audioEl.playsInline = true;
+    audioEl.style.display = "none";
+    document.body.appendChild(audioEl);
+    let resolveReady;
+    let rejectReady;
+    const readyPromise = new Promise((resolve, reject) => {
+      resolveReady = resolve;
+      rejectReady = reject;
+    });
 
     pc.ontrack = (event) => {
+      logRealtimeDebug("audio track received", {
+        streams: event.streams?.length || 0,
+        trackKind: event.track?.kind || null,
+        trackId: event.track?.id || null
+      });
       audioEl.srcObject = event.streams[0];
+      audioEl.play().then(() => {
+        logRealtimeDebug("audio playback started");
+        setAudioUnlockVisible(false);
+      }).catch((err) => {
+        console.warn("[AI Realtime] audio playback blocked", err);
+        setAudioUnlockVisible(true);
+      });
     };
 
     const dc = pc.createDataChannel("oai-events");
@@ -536,8 +1339,19 @@
         // ignore parse failures
       }
     };
-    dc.onopen = () => onStatus?.("Connected");
-    dc.onclose = () => onStatus?.("Disconnected");
+    dc.onopen = () => {
+      logRealtimeDebug("data channel open");
+      onStatus?.("Connected");
+      resolveReady?.();
+    };
+    dc.onclose = () => {
+      logRealtimeDebug("data channel closed");
+      onStatus?.("Disconnected");
+    };
+    dc.onerror = (err) => {
+      console.error("[AI Realtime] data channel error", err);
+      rejectReady?.(err);
+    };
 
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
@@ -571,9 +1385,12 @@
     await pc.setRemoteDescription({ type: "answer", sdp: remoteSdp });
 
     function sendEvent(payload) {
-      if (dc.readyState === "open") {
-        dc.send(JSON.stringify(payload));
+      if (dc.readyState !== "open") {
+        logRealtimeDebug("sendEvent skipped, data channel not open yet", payload?.type || payload);
+        return false;
       }
+      dc.send(JSON.stringify(payload));
+      return true;
     }
 
     function stop() {
@@ -581,9 +1398,17 @@
       try { localTrack.stop(); } catch {}
       try { pc.close(); } catch {}
       try { stream.getTracks().forEach((t) => t.stop()); } catch {}
+      try { audioEl.remove(); } catch {}
+      setAudioUnlockVisible(false);
     }
 
-    return { pc, dc, localTrack, sendEvent, stop };
+    async function resumeAudioPlayback() {
+      if (!audioEl.srcObject) return;
+      await audioEl.play();
+      logRealtimeDebug("audio playback started");
+    }
+
+    return { pc, dc, localTrack, sendEvent, stop, waitForReady: () => readyPromise, resumeAudioPlayback };
   }
 
   async function teardownRealtime() {
@@ -601,12 +1426,18 @@
     }
     setActiveControlsVisible(false);
     setTranscriptVisibility(false);
+    setAudioUnlockVisible(false);
+    setSpeakingSessionActive(false);
   }
 
   async function handleStart() {
     const startBtn = $("aiStartBtn");
     const stopBtn = $("aiStopBtn");
     if (!startBtn || !stopBtn) return;
+    if (realtimeConnection) {
+      logRealtimeDebug("handleStart ignored because a session is already active");
+      return;
+    }
     if (isBlocked()) {
       showBlockedUI("Budget exhausted. Ask your admin to top it up.");
       return;
@@ -618,7 +1449,9 @@
 
     try {
       const scenarioSelect = $("aiScenario");
-      const scenarioValue = scenarioSelect?.value || "free";
+      const scenarioValue = normalizeScenarioId(scenarioSelect?.value || DEFAULT_TOPIC_ID);
+      const scenarioConfig = getScenarioConfig(scenarioValue);
+      const scenarioVoice = scenarioConfig?.voice || "alloy";
       const selectedMode = getSelectedMode();
       await startConversation({ scenario: scenarioValue, mode: selectedMode });
       bufferMessage("system", `Session started: scenario=${scenarioValue}, mode=${selectedMode}`);
@@ -629,6 +1462,9 @@
         body: JSON.stringify({ scenario: scenarioValue })
       });
       const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data?.error || `Realtime session request failed (${response.status})`);
+      }
       if (data.blocked) {
         await fetchBudget();
         showBlockedUI(data.reason || "Budget limit reached");
@@ -644,16 +1480,18 @@
         onEvent: handleRealtimeEvent,
         onStatus: setStatus
       });
+      await realtimeConnection.waitForReady();
       stopBtn.disabled = false;
-      appendTranscript("System", `Connected with scenario ${mode}`);
+      appendTranscript("System", `Connected with scenario ${scenarioValue}`);
       resetAIDelta();
+      setSpeakingSessionActive(true);
       if (selectedMode === "ptt") {
-        applyPTTConfig(realtimeConnection);
+        applyPTTConfig(realtimeConnection, data.voice || scenarioVoice);
         wirePushToTalk(startBtn, realtimeConnection);
         startBtn.disabled = false;
         setStatus("Ready (push-to-talk)");
       } else {
-        applyVADConfig(realtimeConnection);
+        applyVADConfig(realtimeConnection, data.voice || scenarioVoice);
         realtimeConnection.localTrack.enabled = true;
         startBtn.textContent = "Auto listening…";
         startBtn.disabled = true;
@@ -693,10 +1531,24 @@
         .then(fetchBudget)
         .catch(() => {});
       setActiveControlsVisible(false);
-      setTranscriptVisibility(false);
+      setSpeakingSessionActive(false);
     });
     setActiveControlsVisible(false);
-    setTranscriptVisibility(false);
+    setSpeakingSessionActive(false);
+    setAudioUnlockVisible(false);
+    wireAudioUnlock();
+    const closeBtn = $("aiSessionCloseBtn");
+    if (closeBtn) {
+      closeBtn.addEventListener("click", () => {
+        const stop = $("aiStopBtn");
+        if (stop && !stop.disabled) {
+          stop.click();
+          return;
+        }
+        resetOverlays();
+        setSpeakingSessionActive(false);
+      });
+    }
   }
 
   function showPracticePanel(show) {

@@ -1,169 +1,66 @@
 cat-6.1/
-<<<<<<< HEAD
 ├── Ai Intregration/
-│   ├── client/
-│   │   ├── components/
-│   │   │   └── live/
-│   │   │       ├── JitsiEmbed.js
-│   │   │       ├── LiveClassShell.js
-│   │   │       ├── SlidePanel.js
-│   │   │       └── SlideUploader.js
-│   │   ├── pages/
-│   │   │   └── LiveClassPage.js
-│   │   └── styles/
-│   │       └── live-class.css
 │   ├── integration.css
-│   ├── integration.js
-│   └── server/
-│       ├── db/
-│       │   └── migrations/
-│       │       ├── 20260226_create_live_classes.sql
-│       │       ├── 20260226_create_slide_decks.sql
-│       │       └── 20260226_create_slide_state.sql
-│       ├── routes/
-│       │   └── liveClasses.routes.js
-│       └── services/
-│           ├── jitsiJwt.service.js
-│           ├── liveClass.service.js
-│           ├── pdfSync.service.js
-│           └── slideState.service.js
+│   └── integration.js
 ├── admin/
 │   ├── admin.css
 │   ├── admin.js
 │   └── index.html
-├── DESIGN_TOKENS.md
-├── SERVER_SETUP.md
 ├── public/
 │   ├── AIvoicepractice/
-=======
-├── AI Intregration/
-│   ├── client/
-│   │   ├── components/live/
-│   │   │   ├── JitsiEmbed.js
-│   │   │   ├── LiveClassShell.js
-│   │   │   ├── SlidePanel.js
-│   │   │   └── SlideUploader.js
-│   │   ├── pages/LiveClassPage.js
-│   │   └── styles/live-class.css
-│   ├── server/
-│   │   ├── config/jitsi.js
-│   │   ├── db/migrations/
-│   │   │   ├── 20260226_create_live_classes.sql
-│   │   │   ├── 20260226_create_slide_decks.sql
-│   │   │   └── 20260226_create_slide_state.sql
-│   │   ├── routes/
-│   │   │   ├── live.js
-│   │   │   └── liveSchedule.js
-│   │   ├── services/
-│   │   │   ├── jitsiTokenService.js
-│   │   │   ├── liveClass.service.js
-│   │   │   ├── liveRoomService.js
-│   │   │   ├── pdfSync.service.js
-│   │   │   └── slideState.service.js
-│   │   └── utils/authMiddleware.js
-│   ├── server.js (placeholder)
-│   └── README (implicit docs)
-├── DESIGN_TOKENS.md
-├── SERVER_SETUP.md
-├── public/
-│   ├── live.js
-│   ├── index.html
-│   ├── app.js
-│   ├── styles.refactor.css
-│   ├── styles.refactor.css
->>>>>>> b5cb78b (add screenshort folder)
 │   ├── Announcements/
-│   │   ├── announcements.css
-│   │   └── announcements.js
 │   ├── Grammar/
-<<<<<<< HEAD
-│   ├── Privacy/
-│   ├── Privacy & Rules.css
+│   ├── analytics/
+│   ├── calendar/
 │   ├── assets/
 │   ├── cdn/
 │   ├── app.js
-│   ├── live.js
+│   ├── index.html
 │   ├── loginregister.js
 │   ├── register.html
 │   ├── reset-password.html
 │   ├── favicon.ico
-│   ├── index.html
 │   └── styles.refactor.css
 ├── server/
 │   ├── config/
 │   │   └── jitsi.js
-│   ├── env.js
-│   ├── ffmpeg.js
 │   ├── routes/
-│   │   ├── live.js
-│   │   └── liveSchedule.js
 │   ├── services/
 │   │   ├── inboundEmail.service.js
-│   │   ├── jitsiTokenService.js
-│   │   └── liveRoomService.js
+│   │   └── jitsiTokenService.js
 │   ├── utils/
 │   │   └── authMiddleware.js
-│   └── secrets/
-│       ├── README.md
-│       └── gcp-translate-key.json
-├── uploads/ (stores user uploads plus `workspaces` folder)
+│   ├── env.js
+│   └── ffmpeg.js
 ├── storage/
 │   └── email_attachments/
-├── twilio-otp/
-│   ├── check_otp.js
-│   ├── create_service.js
-│   ├── send_otp.js
-│   ├── server.js
-│   ├── package.json
-│   ├── package-lock.json
-│   └── node_modules/
-=======
-│   └── assets/
-├── server/
-│   ├── env.js
-│   ├── ffmpeg.js
-│   ├── config/
-│   │   └── ... (existing config files)
-│   ├── routes/
-│   │   └── ... (existing routes)
-│   ├── services/
-│   │   └── ... (existing services)
-│   └── secrets/
 ├── uploads/
->>>>>>> b5cb78b (add screenshort folder)
-├── node_modules/
+│   └── workspaces/
+├── twilio-otp/
+├── .env
+├── .env.example
+├── DESIGN_TOKENS.md
+├── README.md
+├── SERVER_SETUP.md
+├── command.text
+├── emailSender.js
+├── imap-test.js
 ├── package.json
 ├── package-lock.json
 ├── server.js
-<<<<<<< HEAD
-├── emailSender.js
-├── imap-test.js
-├── translator.py
-├── worknest-chat@1.0.0/
-├── worknest.db
-├── worknest.db-shm
-├── worknest.db-wal
-├── node (empty placeholder file)
-├── .env
-├── .env.example
-├── projectfilestructure.text
-├── command.text
-=======
-└── other top-level scripts (emailSender.js, translator.py, twilio-otp/ etc.)
+└── translator.py
 
+Current production live-class implementation
+- Backend source of truth: server.js live session APIs + SQLite tables
+- Frontend source of truth: public/index.html + public/app.js
+- Active meeting embed and slide session UI logic: Ai Intregration/integration.js
+- Active live-class styling: Ai Intregration/integration.css plus public/styles.refactor.css
+- Jitsi config: server/config/jitsi.js
+- Jitsi JWT issuance: server/services/jitsiTokenService.js
 
-Multi-tenant SaaS
-Role-based system (student, teacher, admin, super_admin)
-Chat + tasks + attendance
-AI voice practice with budget caps
-AI billing engine (token + runtime tracking)
-Admin control plane
-School approval workflow
-Invoice + payment tracking
-Audit logging
-Live classes (Jitsi + slide sync)
-Translation system
-OTP + email flows
-Security logging
-CSRF + JWT refresh
->>>>>>> b5cb78b (add screenshort folder)
+Platform summary
+- Multi-tenant SaaS with role-based access
+- Chat, DMs, files, tasks, announcements, calendar, attendance
+- Live classes with self-hosted Jitsi integration and optional slide sync
+- AI chat and voice practice
+- Email, OTP, security, audit logging

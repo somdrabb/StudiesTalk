@@ -21,9 +21,20 @@ const helmet = require('helmet');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
 const { getFfmpegCommand, isStrict } = require('./server/ffmpeg');
-const liveRouter = require('./server/routes/live');
-const liveScheduleRouter = require('./server/routes/liveSchedule');
 const inboundEmailService = require('./server/services/inboundEmail.service');
+const jitsiConfig = require('./server/config/jitsi');
+const { generateJitsiToken } = require('./server/services/jitsiTokenService');
+const aiSpeakingScenarioConfig = require('./public/AIvoicepractice/scenarioConfig.js');
+
+if (ENV.OPENAI_API_KEY) {
+  console.log(
+    `[AI] Realtime configured: model=${ENV.OPENAI_REALTIME_MODEL} url=${ENV.OPENAI_REALTIME_URL}`
+  );
+} else {
+  console.warn(
+    '[AI] OPENAI_API_KEY is missing. Speaking Practice Realtime sessions will fail until it is set in the server .env file.'
+  );
+}
 
 const FFMPEG_CMD = (() => {
   try {
@@ -1189,8 +1200,16 @@ function logAiUsage({ workspaceId, userId, costEur, tokensIn = null, tokensOut =
   );
 }
 
-function markConversationEnded(conversationId) {
+function markConversationEnded(conversationId, workspaceId = null, userId = null) {
   if (!conversationId) return;
+  if (workspaceId && userId) {
+    db.prepare(`
+      UPDATE ai_conversations
+      SET ended_at = ?
+      WHERE id = ? AND workspace_id = ? AND user_id = ? AND ended_at IS NULL
+    `).run(Date.now(), conversationId, workspaceId, userId);
+    return;
+  }
   db.prepare(`
     UPDATE ai_conversations
     SET ended_at = ?
@@ -1293,6 +1312,34 @@ function finalizeRuntimeSession({ runtimeId, reason }) {
   return { ok: true, seconds, cost_eur: costEur, conversation_id: row.conversation_id };
 }
 
+function getAiConversationForUser(workspaceId, userId, conversationId) {
+  if (!workspaceId || !userId || !conversationId) return null;
+  return db
+    .prepare(
+      `
+      SELECT id, workspace_id AS workspaceId, user_id AS userId, scenario, mode, started_at AS startedAt, ended_at AS endedAt
+      FROM ai_conversations
+      WHERE id = ? AND workspace_id = ? AND user_id = ?
+      LIMIT 1
+    `
+    )
+    .get(String(conversationId).trim(), String(workspaceId).trim(), String(userId).trim());
+}
+
+function listAiConversationMessages(conversationId) {
+  if (!conversationId) return [];
+  return db
+    .prepare(
+      `
+      SELECT role, content, created_at AS createdAt
+      FROM ai_conversation_messages
+      WHERE conversation_id = ?
+      ORDER BY created_at ASC, id ASC
+    `
+    )
+    .all(String(conversationId).trim());
+}
+
 function getAiTokenRates() {
   const inputRate = Number.parseFloat(ENV.AI_INPUT_TOKEN_RATE_EUR) || 0;
   const outputRate = Number.parseFloat(ENV.AI_OUTPUT_TOKEN_RATE_EUR) || 0;
@@ -1339,14 +1386,19 @@ async function createOpenAIRealtimeSession(options = {}) {
   if (!ENV.OPENAI_API_KEY) {
     throw new Error('OpenAI API key is not configured');
   }
-  const { model, voice, instructions, metadata } = options;
+  const { model, instructions } = options;
+  const endpoint = String(ENV.OPENAI_REALTIME_URL || '').trim()
+    .replace('https://api.openai.com/realtime/client_secrets', 'https://api.openai.com/v1/realtime/client_secrets')
+    .replace('https://api.openai.com/realtime/sessions', 'https://api.openai.com/v1/realtime/sessions');
   const payload = {
-    model: model || ENV.OPENAI_REALTIME_MODEL,
-    voice: voice || ENV.OPENAI_REALTIME_VOICE,
-    instructions: instructions || undefined,
-    metadata: metadata || undefined
+    session: {
+      type: 'realtime',
+      model: model || ENV.OPENAI_REALTIME_MODEL,
+      instructions: instructions || undefined
+    }
   };
-  const response = await fetch(ENV.OPENAI_REALTIME_URL, {
+  console.log('[AI] Realtime client secret payload', payload);
+  const response = await fetch(endpoint, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${ENV.OPENAI_API_KEY}`,
@@ -1356,9 +1408,30 @@ async function createOpenAIRealtimeSession(options = {}) {
   });
   if (!response.ok) {
     const text = await response.text().catch(() => '');
+    console.error('[AI] Realtime client secret request failed', {
+      endpoint,
+      status: response.status,
+      payloadShape: {
+        hasSession: Boolean(payload.session),
+        sessionType: payload.session?.type || null,
+        model: payload.session?.model || null,
+        hasInstructions: Boolean(payload.session?.instructions)
+      },
+      body: text
+    });
     throw new Error(`OpenAI realtime session failed: ${response.status} ${text}`);
   }
-  return response.json();
+  const data = await response.json();
+  if (data?.value && !data?.client_secret?.value) {
+    return {
+      ...data,
+      client_secret: {
+        value: data.value,
+        expires_at: data.expires_at || null
+      }
+    };
+  }
+  return data;
 }
 
 const REGISTRATION_SESSION_COOKIE = 'worknest_registration_session';
@@ -2480,9 +2553,6 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use('/api/live', liveRouter);
-app.use('/api/live/schedule', liveScheduleRouter);
-
 // Friendly route
 app.get('/admin', (req, res) => {
   res.sendFile(path.join(__dirname, 'admin', 'index.html'));
@@ -2517,6 +2587,10 @@ app.get('/.well-known/appspecific/com.chrome.devtools.json', (_req, res) => {
 
 app.get('/register', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'register.html'));
+});
+
+app.get(/^\/channels\/[^/]+\/live\/[^/]+\/presenter\/?$/, (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'live-presenter.html'));
 });
 
 app.post('/api/register/otp/send', strictLimiter, async (req, res) => {
@@ -3507,9 +3581,71 @@ app.get('/api/register/invite-info', (req, res) => {
 
 function buildAiSchoolContext({ user, clientContext }) {
   if (!user) return null;
-  const role = String(user.role || user.userRole || '').toLowerCase() || 'student';
-  const workspaceId = user.workspaceId || user.workspace_id || 'default';
+  const role = String(user.role || user.userRole || "").toLowerCase() || "student";
+  const workspaceId = String(user.workspaceId || user.workspace_id || "default").trim() || "default";
+  const roleBucket = ["admin", "school_admin", "super_admin"].includes(role)
+    ? "admin"
+    : role === "teacher"
+    ? "teacher"
+    : "student";
   const calendar = Array.isArray(clientContext?.calendar) ? clientContext.calendar : [];
+  const allowedCategories = new Set(["classes", "exams", "homework", "clubs", "tools", "teachers"]);
+  const mapChannelRows = (rows = []) =>
+    rows
+      .filter((row) => allowedCategories.has(String(row?.category || "").toLowerCase()))
+      .map((row) => ({
+        id: row.id,
+        name: row.name,
+        category: row.category,
+        topic: row.topic || ""
+      }));
+  const getChannelsByIds = (channelIds = [], limit = 60) => {
+    const ids = [...new Set((Array.isArray(channelIds) ? channelIds : []).map((id) => String(id || "").trim()).filter(Boolean))];
+    if (!ids.length) return [];
+    const placeholders = ids.map(() => "?").join(", ");
+    const rows = db
+      .prepare(
+        `
+        SELECT id, name, topic, category
+        FROM channels
+        WHERE workspace_id = ?
+          AND id IN (${placeholders})
+        ORDER BY lower(COALESCE(category, '')) ASC, lower(COALESCE(name, id)) ASC
+      `
+      )
+      .all(workspaceId, ...ids);
+    return mapChannelRows(rows).slice(0, limit);
+  };
+  const workspaceChannels = mapChannelRows(
+    db
+      .prepare(
+        `
+        SELECT id, name, topic, category
+        FROM channels
+        WHERE workspace_id = ?
+          AND lower(category) IN ('classes','exams','homework','clubs','tools','teachers')
+        ORDER BY category, name
+        LIMIT 60
+      `
+      )
+      .all(workspaceId)
+  );
+  const membershipChannelIds = getUserChannelIds(user.id, workspaceId);
+  const assignedClassRows =
+    roleBucket === "teacher" ? getAssignedClassChannelsForTeacher(workspaceId, user.id) : [];
+  const visibleChannelIds =
+    roleBucket === "admin"
+      ? workspaceChannels.map((row) => row.id)
+      : [
+          ...membershipChannelIds,
+          ...(Array.isArray(assignedClassRows) ? assignedClassRows.map((row) => String(row.id || "")) : [])
+        ];
+  const visibleChannels = roleBucket === "admin" ? workspaceChannels : getChannelsByIds(visibleChannelIds, 36);
+  const visibleChannelIdSet = new Set(visibleChannels.map((row) => String(row.id || "")));
+  const requestedChannelId = String(clientContext?.channelId || "").trim();
+  const canUseRequestedChannel =
+    !!requestedChannelId &&
+    (roleBucket === "admin" ? workspaceChannels : visibleChannels).some((row) => String(row.id || "") === requestedChannelId);
   const context = {
     user: {
       id: user.id,
@@ -3518,34 +3654,83 @@ function buildAiSchoolContext({ user, clientContext }) {
       role,
       workspaceId
     },
-    calendar
+    calendar,
+    selectedDate: clientContext?.selectedDate || null,
+    viewMode: clientContext?.viewMode || null,
+    scope: roleBucket,
+    accessPolicy:
+      roleBucket === "admin"
+        ? "workspace_admin_only"
+        : roleBucket === "teacher"
+        ? "teacher_visible_scope_only"
+        : "student_visible_scope_only"
   };
+  if (canUseRequestedChannel) {
+    const channelMeta = (roleBucket === "admin" ? workspaceChannels : visibleChannels).find(
+      (row) => String(row.id || "") === requestedChannelId
+    );
+    context.currentChannel = channelMeta
+      ? {
+          id: channelMeta.id,
+          name: channelMeta.name,
+          topic: channelMeta.topic || "",
+          category: channelMeta.category || ""
+        }
+      : null;
+    context.recentMessages = Array.isArray(clientContext?.recentMessages)
+      ? clientContext.recentMessages
+          .slice(-20)
+          .map((msg) => ({
+            from: String(msg?.from || "user").slice(0, 80),
+            text: String(msg?.text || "").slice(0, 400)
+          }))
+      : [];
+  }
 
-  const publicChannels = db
-    .prepare(
-      `
-      SELECT id, name, topic, category
-      FROM channels
-      WHERE workspace_id = ?
-        AND lower(category) IN ('classes','exams','homework','clubs','tools','teachers')
-      ORDER BY category, name
-      LIMIT 60
-    `
-    )
-    .all(workspaceId);
-
-  const sanitizedCourses = publicChannels.map((c) => ({
-    id: c.id,
-    name: c.name,
-    category: c.category,
-    topic: c.topic || ''
-  }));
-
-  if (role === 'student') {
-    context.courses = sanitizedCourses.slice(0, 20);
-    context.groups = sanitizedCourses
-      .filter((c) => String(c.category || '').toLowerCase() === 'classes')
+  if (roleBucket === "student") {
+    const analytics = buildStudentAnalyticsOverview(workspaceId, user.id);
+    context.courses = visibleChannels.slice(0, 20);
+    context.groups = visibleChannels
+      .filter((c) => String(c.category || "").toLowerCase() === "classes")
       .map((c) => ({ id: c.id, name: c.name }));
+    if (analytics) {
+      context.analytics = analytics;
+      context.studentProgress = {
+        attendanceRate: Number(analytics.attendanceRate || 0),
+        completionRate: Number(analytics.completionRate || 0),
+        totalGroups: Number(analytics.totalGroups || 0),
+        student: analytics.student || null
+      };
+    }
+    return context;
+  }
+
+  if (roleBucket === "teacher") {
+    const analytics = buildTeacherAnalyticsOverview(workspaceId, user.id);
+    const assignedStudents = getAssignedStudentRowsForTeacher(workspaceId, user.id)
+      .slice(0, 40)
+      .map((student) => ({
+        id: student.id,
+        name: student.name || student.username || student.email || "Student",
+        courseLevel: student.courseLevel || "",
+        status: student.status || ""
+      }));
+    context.courses = visibleChannels;
+    context.groups = visibleChannels
+      .filter((c) => String(c.category || "").toLowerCase() === "classes")
+      .map((c) => ({ id: c.id, name: c.name }));
+    context.studentsSummary = assignedStudents;
+    if (analytics) {
+      context.analytics = analytics;
+      context.stats = {
+        students: Number(analytics.students || 0),
+        teachers: 1,
+        admins: 0,
+        totalGroups: Number(analytics.totalGroups || 0),
+        attendanceRate: Number(analytics.attendanceRate || 0),
+        completionRate: Number(analytics.completionRate || 0)
+      };
+    }
     return context;
   }
 
@@ -3595,11 +3780,350 @@ function buildAiSchoolContext({ user, clientContext }) {
   };
   context.teachers = teachers;
   context.studentsSummary = students;
-  context.courses = sanitizedCourses;
-  context.groups = sanitizedCourses
-    .filter((c) => String(c.category || '').toLowerCase() === 'classes')
+  context.courses = workspaceChannels;
+  context.groups = workspaceChannels
+    .filter((c) => String(c.category || "").toLowerCase() === "classes")
     .map((c) => ({ id: c.id, name: c.name }));
+  context.analytics = buildSchoolAnalyticsOverview(workspaceId, user);
   return context;
+}
+
+function getAiChannelRowsByIds(workspaceId, channelIds = [], limit = 24) {
+  const ids = [...new Set((Array.isArray(channelIds) ? channelIds : []).map((id) => String(id || "").trim()).filter(Boolean))];
+  if (!ids.length) return [];
+  const placeholders = ids.map(() => "?").join(", ");
+  return db
+    .prepare(
+      `
+      SELECT id, name, topic, category
+      FROM channels
+      WHERE workspace_id = ?
+        AND id IN (${placeholders})
+      ORDER BY lower(COALESCE(name, id)) ASC
+      LIMIT ${Math.max(1, Math.min(Number(limit) || 24, 100))}
+    `
+    )
+    .all(workspaceId, ...ids);
+}
+
+function getAiVisibleCourses(workspaceId, user, roleBucket) {
+  if (!workspaceId || !user?.id) return [];
+  if (roleBucket === "admin") {
+    return db
+      .prepare(
+        `
+        SELECT id, name, topic, category
+        FROM channels
+        WHERE workspace_id = ?
+          AND lower(COALESCE(category, '')) IN ('classes', 'class', 'exams', 'homework', 'clubs', 'tools')
+        ORDER BY lower(COALESCE(name, id)) ASC
+        LIMIT 24
+      `
+      )
+      .all(workspaceId);
+  }
+  const membershipIds = getUserChannelIds(user.id, workspaceId);
+  const assignedIds =
+    roleBucket === "teacher"
+      ? getAssignedClassChannelsForTeacher(workspaceId, user.id).map((row) => String(row.id || "").trim())
+      : [];
+  return getAiChannelRowsByIds(workspaceId, [...membershipIds, ...assignedIds], 24);
+}
+
+function buildAiBlock(title, lines = []) {
+  const safeLines = (Array.isArray(lines) ? lines : [])
+    .map((line) => String(line || "").trim())
+    .filter(Boolean)
+    .slice(0, 10);
+  if (!safeLines.length) return null;
+  return { title: String(title || "").trim() || "Context", lines: safeLines };
+}
+
+function buildAiCalendarSummaryBlock(clientContext) {
+  const calendar = Array.isArray(clientContext?.calendar) ? clientContext.calendar : [];
+  if (!calendar.length) return null;
+  const items = calendar
+    .slice(0, 6)
+    .map((row) => normalizeEvent(row))
+    .filter((row) => row.title || row.date);
+  if (!items.length) return null;
+  return buildAiBlock("Calendar summary", [
+    clientContext?.selectedDate ? `Selected date: ${clientContext.selectedDate}` : "",
+    clientContext?.viewMode ? `View mode: ${clientContext.viewMode}` : "",
+    ...items.map((row) =>
+      [row.title || "Untitled event", row.date || "", `${row.startTime || ""}${row.endTime ? `-${row.endTime}` : ""}`.trim(), row.location || ""]
+        .filter(Boolean)
+        .join(" | ")
+    )
+  ]);
+}
+
+function buildAiChannelSummaryBlock(workspaceId, user, roleBucket, clientContext) {
+  const channelId = String(clientContext?.channelId || "").trim();
+  if (!channelId) return null;
+  const visible = getAiVisibleCourses(workspaceId, user, roleBucket);
+  const channel = visible.find((row) => String(row.id || "") === channelId);
+  if (!channel) return null;
+  const recentMessages = Array.isArray(clientContext?.recentMessages)
+    ? clientContext.recentMessages
+        .slice(-6)
+        .map((msg) => `${String(msg?.from || "user").slice(0, 40)}: ${String(msg?.text || "").replace(/\s+/g, " ").slice(0, 160)}`)
+    : [];
+  return buildAiBlock("Current channel", [
+    `Name: ${channel.name || channel.id}`,
+    channel.category ? `Category: ${channel.category}` : "",
+    channel.topic ? `Topic: ${channel.topic}` : "",
+    ...recentMessages
+  ]);
+}
+
+function buildAiStudentProgressBlock(workspaceId, userId) {
+  return readAiContextCache(`ai:student-progress:${workspaceId}:${userId}`, 60 * 1000, () => {
+    const summary = buildStudentPerformanceSummary(workspaceId, userId);
+    const payment = getStudentPaymentSummary(workspaceId, userId);
+    if (!summary) return null;
+    return buildAiBlock("Student progress", [
+      `Student: ${summary.student?.name || "Student"}`,
+      summary.progress?.cefrLevel ? `Level: ${summary.progress.cefrLevel}` : "",
+      `Attendance rate: ${Number(summary.attendance?.attendanceRate || 0)}%`,
+      `Homework completion: ${Number(summary.homework?.completionRate || 0)}%`,
+      `Pending homework: ${Number(summary.homework?.pendingItems || 0)}`,
+      `Pending invoices: ${Number(payment?.pendingCount || 0)}`,
+      `Payment status: ${payment?.status || "clear"}`
+    ]);
+  });
+}
+
+function buildAiTeacherClassBlock(workspaceId, userId) {
+  return readAiContextCache(`ai:teacher-summary:${workspaceId}:${userId}`, 90 * 1000, () => {
+    const summary = buildTeacherAnalyticsOverview(workspaceId, userId);
+    if (!summary) return null;
+    return buildAiBlock("Teacher class summary", [
+      `Teacher: ${summary.teacher?.name || "Teacher"}`,
+      `Assigned classes: ${Number(summary.totalGroups || 0)}`,
+      `Students: ${Number(summary.students || 0)}`,
+      `Average attendance: ${Number(summary.attendanceRate || 0)}%`,
+      `Homework completion: ${Number(summary.completionRate || 0)}%`,
+      ...((Array.isArray(summary.classRowsSorted) ? summary.classRowsSorted : [])
+        .slice(0, 4)
+        .map((row) => `${row.name}: ${row.students} students, attendance ${Number(row.attendanceRate || 0)}%`))
+    ]);
+  });
+}
+
+function buildAiWorkspaceOverviewBlock(workspaceId, user) {
+  return readAiContextCache(`ai:workspace-overview:${workspaceId}`, 2 * 60 * 1000, () => {
+    const summary = buildSchoolAnalyticsOverview(workspaceId, user);
+    if (!summary) return null;
+    return buildAiBlock("Workspace overview", [
+      `Workspace: ${summary.workspaceName || workspaceId}`,
+      `Students: ${Number(summary.students || 0)}`,
+      `Teachers: ${Number(summary.teachers || 0)}`,
+      `Admins: ${Number(summary.admins || 0)}`,
+      `Groups: ${Number(summary.totalGroups || 0)}`,
+      `Homework completion: ${Number(summary.completionRate || 0)}%`,
+      `Attendance rate: ${Number(summary.attendanceRate || 0)}%`
+    ]);
+  });
+}
+
+function buildAiWorkspaceAttendanceBlock(workspaceId) {
+  return readAiContextCache(`ai:attendance:${workspaceId}`, 60 * 1000, () => {
+    const totals = db
+      .prepare(
+        `
+        SELECT
+          COUNT(*) AS total,
+          SUM(CASE WHEN lower(COALESCE(status, '')) = 'present' THEN 1 ELSE 0 END) AS present
+        FROM attendance_records
+        WHERE workspace_id = ?
+      `
+      )
+      .get(workspaceId) || {};
+    const classRows = db
+      .prepare(
+        `
+        SELECT c.name AS className,
+               COUNT(*) AS total,
+               SUM(CASE WHEN lower(COALESCE(ar.status, '')) = 'present' THEN 1 ELSE 0 END) AS present
+        FROM attendance_records ar
+        JOIN channels c ON c.id = ar.channel_id
+        WHERE ar.workspace_id = ?
+        GROUP BY ar.channel_id, c.name
+        ORDER BY total DESC, lower(COALESCE(c.name, ar.channel_id)) ASC
+        LIMIT 5
+      `
+      )
+      .all(workspaceId);
+    const total = Number(totals.total || 0);
+    const present = Number(totals.present || 0);
+    const attendanceRate = total ? Math.round((present / total) * 100) : 0;
+    return buildAiBlock("Attendance summary", [
+      `Attendance rate: ${attendanceRate}%`,
+      `Attendance records: ${total}`,
+      `Present records: ${present}`,
+      ...classRows.map((row) => {
+        const classTotal = Number(row.total || 0);
+        const classPresent = Number(row.present || 0);
+        const classRate = classTotal ? Math.round((classPresent / classTotal) * 100) : 0;
+        return `${row.className || "Class"}: ${classRate}% attendance`;
+      })
+    ]);
+  });
+}
+
+function buildAiWorkspacePaymentBlock(workspaceId) {
+  return readAiContextCache(`ai:payments:${workspaceId}`, 60 * 1000, () => {
+    const invoiceStats = db
+      .prepare(
+        `
+        SELECT
+          COUNT(*) AS totalInvoices,
+          SUM(CASE WHEN lower(COALESCE(status, '')) = 'open' THEN 1 ELSE 0 END) AS openInvoices,
+          SUM(CASE WHEN lower(COALESCE(status, '')) = 'paid' THEN 1 ELSE 0 END) AS paidInvoices,
+          SUM(CASE WHEN lower(COALESCE(status, '')) = 'open' THEN amount_cents ELSE 0 END) AS outstandingCents
+        FROM invoices
+        WHERE workspace_id = ?
+      `
+      )
+      .get(workspaceId) || {};
+    const recentPayments = db
+      .prepare(
+        `
+        SELECT COUNT(*) AS recentCount
+        FROM payments
+        WHERE workspace_id = ?
+          AND datetime(created_at / 1000, 'unixepoch') >= datetime('now', '-7 day')
+      `
+      )
+      .get(workspaceId) || {};
+    return buildAiBlock("Payment summary", [
+      `Open invoices: ${Number(invoiceStats.openInvoices || 0)}`,
+      `Paid invoices: ${Number(invoiceStats.paidInvoices || 0)}`,
+      `Outstanding amount: ${Math.round(Number(invoiceStats.outstandingCents || 0) / 100)} EUR`,
+      `Payments in last 7 days: ${Number(recentPayments.recentCount || 0)}`
+    ]);
+  });
+}
+
+function buildAiWorkspaceRegistrationBlock(workspaceId) {
+  return readAiContextCache(`ai:registrations:${workspaceId}`, 2 * 60 * 1000, () => {
+    const rows = db
+      .prepare(
+        `
+        SELECT status, payload
+        FROM registration_review_requests
+        ORDER BY created_at DESC
+        LIMIT 200
+      `
+      )
+      .all();
+    const counts = rows.reduce((acc, row) => {
+      let payload = null;
+      try {
+        payload = JSON.parse(String(row.payload || "{}"));
+      } catch (_err) {
+        payload = null;
+      }
+      const payloadWorkspaceId = String(
+        payload?.workspaceId ||
+          payload?.workspace_id ||
+          payload?.form?.workspaceId ||
+          payload?.form?.workspace_id ||
+          ""
+      ).trim();
+      if (!payloadWorkspaceId || payloadWorkspaceId !== workspaceId) return acc;
+      const key = String(row.status || "pending").toLowerCase();
+      acc[key] = Number(acc[key] || 0) + 1;
+      return acc;
+    }, {});
+    if (!Object.keys(counts).length) return null;
+    return buildAiBlock("Registration summary", [
+      `Pending registrations: ${Number(counts.pending || 0)}`,
+      `Approved registrations: ${Number(counts.approved || 0)}`,
+      `Rejected registrations: ${Number(counts.rejected || 0)}`
+    ]);
+  });
+}
+
+function buildAiHomeworkBlock(workspaceId, user, roleBucket) {
+  return readAiContextCache(`ai:homework:${workspaceId}:${roleBucket}:${user?.id || "anon"}`, 90 * 1000, () => {
+    if (roleBucket === "student") {
+      const summary = buildStudentPerformanceSummary(workspaceId, user.id);
+      if (!summary) return null;
+      return buildAiBlock("Homework summary", [
+        `Total homework items: ${Number(summary.homework?.totalItems || 0)}`,
+        `Completed items: ${Number(summary.homework?.completedItems || 0)}`,
+        `Pending items: ${Number(summary.homework?.pendingItems || 0)}`,
+        ...((Array.isArray(summary.homework?.items) ? summary.homework.items : [])
+          .slice(0, 5)
+          .map((item) => `${item.className || "Class"}: ${item.title || "Homework"}${item.dueDate ? ` due ${item.dueDate}` : ""}`))
+      ]);
+    }
+
+    const visibleCourses = getAiVisibleCourses(workspaceId, user, roleBucket)
+      .filter((row) => ["class", "classes"].includes(String(row.category || "").toLowerCase()))
+      .map((row) => String(row.id || "").trim())
+      .filter(Boolean);
+
+    const filters = ["hi.workspace_id = ?", "coalesce(hi.is_archived, 0) = 0"];
+    const params = [workspaceId];
+    if (roleBucket !== "admin" && visibleCourses.length) {
+      filters.push(`hi.class_channel_id IN (${visibleCourses.map(() => "?").join(",")})`);
+      params.push(...visibleCourses);
+    }
+    const rows = db
+      .prepare(
+        `
+        SELECT hi.title, hi.due_date AS dueDate, c.name AS className
+        FROM homework_items hi
+        LEFT JOIN channels c ON c.id = hi.class_channel_id
+        WHERE ${filters.join(" AND ")}
+        ORDER BY datetime(COALESCE(hi.due_date, hi.created_at)) ASC
+        LIMIT 6
+      `
+      )
+      .all(...params);
+    return buildAiBlock("Homework context", rows.map((row) => `${row.className || "Class"}: ${row.title || "Homework"}${row.dueDate ? ` due ${row.dueDate}` : ""}`));
+  });
+}
+
+function buildAiExamBlock(workspaceId, user, roleBucket, clientContext) {
+  return readAiContextCache(`ai:exams:${workspaceId}:${roleBucket}:${user?.id || "anon"}`, 2 * 60 * 1000, () => {
+    const calendarItems = Array.isArray(clientContext?.calendar) ? clientContext.calendar : [];
+    const examLines = calendarItems
+      .map((row) => normalizeEvent(row))
+      .filter((row) => /exam|test|prüfung/i.test(`${row.title} ${row.category}`))
+      .slice(0, 5)
+      .map((row) =>
+        [row.title || "Exam", row.date || "", `${row.startTime || ""}${row.endTime ? `-${row.endTime}` : ""}`.trim()]
+          .filter(Boolean)
+          .join(" | ")
+      );
+    const channelRows = db
+      .prepare(
+        `
+        SELECT name
+        FROM channels
+        WHERE workspace_id = ?
+          AND lower(COALESCE(category, '')) IN ('exams', 'exam')
+        ORDER BY lower(COALESCE(name, id)) ASC
+        LIMIT 5
+      `
+      )
+      .all(workspaceId)
+      .map((row) => `Exam channel: ${row.name}`);
+    return buildAiBlock("Exam overview", [...examLines, ...channelRows].slice(0, 6));
+  });
+}
+
+function buildAiKnowledgeBlock(workspaceId, role, query) {
+  const items = searchKnowledge(workspaceId, query, role).slice(0, 4);
+  if (!items.length) return null;
+  return buildAiBlock(
+    "Knowledge matches",
+    items.map((item) => `${item.title}: ${String(item.body || "").replace(/\s+/g, " ").slice(0, 140)}`)
+  );
 }
 
 function getSchoolStats(workspaceId) {
@@ -4768,6 +5292,7 @@ try {
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT,
       audience TEXT,
+      invited_user_ids TEXT DEFAULT '',
       FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
     );
 
@@ -5038,6 +5563,7 @@ tryAlter("ALTER TABLE inbound_emails ADD COLUMN recipient_user_id TEXT DEFAULT '
 tryAlter("ALTER TABLE inbound_emails ADD COLUMN direction TEXT DEFAULT 'inbound'");
 tryAlter("ALTER TABLE inbound_emails ADD COLUMN visibility_scope TEXT DEFAULT 'workspace'");
 tryAlter("ALTER TABLE inbound_emails ADD COLUMN sender_role TEXT DEFAULT ''");
+tryAlter("ALTER TABLE live_sessions ADD COLUMN invited_user_ids TEXT DEFAULT ''");
 db.exec(`
   CREATE TABLE IF NOT EXISTS deleted_inbound_emails (
     message_id TEXT PRIMARY KEY,
@@ -5155,15 +5681,16 @@ function rebuildLiveSessionsAllowingNullChannel() {
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT,
       audience TEXT DEFAULT 'general',
+      invited_user_ids TEXT DEFAULT '',
       FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
     );
   `);
 
   db.exec(`
     INSERT INTO live_sessions (id, workspace_id, channel_id, title, date, start_time, end_time, meeting_url,
-      meeting_pass, student_notes, status, autopost_mode, audience, created_by, created_at, updated_at)
+      meeting_pass, student_notes, status, autopost_mode, audience, created_by, created_at, updated_at, invited_user_ids)
     SELECT id, workspace_id, channel_id, title, date, start_time, end_time, meeting_url,
-      meeting_pass, student_notes, status, autopost_mode, COALESCE(audience, 'general'), created_by, created_at, updated_at
+      meeting_pass, student_notes, status, autopost_mode, COALESCE(audience, 'general'), created_by, created_at, updated_at, ''
     FROM live_sessions_old;
   `);
 
@@ -5172,6 +5699,23 @@ function rebuildLiveSessionsAllowingNullChannel() {
 }
 
 rebuildLiveSessionsAllowingNullChannel();
+
+function normalizeStoredLiveMeetingUrls() {
+  try {
+    const rows = db.prepare("SELECT id, workspace_id, channel_id, audience FROM live_sessions").all();
+    const stmt = db.prepare("UPDATE live_sessions SET meeting_url = ?, updated_at = ? WHERE id = ?");
+    const now = nowIso();
+    rows.forEach((row) => {
+      const canonicalUrl = buildLiveMeetingUrl(row);
+      if (!canonicalUrl) return;
+      stmt.run(canonicalUrl, now, row.id);
+    });
+  } catch (err) {
+    console.warn("Failed to normalize live meeting URLs:", err?.message || err);
+  }
+}
+
+normalizeStoredLiveMeetingUrls();
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_live_sessions_workspace ON live_sessions(workspace_id);
   CREATE INDEX IF NOT EXISTS idx_live_sessions_channel ON live_sessions(channel_id);
@@ -5489,6 +6033,9 @@ function ensureCalendarSchema() {
   safeAlter("ALTER TABLE calendar_events ADD COLUMN target_id TEXT DEFAULT ''");
   safeAlter("ALTER TABLE calendar_events ADD COLUMN description TEXT DEFAULT ''");
   safeAlter("ALTER TABLE calendar_events ADD COLUMN notes TEXT DEFAULT ''");
+  safeAlter("ALTER TABLE calendar_events ADD COLUMN location TEXT DEFAULT ''");
+  safeAlter("ALTER TABLE calendar_events ADD COLUMN type TEXT DEFAULT ''");
+  safeAlter("ALTER TABLE calendar_events ADD COLUMN category TEXT DEFAULT ''");
   safeAlter("ALTER TABLE calendar_events ADD COLUMN date TEXT DEFAULT ''");
   safeAlter("ALTER TABLE calendar_events ADD COLUMN event_date TEXT DEFAULT ''");
   safeAlter("ALTER TABLE calendar_events ADD COLUMN all_day INTEGER DEFAULT 0");
@@ -6733,19 +7280,86 @@ function ensureToolChannels(workspaceId = 'default') {
 
 ensureToolChannels('default');
 
+const RESERVED_TASK_CHANNEL_NAMES = new Set(['school task', 'teachers task', 'student tasks']);
+
+function normalizeReservedTaskChannels(workspaceId, name, topic = '') {
+  const workspaceKey = String(workspaceId || 'default');
+  const normalizedName = String(name || '').trim().toLowerCase();
+  if (!RESERVED_TASK_CHANNEL_NAMES.has(normalizedName)) {
+    return ensureNamedChannel(workspaceKey, name, { category: 'tasks', topic });
+  }
+
+  const matching = db
+    .prepare(
+      `SELECT id, name, topic, category, workspace_id AS workspaceId
+       FROM channels
+       WHERE workspace_id = ?
+         AND lower(name) = ?
+       ORDER BY CASE WHEN lower(category) = 'tasks' THEN 0 ELSE 1 END, rowid ASC`
+    )
+    .all(workspaceKey, normalizedName);
+
+  if (!matching.length) {
+    return ensureNamedChannel(workspaceKey, name, { category: 'tasks', topic });
+  }
+
+  const canonical = matching[0];
+
+  db.prepare(
+    `UPDATE channels
+     SET category = 'tasks',
+         topic = CASE
+           WHEN COALESCE(trim(topic), '') = '' THEN ?
+           ELSE topic
+         END
+     WHERE id = ?`
+  ).run(topic || '', canonical.id);
+
+  const duplicates = matching.slice(1);
+  if (duplicates.length) {
+    const moveDuplicateData = db.transaction((targetId, duplicateRows) => {
+      duplicateRows.forEach((row) => {
+        const duplicateId = String(row.id || '');
+        if (!duplicateId || duplicateId === targetId) return;
+        db.prepare('UPDATE messages SET channel_id = ? WHERE channel_id = ?').run(targetId, duplicateId);
+        db.prepare('UPDATE tasks SET channel_id = ? WHERE channel_id = ?').run(targetId, duplicateId);
+        db.prepare('UPDATE files_registry SET channel_id = ? WHERE channel_id = ?').run(targetId, duplicateId);
+        db.prepare(
+          `INSERT OR IGNORE INTO channel_members (channel_id, user_id)
+           SELECT ?, user_id
+           FROM channel_members
+           WHERE channel_id = ?`
+        ).run(targetId, duplicateId);
+        db.prepare('DELETE FROM channel_members WHERE channel_id = ?').run(duplicateId);
+
+        const orphanHomeworkChannels = db
+          .prepare(
+            `SELECT id
+             FROM channels
+             WHERE workspace_id = ?
+               AND lower(category) = 'homework'
+               AND topic = ?`
+          )
+          .all(workspaceKey, `homework_for:${duplicateId}`);
+        orphanHomeworkChannels.forEach((hw) => {
+          db.prepare('DELETE FROM channel_members WHERE channel_id = ?').run(hw.id);
+          db.prepare('DELETE FROM channels WHERE id = ?').run(hw.id);
+        });
+
+        db.prepare('DELETE FROM channels WHERE id = ?').run(duplicateId);
+      });
+    });
+
+    moveDuplicateData(canonical.id, duplicates);
+  }
+
+  return canonical.id;
+}
+
 function ensureTaskChannels(workspaceId = 'default') {
-  ensureNamedChannel(workspaceId, 'School Task', {
-    category: 'tasks',
-    topic: 'School-wide task board'
-  });
-  ensureNamedChannel(workspaceId, 'Teachers Task', {
-    category: 'tasks',
-    topic: 'Teacher task list'
-  });
-  ensureNamedChannel(workspaceId, 'Student Tasks', {
-    category: 'tasks',
-    topic: 'Student task list'
-  });
+  normalizeReservedTaskChannels(workspaceId, 'School Task', 'School-wide task board');
+  normalizeReservedTaskChannels(workspaceId, 'Teachers Task', 'Teacher task list');
+  normalizeReservedTaskChannels(workspaceId, 'Student Tasks', 'Student task list');
 }
 
 ensureTaskChannels('default');
@@ -15051,10 +15665,201 @@ function buildEmailSignatureBlock({ profileRow = {}, workspaceRow = {}, settings
 
 const LIVE_SCOPE_VALUES = new Set(["today", "week", "all"]);
 const LIVE_AUDIENCE_VALUES = new Set(["general", "teachers"]);
+const LIVE_SLIDE_MANAGER_ROLES = new Set(["teacher", "admin", "school_admin", "super_admin"]);
 
 function canManageLiveSessions(user) {
   if (!user) return false;
   return isTeacherRole(user) || isWorkspaceAdmin(user);
+}
+
+function sanitizeLiveRoomSegment(value, fallback = "room") {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || fallback;
+}
+
+function buildLiveRoomName(session) {
+  if (!session) return "";
+  const workspaceSegment = sanitizeLiveRoomSegment(session.workspace_id || session.workspaceId, "workspace");
+  const channelSegment = sanitizeLiveRoomSegment(session.channel_id || session.channelId || session.audience, "audience");
+  const sessionSegment = sanitizeLiveRoomSegment(session.id, "session");
+  return `${workspaceSegment}-${channelSegment}-${sessionSegment}`;
+}
+
+function buildLiveMeetingUrl(session) {
+  const roomName = buildLiveRoomName(session);
+  if (!roomName) return "";
+  return `${jitsiConfig.publicOrigin}/${encodeURIComponent(roomName)}`;
+}
+
+function buildLiveAppPath(session) {
+  return String(session?.meeting_url || "").trim();
+}
+
+function parseLiveSessionDateTime(dateValue, timeValue) {
+  const date = String(dateValue || "").trim();
+  const time = String(timeValue || "").trim();
+  if (!date || !time) return null;
+  const parsed = new Date(`${date}T${time}:00`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function getLiveSessionWindow(session) {
+  if (!session) return { startAt: null, endAt: null };
+  return {
+    startAt: parseLiveSessionDateTime(session.date, session.start_time),
+    endAt: parseLiveSessionDateTime(session.date, session.end_time),
+  };
+}
+
+function normalizeLiveInvitedUserIds(value) {
+  const list = Array.isArray(value) ? value : String(value || "").split(",");
+  return [...new Set(list.map((entry) => String(entry || "").trim()).filter(Boolean))];
+}
+
+function serializeLiveInvitedUserIds(value) {
+  return normalizeLiveInvitedUserIds(value).join(",");
+}
+
+function isUserInvitedToLiveSession(userId, session) {
+  if (!userId || !session) return false;
+  return normalizeLiveInvitedUserIds(session.invited_user_ids).includes(String(userId));
+}
+
+function deriveLiveSessionStatus(session) {
+  const explicitStatus = String(session?.status || "").toLowerCase();
+  if (explicitStatus === "canceled" || explicitStatus === "cancelled") {
+    return "canceled";
+  }
+  const now = Date.now();
+  const { startAt, endAt } = getLiveSessionWindow(session);
+  if (endAt && now > endAt.getTime()) {
+    return "ended";
+  }
+  if (startAt && now >= startAt.getTime() && (!endAt || now <= endAt.getTime())) {
+    return "live";
+  }
+  return explicitStatus || "scheduled";
+}
+
+function shouldAutopostLiveSession(session) {
+  const rawMode = String(session?.autopost_mode || "").trim().toLowerCase();
+  if (session?.channel_id) return true;
+  return rawMode === "0" || rawMode === "channel" || rawMode === "immediate" || rawMode === "class";
+}
+
+function hydrateLiveSession(session) {
+  if (!session) return null;
+  const { startAt, endAt } = getLiveSessionWindow(session);
+  const invitedUserIds = normalizeLiveInvitedUserIds(session.invited_user_ids);
+  return {
+    ...session,
+    status: deriveLiveSessionStatus(session),
+    meeting_domain: jitsiConfig.domain,
+    room_name: buildLiveRoomName(session),
+    meeting_url: buildLiveMeetingUrl(session),
+    starts_at: startAt ? startAt.toISOString() : null,
+    ends_at: endAt ? endAt.toISOString() : null,
+    is_expired: Boolean(endAt && Date.now() > endAt.getTime()),
+    invited_user_ids: invitedUserIds.join(","),
+    invitedUserIds,
+  };
+}
+
+function isUserInChannel(userId, channelId) {
+  if (!userId || !channelId) return false;
+  const row = db
+    .prepare("SELECT 1 FROM channel_members WHERE user_id = ? AND channel_id = ? LIMIT 1")
+    .get(String(userId), String(channelId));
+  return Boolean(row);
+}
+
+function canTeacherManageLiveSession(user, session) {
+  if (!user || !isTeacherRole(user)) return false;
+  if (!session) return false;
+  if (session.channel_id) {
+    return isUserInChannel(user.id, session.channel_id);
+  }
+  return String(session.created_by || "") === String(user.id || "");
+}
+
+function canUserManageSpecificLiveSession(user, session) {
+  if (!user || !session) return false;
+  if (isWorkspaceAdmin(user)) return true;
+  return canTeacherManageLiveSession(user, session);
+}
+
+function canUserViewLiveSession(user, session) {
+  if (!user || !session) return false;
+  if (isWorkspaceAdmin(user)) return true;
+  if (isUserInvitedToLiveSession(user.id, session)) return true;
+  if (isTeacherRole(user)) {
+    if (session.channel_id) return isUserInChannel(user.id, session.channel_id);
+    if (String(session.audience || "").toLowerCase() === "teachers") return true;
+    return (
+      String(session.audience || "").toLowerCase() === "general" ||
+      String(session.created_by || "") === String(user.id || "")
+    );
+  }
+  if (session.channel_id) return isUserInChannel(user.id, session.channel_id);
+  return String(session.audience || "").toLowerCase() === "general";
+}
+
+function canUserManageLiveSlides(user, session) {
+  if (!user || !session) return false;
+  const role = getNormalizedUserRole(user);
+  if (!LIVE_SLIDE_MANAGER_ROLES.has(role)) return false;
+  return canUserManageSpecificLiveSession(user, session);
+}
+
+function validateLiveSessionTarget(user, { channelId, audience, existingSession = null, allowInvitedOnly = false } = {}) {
+  const normalizedAudience = normalizeAudience(audience);
+  if (isWorkspaceAdmin(user)) {
+    return { ok: true, audience: normalizedAudience };
+  }
+  if (!isTeacherRole(user)) {
+    return { ok: false, error: "Forbidden" };
+  }
+  if (allowInvitedOnly) {
+    return {
+      ok: true,
+      audience: normalizedAudience,
+      channelId: channelId || null,
+      existingSession,
+    };
+  }
+  if (!channelId) {
+    return { ok: false, error: "Teachers can only create or edit sessions for allowed classes." };
+  }
+  if (!isUserInChannel(user.id, channelId)) {
+    return { ok: false, error: "You can only manage live sessions for classes you belong to." };
+  }
+  return {
+    ok: true,
+    audience: normalizedAudience,
+    channelId,
+    existingSession,
+  };
+}
+
+function validateInvitedLiveSessionUsers(workspaceId, invitedUserIds = []) {
+  const normalizedIds = normalizeLiveInvitedUserIds(invitedUserIds);
+  if (!normalizedIds.length) {
+    return { ok: false, error: "Please select at least one school member." };
+  }
+  const placeholders = normalizedIds.map(() => "?").join(",");
+  const rows = db
+    .prepare(`SELECT id FROM users WHERE workspace_id = ? AND id IN (${placeholders})`)
+    .all(workspaceId, ...normalizedIds);
+  const found = new Set(rows.map((row) => String(row.id || "")));
+  const invalid = normalizedIds.filter((id) => !found.has(id));
+  if (invalid.length) {
+    return { ok: false, error: "Selected members must belong to this school." };
+  }
+  return { ok: true, invitedUserIds: normalizedIds };
 }
 
 function formatDateOnly(date = new Date()) {
@@ -15110,59 +15915,122 @@ function formatLiveSessionScheduleLabel(session) {
   return [dateLabel, timeLabel].filter(Boolean).join(" · ");
 }
 
+function getLiveAnnouncementState(session, variant = "scheduled") {
+  const normalizedVariant = String(variant || "scheduled").toLowerCase();
+  const derivedStatus = deriveLiveSessionStatus(session);
+  if (normalizedVariant === "cancelled") {
+    return {
+      eventLabel: "LIVE SESSION",
+      badgeText: "Canceled",
+      badgeClass: "live-announcement-badge live-announcement-badge-canceled",
+      ctaText: "Session canceled",
+      ctaClass: "live-announcement-cta live-announcement-cta-disabled",
+      ctaDisabled: true,
+      noteText: "This live session was canceled.",
+      wrapperClass: "live-announcement-card live-announcement-card-canceled",
+    };
+  }
+  if (derivedStatus === "ended") {
+    return {
+      eventLabel: "LIVE SESSION",
+      badgeText: "Ended",
+      badgeClass: "live-announcement-badge live-announcement-badge-ended",
+      ctaText: "Session ended",
+      ctaClass: "live-announcement-cta live-announcement-cta-disabled",
+      ctaDisabled: true,
+      noteText: "Session has ended.",
+      wrapperClass: "live-announcement-card live-announcement-card-ended",
+    };
+  }
+  if (derivedStatus === "live") {
+    return {
+      eventLabel: "LIVE NOW",
+      badgeText: "Live now",
+      badgeClass: "live-announcement-badge live-announcement-badge-live",
+      ctaText: "Enter classroom",
+      ctaClass: "live-announcement-cta live-announcement-cta-live",
+      ctaDisabled: false,
+      noteText: "",
+      wrapperClass: "live-announcement-card live-announcement-card-live",
+    };
+  }
+  if (normalizedVariant === "updated") {
+    return {
+      eventLabel: "SCHEDULED SESSION",
+      badgeText: "Ready to join",
+      badgeClass: "live-announcement-badge live-announcement-badge-ready",
+      ctaText: "Join class",
+      ctaClass: "live-announcement-cta live-announcement-cta-ready",
+      ctaDisabled: false,
+      noteText: "Session details were updated.",
+      wrapperClass: "live-announcement-card live-announcement-card-updated",
+    };
+  }
+  return {
+    eventLabel: "SCHEDULED SESSION",
+    badgeText: "Ready to join",
+    badgeClass: "live-announcement-badge live-announcement-badge-ready",
+    ctaText: "Join class",
+    ctaClass: "live-announcement-cta live-announcement-cta-ready",
+    ctaDisabled: false,
+    noteText: "",
+    wrapperClass: "live-announcement-card",
+  };
+}
+
+function buildLiveAnnouncementActionHtml({ appPath, sessionId, channelId, ctaText, ctaClass, ctaDisabled }) {
+  if (ctaDisabled || !appPath || !sessionId) {
+    return `<span class="${ctaClass}" aria-disabled="true">${escapeHtml(ctaText)}</span>`;
+  }
+  return `<a class="${ctaClass}" href="${escapeHtml(appPath)}" target="_blank" rel="noopener noreferrer">${escapeHtml(ctaText)}</a>`;
+}
+
 function buildLiveSessionAnnouncementText(session, channel, variant = "scheduled") {
   if (!session) return "";
   const title = escapeHtml(session.title || "Live Class");
   const className = escapeHtml(channel?.name || "Live Class");
   const scheduleLabel = escapeHtml(formatLiveSessionScheduleLabel(session));
+  const dateLabel = scheduleLabel;
   const notes = String(session.student_notes || "").trim();
-  const notesHtml = notes ? `<div class="live-announcement-notes">${escapeHtml(notes)}</div>` : "";
-  const meetingUrl = String(session.meeting_url || "").trim();
-  const safeUrl = meetingUrl ? escapeHtml(meetingUrl) : "";
-  const linkHtml = meetingUrl
-    ? `<div class="live-announcement-link"><a href="${safeUrl}" target="_blank" rel="noopener noreferrer">Tap to join meeting</a></div>`
-    : "";
-  const variantClass =
-    variant === "cancelled"
-      ? "live-announcement-card--cancelled"
-      : variant === "updated"
-      ? "live-announcement-card--updated"
-      : "";
-  const headerText =
-    variant === "cancelled"
-      ? `Meeting cancelled: ${title}`
-      : variant === "updated"
-      ? `Live class updated: ${title}`
-      : `Live class scheduled: ${title}`;
-  const statusText =
-    variant === "cancelled" ? "Cancelled" : variant === "updated" ? "Updated session" : "Link ready";
-  const statusClass =
-    variant === "cancelled"
-      ? "live-announcement-status--cancelled"
-      : variant === "updated"
-      ? "live-announcement-status--updated"
-      : "live-announcement-status";
+  const appPath = buildLiveAppPath(session);
+  const state = getLiveAnnouncementState(session, variant);
+  const actionHtml = buildLiveAnnouncementActionHtml({
+    appPath,
+    sessionId: session.id,
+    channelId: session.channel_id || session.audience || "",
+    ctaText: state.ctaText,
+    ctaClass: state.ctaClass,
+    ctaDisabled: state.ctaDisabled,
+  });
+  const notesHtml = notes ? `<div class="live-announcement-note">${escapeHtml(notes)}</div>` : "";
+  const stateNoteHtml = state.noteText ? `<div class="live-announcement-state-note">${escapeHtml(state.noteText)}</div>` : "";
   return `
-    <div class="live-announcement-card ${variantClass}">
-      <div class="live-announcement-top">
-        <div class="live-announcement-icon" aria-hidden="true"><i class="fa-solid fa-video"></i></div>
-        <div>
-          <div class="live-announcement-title">${headerText}</div>
-          <div class="live-announcement-meta">
-            <span class="live-announcement-channel">${className}</span>
-            ${scheduleLabel ? `<span class="live-announcement-schedule">${scheduleLabel}</span>` : ""}
-          </div>
+    <section class="${state.wrapperClass}" aria-label="Live session event">
+      <div class="live-announcement-accent" aria-hidden="true">
+        <i class="fa-solid fa-video"></i>
+      </div>
+      <div class="live-announcement-body">
+        <div class="live-announcement-label-row">
+          <span class="live-announcement-label">${escapeHtml(state.eventLabel)}</span>
+          <span class="${state.badgeClass}">${escapeHtml(state.badgeText)}</span>
+        </div>
+        <div class="live-announcement-title">${title}</div>
+        <div class="live-announcement-meta">
+          <span class="live-announcement-class">${className}</span>
+          ${dateLabel ? `<span class="live-announcement-dot" aria-hidden="true"></span><span class="live-announcement-datetime">${dateLabel}</span>` : ""}
+        </div>
+        ${stateNoteHtml}
+        ${notesHtml}
+        <div class="live-announcement-actions">
+          ${actionHtml}
         </div>
       </div>
-      <div class="live-announcement-status ${statusClass}">${statusText}</div>
-      ${linkHtml}
-      ${notesHtml}
-    </div>
+    </section>
   `;
 }
 
 function autopostLiveSessionMessage(session, user, options = {}) {
-  if (!session || String(session.autopost_mode) !== "0") {
+  if (!session || !shouldAutopostLiveSession(session)) {
     return null;
   }
   const variant = String(options.variant || "scheduled").toLowerCase();
@@ -15534,22 +16402,8 @@ app.get('/api/live-sessions', (req, res) => {
     params.push(end);
   }
 
-  if (!canManageLiveSessions(user)) {
-    if (!user) {
-      return res.json([]);
-    }
-    const channelRows = db
-      .prepare('SELECT channel_id FROM channel_members WHERE user_id = ?')
-      .all(user.id);
-    const channelIds = channelRows.map((row) => row.channel_id);
-    const audienceClauses = [];
-    if (channelIds.length) {
-      const placeholders = channelIds.map(() => '?').join(',');
-      audienceClauses.push(`ls.channel_id IN (${placeholders})`);
-      params.push(...channelIds);
-    }
-    audienceClauses.push("ls.audience = 'general'");
-    conditions.push(`(${audienceClauses.join(' OR ')})`);
+  if (!user) {
+    return res.json([]);
   }
 
   const rows = db
@@ -15561,7 +16415,10 @@ app.get('/api/live-sessions', (req, res) => {
        ORDER BY ls.date ASC, ls.start_time ASC`
     )
     .all(...params);
-  res.json(rows);
+  const visibleRows = isWorkspaceAdmin(user)
+    ? rows
+    : rows.filter((row) => canUserViewLiveSession(user, row));
+  res.json(visibleRows.map((row) => hydrateLiveSession(row)));
 });
 
 app.post('/api/live-sessions', async (req, res) => {
@@ -15577,19 +16434,44 @@ app.post('/api/live-sessions', async (req, res) => {
     date,
     start_time: startTime,
     end_time: endTime,
-    meeting_url: meetingUrl,
     meeting_pass: meetingPass,
     student_notes: studentNotes,
     status = 'scheduled',
     autopost_mode: autopostMode = 'none',
-    audience
+    audience,
+    invited_user_ids: invitedUserIdsRaw = [],
   } = payload;
   const notifyEmail = !!payload.notify_email;
   const normalizedAudience = normalizeAudience(audience);
-  const requiresChannel = normalizedAudience === null;
+  const workspaceId = workspaceIdFromRequest(req);
+  const normalizedInvitedUserIds = normalizeLiveInvitedUserIds(invitedUserIdsRaw);
+  const invitedValidation = normalizedInvitedUserIds.length
+    ? validateInvitedLiveSessionUsers(workspaceId, normalizedInvitedUserIds)
+    : null;
+  const hasInvitedUsers = Boolean(invitedValidation?.ok);
+  const requiresChannel = normalizedAudience === null && !hasInvitedUsers;
   const channelIdValue = channelId || channelIdAlt;
-  if ((requiresChannel && !channelIdValue) || !date || !startTime || !endTime || !meetingUrl) {
+  if ((requiresChannel && !channelIdValue) || !date || !startTime || !endTime) {
     return res.status(400).json({ error: 'Missing required fields' });
+  }
+  const startAt = parseLiveSessionDateTime(date, startTime);
+  const endAt = parseLiveSessionDateTime(date, endTime);
+  if (!startAt || !endAt || endAt.getTime() <= startAt.getTime()) {
+    return res.status(400).json({ error: 'End time must be after start time' });
+  }
+  const targetValidation = validateLiveSessionTarget(user, {
+    channelId: requiresChannel ? channelIdValue : null,
+    audience: normalizedAudience,
+    allowInvitedOnly: hasInvitedUsers,
+  });
+  if (!targetValidation.ok) {
+    return res.status(403).json({ error: targetValidation.error });
+  }
+  if (!requiresChannel && !normalizedAudience && !hasInvitedUsers) {
+    return res.status(400).json({ error: 'Choose a class, audience, or invited members.' });
+  }
+  if (invitedValidation && !invitedValidation.ok) {
+    return res.status(400).json({ error: invitedValidation.error });
   }
   let channelRow = null;
   if (requiresChannel) {
@@ -15605,28 +16487,30 @@ app.post('/api/live-sessions', async (req, res) => {
   const stmt = db.prepare(`
     INSERT INTO live_sessions
       (id, workspace_id, channel_id, title, date, start_time, end_time, meeting_url,
-       meeting_pass, student_notes, status, autopost_mode, audience, created_by, created_at, updated_at)
+       meeting_pass, student_notes, status, autopost_mode, audience, created_by, created_at, updated_at, invited_user_ids)
     VALUES (@id, @workspace_id, @channel_id, @title, @date, @start_time, @end_time, @meeting_url,
-            @meeting_pass, @student_notes, @status, @autopost_mode, @audience, @created_by, @created_at, @updated_at)
+            @meeting_pass, @student_notes, @status, @autopost_mode, @audience, @created_by, @created_at, @updated_at, @invited_user_ids)
   `);
   const record = {
     id: sessionId,
-    workspace_id: (channelRow && channelRow.workspace_id) || workspaceIdFromRequest(req),
+    workspace_id: (channelRow && channelRow.workspace_id) || workspaceId,
     channel_id: requiresChannel ? channelIdValue : null,
     title: String(title || 'Live Class'),
     date,
     start_time: startTime,
     end_time: endTime,
-    meeting_url: meetingUrl,
+    meeting_url: '',
     meeting_pass: meetingPass || null,
     student_notes: studentNotes || null,
     status: String(status || 'scheduled'),
-    autopost_mode: String(autopostMode || 'none'),
+    autopost_mode: requiresChannel ? 'channel' : String(autopostMode || 'channel'),
     audience: normalizedAudience,
     created_by: user?.id || null,
     created_at: now,
-    updated_at: now
+    updated_at: now,
+    invited_user_ids: hasInvitedUsers ? serializeLiveInvitedUserIds(invitedValidation.invitedUserIds) : ''
   };
+  record.meeting_url = buildLiveMeetingUrl(record);
   stmt.run(record);
   ensureLiveSessionCalendar(record);
   autopostLiveSessionMessage(record, user);
@@ -15641,7 +16525,7 @@ app.post('/api/live-sessions', async (req, res) => {
       console.error('Failed to send live session emails', err?.message || err);
     }
   }
-  res.status(201).json(record);
+  res.status(201).json(hydrateLiveSession(record));
 });
 
 app.patch('/api/live-sessions/:sessionId', (req, res) => {
@@ -15654,6 +16538,9 @@ app.patch('/api/live-sessions/:sessionId', (req, res) => {
   if (!existing) {
     return res.status(404).json({ error: 'Session not found' });
   }
+  if (!canUserManageSpecificLiveSession(user, existing)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
   const payload = req.body || {};
   const updates = {};
   const fields = [
@@ -15662,17 +16549,19 @@ app.patch('/api/live-sessions/:sessionId', (req, res) => {
     'date',
     'start_time',
     'end_time',
-    'meeting_url',
     'meeting_pass',
     'student_notes',
     'status',
     'autopost_mode',
-    'audience'
+    'audience',
+    'invited_user_ids'
   ];
   fields.forEach((field) => {
     if (Object.prototype.hasOwnProperty.call(payload, field)) {
       if (field === 'audience') {
         updates.audience = normalizeAudience(payload.audience);
+      } else if (field === 'invited_user_ids') {
+        updates.invited_user_ids = serializeLiveInvitedUserIds(payload.invited_user_ids);
       } else {
         updates[field] = payload[field];
       }
@@ -15681,22 +16570,61 @@ app.patch('/api/live-sessions/:sessionId', (req, res) => {
   const audienceCandidate = Object.prototype.hasOwnProperty.call(updates, 'audience')
     ? updates.audience
     : existing.audience;
+  const invitedCandidate = Object.prototype.hasOwnProperty.call(updates, 'invited_user_ids')
+    ? updates.invited_user_ids
+    : existing.invited_user_ids;
+  const normalizedInvitedUserIds = normalizeLiveInvitedUserIds(invitedCandidate);
+  const invitedValidation = normalizedInvitedUserIds.length
+    ? validateInvitedLiveSessionUsers(existing.workspace_id, normalizedInvitedUserIds)
+    : null;
+  const hasInvitedUsers = Boolean(invitedValidation?.ok);
+  if (invitedValidation && !invitedValidation.ok) {
+    return res.status(400).json({ error: invitedValidation.error });
+  }
   const normalizedAudience = normalizeAudience(audienceCandidate);
   if (normalizedAudience) {
+    if (!isWorkspaceAdmin(user)) {
+      return res.status(403).json({ error: 'Teachers can only edit sessions for allowed classes.' });
+    }
     updates.channel_id = null;
     updates.audience = normalizedAudience;
+    updates.invited_user_ids = '';
+  } else if (hasInvitedUsers) {
+    updates.channel_id = null;
+    updates.audience = null;
+    updates.invited_user_ids = serializeLiveInvitedUserIds(invitedValidation.invitedUserIds);
   } else {
     const finalChannelId = updates.channel_id ?? existing.channel_id;
     if (!finalChannelId) {
       return res.status(400).json({ error: 'Channel is required for class sessions' });
     }
+    const targetValidation = validateLiveSessionTarget(user, {
+      channelId: finalChannelId,
+      existingSession: existing,
+    });
+    if (!targetValidation.ok) {
+      return res.status(403).json({ error: targetValidation.error });
+    }
     updates.channel_id = finalChannelId;
     delete updates.audience;
+    updates.invited_user_ids = '';
+    updates.autopost_mode = 'channel';
   }
   if (!Object.keys(updates).length) {
     return res.status(400).json({ error: 'No fields to update' });
   }
+  const candidate = {
+    ...existing,
+    ...updates,
+    audience: Object.prototype.hasOwnProperty.call(updates, 'audience') ? updates.audience : existing.audience,
+  };
+  const startAt = parseLiveSessionDateTime(candidate.date, candidate.start_time);
+  const endAt = parseLiveSessionDateTime(candidate.date, candidate.end_time);
+  if (!startAt || !endAt || endAt.getTime() <= startAt.getTime()) {
+    return res.status(400).json({ error: 'End time must be after start time' });
+  }
   updates.updated_at = nowIso();
+  updates.meeting_url = buildLiveMeetingUrl(candidate);
   const setClause = Object.keys(updates)
     .map((key) => `${key} = @${key}`)
     .join(', ');
@@ -15705,7 +16633,7 @@ app.patch('/api/live-sessions/:sessionId', (req, res) => {
   const updated = db.prepare('SELECT * FROM live_sessions WHERE id = ?').get(sessionId);
   autopostLiveSessionMessage(updated, user, { variant: "updated" });
   ensureLiveSessionCalendar(updated);
-  res.json(updated);
+  res.json(hydrateLiveSession(updated));
 });
 
 app.delete('/api/live-sessions/:sessionId', (req, res) => {
@@ -15717,6 +16645,9 @@ app.delete('/api/live-sessions/:sessionId', (req, res) => {
   const existing = db.prepare('SELECT * FROM live_sessions WHERE id = ?').get(sessionId);
   if (!existing) {
     return res.status(404).json({ error: 'Session not found' });
+  }
+  if (!canUserManageSpecificLiveSession(user, existing)) {
+    return res.status(403).json({ error: 'Forbidden' });
   }
   autopostLiveSessionMessage(existing, user, { variant: "cancelled" });
   removeLiveSessionCalendar(sessionId);
@@ -15730,10 +16661,21 @@ app.post('/api/live-sessions/:sessionId/join', (req, res) => {
   if (!session) {
     return res.status(404).json({ error: 'Session not found' });
   }
+  const sessionStatus = deriveLiveSessionStatus(session);
+  if (sessionStatus === 'canceled') {
+    return res.status(410).json({ error: 'This live session was canceled.' });
+  }
+  if (sessionStatus === 'ended') {
+    return res.status(410).json({ error: 'This live session link has expired.' });
+  }
   const user = getAuthedUser(req);
   if (!user) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
+  if (!canUserViewLiveSession(user, session)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const hydratedSession = hydrateLiveSession(session);
   const now = nowIso();
   db.prepare(
     `INSERT INTO live_attendance (session_id, student_id, joined_at, status, updated_at)
@@ -15741,7 +16683,29 @@ app.post('/api/live-sessions/:sessionId/join', (req, res) => {
      ON CONFLICT(session_id, student_id)
        DO UPDATE SET joined_at = excluded.joined_at, updated_at = excluded.updated_at`
   ).run(sessionId, user.id, now, now);
-  res.json({ ok: true, sessionId, studentId: user.id, joinedAt: now });
+  const canModerate = canUserManageSpecificLiveSession(user, session);
+  let token = null;
+  if (jitsiConfig.canGenerateTokens) {
+    token = generateJitsiToken({
+      user,
+      room: hydratedSession.room_name,
+      moderator: canModerate,
+    });
+  }
+  res.json({
+    ok: true,
+    sessionId,
+    studentId: user.id,
+    joinedAt: now,
+    session: hydratedSession,
+    jitsi: {
+      domain: jitsiConfig.domain,
+      roomName: hydratedSession.room_name,
+      meetingUrl: hydratedSession.meeting_url,
+      jwt: token,
+      moderator: canModerate,
+    },
+  });
 });
 
 app.get('/api/live-sessions/:sessionId/attendance', (req, res) => {
@@ -15753,6 +16717,9 @@ app.get('/api/live-sessions/:sessionId/attendance', (req, res) => {
   const session = db.prepare('SELECT * FROM live_sessions WHERE id = ?').get(sessionId);
   if (!session) {
     return res.status(404).json({ error: 'Session not found' });
+  }
+  if (!canUserManageSpecificLiveSession(user, session)) {
+    return res.status(403).json({ error: 'Forbidden' });
   }
   const rows = db
     .prepare(
@@ -15775,6 +16742,9 @@ app.post('/api/live-sessions/:sessionId/attendance', (req, res) => {
   const session = db.prepare('SELECT * FROM live_sessions WHERE id = ?').get(sessionId);
   if (!session) {
     return res.status(404).json({ error: 'Session not found' });
+  }
+  if (!canUserManageSpecificLiveSession(user, session)) {
+    return res.status(403).json({ error: 'Forbidden' });
   }
   const records = Array.isArray(req.body?.records) ? req.body.records : [];
   if (!records.length) {
@@ -15812,6 +16782,11 @@ app.get("/api/live-sessions/:sessionId/slides/stream", (req, res) => {
   if (!user) return res.status(401).json({ error: "Unauthorized" });
 
   const sessionId = String(req.params.sessionId);
+  const session = db.prepare("SELECT * FROM live_sessions WHERE id = ?").get(sessionId);
+  if (!session) return res.status(404).json({ error: "Session not found" });
+  if (!canUserViewLiveSession(user, session)) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
@@ -15839,6 +16814,11 @@ app.get("/api/live-sessions/:sessionId/slides/state", (req, res) => {
   if (!user) return res.status(401).json({ error: "Unauthorized" });
 
   const sessionId = String(req.params.sessionId);
+  const session = db.prepare("SELECT * FROM live_sessions WHERE id = ?").get(sessionId);
+  if (!session) return res.status(404).json({ error: "Session not found" });
+  if (!canUserViewLiveSession(user, session)) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
   const row = db.prepare("SELECT * FROM slide_state WHERE live_session_id=?").get(sessionId);
 
   res.json(
@@ -15857,7 +16837,9 @@ app.post("/api/live-sessions/:sessionId/slides/page", (req, res) => {
   const user = getAuthedUser(req);
 
   if (!user) return res.status(401).json({ error: "Unauthorized" });
-  if (!canManageLiveSessions(user)) {
+  const session = db.prepare("SELECT * FROM live_sessions WHERE id = ?").get(sessionId);
+  if (!session) return res.status(404).json({ error: "Session not found" });
+  if (!canUserManageLiveSlides(user, session)) {
     return res.status(403).json({ error: "Forbidden" });
   }
 
@@ -15894,7 +16876,9 @@ app.post("/api/live-sessions/:sessionId/slides/deck", (req, res) => {
   const sessionId = String(req.params.sessionId);
   const user = getAuthedUser(req);
   if (!user) return res.status(401).json({ error: "Unauthorized" });
-  if (!canManageLiveSessions(user)) return res.status(403).json({ error: "Forbidden" });
+  const session = db.prepare("SELECT * FROM live_sessions WHERE id = ?").get(sessionId);
+  if (!session) return res.status(404).json({ error: "Session not found" });
+  if (!canUserManageLiveSlides(user, session)) return res.status(403).json({ error: "Forbidden" });
 
   const deckUrl = String(req.body?.deck_url || "").trim();
   const pageCount = Math.max(1, Number(req.body?.page_count || 1));
@@ -15920,9 +16904,10 @@ app.post("/api/live-sessions/:sessionId/slides/deck", (req, res) => {
 app.post("/api/live-sessions/:sessionId/end", (req, res) => {
   const user = getAuthedUser(req);
   if (!user) return res.status(401).json({ error: "Unauthorized" });
-  if (!canManageLiveSessions(user)) return res.status(403).json({ error: "Forbidden" });
-
   const sessionId = String(req.params.sessionId);
+  const session = db.prepare("SELECT * FROM live_sessions WHERE id = ?").get(sessionId);
+  if (!session) return res.status(404).json({ error: "Session not found" });
+  if (!canUserManageSpecificLiveSession(user, session)) return res.status(403).json({ error: "Forbidden" });
   broadcastSse(sessionId, "session", { type: "ended", sessionId, at: Date.now() });
   res.json({ ok: true, sessionId });
 });
@@ -16576,9 +17561,29 @@ app.post('/api/dms/:dmId/messages/:messageId/reactions', (req, res) => {
 // ---------- AI ASSISTANT (Local Ollama) ----------
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "llama3.1:8b";
+const OLLAMA_FAST_MODEL = process.env.OLLAMA_FAST_MODEL || OLLAMA_MODEL;
+const OLLAMA_COMPLEX_MODEL = process.env.OLLAMA_COMPLEX_MODEL || OLLAMA_MODEL;
+const AI_CONTEXT_CACHE = new Map();
+const AI_REQUEST_STATE_CACHE = new Map();
 
 function normalizeText(s = "") {
   return String(s || "").toLowerCase().trim();
+}
+
+function getAiRoleBucket(role = "") {
+  const normalized = String(role || "").toLowerCase();
+  if (["admin", "school_admin", "super_admin"].includes(normalized)) return "admin";
+  if (normalized === "teacher" || normalized === "owner") return "teacher";
+  return "student";
+}
+
+function readAiContextCache(key, ttlMs, compute) {
+  const now = Date.now();
+  const cached = AI_CONTEXT_CACHE.get(key);
+  if (cached && cached.expiresAt > now) return cached.value;
+  const value = compute();
+  AI_CONTEXT_CACHE.set(key, { value, expiresAt: now + ttlMs });
+  return value;
 }
 
 function extractUpcomingEvents(context) {
@@ -16628,7 +17633,7 @@ async function warmOllama() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: OLLAMA_MODEL,
+        model: OLLAMA_FAST_MODEL,
         stream: false,
         prompt: "Say 'ready' فقط."
       })
@@ -16644,8 +17649,23 @@ async function warmOllama() {
 function compactContext(ctx) {
   if (!ctx || typeof ctx !== "object") return "";
   const parts = [];
+  if (ctx.intent) parts.push(`Intent: ${ctx.intent}`);
+  if (ctx.mode) parts.push(`Mode: ${ctx.mode}`);
+  if (ctx.workspaceName) parts.push(`Workspace: ${ctx.workspaceName}`);
+  if (ctx.currentChannel?.name) {
+    parts.push(
+      `Current channel: ${ctx.currentChannel.name}${ctx.currentChannel.category ? ` (${ctx.currentChannel.category})` : ""}`
+    );
+  }
   if (ctx.selectedDate) parts.push(`Selected date: ${ctx.selectedDate}`);
   if (ctx.viewMode) parts.push(`Calendar view: ${ctx.viewMode}`);
+  if (Array.isArray(ctx.summaryBlocks) && ctx.summaryBlocks.length) {
+    parts.push(
+      ctx.summaryBlocks
+        .map((block) => `${block.title}:\n${(Array.isArray(block.lines) ? block.lines : []).map((line) => `- ${line}`).join("\n")}`)
+        .join("\n\n")
+    );
+  }
   if (Array.isArray(ctx.calendar) && ctx.calendar.length) {
     const items = ctx.calendar.slice(0, 12).map((e) => {
       const ev = normalizeEvent(e);
@@ -16737,12 +17757,25 @@ function normalizeEvent(e = {}) {
   };
 }
 
-function detectIntent(text = "") {
-  const t = (text || "").toLowerCase();
-  if (/(when|next|start|date|time|schedule|notice)/.test(t)) return "schedule_lookup";
+function detectIntent(text = "", mode = "assistant") {
+  const t = normalizeText(text);
+  if (/(attendance|absent|present|late)/.test(t)) return "attendance_summary";
+  if (/(payment|invoice|fees|fee|outstanding|paid|refund)/.test(t)) return "payment_summary";
+  if (/(registration|register|enroll|enrol|admission|prospective student)/.test(t)) return "registration_reply";
+  if (/(homework|assignment|worksheet)/.test(t)) return "homework_help";
+  if (/(grammar|translate|translation|tense|vocabulary|explain)/.test(t)) return "grammar_explanation";
+  if (/(exam|quiz|test practice|mock exam|practice questions)/.test(t)) return "exam_preparation";
+  if (/(lesson summary|class summary|summari[sz]e class|summari[sz]e channel|discussion summary)/.test(t))
+    return "classroom_summary";
+  if (/(progress|performance|weak topic|weak topics|learning progress|how am i doing|student progress)/.test(t))
+    return "student_progress_question";
+  if (/(email|reply to parent|parent update|draft email)/.test(t)) return "email_draft";
+  if (/(announcement|notice|reminder message|school notice)/.test(t)) return "school_notice_draft";
+  if (/(calendar|schedule|next class|date|time|today|tomorrow|upcoming|planner)/.test(t)) return "calendar_summary";
   if (/(lesson plan|objectives|warm-up|teach)/.test(t)) return "lesson_plan";
-  if (/(quiz|test|questions)/.test(t)) return "quiz";
-  return "general";
+  if (mode === "planner") return "planner_help";
+  if (mode === "classroom") return "classroom_summary";
+  return "general_chat_help";
 }
 
 function detectToolIntent(text = "") {
@@ -16756,6 +17789,1175 @@ function detectToolIntent(text = "") {
   if (t.includes("attendance") || t.includes("policy") || t.includes("enroll") || t.includes("payment") || t.includes("fees"))
     return "search_knowledge";
   return null;
+}
+
+function chooseAiModel({ intent, roleBucket, mode }) {
+  const complexIntents = new Set([
+    "payment_summary",
+    "registration_reply",
+    "school_notice_draft",
+    "classroom_summary",
+    "lesson_plan"
+  ]);
+  if (mode === "classroom" || (roleBucket === "admin" && complexIntents.has(intent))) {
+    return OLLAMA_COMPLEX_MODEL;
+  }
+  return OLLAMA_FAST_MODEL;
+}
+
+function getAiStateKey(workspaceId, userId) {
+  return `ai-state:${String(workspaceId || "").trim()}:${String(userId || "").trim()}`;
+}
+
+function readAiRequestState(workspaceId, userId) {
+  const key = getAiStateKey(workspaceId, userId);
+  const row = AI_REQUEST_STATE_CACHE.get(key);
+  if (!row) return null;
+  if (row.expiresAt <= Date.now()) {
+    AI_REQUEST_STATE_CACHE.delete(key);
+    return null;
+  }
+  return row.value;
+}
+
+function writeAiRequestState(workspaceId, userId, value) {
+  const key = getAiStateKey(workspaceId, userId);
+  AI_REQUEST_STATE_CACHE.set(key, {
+    value,
+    expiresAt: Date.now() + 20 * 60 * 1000
+  });
+}
+
+function clearAiContextCacheForWorkspace(workspaceId) {
+  const prefix = `:${String(workspaceId || "").trim()}`;
+  for (const key of AI_CONTEXT_CACHE.keys()) {
+    if (key.includes(prefix)) {
+      AI_CONTEXT_CACHE.delete(key);
+    }
+  }
+}
+
+function getLatestAiConversationMessagesForUser(workspaceId, userId, limit = 8) {
+  if (!workspaceId || !userId) return [];
+  const conversation = db
+    .prepare(
+      `
+      SELECT id
+      FROM ai_conversations
+      WHERE workspace_id = ? AND user_id = ?
+      ORDER BY started_at DESC
+      LIMIT 1
+    `
+    )
+    .get(String(workspaceId).trim(), String(userId).trim());
+  if (!conversation?.id) return [];
+  return db
+    .prepare(
+      `
+      SELECT role, content, created_at AS createdAt
+      FROM ai_conversation_messages
+      WHERE conversation_id = ?
+      ORDER BY created_at DESC, id DESC
+      LIMIT ?
+    `
+    )
+    .all(conversation.id, Math.max(1, Math.min(Number(limit) || 8, 20)));
+}
+
+function isAiShortFollowUp(text = "") {
+  const normalized = String(text || "").trim();
+  if (!normalized) return false;
+  if (normalized.length <= 18) return true;
+  if (normalized.length <= 42 && !/\?/.test(normalized)) return true;
+  return /^(yes|yeah|yep|no|okay|ok|again|check again|now check again|that class|this class|inside the school)$/i.test(normalized);
+}
+
+function isAiRefreshRequest(text = "") {
+  return /^(check again|now check again|refresh|try again|recheck)$/i.test(String(text || "").trim());
+}
+
+function isAiAffirmative(text = "") {
+  return /^(yes|yeah|yep|ok|okay|sure)$/i.test(String(text || "").trim());
+}
+
+function normalizeEntityText(value = "") {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/[^\w\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeLevelToken(value = "") {
+  const m = String(value || "").toUpperCase().match(/\b([ABC][12])\b/);
+  return m ? m[1] : "";
+}
+
+function getWorkspaceGroups(workspaceId) {
+  return db
+    .prepare(
+      `
+      SELECT id, name, topic, category
+      FROM channels
+      WHERE workspace_id = ?
+      ORDER BY lower(COALESCE(category, '')), lower(COALESCE(name, id))
+      LIMIT 200
+    `
+    )
+    .all(String(workspaceId || "").trim());
+}
+
+function getWorkspaceSummary(workspaceId, user = null) {
+  const summary = buildSchoolAnalyticsOverview(String(workspaceId || "").trim(), user || null);
+  if (!summary) return null;
+  return {
+    workspaceId: String(workspaceId || "").trim(),
+    workspaceName: summary.workspaceName || getWorkspaceName(workspaceId) || String(workspaceId || "").trim(),
+    students: Number(summary.students || 0),
+    teachers: Number(summary.teachers || 0),
+    admins: Number(summary.admins || 0),
+    classes: Number((summary.channelCounts || {}).classes || 0),
+    clubs: Number((summary.channelCounts || {}).clubs || 0),
+    exams: Number((summary.channelCounts || {}).exams || 0),
+    totalGroups: Number(summary.totalGroups || 0)
+  };
+}
+
+function getWorkspaceAdminCount(workspaceId) {
+  const row = db
+    .prepare(
+      `
+      SELECT COUNT(*) AS count
+      FROM users
+      WHERE workspace_id = ?
+        AND lower(COALESCE(role, '')) IN ('admin', 'school_admin', 'super_admin')
+    `
+    )
+    .get(String(workspaceId || "").trim());
+  return Number(row?.count || 0);
+}
+
+function getWorkspaceClassGroups(workspaceId) {
+  return getWorkspaceGroups(workspaceId).filter((row) => ["class", "classes"].includes(String(row.category || "").toLowerCase()));
+}
+
+function getWorkspaceExamGroups(workspaceId) {
+  return getWorkspaceGroups(workspaceId).filter((row) => ["exam", "exams"].includes(String(row.category || "").toLowerCase()));
+}
+
+function getWorkspaceClubGroups(workspaceId) {
+  return getWorkspaceGroups(workspaceId).filter((row) => ["club", "clubs"].includes(String(row.category || "").toLowerCase()));
+}
+
+function getClassChannels(workspaceId, user, roleBucket) {
+  return getAiVisibleCourses(workspaceId, user, roleBucket).filter((row) => ["class", "classes"].includes(String(row.category || "").toLowerCase()));
+}
+
+function getWorkspaceIdentity(workspaceId) {
+  const row = db
+    .prepare(
+      `
+      SELECT id, name
+      FROM workspaces
+      WHERE id = ?
+      LIMIT 1
+    `
+    )
+    .get(String(workspaceId || "").trim());
+  return row
+    ? { workspaceId: row.id, workspaceName: row.name || row.id }
+    : { workspaceId: String(workspaceId || "").trim(), workspaceName: getWorkspaceName(workspaceId) || String(workspaceId || "").trim() };
+}
+
+function getChannelByName(workspaceId, user, roleBucket, name) {
+  const query = normalizeEntityText(name);
+  if (!query) return [];
+  const visibleRows = getAiVisibleCourses(workspaceId, user, roleBucket);
+  const scored = visibleRows
+    .map((row) => {
+      const hay = normalizeEntityText(`${row.name || ""} ${row.topic || ""} ${row.category || ""}`);
+      let score = 0;
+      if (hay === query) score += 100;
+      if (hay.includes(query)) score += 50;
+      const level = normalizeLevelToken(query);
+      if (level && hay.includes(level.toLowerCase())) score += 20;
+      return { row, score };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score || String(a.row.name || "").localeCompare(String(b.row.name || "")));
+  return scored.slice(0, 5).map((entry) => entry.row);
+}
+
+function normalizeAiCandidate(type, row, label = "") {
+  return {
+    type: String(type || ""),
+    label: String(label || row?.name || row?.title || row?.id || "").trim(),
+    row: row || null
+  };
+}
+
+function getWorkspaceTeacherList(workspaceId, includeEmail = false) {
+  return listTeachers(workspaceId, includeEmail).map((row) => ({
+    id: row.id,
+    name: row.name || row.email || row.id,
+    email: includeEmail ? row.email || "" : "",
+    courseLevel: row.course_level || row.courseLevel || ""
+  }));
+}
+
+function getStudentCount(workspaceId, user, roleBucket) {
+  return getWorkspaceStudentList(workspaceId, user, roleBucket).length;
+}
+
+function getTeacherCount(workspaceId) {
+  return getWorkspaceTeacherList(workspaceId, false).length;
+}
+
+function getAnalyticsSnapshot(workspaceId, user = null) {
+  return buildSchoolAnalyticsOverview(String(workspaceId || "").trim(), user || null);
+}
+
+function getPaymentSummary(workspaceId) {
+  return readAiContextCache(`ai:payment-summary:${String(workspaceId || "").trim()}`, 60 * 1000, () => {
+    const invoiceStats = db
+      .prepare(
+        `
+        SELECT
+          COUNT(*) AS totalInvoices,
+          SUM(CASE WHEN lower(COALESCE(status, '')) = 'open' THEN 1 ELSE 0 END) AS openInvoices,
+          SUM(CASE WHEN lower(COALESCE(status, '')) = 'paid' THEN 1 ELSE 0 END) AS paidInvoices,
+          SUM(CASE WHEN lower(COALESCE(status, '')) = 'open' THEN amount_cents ELSE 0 END) AS outstandingCents
+        FROM invoices
+        WHERE workspace_id = ?
+      `
+      )
+      .get(String(workspaceId || "").trim()) || {};
+    const recentPayments = db
+      .prepare(
+        `
+        SELECT COUNT(*) AS recentCount
+        FROM payments
+        WHERE workspace_id = ?
+          AND datetime(created_at / 1000, 'unixepoch') >= datetime('now', '-7 day')
+      `
+      )
+      .get(String(workspaceId || "").trim()) || {};
+    return {
+      totalInvoices: Number(invoiceStats.totalInvoices || 0),
+      openInvoices: Number(invoiceStats.openInvoices || 0),
+      paidInvoices: Number(invoiceStats.paidInvoices || 0),
+      outstandingCents: Number(invoiceStats.outstandingCents || 0),
+      recentPayments: Number(recentPayments.recentCount || 0)
+    };
+  });
+}
+
+function getTeacherlessClasses(workspaceId) {
+  return getWorkspaceClassGroups(workspaceId)
+    .filter((row) => {
+      const teacherCount = db
+        .prepare(
+          `
+          SELECT COUNT(*) AS count
+          FROM channel_members cm
+          JOIN users u ON u.id = cm.user_id
+          WHERE cm.channel_id = ?
+            AND u.workspace_id = ?
+            AND lower(COALESCE(u.role, '')) = 'teacher'
+        `
+        )
+        .get(row.id, String(workspaceId || "").trim());
+      return Number(teacherCount?.count || 0) === 0;
+    })
+    .slice(0, 8);
+}
+
+function getLowEngagementClasses(workspaceId, user = null) {
+  const analytics = getAnalyticsSnapshot(workspaceId, user);
+  return (Array.isArray(analytics?.classRowsSorted) ? analytics.classRowsSorted : [])
+    .filter((row) => Number(row.messages || 0) < 2 || Number(row.attendanceRate || 0) < 60)
+    .slice(0, 6);
+}
+
+function getUpcomingWorkspaceEvents(workspaceId, limit = 6) {
+  return db
+    .prepare(
+      `
+      SELECT title, date, start_time AS startTime, end_time AS endTime, location, category
+      FROM calendar_events
+      WHERE workspace_id = ?
+        AND date >= ?
+      ORDER BY date ASC, start_time ASC
+      LIMIT ?
+    `
+    )
+    .all(String(workspaceId || "").trim(), new Date().toISOString().slice(0, 10), Math.max(1, Math.min(Number(limit) || 6, 12)));
+}
+
+function getAdminOperationalSummary(workspaceId, user = null) {
+  const summary = getWorkspaceSummary(workspaceId, user);
+  if (!summary) return null;
+  const analytics = getAnalyticsSnapshot(workspaceId, user);
+  const payment = getPaymentSummary(workspaceId);
+  const registrations = getOpenExamRegistrations(workspaceId);
+  const classRows = getWorkspaceClassGroups(workspaceId);
+  const tools = getSchoolTools(workspaceId, user || {}, "admin");
+  const teacherlessClasses = getTeacherlessClasses(workspaceId);
+  const lowEngagement = getLowEngagementClasses(workspaceId, user);
+  const upcomingEvents = getUpcomingWorkspaceEvents(workspaceId, 6);
+  return {
+    ...summary,
+    admins: getWorkspaceAdminCount(workspaceId),
+    classNames: classRows.slice(0, 12).map((row) => row.name || row.id),
+    toolNames: tools.slice(0, 8).map((row) => row.name || row.id),
+    teacherlessClasses: teacherlessClasses.map((row) => row.name || row.id),
+    lowEngagementClasses: lowEngagement.map((row) => row.name || row.id),
+    pendingRegistrations:
+      registrations?.status === "not_connected"
+        ? null
+        : Array.isArray(registrations?.items)
+        ? registrations.items.length
+        : null,
+    payment,
+    analytics: analytics
+      ? {
+          inactiveStudents: Number(analytics.inactiveStudents || 0),
+          mostUsedTool: analytics.mostUsedTool || "",
+          homeworkCreated: Number(analytics.homeworkCreated || 0)
+        }
+      : null,
+    upcomingEvents
+  };
+}
+
+function getWorkspaceStudentList(workspaceId, user, roleBucket) {
+  if (roleBucket === "student") {
+    const me = getWorkspaceScopedUser(workspaceId, user.id);
+    return me ? [{ id: me.id, name: me.name || me.username || me.email || "Student" }] : [];
+  }
+  if (roleBucket === "teacher") {
+    return getAssignedStudentRowsForTeacher(workspaceId, user.id).map((row) => ({
+      id: row.id,
+      name: row.name || row.username || row.email || row.id
+    }));
+  }
+  return db
+    .prepare(
+      `
+      SELECT id, name, username, email
+      FROM users
+      WHERE workspace_id = ?
+        AND lower(COALESCE(role, '')) = 'student'
+      ORDER BY lower(COALESCE(name, username, email, id))
+      LIMIT 120
+    `
+    )
+    .all(String(workspaceId || "").trim())
+    .map((row) => ({ id: row.id, name: row.name || row.username || row.email || row.id }));
+}
+
+function getClassTeacher(workspaceId, user, roleBucket, classIdOrName) {
+  const candidates = getChannelByName(workspaceId, user, roleBucket, classIdOrName).filter((row) =>
+    ["class", "classes"].includes(String(row.category || "").toLowerCase())
+  );
+  if (!candidates.length) {
+    return { status: "no_match", matches: [] };
+  }
+  if (candidates.length > 1) {
+    return { status: "ambiguous", matches: candidates };
+  }
+  const classRow = candidates[0];
+  const teachers = db
+    .prepare(
+      `
+      SELECT u.id, u.name, u.email
+      FROM channel_members cm
+      JOIN users u ON u.id = cm.user_id
+      WHERE cm.channel_id = ?
+        AND u.workspace_id = ?
+        AND lower(COALESCE(u.role, '')) = 'teacher'
+      ORDER BY lower(COALESCE(u.name, u.email, u.id))
+      LIMIT 6
+    `
+    )
+    .all(classRow.id, String(workspaceId || "").trim());
+  if (!teachers.length) {
+    return { status: "no_data", classRow, teachers: [] };
+  }
+  return { status: "found", classRow, teachers };
+}
+
+function getCalendarUpcoming(workspaceId, user, roleBucket, date = null) {
+  const baseDate = String(date || new Date().toISOString().slice(0, 10)).trim();
+  const filters = ["workspace_id = ?", "date >= ?"];
+  const params = [String(workspaceId || "").trim(), baseDate];
+  if (roleBucket === "student") {
+    filters.push("(assignee_id = ? OR assignee_id IS NULL OR assignee_id = '')");
+    params.push(String(user?.id || "").trim());
+  }
+  const rows = db
+    .prepare(
+      `
+      SELECT id, title, date, start_time AS startTime, end_time AS endTime, location, notes, type, category
+      FROM calendar_events
+      WHERE ${filters.join(" AND ")}
+      ORDER BY date ASC, start_time ASC
+      LIMIT 12
+    `
+    )
+    .all(...params);
+  return rows;
+}
+
+function getCalendarPast(workspaceId, user, roleBucket, date = null) {
+  const baseDate = String(date || new Date().toISOString().slice(0, 10)).trim();
+  const filters = ["workspace_id = ?", "date < ?"];
+  const params = [String(workspaceId || "").trim(), baseDate];
+  if (roleBucket === "student") {
+    filters.push("(assignee_id = ? OR assignee_id IS NULL OR assignee_id = '')");
+    params.push(String(user?.id || "").trim());
+  }
+  return db
+    .prepare(
+      `
+      SELECT id, title, date, start_time AS startTime, end_time AS endTime, location, notes, type, category
+      FROM calendar_events
+      WHERE ${filters.join(" AND ")}
+      ORDER BY date DESC, start_time DESC
+      LIMIT 12
+    `
+    )
+    .all(...params);
+}
+
+function getCalendarEventByTitle(workspaceId, user, roleBucket, title) {
+  const query = normalizeEntityText(title);
+  if (!query) return [];
+  const all = [...getCalendarUpcoming(workspaceId, user, roleBucket), ...getCalendarPast(workspaceId, user, roleBucket)];
+  return all
+    .map((row) => {
+      const hay = normalizeEntityText(`${row.title || ""} ${row.category || ""} ${row.location || ""}`);
+      let score = 0;
+      if (hay === query) score += 100;
+      if (hay.includes(query)) score += 50;
+      return { row, score };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5)
+    .map((entry) => entry.row);
+}
+
+function getGrammarToolOrChannel(workspaceId, user, roleBucket) {
+  const rows = getAiVisibleCourses(workspaceId, user, roleBucket).filter((row) => {
+    const hay = normalizeEntityText(`${row.name || ""} ${row.topic || ""} ${row.category || ""}`);
+    return hay.includes("grammar");
+  });
+  return rows.slice(0, 6);
+}
+
+function getSchoolTools(workspaceId, user, roleBucket) {
+  return getAiVisibleCourses(workspaceId, user, roleBucket)
+    .filter((row) => normalizeEntityText(row.category || "") === "tools")
+    .slice(0, 20);
+}
+
+function getHomeworkSummary(workspaceId, roleBucket, userId) {
+  const normalizedWorkspaceId = String(workspaceId || "").trim();
+  const normalizedUserId = String(userId || "").trim();
+  if (!normalizedWorkspaceId || !normalizedUserId) return { totalItems: 0, completedItems: 0, pendingItems: 0, items: [] };
+  if (roleBucket === "student") {
+    const perf = buildStudentPerformanceSummary(normalizedWorkspaceId, normalizedUserId);
+    return {
+      totalItems: Number(perf?.homework?.totalItems || 0),
+      completedItems: Number(perf?.homework?.completedItems || 0),
+      pendingItems: Number(perf?.homework?.pendingItems || 0),
+      items: Array.isArray(perf?.homework?.items) ? perf.homework.items.slice(0, 8) : []
+    };
+  }
+  if (roleBucket === "teacher") {
+    const teacher = buildTeacherAnalyticsOverview(normalizedWorkspaceId, normalizedUserId);
+    return {
+      totalItems: Number(teacher?.homeworkCreated || 0),
+      completedItems: Number(teacher?.avgSubmissions || 0),
+      pendingItems: 0,
+      items: Array.isArray(teacher?.classRowsSorted) ? teacher.classRowsSorted.slice(0, 6) : []
+    };
+  }
+  const rows = db
+    .prepare(
+      `
+      SELECT hi.title, hi.due_date AS dueDate, c.name AS className
+      FROM homework_items hi
+      LEFT JOIN channels c ON c.id = hi.class_channel_id
+      WHERE hi.workspace_id = ?
+        AND coalesce(hi.is_archived, 0) = 0
+      ORDER BY datetime(COALESCE(hi.due_date, hi.created_at)) ASC
+      LIMIT 20
+    `
+    )
+    .all(normalizedWorkspaceId);
+  return {
+    totalItems: rows.length,
+    completedItems: 0,
+    pendingItems: rows.length,
+    items: rows.slice(0, 8)
+  };
+}
+
+function getLearningMaterialsSummary(workspaceId, roleBucket, userId) {
+  const normalizedWorkspaceId = String(workspaceId || "").trim();
+  const normalizedUserId = String(userId || "").trim();
+  const visibilityClauses = ["workspace_id = ?"];
+  const params = [normalizedWorkspaceId];
+  if (roleBucket !== "admin") {
+    visibilityClauses.push("(lower(COALESCE(visibility, 'public')) IN ('public', 'school', 'teacher', 'student'))");
+  }
+  const knowledgeRows = db
+    .prepare(
+      `
+      SELECT id, title, visibility, tags
+      FROM knowledge_items
+      WHERE ${visibilityClauses.join(" AND ")}
+      ORDER BY datetime(updated_at) DESC, rowid DESC
+      LIMIT 20
+    `
+    )
+    .all(...params);
+  const channelRows = getAiVisibleCourses(normalizedWorkspaceId, { id: normalizedUserId }, roleBucket).filter((row) => {
+    const hay = normalizeEntityText(`${row.name || ""} ${row.topic || ""} ${row.category || ""}`);
+    return hay.includes("material") || hay.includes("lesson") || hay.includes("resource") || hay.includes("grammar");
+  });
+  return {
+    totalItems: knowledgeRows.length + channelRows.length,
+    knowledgeItems: knowledgeRows.slice(0, 8),
+    channels: channelRows.slice(0, 8)
+  };
+}
+
+function getOpenExamRegistrations(workspaceId) {
+  return {
+    status: "not_connected",
+    workspaceId: String(workspaceId || "").trim(),
+    items: []
+  };
+}
+
+function inferAiStateFromHistory(workspaceId, userId) {
+  const messages = getLatestAiConversationMessagesForUser(workspaceId, userId, 6);
+  const latestUser = messages.find((row) => String(row.role || "").toLowerCase() === "user");
+  if (!latestUser?.content) return null;
+  const lastText = String(latestUser.content || "").trim();
+  return {
+    lastUserText: lastText,
+    lastIntent: detectSchoolIntent(lastText),
+    lastIntentLabel: String(detectSchoolIntent(lastText) || "").replace(/_/g, " ")
+  };
+}
+
+function resolveAiFollowUpState({ workspaceId, userId, rawText, mode, priorState }) {
+  const trimmedText = String(rawText || "").trim();
+  const cachedState = priorState || readAiRequestState(workspaceId, userId) || inferAiStateFromHistory(workspaceId, userId);
+  const shortFollowUp = isAiShortFollowUp(trimmedText);
+  const refreshRequested = isAiRefreshRequest(trimmedText);
+  if (refreshRequested) {
+    clearAiContextCacheForWorkspace(workspaceId);
+  }
+  const clarificationCandidates = Array.isArray(cachedState?.clarificationCandidates)
+    ? cachedState.clarificationCandidates
+    : [];
+  let selectedClarification = null;
+  if (clarificationCandidates.length) {
+    if (isAiAffirmative(trimmedText)) {
+      selectedClarification = clarificationCandidates[0];
+    } else {
+      const normalizedText = normalizeEntityText(trimmedText);
+      selectedClarification =
+        clarificationCandidates.find((candidate) => normalizeEntityText(candidate.label) === normalizedText) ||
+        clarificationCandidates.find((candidate) => normalizeEntityText(candidate.label).includes(normalizedText)) ||
+        null;
+    }
+  }
+  return {
+    cachedState,
+    shortFollowUp,
+    refreshRequested,
+    selectedClarification,
+    effectiveText:
+      selectedClarification && cachedState?.lastIntent
+        ? `${cachedState.lastIntentLabel || cachedState.lastIntent} ${selectedClarification.label}`
+        : shortFollowUp && cachedState?.lastIntent && cachedState?.lastEntityLabel
+        ? `${cachedState.lastIntentLabel || cachedState.lastIntent} ${cachedState.lastEntityLabel}. Follow-up: ${trimmedText}`
+        : trimmedText,
+    carryIntent: shortFollowUp && !!cachedState?.lastIntent,
+    carryEntity: shortFollowUp && !!cachedState?.lastEntityLabel,
+    mode
+  };
+}
+
+function detectSchoolIntent(text = "", mode = "assistant", previousState = null) {
+  const t = normalizeText(text);
+  if (/(my role|what is my role|which role am i|am i admin|am i teacher|am i student)/.test(t)) return "get_role_info";
+  if (/(who am i|my user info|my profile|my account info|my info)/.test(t)) return "get_user_info";
+  if (/\b(who|teacher).*(class teacher|teacher).*?\b/.test(t) || /\bclass teacher\b/.test(t)) return "get_class_teacher";
+  if (/(whole classes list|which classes|what classes|class list|classes are there|all classes)/.test(t)) return "get_class_list";
+  if (/(class channels|class channel|channel under classes|under classes.*channel)/.test(t)) return "get_class_channels";
+  if (/(groups breakdown|group list|all groups|which groups)/.test(t)) return "get_group_list";
+  if (/(student count|how many students|number of students)/.test(t)) return "get_student_count";
+  if (/(teacher count|how many teachers|number of teachers)/.test(t)) return "get_teacher_count";
+  if (/(student list|list students|which students)/.test(t)) return "get_student_list";
+  if (/(teacher list|list teachers|which teachers)/.test(t)) return "get_teacher_list";
+  if (/(workspace|school).*(name|identity|inside the school|current school)/.test(t)) return "get_workspace_identity";
+  if (/(school summary|workspace summary|school overview|admin summary)/.test(t)) return "get_school_summary";
+  if (/(calendar|upcoming events|next events|today'?s events|tomorrow|upcoming)/.test(t)) return "get_calendar_upcoming";
+  if (/(past events|previous events|last events)/.test(t)) return "get_calendar_past";
+  if (/(event details|details for event|calendar event)/.test(t)) return "get_calendar_event_details";
+  if (/(create calendar event|add calendar event|new event)/.test(t)) return "create_calendar_event";
+  if (/(exam registration|open exam|exam status)/.test(t)) return "get_exam_registration_status";
+  if (/(channel exists|is there any channel|do we have a channel)/.test(t)) return "get_channel_exists";
+  if (/(material exists|learning material|materials available)/.test(t)) return "get_material_exists";
+  if (/(grammar channel|grammar tool|grammar area|grammar)/.test(t)) return "get_grammar_channel_or_tool";
+  if (/(admin report|operational summary|analytics summary)/.test(t)) return "generate_admin_report";
+  if (/(teacher summary|class progress summary)/.test(t)) return "generate_teacher_summary";
+  if (/(student summary|my summary|my progress summary)/.test(t)) return "generate_student_summary";
+  if (/(exam plan|study plan for exam|prepare for exam|exam preparation plan|generate exam plan)/.test(t)) return "generate_exam_plan";
+  if (/(draft school email|write email|registration reply|school email)/.test(t)) return "draft_school_email";
+  if (/(explain homework|help with homework)/.test(t)) return "explain_homework";
+  if (/(analytics|engagement|counts breakdown)/.test(t)) return "summarize_analytics";
+  if (previousState?.lastIntent && isAiShortFollowUp(text)) return previousState.lastIntent;
+  return detectIntent(text, mode);
+}
+
+function resolveAiEntityCandidates({ workspaceId, user, roleBucket, text, previousState }) {
+  const normalized = normalizeEntityText(text);
+  const level = normalizeLevelToken(text);
+  const candidates = [];
+  const addCandidate = (type, row, score, label = null) => {
+    if (!row) return;
+    candidates.push({
+      type,
+      row,
+      label: label || row.name || row.title || row.id || "",
+      score: Number(score || 0)
+    });
+  };
+
+  getAiVisibleCourses(workspaceId, user, roleBucket).forEach((row) => {
+    const hay = normalizeEntityText(`${row.name || ""} ${row.topic || ""} ${row.category || ""}`);
+    let score = 0;
+    if (normalized && hay === normalized) score += 100;
+    if (normalized && hay.includes(normalized)) score += 60;
+    if (level && hay.includes(level.toLowerCase())) score += 25;
+    if (score > 0) addCandidate("channel", row, score);
+  });
+
+  getCalendarEventByTitle(workspaceId, user, roleBucket, text).forEach((row, index) => {
+    addCandidate("calendar_event", row, 90 - index * 5, row.title || row.id);
+  });
+
+  if (previousState?.clarificationCandidates?.length) {
+    previousState.clarificationCandidates.forEach((candidate, index) => {
+      const label = String(candidate?.label || "").trim();
+      const normalizedLabel = normalizeEntityText(label);
+      if (!label) return;
+      let score = 0;
+      if (normalized && normalizedLabel === normalized) score += 110;
+      if (normalized && normalizedLabel.includes(normalized)) score += 80;
+      if (!normalized && isAiAffirmative(text) && index === 0) score += 75;
+      if (score > 0) addCandidate(candidate.type || "channel", candidate.row || null, score, label);
+    });
+  }
+
+  if (previousState?.lastEntity && isAiShortFollowUp(text)) {
+    addCandidate(previousState.lastEntity.type, previousState.lastEntity.row, 70, previousState.lastEntity.label);
+  }
+
+  return candidates.sort((a, b) => b.score - a.score).slice(0, 5);
+}
+
+function aiDirectResponse(status, lines = [], extra = {}) {
+  return { status, lines: (Array.isArray(lines) ? lines : []).filter(Boolean), ...extra };
+}
+
+function formatAiDirectResponse(result) {
+  if (!result || !Array.isArray(result.lines) || !result.lines.length) return null;
+  return result.lines
+    .map((line, index, arr) => {
+      const current = String(line || "").trim();
+      if (!current) return "";
+      const prev = index > 0 ? String(arr[index - 1] || "").trim() : "";
+      const needsSpacer =
+        index > 0 &&
+        prev &&
+        !prev.endsWith(":") &&
+        (current.endsWith(":") || /^(Students|Teachers|Admins|Classes|Clubs|Exams|Total groups|Upcoming events|Recent past events|Teachers:|Students:|Class groups:|The class groups|The visible class channels are:|I found)/.test(current));
+      return needsSpacer ? `\n${current}` : current;
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function handleAiDirectIntent({ intent, workspaceId, workspaceName, user, roleBucket, rawText, clientContext, entityCandidates }) {
+  const preferredEntityLabel =
+    Array.isArray(entityCandidates) && entityCandidates.length ? String(entityCandidates[0].label || "").trim() : "";
+  const preferredLookupText =
+    (!rawText || isAiShortFollowUp(rawText)) && preferredEntityLabel ? preferredEntityLabel : rawText;
+  switch (intent) {
+    case "get_role_info":
+      return aiDirectResponse("found", [
+        `Role: ${String(user?.role || user?.userRole || "unknown")}`,
+        `Access scope: ${
+          roleBucket === "admin"
+            ? "workspace-wide admin scope"
+            : roleBucket === "teacher"
+            ? "teacher-visible class scope"
+            : "student-visible personal scope"
+        }`
+      ]);
+    case "get_user_info":
+      return aiDirectResponse("found", [
+        `Name: ${user?.name || user?.username || user?.email || "User"}`,
+        user?.email ? `Email: ${user.email}` : "",
+        `Role: ${String(user?.role || user?.userRole || "unknown")}`,
+        `Workspace: ${workspaceName || workspaceId}`
+      ]);
+    case "get_workspace_identity": {
+      const identity = getWorkspaceIdentity(workspaceId);
+      return aiDirectResponse("found", [
+        `Workspace: ${identity.workspaceName || workspaceName}`,
+        `Workspace ID: ${identity.workspaceId || workspaceId}`
+      ]);
+    }
+    case "get_school_summary":
+    case "summarize_analytics":
+    case "generate_admin_report": {
+      if (roleBucket !== "admin") {
+        return aiDirectResponse("permission_denied", ["I cannot show workspace-wide school summaries for this role."]);
+      }
+      const summary = getAdminOperationalSummary(workspaceId, user);
+      if (!summary) return aiDirectResponse("no_data", ["I could not load a school summary for this workspace."]);
+      const lines = [
+        `Students: ${Number(summary.students || 0)}`,
+        `Teachers: ${Number(summary.teachers || 0)}`,
+        `Admins: ${Number(summary.admins || 0)}`,
+        `Classes: ${Number(summary.classes || 0)}`,
+        `Clubs: ${Number(summary.clubs || 0)}`,
+        `Exams: ${Number(summary.exams || 0)}`,
+        `Total groups: ${Number(summary.totalGroups || 0)}`
+      ];
+      if (summary.classNames?.length) {
+        lines.push("Class groups:");
+        lines.push(...summary.classNames);
+      }
+      if (summary.teacherlessClasses?.length) {
+        lines.push(`Teacher-less classes: ${summary.teacherlessClasses.join(", ")}`);
+      } else {
+        lines.push("Teacher-less classes: none found in current data");
+      }
+      if (summary.lowEngagementClasses?.length) {
+        lines.push(`Low-engagement classes: ${summary.lowEngagementClasses.join(", ")}`);
+      }
+      if (summary.pendingRegistrations != null) {
+        lines.push(`Pending registrations: ${Number(summary.pendingRegistrations || 0)}`);
+      } else {
+        lines.push("Pending registrations: not connected in the current AI retrieval layer");
+      }
+      lines.push(`Open invoices: ${Number(summary.payment?.openInvoices || 0)}`);
+      lines.push(`Outstanding amount: ${Math.round(Number(summary.payment?.outstandingCents || 0) / 100)} EUR`);
+      if (summary.upcomingEvents?.length) {
+        lines.push(`Upcoming events: ${summary.upcomingEvents.map((row) => `${row.title || "Event"}${row.date ? ` (${row.date})` : ""}`).join(", ")}`);
+      }
+      if (summary.toolNames?.length) {
+        lines.push(`School tools: ${summary.toolNames.join(", ")}`);
+      } else if (summary.analytics?.mostUsedTool) {
+        lines.push(`Most used tool: ${summary.analytics.mostUsedTool}`);
+      } else {
+        lines.push("School tools: none found in current data");
+      }
+      if (summary.analytics?.inactiveStudents != null) {
+        lines.push(`Inactive students: ${Number(summary.analytics.inactiveStudents || 0)}`);
+      }
+      return aiDirectResponse("found", lines);
+    }
+    case "get_class_list": {
+      const rows = getWorkspaceClassGroups(workspaceId);
+      if (!rows.length) return aiDirectResponse("no_data", ["I checked this workspace and found no class groups."]);
+      return aiDirectResponse("found", [
+        "The class groups in this workspace are:",
+        ...rows.slice(0, 20).map((row) => row.name || row.id)
+      ]);
+    }
+    case "get_group_list": {
+      const classes = getWorkspaceClassGroups(workspaceId);
+      const clubs = getWorkspaceClubGroups(workspaceId);
+      const exams = getWorkspaceExamGroups(workspaceId);
+      return aiDirectResponse("found", [
+        `Classes: ${classes.length}`,
+        `Clubs: ${clubs.length}`,
+        `Exams: ${exams.length}`,
+        `Total groups: ${getWorkspaceGroups(workspaceId).length}`
+      ]);
+    }
+    case "get_class_channels": {
+      const rows = getClassChannels(workspaceId, user, roleBucket);
+      if (!rows.length) return aiDirectResponse("no_data", ["I could not find any class channels in your visible scope."]);
+      return aiDirectResponse("found", ["The visible class channels are:", ...rows.slice(0, 20).map((row) => `${row.name || row.id} (class channel)`)]);
+    }
+    case "get_student_count": {
+      if (roleBucket === "student") return aiDirectResponse("permission_denied", ["I cannot show a student count beyond your own student view."]);
+      const count = getStudentCount(workspaceId, user, roleBucket);
+      return aiDirectResponse("found", [`Students: ${count}`]);
+    }
+    case "get_teacher_count": {
+      if (roleBucket !== "admin") return aiDirectResponse("permission_denied", ["I cannot show the full teacher count for this role."]);
+      return aiDirectResponse("found", [`Teachers: ${getTeacherCount(workspaceId)}`]);
+    }
+    case "get_student_list": {
+      const rows = getWorkspaceStudentList(workspaceId, user, roleBucket);
+      if (!rows.length) return aiDirectResponse("no_data", ["I could not find any students in your visible scope."]);
+      return aiDirectResponse("found", ["Students:", ...rows.slice(0, 20).map((row) => row.name)]);
+    }
+    case "get_teacher_list": {
+      if (roleBucket !== "admin") return aiDirectResponse("permission_denied", ["I cannot list all teachers for this role."]);
+      const rows = getWorkspaceTeacherList(workspaceId, true);
+      if (!rows.length) return aiDirectResponse("no_data", ["I could not find any teachers in this workspace."]);
+      return aiDirectResponse("found", ["Teachers:", ...rows.slice(0, 20).map((row) => row.name)]);
+    }
+    case "get_class_teacher": {
+      const query = preferredLookupText || "";
+      const result = getClassTeacher(workspaceId, user, roleBucket, query);
+      if (result.status === "ambiguous") {
+        return aiDirectResponse("ambiguous", [
+          `I found multiple class matches for "${query}":`,
+          ...result.matches.map((row) => row.name || row.id),
+          "Which one do you want?"
+        ], {
+          unresolved: true,
+          clarificationCandidates: result.matches.map((row) => normalizeAiCandidate("channel", row))
+        });
+      }
+      if (result.status === "no_match") {
+        return aiDirectResponse("no_match", [`I could not find any class group matching "${query}".`]);
+      }
+      if (result.status === "no_data") {
+        return aiDirectResponse("no_data", [`I checked ${result.classRow?.name || "that class"} and could not find a teacher assigned to it.`]);
+      }
+      return aiDirectResponse("found", [
+        `Class: ${result.classRow?.name || query}`,
+        `Teacher: ${result.teachers.map((row) => row.name || row.email || row.id).join(", ")}`
+      ], {
+        resolvedEntity: { type: "channel", row: result.classRow, label: result.classRow?.name || query }
+      });
+    }
+    case "get_calendar_upcoming": {
+      const rows = getCalendarUpcoming(workspaceId, user, roleBucket, clientContext?.selectedDate || null);
+      if (!rows.length) {
+        return aiDirectResponse("no_data", [`No upcoming events were found after ${clientContext?.selectedDate || new Date().toISOString().slice(0, 10)}.`]);
+      }
+      return aiDirectResponse("found", ["Upcoming events:", ...rows.slice(0, 8).map((row) => `${row.title || "Event"} | ${row.date}${row.startTime ? ` | ${row.startTime}` : ""}`)]);
+    }
+    case "get_calendar_past": {
+      const rows = getCalendarPast(workspaceId, user, roleBucket, clientContext?.selectedDate || null);
+      if (!rows.length) return aiDirectResponse("no_data", ["I could not find past events in your visible calendar scope."]);
+      return aiDirectResponse("found", ["Recent past events:", ...rows.slice(0, 8).map((row) => `${row.title || "Event"} | ${row.date}`)]);
+    }
+    case "get_calendar_event_details": {
+      const query = preferredLookupText || rawText;
+      const rows = getCalendarEventByTitle(workspaceId, user, roleBucket, query);
+      if (!rows.length) return aiDirectResponse("no_match", [`I could not find a calendar event matching "${query}".`]);
+      if (rows.length > 1) {
+        return aiDirectResponse("ambiguous", ["I found multiple calendar events:", ...rows.map((row) => row.title || row.id), "Which one do you want?"], {
+          unresolved: true,
+          clarificationCandidates: rows.map((row) => normalizeAiCandidate("calendar_event", row, row.title || row.id))
+        });
+      }
+      const row = rows[0];
+      return aiDirectResponse("found", [
+        `Event: ${row.title || row.id}`,
+        `Date: ${row.date || "Not set"}`,
+        `Time: ${row.startTime || "Not set"}${row.endTime ? `-${row.endTime}` : ""}`,
+        `Location: ${row.location || "Not set"}`
+      ], {
+        resolvedEntity: { type: "calendar_event", row, label: row.title || row.id }
+      });
+    }
+    case "create_calendar_event":
+      return aiDirectResponse("unsupported", [
+        "Calendar event creation is not supported from AI right now.",
+        "Create event from AI: No",
+        "Prefill event details: Yes",
+        "Open the calendar page: No",
+        "Guide you manually: Yes",
+        "I can help draft the title, date, time, and description, but I cannot create the event or open the calendar automatically."
+      ]);
+    case "get_channel_exists": {
+      const rows = getChannelByName(workspaceId, user, roleBucket, preferredLookupText || rawText);
+      if (!rows.length) return aiDirectResponse("no_match", [`I could not find a visible channel matching "${preferredLookupText || rawText}".`]);
+      if (rows.length > 1) return aiDirectResponse("ambiguous", ["I found multiple matching channels:", ...rows.map((row) => row.name || row.id), "Which one do you mean?"], {
+        unresolved: true,
+        clarificationCandidates: rows.map((row) => normalizeAiCandidate("channel", row))
+      });
+      return aiDirectResponse("found", [`Yes. I found the channel "${rows[0].name || rows[0].id}".`], {
+        resolvedEntity: { type: "channel", row: rows[0], label: rows[0].name || rows[0].id }
+      });
+    }
+    case "get_grammar_channel_or_tool": {
+      const rows = getGrammarToolOrChannel(workspaceId, user, roleBucket);
+      if (!rows.length) return aiDirectResponse("no_data", ["I could not find a visible grammar channel or grammar tool in this workspace."]);
+      return aiDirectResponse("found", ["I found these grammar-related items:", ...rows.map((row) => `${row.name || row.id}${row.category ? ` (${row.category === "tools" ? "school tool" : row.category})` : ""}`)]);
+    }
+    case "generate_teacher_summary": {
+      if (roleBucket === "student") {
+        return aiDirectResponse("permission_denied", ["I cannot generate a teacher summary for a student role."]);
+      }
+      const summary = buildTeacherAnalyticsOverview(workspaceId, roleBucket === "teacher" ? user.id : user.id);
+      if (!summary && roleBucket === "teacher") {
+        return aiDirectResponse("no_data", ["I could not load your teacher summary from the current workspace."]);
+      }
+      if (roleBucket === "teacher" && summary) {
+        return aiDirectResponse("found", [
+          `Assigned classes: ${Number(summary.totalGroups || 0)}`,
+          `Students: ${Number(summary.students || 0)}`,
+          `Average attendance: ${Number(summary.attendanceRate || 0)}%`,
+          `Homework completion: ${Number(summary.completionRate || 0)}%`
+        ]);
+      }
+      return null;
+    }
+    case "generate_student_summary": {
+      const targetUserId = roleBucket === "student" ? user.id : user.id;
+      const summary = buildStudentAnalyticsOverview(workspaceId, targetUserId);
+      if (!summary) {
+        return aiDirectResponse("no_data", ["I could not load a student summary from the current scope."]);
+      }
+      return aiDirectResponse("found", [
+        `Attendance rate: ${Number(summary.attendanceRate || 0)}%`,
+        `Homework completion: ${Number(summary.completionRate || 0)}%`,
+        `Classes: ${Number(summary.totalGroups || 0)}`,
+        `Payment status: ${summary.payment?.status || "clear"}`
+      ]);
+    }
+    case "generate_exam_plan": {
+      const rows = getCalendarUpcoming(workspaceId, user, roleBucket, clientContext?.selectedDate || null)
+        .filter((row) => /exam|test|prüfung/i.test(`${row.title || ""} ${row.category || ""}`))
+        .slice(0, 4);
+      if (!rows.length) {
+        return aiDirectResponse("no_data", [
+          "I could not find upcoming exam items in your visible scope.",
+          "I can still create a general exam study plan if you tell me the subject or exam name."
+        ]);
+      }
+      return aiDirectResponse("found", [
+        `Next exam item: ${rows[0].title || "Exam"}${rows[0].date ? ` on ${rows[0].date}` : ""}`,
+        "I can generate a focused exam plan from this context.",
+        ...rows.slice(1).map((row) => `${row.title || "Exam"}${row.date ? ` | ${row.date}` : ""}`)
+      ]);
+    }
+    case "get_exam_registration_status":
+      return (() => {
+        const result = getOpenExamRegistrations(workspaceId);
+        if (result.status === "not_connected") {
+          return aiDirectResponse("not_connected", [
+            "Exam registration status is not connected to a dedicated AI retrieval query yet.",
+            "I can check visible exam channels and calendar items, but I cannot confirm registration status directly from the current tool layer."
+          ]);
+        }
+        if (!Array.isArray(result.items) || !result.items.length) {
+          return aiDirectResponse("no_data", ["I checked the current workspace and found no open exam registrations."]);
+        }
+        return aiDirectResponse("found", ["Open exam registrations:", ...result.items.slice(0, 10).map((item) => String(item.label || item.name || item.id || "Registration"))]);
+      })();
+    case "get_material_exists":
+      return (() => {
+        const materials = getLearningMaterialsSummary(workspaceId, roleBucket, user.id);
+        if (!materials.totalItems) {
+          return aiDirectResponse("no_data", ["I checked your visible scope and could not find learning materials that match this request."]);
+        }
+        return aiDirectResponse("found", [
+          `Visible learning materials: ${Number(materials.totalItems || 0)}`,
+          ...materials.knowledgeItems.slice(0, 4).map((item) => `${item.title || item.id} (${item.visibility || "public"})`),
+          ...materials.channels.slice(0, 4).map((item) => `${item.name || item.id}${item.category ? ` (${item.category})` : ""}`)
+        ]);
+      })();
+    default:
+      return null;
+  }
+}
+
+function buildAiRequestPlan({ user, userText, mode = "assistant", clientContext = null }) {
+  const role = String(user?.role || user?.userRole || "").toLowerCase() || "student";
+  const roleBucket = getAiRoleBucket(role);
+  const workspaceId = String(user?.workspaceId || user?.workspace_id || "default").trim() || "default";
+  const userId = String(user?.id || user?.sub || "").trim();
+  const workspaceName = getWorkspaceName(workspaceId) || workspaceId;
+  const followUp = resolveAiFollowUpState({
+    workspaceId,
+    userId,
+    rawText: userText || "",
+    mode,
+    priorState: readAiRequestState(workspaceId, userId)
+  });
+  const intent = detectSchoolIntent(userText || "", mode, followUp.cachedState);
+  const summaryBlocks = [];
+  const addBlock = (block) => {
+    if (block && !summaryBlocks.some((entry) => entry.title === block.title)) {
+      summaryBlocks.push(block);
+    }
+  };
+
+  const visibleCourses = getAiVisibleCourses(workspaceId, user, roleBucket);
+  const entityCandidates = resolveAiEntityCandidates({
+    workspaceId,
+    user,
+    roleBucket,
+    text: followUp.selectedClarification?.label || userText || "",
+    previousState: followUp.cachedState
+  });
+  const currentChannelBlock = buildAiChannelSummaryBlock(workspaceId, user, roleBucket, clientContext);
+  const calendarBlock = buildAiCalendarSummaryBlock(clientContext);
+
+  if (["calendar_summary", "planner_help", "exam_preparation", "generate_exam_plan", "get_calendar_upcoming", "get_calendar_past", "get_calendar_event_details"].includes(intent)) addBlock(calendarBlock);
+  if (["classroom_summary", "homework_help", "general_chat_help", "school_notice_draft", "draft_school_email", "explain_homework", "get_channel_exists", "get_material_exists", "get_grammar_channel_or_tool"].includes(intent)) addBlock(currentChannelBlock);
+
+  if (roleBucket === "student") {
+    if (["student_progress_question", "attendance_summary", "payment_summary", "general_chat_help", "get_user_info", "generate_student_summary"].includes(intent)) {
+      addBlock(buildAiStudentProgressBlock(workspaceId, user.id));
+    }
+    if (["homework_help", "exam_preparation", "general_chat_help", "explain_homework", "generate_exam_plan"].includes(intent)) {
+      addBlock(buildAiHomeworkBlock(workspaceId, user, roleBucket));
+      addBlock(buildAiExamBlock(workspaceId, user, roleBucket, clientContext));
+    }
+  } else if (roleBucket === "teacher") {
+    if (["attendance_summary", "student_progress_question", "classroom_summary", "general_chat_help", "generate_teacher_summary", "get_user_info"].includes(intent)) {
+      addBlock(buildAiTeacherClassBlock(workspaceId, user.id));
+    }
+    if (["homework_help", "lesson_plan", "exam_preparation", "classroom_summary", "explain_homework", "generate_exam_plan"].includes(intent)) {
+      addBlock(buildAiHomeworkBlock(workspaceId, user, roleBucket));
+      addBlock(buildAiExamBlock(workspaceId, user, roleBucket, clientContext));
+    }
+    if (intent === "payment_summary") {
+      addBlock(buildAiBlock("Access note", ["Payment summary is not available in teacher AI scope."]));
+    }
+  } else {
+    addBlock(buildAiWorkspaceOverviewBlock(workspaceId, user));
+    if (["attendance_summary", "general_chat_help", "classroom_summary"].includes(intent)) {
+      addBlock(buildAiWorkspaceAttendanceBlock(workspaceId));
+    }
+    if (["payment_summary", "general_chat_help", "registration_reply"].includes(intent)) {
+      addBlock(buildAiWorkspacePaymentBlock(workspaceId));
+    }
+    if (intent === "registration_reply") {
+      addBlock(buildAiWorkspaceRegistrationBlock(workspaceId));
+    }
+    if (["homework_help", "classroom_summary"].includes(intent)) {
+      addBlock(buildAiHomeworkBlock(workspaceId, user, roleBucket));
+    }
+    if (["exam_preparation", "calendar_summary", "generate_exam_plan", "get_calendar_upcoming", "get_calendar_past", "get_calendar_event_details"].includes(intent)) {
+      addBlock(buildAiExamBlock(workspaceId, user, roleBucket, clientContext));
+    }
+  }
+
+  if (["email_draft", "school_notice_draft", "grammar_explanation", "general_chat_help", "draft_school_email", "explain_homework"].includes(intent)) {
+    addBlock(buildAiKnowledgeBlock(workspaceId, role, userText));
+  }
+  if (!summaryBlocks.length) {
+    addBlock(calendarBlock);
+    addBlock(currentChannelBlock);
+    addBlock(
+      roleBucket === "student"
+        ? buildAiStudentProgressBlock(workspaceId, user.id)
+        : roleBucket === "teacher"
+        ? buildAiTeacherClassBlock(workspaceId, user.id)
+        : buildAiWorkspaceOverviewBlock(workspaceId, user)
+    );
+  }
+
+  const currentChannel = currentChannelBlock
+    ? {
+        id: String(clientContext?.channelId || "").trim(),
+        name: visibleCourses.find((row) => String(row.id || "") === String(clientContext?.channelId || "").trim())?.name || "",
+        category:
+          visibleCourses.find((row) => String(row.id || "") === String(clientContext?.channelId || "").trim())?.category || ""
+      }
+    : null;
+
+  const context = {
+    user: {
+      id: user.id,
+      displayName: user.name || user.username || user.email || "User",
+      email: user.email || "",
+      role,
+      workspaceId,
+      workspaceName
+    },
+    workspaceId,
+    workspaceName,
+    mode,
+    intent,
+    effectiveUserText: followUp.effectiveText,
+    scope: roleBucket,
+    accessPolicy:
+      roleBucket === "admin"
+        ? "workspace_admin_only"
+        : roleBucket === "teacher"
+        ? "teacher_visible_scope_only"
+        : "student_visible_scope_only",
+    selectedDate: clientContext?.selectedDate || null,
+    viewMode: clientContext?.viewMode || null,
+    currentChannel,
+    summaryBlocks,
+    entityCandidates: entityCandidates.slice(0, 3).map((entry) => ({
+      type: entry.type,
+      label: entry.label,
+      category: entry.row?.category || ""
+    }))
+  };
+
+  const directResponse = handleAiDirectIntent({
+    intent,
+    workspaceId,
+    workspaceName,
+    user,
+    roleBucket,
+    rawText: userText || "",
+    clientContext: clientContext || null,
+    entityCandidates
+  });
+
+  const resolvedEntity =
+    directResponse?.resolvedEntity ||
+    (entityCandidates[0]
+      ? {
+          type: entityCandidates[0].type,
+          row: entityCandidates[0].row,
+          label: entityCandidates[0].label
+        }
+      : followUp.cachedState?.lastEntity || null);
+
+  writeAiRequestState(workspaceId, userId, {
+    lastIntent: intent,
+    lastIntentLabel: String(intent || "").replace(/_/g, " "),
+    lastEntity: resolvedEntity,
+    lastEntityLabel: resolvedEntity?.label || followUp.cachedState?.lastEntityLabel || "",
+    lastQuestion: String(userText || "").trim(),
+    unresolvedClarification: !!directResponse?.unresolved,
+    clarificationCandidates: Array.isArray(directResponse?.clarificationCandidates)
+      ? directResponse.clarificationCandidates
+      : directResponse?.unresolved
+      ? followUp.cachedState?.clarificationCandidates || []
+      : [],
+    updatedAt: Date.now()
+  });
+
+  return {
+    intent,
+    roleBucket,
+    workspaceId,
+    model: chooseAiModel({ intent, roleBucket, mode }),
+    context,
+    directResponse
+  };
 }
 
 function formatToolResponse(toolName, payload) {
@@ -16832,7 +19034,10 @@ function invokeTool(user, message, clientContext) {
   const toolName = detectToolIntent(message);
   if (!toolName) return null;
   const workspaceId = user.workspaceId || user.workspace_id || "default";
-  if (toolName === "get_school_stats" && !String(user.role || user.userRole || "").toLowerCase().includes("admin"))
+  const role = String(user.role || user.userRole || "").toLowerCase();
+  const roleBucket = getAiRoleBucket(role);
+  const isAdmin = roleBucket === "admin";
+  if (toolName === "get_school_stats" && !isAdmin)
     return null;
 
   let payload = [];
@@ -16841,10 +19046,11 @@ function invokeTool(user, message, clientContext) {
       payload = getSchoolStats(workspaceId);
       break;
     case "list_courses":
-      payload = listCourses(workspaceId);
+      payload = getAiVisibleCourses(workspaceId, user, roleBucket).slice(0, 20);
       break;
     case "list_teachers":
-      payload = listTeachers(workspaceId, String(user.role || user.userRole || "").toLowerCase().includes("admin"));
+      if (!isAdmin) return null;
+      payload = listTeachers(workspaceId, true);
       break;
     case "get_deadlines":
       payload = getDeadlines(user);
@@ -16861,30 +19067,55 @@ function invokeTool(user, message, clientContext) {
   return { tool: toolName, text, payload };
 }
 
-function buildOllamaPrompt({ userText, mode = "assistant", role = "student", context = null }) {
-  const intent = detectIntent(userText);
+function buildOllamaPrompt({ userText, mode = "assistant", role = "student", context = null, intent = null }) {
+  const resolvedIntent = intent || detectIntent(userText, mode);
   const events = extractUpcomingEvents(context);
   const relevant = pickRelevantEvents(userText, events, 10);
 
   const rolePolicy =
     role === "student"
-      ? "ROLE_POLICY: When USER_ROLE is student, only answer with schedule info, upcoming courses, deadlines, and group activity relevant to that student."
-      : "ROLE_POLICY: When USER_ROLE is admin/teacher, you may leverage enrollment counts, teachers, courses, and workspace stats present in the context.";
+      ? "ROLE_POLICY: When USER_ROLE is student, answer only from the student's own visible classes, homework, materials, progress, calendar, and current channel context present in CONTEXT."
+      : role === "teacher"
+      ? "ROLE_POLICY: When USER_ROLE is teacher, answer only from teacher-visible classes, assigned students, teacher-visible materials, homework, calendar, and current channel context present in CONTEXT. Do not answer with full schoolwide private data."
+      : "ROLE_POLICY: When USER_ROLE is school_admin/admin, you may use schoolwide data present in CONTEXT, but only for the current workspace.";
 
   const systemCommon = [
     "You are WorkNest AI for a school planner used by teachers and students.",
     "Be accurate and do NOT invent dates/times.",
     "Use provided context as the only source of truth for schedule facts.",
+    "Use only compact filtered context prepared by the backend. Do not assume hidden database access.",
+    "Answer from provided structured data only.",
+    "Never use or imply access to any other school or workspace.",
+    "Never reveal data beyond the current user's permission scope.",
+    "Terminology map: class = academic class group; class channel = communication space attached to a class; group = broader entity that can include class, club, or exam; club = club/practice group; exam = exam-related group; school tool = tool under school tools; channel = visible chat/content area.",
+    "Preserve the current user intent across short follow-up messages unless the user clearly changes topic.",
+    "If a follow-up names an entity such as A2 or A2-Evening, continue the previous task when possible.",
+    "Distinguish these states clearly: data found, no matching records, ambiguous entity, data source not connected, or permission denied.",
+    "Do not invent missing names, assignments, records, or backend capabilities.",
     "If you cannot find the answer in context, ask ONE short clarification question.",
-    "Keep the first line as a direct answer, then add brief bullet details.",
+    "If information is missing from context, say so clearly instead of inventing details.",
+    "Do not answer from the wrong domain. For example, a class-teacher question must not be answered with attendance data.",
+    "If the correct backend query result exists in context, use it clearly and directly.",
+    "If an action is unsupported, say so plainly.",
+    "Do not switch topic unless the user clearly changes topic.",
+    "Do not give generic UI guidance unless the backend context says the action is not supported.",
+    "Format every response for direct in-app chat display.",
+    "Respond in clean plain text only.",
+    "Do not use markdown symbols such as **, __, `, #, or ###.",
+    "Do not use tables, code blocks, or decorative formatting.",
+    "Keep the first line as a direct answer, then add short plain-text sections or brief bullet details only when helpful.",
+    "Prefer concise list-like answers for counts, class names, ambiguity choices, and missing-data notices.",
+    "Use short paragraphs and no more than 5 bullet points unless the user explicitly asks for more.",
+    "Default to concise answers unless the user asks for more detail.",
     `USER_ROLE: ${role}`,
     `MODE: ${mode}`,
-    `INTENT: ${intent}`,
+    `INTENT: ${resolvedIntent}`,
+    `CONTEXT_SCOPE: ${context?.scope || "unknown"}`,
     rolePolicy
   ].join("\n");
 
   const systemByIntent = (() => {
-    if (intent === "schedule_lookup") {
+    if (["calendar_summary", "get_calendar_upcoming", "get_calendar_past", "get_calendar_event_details"].includes(resolvedIntent)) {
       return [
         "TASK: Find the next relevant class/event in the calendar.",
         "RULES:",
@@ -16901,7 +19132,7 @@ function buildOllamaPrompt({ userText, mode = "assistant", role = "student", con
         "- Notes: <Short or 'None'>"
       ].join("\n");
     }
-    if (intent === "lesson_plan") {
+    if (resolvedIntent === "lesson_plan") {
       return [
         "TASK: Create a lesson plan.",
         "RULES:",
@@ -16920,7 +19151,7 @@ function buildOllamaPrompt({ userText, mode = "assistant", role = "student", con
         "9) Homework"
       ].join("\n");
     }
-    if (intent === "quiz") {
+    if (resolvedIntent === "exam_preparation" || resolvedIntent === "generate_exam_plan") {
       return [
         "TASK: Create a short quiz with answers.",
         "RULES:",
@@ -16932,8 +19163,27 @@ function buildOllamaPrompt({ userText, mode = "assistant", role = "student", con
         "Answer key"
       ].join("\n");
     }
+    if (["email_draft", "school_notice_draft", "registration_reply", "draft_school_email"].includes(resolvedIntent)) {
+      return [
+        "TASK: Draft a clear school-ready message.",
+        "RULES:",
+        "- Keep tone professional and direct.",
+        "- Use provided school data only when it exists in context.",
+        "- If key facts are missing, use neutral placeholders or ask one short follow-up question."
+      ].join("\n");
+    }
+    if (["get_class_teacher", "get_class_list", "get_group_list", "get_class_channels", "get_channel_exists", "get_grammar_channel_or_tool", "get_workspace_identity", "get_role_info", "get_user_info", "get_student_count", "get_teacher_count", "get_student_list", "get_teacher_list"].includes(resolvedIntent)) {
+      return [
+        "TASK: Answer a school data lookup question.",
+        "RULES:",
+        "- Use the retrieved entity and summary blocks directly.",
+        "- If multiple matches exist, ask which one the user wants.",
+        "- If no match exists, say that clearly.",
+        "- If the backend tool layer is not connected for that request, say so plainly."
+      ].join("\n");
+    }
     return [
-      "TASK: General help.",
+      "TASK: General help inside the school platform.",
       "RULES:",
       "- If user asks for a plan, provide steps.",
       "- If user asks a question, answer directly first.",
@@ -17001,8 +19251,9 @@ function buildOllamaPrompt({ userText, mode = "assistant", role = "student", con
   ].join("\n");
 }
 
-async function ollamaChat({ userText, mode = "assistant", role = "student", context = null }) {
-  const prompt = buildOllamaPrompt({ userText, mode, role, context });
+async function ollamaChat({ userText, mode = "assistant", role = "student", context = null, model = null }) {
+  const prompt = buildOllamaPrompt({ userText, mode, role, context, intent: context?.intent || null });
+  const selectedModel = model || OLLAMA_FAST_MODEL;
 
   const isWarm = globalThis.__OLLAMA_WARM === true;
   const timeoutMs = isWarm ? 30000 : 120000;
@@ -17015,7 +19266,7 @@ async function ollamaChat({ userText, mode = "assistant", role = "student", cont
       headers: { "Content-Type": "application/json" },
       signal: controller.signal,
       body: JSON.stringify({
-        model: OLLAMA_MODEL,
+        model: selectedModel,
         stream: false,
         prompt,
         options: {
@@ -17048,12 +19299,17 @@ app.post("/api/ai/chat", async (req, res) => {
   const authed = getAuthedUser(req);
   if (!authed) return res.status(401).json({ error: 'unauthorized' });
 
-  const safeContext = buildAiSchoolContext({
+  const aiPlan = buildAiRequestPlan({
     user: authed,
+    userText: text,
+    mode: mode || "assistant",
     clientContext: clientContext || null
   });
 
-  const toolResult = invokeTool(authed, userText, safeContext);
+  const toolResult = invokeTool(authed, text, aiPlan.context);
+  if (aiPlan.directResponse) {
+    return res.json({ reply: formatAiDirectResponse(aiPlan.directResponse) || "I could not complete that request." });
+  }
   if (toolResult) {
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.write(toolResult.text);
@@ -17062,10 +19318,11 @@ app.post("/api/ai/chat", async (req, res) => {
 
   try {
     const reply = await ollamaChat({
-      userText: text,
+      userText: aiPlan.context?.effectiveUserText || text,
       mode: mode || 'assistant',
       role: String(authed.role || authed.userRole || 'student').toLowerCase(),
-      context: safeContext
+      context: aiPlan.context,
+      model: aiPlan.model
     });
     res.json({ reply });
   } catch (err) {
@@ -17101,10 +19358,17 @@ app.post("/api/ai/chat_stream", async (req, res) => {
   const authed = getAuthedUser(req);
   if (!authed) return res.status(401).end("Unauthorized");
 
-  const safeContext = buildAiSchoolContext({
+  const aiPlan = buildAiRequestPlan({
     user: authed,
+    userText,
+    mode: mode || "assistant",
     clientContext: clientContext || null
   });
+
+  if (aiPlan.directResponse) {
+    res.write(formatAiDirectResponse(aiPlan.directResponse) || "I could not complete that request.");
+    return res.end();
+  }
 
   res.status(200);
   res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -17126,10 +19390,11 @@ app.post("/api/ai/chat_stream", async (req, res) => {
   });
 
   const prompt = buildOllamaPrompt({
-    userText,
+    userText: aiPlan.context?.effectiveUserText || userText,
     mode: mode || "assistant",
     role: String(authed.role || authed.userRole || "student").toLowerCase(),
-    context: safeContext
+    context: aiPlan.context,
+    intent: aiPlan.intent
   });
 
   try {
@@ -17140,7 +19405,7 @@ app.post("/api/ai/chat_stream", async (req, res) => {
       headers: { "Content-Type": "application/json" },
       signal: controller.signal,
       body: JSON.stringify({
-        model: OLLAMA_MODEL,
+        model: aiPlan.model,
         stream: false,
         prompt,
         options: { temperature: 0.2, top_p: 0.9, num_predict: 250 }
@@ -17242,6 +19507,66 @@ app.post("/api/ai/usage", authRequired, (req, res) => {
   }
 });
 
+const AI_SPEAKING_SCENARIO_ALIASES = aiSpeakingScenarioConfig.aliases || {};
+const AI_SPEAKING_SCENARIOS = Object.fromEntries(
+  (Array.isArray(aiSpeakingScenarioConfig.topics) ? aiSpeakingScenarioConfig.topics : []).map((scenario) => [scenario.id, scenario])
+);
+
+function normalizeAiSpeakingScenario(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "smalltalk";
+  const normalized = AI_SPEAKING_SCENARIO_ALIASES[raw] || raw;
+  return AI_SPEAKING_SCENARIOS[normalized] ? normalized : "smalltalk";
+}
+
+function buildAiSpeakingInstructions(scenarioId) {
+  const normalized = normalizeAiSpeakingScenario(scenarioId);
+  const config = AI_SPEAKING_SCENARIOS[normalized] || AI_SPEAKING_SCENARIOS.smalltalk;
+  const responsibilities = Array.isArray(config.aiResponsibilities)
+    ? config.aiResponsibilities.map((item) => `- ${item}`).join("\n")
+    : "- Keep the conversation moving naturally.";
+  const levels = Array.isArray(config.levels) ? config.levels.join(", ") : "A1-B2";
+  const skills = Array.isArray(config.skills) ? config.skills.join(", ") : "";
+  return [
+    `You are acting as: ${config.aiRole}.`,
+    `The learner is acting as: ${config.userRole}.`,
+    "",
+    `Scenario title: ${config.title}.`,
+    `Scene: ${config.scene}.`,
+    `Category: ${config.category}.`,
+    `Learner levels: ${levels}.`,
+    `Conversation objective: ${config.objective}.`,
+    `Conversation goal: ${config.conversationGoal}.`,
+    `Skills to practice: ${skills}.`,
+    "",
+    `Your persona: ${config.aiPersona}.`,
+    `Correction style: ${config.correctionStyle}.`,
+    "",
+    "Your responsibilities:",
+    responsibilities,
+    "",
+    "Rules:",
+    "- Stay in your assigned role at all times.",
+    "- Never swap roles with the learner.",
+    "- Speak only in German unless the learner explicitly asks for another language.",
+    "- Keep the language appropriate for the learner level.",
+    "- Ask natural follow-up questions that fit the scene.",
+    "- Use realistic constraints that belong to your role and situation.",
+    "- Ignore hesitation sounds, cough-like noises, and filler utterances unless they contain meaningful intent.",
+    "- Answer only when the learner expresses meaningful speech or a clear communicative intention.",
+    "- Give short, friendly corrections only when helpful and without breaking the flow.",
+    "- Keep replies concise enough for live speaking practice.",
+    "",
+    `Start the conversation like this: ${config.starter}`
+  ].join("\n");
+}
+
+function getAiSpeakingScenarioVoice(scenarioId) {
+  const normalized = normalizeAiSpeakingScenario(scenarioId);
+  const config = AI_SPEAKING_SCENARIOS[normalized] || AI_SPEAKING_SCENARIOS.smalltalk || {};
+  return String(config.voice || ENV.OPENAI_REALTIME_VOICE || 'alloy').trim() || 'alloy';
+}
+
 app.post(
   "/api/ai/realtime/session",
   authRequired,
@@ -17263,6 +19588,11 @@ app.post(
       if (!workspaceId) {
         return res.status(400).json({ error: "workspaceId required" });
       }
+      if (!ENV.OPENAI_API_KEY) {
+        return res.status(500).json({
+          error: "OPENAI_API_KEY is not configured on the server"
+        });
+      }
 
       const summary = getWorkspaceAiBudgetSummary(workspaceId);
       if (summary.blocked) {
@@ -17275,21 +19605,13 @@ app.post(
         });
       }
 
-      const scenario = String(req.body?.scenario || "free");
-      const instructions =
-        scenario === "restaurant"
-          ? "You are a friendly language tutor. Roleplay ordering at a restaurant. Ask one question at a time. Correct gently."
-          : "You are a friendly language tutor. Keep replies short. Ask one question at a time. Correct gently.";
+      const scenario = normalizeAiSpeakingScenario(req.body?.scenario || "smalltalk");
+      const instructions = buildAiSpeakingInstructions(scenario);
+      const voice = getAiSpeakingScenarioVoice(scenario);
 
       const session = await createOpenAIRealtimeSession({
         model: ENV.OPENAI_REALTIME_MODEL || "gpt-realtime-mini",
-        voice: ENV.OPENAI_REALTIME_VOICE || "alloy",
-        instructions,
-        metadata: {
-          workspace_id: workspaceId,
-          user_id: userId || "",
-          role: role || ""
-        }
+        instructions
       });
 
       return res.json({
@@ -17298,11 +19620,14 @@ app.post(
         userId,
         ...summary,
         client_secret: session.client_secret,
+        voice,
         expires_at: session.client_secret?.expires_at || session.expires_at || null,
       });
     } catch (err) {
       console.error("Failed to start AI session:", err);
-      return res.status(500).json({ error: "Failed to start AI session" });
+      return res.status(500).json({
+        error: err?.message || "Failed to start AI session"
+      });
     }
   }
 );
@@ -17366,7 +19691,7 @@ app.post("/api/ai/conversation/start", authRequired, express.json(), (req, res) 
   if (!workspaceId || !userId) {
     return res.status(400).json({ error: "Invalid auth context" });
   }
-  const scenario = String(req.body?.scenario || "free").trim();
+  const scenario = normalizeAiSpeakingScenario(req.body?.scenario || "smalltalk");
   const mode = String(req.body?.mode || "vad").trim();
   const now = Date.now();
   db.prepare(`
@@ -17416,6 +19741,49 @@ app.post("/api/ai/conversation/:id/messages", authRequired, express.json(), (req
   res.json({ ok: true });
 });
 
+app.get("/api/ai/conversation/latest", authRequired, (req, res) => {
+  const workspaceId = getAuthWorkspaceId(req);
+  const userId = getAuthUserId(req);
+  if (!workspaceId || !userId) {
+    return res.status(400).json({ error: "Invalid auth context" });
+  }
+  const conversation = db
+    .prepare(
+      `
+      SELECT c.id, c.workspace_id AS workspaceId, c.user_id AS userId, c.scenario, c.mode, c.started_at AS startedAt, c.ended_at AS endedAt
+      FROM ai_conversations c
+      WHERE c.workspace_id = ? AND c.user_id = ?
+      ORDER BY c.started_at DESC
+      LIMIT 1
+    `
+    )
+    .get(workspaceId, userId);
+  if (!conversation) {
+    return res.json({ conversation: null, messages: [] });
+  }
+  return res.json({
+    conversation,
+    messages: listAiConversationMessages(conversation.id)
+  });
+});
+
+app.get("/api/ai/conversation/:id", authRequired, (req, res) => {
+  const conversationId = String(req.params.id || "").trim();
+  const workspaceId = getAuthWorkspaceId(req);
+  const userId = getAuthUserId(req);
+  if (!conversationId || !workspaceId || !userId) {
+    return res.status(400).json({ error: "Invalid request" });
+  }
+  const conversation = getAiConversationForUser(workspaceId, userId, conversationId);
+  if (!conversation) {
+    return res.status(404).json({ error: "conversation not found" });
+  }
+  return res.json({
+    conversation,
+    messages: listAiConversationMessages(conversation.id)
+  });
+});
+
 app.post("/api/ai/conversation/:id/end", authRequired, express.json(), (req, res) => {
   const convId = String(req.params.id || "").trim();
   const workspaceId = getAuthWorkspaceId(req);
@@ -17433,7 +19801,7 @@ app.post("/api/ai/conversation/:id/end", authRequired, express.json(), (req, res
       `
     )
     .run(now, convId, workspaceId, userId);
-  markConversationEnded(convId);
+  markConversationEnded(convId, workspaceId, userId);
   res.json({ ok: true, updated: result.changes });
 });
 
@@ -18128,7 +20496,7 @@ app.put('/api/classes/:channelId/meta', express.json(), (req, res) => {
   res.json({ ok: true, status });
 });
 db.exec(`
-CREATE TABLE IF NOT EXISTS password_history (
+CREATE TABLE IF NOT EXISTS password_history(
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
   password_hash TEXT NOT NULL,
