@@ -5114,6 +5114,65 @@ CREATE TABLE IF NOT EXISTS announcements (
   CREATE INDEX IF NOT EXISTS idx_homework_completions_student
     ON homework_completions(student_id);
 
+  CREATE TABLE IF NOT EXISTS homework_item_files (
+    id           TEXT PRIMARY KEY,
+    item_id       TEXT NOT NULL,
+    workspace_id  TEXT NOT NULL,
+    channel_id    TEXT NOT NULL,
+    file_id       TEXT NOT NULL,
+    file_name     TEXT NOT NULL,
+    mime          TEXT DEFAULT 'application/octet-stream',
+    size_bytes    INTEGER DEFAULT 0,
+    url           TEXT NOT NULL,
+    created_by    TEXT,
+    created_at    TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_homework_item_files_item
+    ON homework_item_files(item_id, created_at);
+
+  CREATE TABLE IF NOT EXISTS homework_submissions (
+    id               TEXT PRIMARY KEY,
+    homework_item_id TEXT NOT NULL,
+    workspace_id     TEXT NOT NULL,
+    channel_id       TEXT NOT NULL,
+    student_id       TEXT NOT NULL,
+    status           TEXT NOT NULL DEFAULT 'draft',
+    submission_text  TEXT DEFAULT '',
+    is_late          INTEGER NOT NULL DEFAULT 0,
+    submitted_at     TEXT,
+    reviewed_at      TEXT,
+    reviewed_by      TEXT,
+    returned_at      TEXT,
+    feedback_text    TEXT DEFAULT '',
+    grade_value      TEXT DEFAULT '',
+    created_at       TEXT DEFAULT (datetime('now')),
+    updated_at       TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_homework_submissions_item_student
+    ON homework_submissions(homework_item_id, student_id);
+
+  CREATE INDEX IF NOT EXISTS idx_homework_submissions_student
+    ON homework_submissions(student_id, updated_at);
+
+  CREATE TABLE IF NOT EXISTS homework_submission_files (
+    id            TEXT PRIMARY KEY,
+    submission_id TEXT NOT NULL,
+    workspace_id  TEXT NOT NULL,
+    channel_id    TEXT NOT NULL,
+    file_id       TEXT NOT NULL,
+    file_name     TEXT NOT NULL,
+    mime          TEXT DEFAULT 'application/octet-stream',
+    size_bytes    INTEGER DEFAULT 0,
+    url           TEXT NOT NULL,
+    created_by    TEXT,
+    created_at    TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_homework_submission_files_submission
+    ON homework_submission_files(submission_id, created_at);
+
   CREATE TABLE IF NOT EXISTS certificates (
     id               TEXT PRIMARY KEY,
     workspace_id     TEXT NOT NULL,
@@ -7450,6 +7509,291 @@ function ensureHomeworkChannels(workspaceId = 'default') {
 }
 
 ensureHomeworkChannels('default');
+
+const HOMEWORK_SUBMISSION_ACTIVE_STATUSES = new Set(['submitted', 'late', 'reviewed']);
+const HOMEWORK_SUBMISSION_VISIBLE_TO_STUDENT = new Set(['draft', 'submitted', 'late', 'reviewed', 'returned']);
+const HOMEWORK_SUBMISSION_REVIEWABLE = new Set(['submitted', 'late', 'reviewed', 'returned']);
+
+function getHomeworkChannelRow(channelId) {
+  return db
+    .prepare(
+      `SELECT id, name, topic, workspace_id AS workspaceId, category
+       FROM channels
+       WHERE id = ?
+         AND lower(COALESCE(category, '')) = 'homework'
+       LIMIT 1`
+    )
+    .get(String(channelId || '').trim());
+}
+
+function getHomeworkChannelForClass(classChannel) {
+  const classId = String(classChannel?.id || '').trim();
+  const workspaceId = String(classChannel?.workspaceId || classChannel?.workspace_id || '').trim();
+  if (!classId || !workspaceId) return null;
+  return db
+    .prepare(
+      `SELECT id, name, topic, workspace_id AS workspaceId, category
+       FROM channels
+       WHERE workspace_id = ?
+         AND lower(COALESCE(category, '')) = 'homework'
+         AND topic = ?
+       LIMIT 1`
+    )
+    .get(workspaceId, `homework_for:${classId}`);
+}
+
+function getHomeworkClassIdFromChannel(channel) {
+  const topic = String(channel?.topic || '').trim().toLowerCase();
+  const match = topic.match(/homework_for:([^\s]+)/);
+  return match?.[1] ? String(match[1]) : '';
+}
+
+function getHomeworkParentClassRow(channel) {
+  const classId = getHomeworkClassIdFromChannel(channel);
+  if (!classId) return null;
+  return db
+    .prepare(
+      `SELECT id, name, workspace_id AS workspaceId, category
+       FROM channels
+       WHERE id = ?
+       LIMIT 1`
+    )
+    .get(classId);
+}
+
+function normalizeHomeworkSubmissionStatus(value, { dueDate = null } = {}) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'reviewed' || raw === 'returned' || raw === 'draft') return raw;
+  if (raw === 'submitted' || raw === 'late') {
+    if (!dueDate) return raw;
+    const dueMs = Date.parse(String(dueDate || ''));
+    if (!Number.isFinite(dueMs)) return raw;
+    return Date.now() > dueMs ? 'late' : 'submitted';
+  }
+  return 'draft';
+}
+
+function canManageHomeworkChannel(user, homeworkChannel) {
+  if (!user || !homeworkChannel) return false;
+  if (isWorkspaceAdmin(user)) {
+    return String(user.workspaceId || user.workspace_id || '') === String(homeworkChannel.workspaceId || '');
+  }
+  if (!isTeacherRole(user)) return false;
+  const userId = String(user.id || user.sub || '').trim();
+  if (!userId) return false;
+  const classId = getHomeworkClassIdFromChannel(homeworkChannel);
+  if (!classId) return false;
+  const membership = db
+    .prepare(`SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ? LIMIT 1`)
+    .get(classId, userId);
+  return !!membership;
+}
+
+function canViewHomeworkChannel(user, homeworkChannel) {
+  if (!user || !homeworkChannel) return false;
+  if (isWorkspaceAdmin(user)) {
+    return String(user.workspaceId || user.workspace_id || '') === String(homeworkChannel.workspaceId || '');
+  }
+  const userId = String(user.id || user.sub || '').trim();
+  if (!userId) return false;
+  const membership = db
+    .prepare(`SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ? LIMIT 1`)
+    .get(homeworkChannel.id, userId);
+  if (membership) return true;
+  const classId = getHomeworkClassIdFromChannel(homeworkChannel);
+  if (!classId) return false;
+  return !!db
+    .prepare(`SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ? LIMIT 1`)
+    .get(classId, userId);
+}
+
+function canSubmitHomework(user, homeworkChannel, studentId = null) {
+  if (!user || !homeworkChannel) return false;
+  const role = getNormalizedUserRole(user);
+  const currentUserId = String(user.id || user.sub || '').trim();
+  const targetStudentId = String(studentId || currentUserId).trim();
+  if (!currentUserId || !targetStudentId || currentUserId !== targetStudentId) return false;
+  if (role !== 'student') return false;
+  return canViewHomeworkChannel(user, homeworkChannel);
+}
+
+function registerHomeworkLinkedFile({
+  workspaceId,
+  channelId,
+  ownerId,
+  file,
+  purpose,
+  messageId
+}) {
+  const url = String(file?.url || '').trim();
+  if (!url) return null;
+  const name = String(file?.originalName || file?.name || 'attachment').trim() || 'attachment';
+  const mime = String(file?.mimeType || file?.mime || 'application/octet-stream').trim() || 'application/octet-stream';
+  const sizeBytes = Number(file?.size || file?.sizeBytes || 0) || 0;
+  const fileId = computeFileIdFromMeta({ url, channelId, messageId, name });
+  db.prepare(
+    `
+    INSERT OR IGNORE INTO files_registry
+    (file_id, workspace_id, channel_id, message_id, uploader_id, purpose, file_name, mime, size_bytes, url, pinned, deleted, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, datetime('now'), datetime('now'))
+  `
+  ).run(fileId, workspaceId, channelId, messageId, ownerId || null, purpose, name, mime, sizeBytes, url);
+  return {
+    fileId,
+    fileName: name,
+    mime,
+    sizeBytes,
+    url
+  };
+}
+
+function syncHomeworkCompletion(homeworkId, studentId, status) {
+  const normalizedStatus = String(status || '').trim().toLowerCase();
+  if (HOMEWORK_SUBMISSION_ACTIVE_STATUSES.has(normalizedStatus)) {
+    db.prepare(
+      `INSERT OR REPLACE INTO homework_completions (homework_id, student_id, completed_at)
+       VALUES (?, ?, datetime('now'))`
+    ).run(homeworkId, studentId);
+    return;
+  }
+  db.prepare(`DELETE FROM homework_completions WHERE homework_id = ? AND student_id = ?`).run(homeworkId, studentId);
+}
+
+function listHomeworkItemFiles(itemIds = []) {
+  const normalized = itemIds.map((id) => String(id || '').trim()).filter(Boolean);
+  if (!normalized.length) return new Map();
+  const rows = db
+    .prepare(
+      `SELECT id, item_id AS itemId, file_id AS fileId, file_name AS fileName, mime, size_bytes AS sizeBytes, url, created_at AS createdAt
+       FROM homework_item_files
+       WHERE item_id IN (${normalized.map(() => '?').join(',')})
+       ORDER BY created_at ASC`
+    )
+    .all(...normalized);
+  const map = new Map();
+  rows.forEach((row) => {
+    const key = String(row.itemId || '');
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(row);
+  });
+  return map;
+}
+
+function listHomeworkSubmissionFiles(submissionIds = []) {
+  const normalized = submissionIds.map((id) => String(id || '').trim()).filter(Boolean);
+  if (!normalized.length) return new Map();
+  const rows = db
+    .prepare(
+      `SELECT id, submission_id AS submissionId, file_id AS fileId, file_name AS fileName, mime, size_bytes AS sizeBytes, url, created_at AS createdAt
+       FROM homework_submission_files
+       WHERE submission_id IN (${normalized.map(() => '?').join(',')})
+       ORDER BY created_at ASC`
+    )
+    .all(...normalized);
+  const map = new Map();
+  rows.forEach((row) => {
+    const key = String(row.submissionId || '');
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(row);
+  });
+  return map;
+}
+
+function listHomeworkBoardForChannel(homeworkChannel, viewer) {
+  const classId = getHomeworkClassIdFromChannel(homeworkChannel);
+  if (!classId) return [];
+  const viewerId = String(viewer?.id || viewer?.sub || '').trim();
+  const viewerRole = getNormalizedUserRole(viewer);
+  const items = db
+    .prepare(
+      `
+      SELECT
+        hi.id,
+        hi.workspace_id AS workspaceId,
+        hi.class_channel_id AS classChannelId,
+        hi.title,
+        hi.description,
+        hi.resource_url AS resourceUrl,
+        hi.due_date AS dueDate,
+        hi.is_archived AS isArchived,
+        hi.created_by AS createdBy,
+        hi.created_at AS createdAt,
+        COALESCE(u.name, u.email, u.username, hi.created_by) AS createdByName
+      FROM homework_items hi
+      LEFT JOIN users u ON u.id = hi.created_by
+      WHERE hi.workspace_id = ?
+        AND hi.class_channel_id = ?
+        AND COALESCE(hi.is_archived, 0) = 0
+      ORDER BY datetime(COALESCE(hi.due_date, hi.created_at)) ASC, hi.created_at DESC
+    `
+    )
+    .all(homeworkChannel.workspaceId, classId);
+  if (!items.length) return [];
+
+  const itemIds = items.map((item) => String(item.id || ''));
+  const itemFiles = listHomeworkItemFiles(itemIds);
+  const submissionRows = db
+    .prepare(
+      `
+      SELECT
+        hs.id,
+        hs.homework_item_id AS homeworkItemId,
+        hs.workspace_id AS workspaceId,
+        hs.channel_id AS channelId,
+        hs.student_id AS studentId,
+        hs.status,
+        hs.submission_text AS submissionText,
+        hs.is_late AS isLate,
+        hs.submitted_at AS submittedAt,
+        hs.reviewed_at AS reviewedAt,
+        hs.reviewed_by AS reviewedBy,
+        hs.returned_at AS returnedAt,
+        hs.feedback_text AS feedbackText,
+        hs.grade_value AS gradeValue,
+        hs.created_at AS createdAt,
+        hs.updated_at AS updatedAt,
+        COALESCE(u.name, u.email, u.username, hs.student_id) AS studentName,
+        COALESCE(r.name, r.email, r.username, hs.reviewed_by) AS reviewedByName
+      FROM homework_submissions hs
+      LEFT JOIN users u ON u.id = hs.student_id
+      LEFT JOIN users r ON r.id = hs.reviewed_by
+      WHERE hs.homework_item_id IN (${itemIds.map(() => '?').join(',')})
+      ORDER BY datetime(hs.updated_at) DESC, hs.created_at DESC
+    `
+    )
+    .all(...itemIds);
+  const submissionFiles = listHomeworkSubmissionFiles(submissionRows.map((row) => row.id));
+  const submissionsByItem = new Map();
+  submissionRows.forEach((row) => {
+    const key = String(row.homeworkItemId || '');
+    if (!submissionsByItem.has(key)) submissionsByItem.set(key, []);
+    submissionsByItem.get(key).push({
+      ...row,
+      files: submissionFiles.get(String(row.id || '')) || []
+    });
+  });
+
+  return items.map((item) => {
+    const itemId = String(item.id || '');
+    const itemSubmissions = submissionsByItem.get(itemId) || [];
+    const mySubmission = viewerRole === 'student'
+      ? itemSubmissions.find((submission) => String(submission.studentId || '') === viewerId) || null
+      : null;
+    return {
+      ...item,
+      homeworkChannelId: homeworkChannel.id,
+      files: itemFiles.get(itemId) || [],
+      mySubmission,
+      submissions: viewerRole === 'student' ? [] : itemSubmissions,
+      submissionSummary: {
+        total: itemSubmissions.length,
+        submitted: itemSubmissions.filter((row) => ['submitted', 'late', 'reviewed'].includes(String(row.status || '').toLowerCase())).length,
+        reviewed: itemSubmissions.filter((row) => String(row.status || '').toLowerCase() === 'reviewed').length,
+        returned: itemSubmissions.filter((row) => String(row.status || '').toLowerCase() === 'returned').length
+      }
+    };
+  });
+}
 
 function ensureClubChannelsForAllWorkspaces() {
   const rows = db.prepare('SELECT id FROM workspaces').all();
@@ -12544,6 +12888,341 @@ app.post('/api/task-reactions/toggle', authRequired, express.json(), (req, res) 
   res.json({ on: true });
 });
 
+function resolveHomeworkRequestContext(req, res, channelId = null) {
+  const user = getAuthedUser(req) || req.auth || null;
+  if (!user) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return null;
+  }
+  if (!channelId) return { user };
+  const homeworkChannel = getHomeworkChannelRow(channelId);
+  if (!homeworkChannel) {
+    res.status(404).json({ error: 'Homework channel not found' });
+    return null;
+  }
+  if (!canViewHomeworkChannel(user, homeworkChannel)) {
+    res.status(403).json({ error: 'Forbidden' });
+    return null;
+  }
+  const classChannel = getHomeworkParentClassRow(homeworkChannel);
+  return { user, homeworkChannel, classChannel };
+}
+
+app.get('/api/homework/channels/:channelId/board', authRequired, (req, res) => {
+  const ctx = resolveHomeworkRequestContext(req, res, req.params.channelId);
+  if (!ctx) return;
+  const role = getNormalizedUserRole(ctx.user);
+  res.json({
+    channel: {
+      ...ctx.homeworkChannel,
+      classChannelId: getHomeworkClassIdFromChannel(ctx.homeworkChannel),
+      className: ctx.classChannel?.name || ''
+    },
+    permissions: {
+      canManage: canManageHomeworkChannel(ctx.user, ctx.homeworkChannel),
+      canSubmit: role === 'student'
+    },
+    items: listHomeworkBoardForChannel(ctx.homeworkChannel, ctx.user)
+  });
+});
+
+app.post('/api/homework/channels/:channelId/items', authRequired, express.json(), (req, res) => {
+  const ctx = resolveHomeworkRequestContext(req, res, req.params.channelId);
+  if (!ctx) return;
+  if (!canManageHomeworkChannel(ctx.user, ctx.homeworkChannel)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const title = String(req.body?.title || '').trim();
+  const description = String(req.body?.description || '').trim();
+  const resourceUrl = String(req.body?.resourceUrl || '').trim() || null;
+  const dueDate = String(req.body?.dueDate || '').trim() || null;
+  const files = Array.isArray(req.body?.files) ? req.body.files : [];
+  if (!title) return res.status(400).json({ error: 'title required' });
+
+  const itemId = generateId('hwi');
+  db.prepare(
+    `
+    INSERT INTO homework_items
+    (id, workspace_id, class_channel_id, title, description, resource_url, due_date, is_archived, created_by, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, datetime('now'))
+  `
+  ).run(
+    itemId,
+    ctx.homeworkChannel.workspaceId,
+    getHomeworkClassIdFromChannel(ctx.homeworkChannel),
+    title,
+    description,
+    resourceUrl,
+    dueDate,
+    ctx.user.id || null
+  );
+
+  const fileStmt = db.prepare(
+    `
+    INSERT INTO homework_item_files
+    (id, item_id, workspace_id, channel_id, file_id, file_name, mime, size_bytes, url, created_by, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  `
+  );
+  files.forEach((file) => {
+    const linked = registerHomeworkLinkedFile({
+      workspaceId: ctx.homeworkChannel.workspaceId,
+      channelId: ctx.homeworkChannel.id,
+      ownerId: ctx.user.id || null,
+      file,
+      purpose: 'homework',
+      messageId: `homework-item:${itemId}`
+    });
+    if (!linked) return;
+    fileStmt.run(
+      generateId('hwif'),
+      itemId,
+      ctx.homeworkChannel.workspaceId,
+      ctx.homeworkChannel.id,
+      linked.fileId,
+      linked.fileName,
+      linked.mime,
+      linked.sizeBytes,
+      linked.url,
+      ctx.user.id || null
+    );
+  });
+
+  const created = listHomeworkBoardForChannel(ctx.homeworkChannel, ctx.user).find((item) => String(item.id) === itemId);
+  res.status(201).json({ item: created || { id: itemId } });
+});
+
+app.patch('/api/homework/items/:itemId', authRequired, express.json(), (req, res) => {
+  const itemId = String(req.params.itemId || '').trim();
+  const item = db
+    .prepare(
+      `SELECT id, workspace_id AS workspaceId, class_channel_id AS classChannelId, title, description, resource_url AS resourceUrl, due_date AS dueDate, is_archived AS isArchived, created_by AS createdBy
+       FROM homework_items
+       WHERE id = ?
+       LIMIT 1`
+    )
+    .get(itemId);
+  if (!item) return res.status(404).json({ error: 'Homework item not found' });
+  const homeworkChannel = getHomeworkChannelForClass({
+    id: item.classChannelId,
+    workspaceId: item.workspaceId
+  });
+  const ctx = resolveHomeworkRequestContext(req, res, homeworkChannel?.id || '');
+  if (!ctx) return;
+  if (!canManageHomeworkChannel(ctx.user, ctx.homeworkChannel)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  const title = req.body?.title != null ? String(req.body.title).trim() : item.title;
+  const description = req.body?.description != null ? String(req.body.description).trim() : item.description;
+  const resourceUrl = req.body?.resourceUrl != null ? (String(req.body.resourceUrl).trim() || null) : item.resourceUrl;
+  const dueDate = req.body?.dueDate != null ? (String(req.body.dueDate).trim() || null) : item.dueDate;
+  const isArchived = req.body?.isArchived != null ? (req.body.isArchived ? 1 : 0) : (item.isArchived ? 1 : 0);
+  if (!title) return res.status(400).json({ error: 'title required' });
+
+  db.prepare(
+    `
+    UPDATE homework_items
+    SET title = ?, description = ?, resource_url = ?, due_date = ?, is_archived = ?
+    WHERE id = ?
+  `
+  ).run(title, description, resourceUrl, dueDate, isArchived, itemId);
+
+  const updated = listHomeworkBoardForChannel(ctx.homeworkChannel, ctx.user).find((row) => String(row.id) === itemId);
+  res.json({ item: updated || { ...item, title, description, resourceUrl, dueDate, isArchived } });
+});
+
+app.delete('/api/homework/items/:itemId', authRequired, (req, res) => {
+  const itemId = String(req.params.itemId || '').trim();
+  const item = db
+    .prepare(
+      `SELECT id, workspace_id AS workspaceId, class_channel_id AS classChannelId
+       FROM homework_items
+       WHERE id = ?
+       LIMIT 1`
+    )
+    .get(itemId);
+  if (!item) return res.status(404).json({ error: 'Homework item not found' });
+  const homeworkChannel = getHomeworkChannelForClass({
+    id: item.classChannelId,
+    workspaceId: item.workspaceId
+  });
+  const ctx = resolveHomeworkRequestContext(req, res, homeworkChannel?.id || '');
+  if (!ctx) return;
+  if (!canManageHomeworkChannel(ctx.user, ctx.homeworkChannel)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  const submissionStudentRows = db
+    .prepare(`SELECT student_id AS studentId, status FROM homework_submissions WHERE homework_item_id = ?`)
+    .all(itemId);
+  submissionStudentRows.forEach((row) => syncHomeworkCompletion(itemId, row.studentId, 'draft'));
+  db.prepare(`DELETE FROM homework_submission_files WHERE submission_id IN (SELECT id FROM homework_submissions WHERE homework_item_id = ?)`).run(itemId);
+  db.prepare(`DELETE FROM homework_submissions WHERE homework_item_id = ?`).run(itemId);
+  db.prepare(`DELETE FROM homework_item_files WHERE item_id = ?`).run(itemId);
+  db.prepare(`DELETE FROM homework_items WHERE id = ?`).run(itemId);
+  db.prepare(`DELETE FROM homework_completions WHERE homework_id = ?`).run(itemId);
+  res.json({ ok: true, itemId });
+});
+
+app.post('/api/homework/items/:itemId/submissions', authRequired, express.json(), (req, res) => {
+  const itemId = String(req.params.itemId || '').trim();
+  const item = db
+    .prepare(
+      `SELECT id, workspace_id AS workspaceId, class_channel_id AS classChannelId, due_date AS dueDate
+       FROM homework_items
+       WHERE id = ?
+       LIMIT 1`
+    )
+    .get(itemId);
+  if (!item) return res.status(404).json({ error: 'Homework item not found' });
+  const homeworkChannel = getHomeworkChannelForClass({
+    id: item.classChannelId,
+    workspaceId: item.workspaceId
+  });
+  const ctx = resolveHomeworkRequestContext(req, res, homeworkChannel?.id || '');
+  if (!ctx) return;
+  if (!canSubmitHomework(ctx.user, ctx.homeworkChannel, ctx.user.id || ctx.user.sub)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const requestedStatus = String(req.body?.status || 'draft').trim().toLowerCase();
+  const status = normalizeHomeworkSubmissionStatus(requestedStatus, { dueDate: item.dueDate });
+  if (!HOMEWORK_SUBMISSION_VISIBLE_TO_STUDENT.has(status)) {
+    return res.status(400).json({ error: 'Invalid status' });
+  }
+  const submissionText = String(req.body?.submissionText || '').trim();
+  const files = Array.isArray(req.body?.files) ? req.body.files : [];
+  const studentId = String(ctx.user.id || ctx.user.sub || '').trim();
+  const existing = db
+    .prepare(
+      `SELECT id
+       FROM homework_submissions
+       WHERE homework_item_id = ? AND student_id = ?
+       LIMIT 1`
+    )
+    .get(itemId, studentId);
+  const submissionId = existing?.id || generateId('hws');
+  const submittedAt = HOMEWORK_SUBMISSION_ACTIVE_STATUSES.has(status) ? nowISOString() : null;
+  const isLate = status === 'late' ? 1 : 0;
+
+  if (existing) {
+    db.prepare(
+      `
+      UPDATE homework_submissions
+      SET status = ?, submission_text = ?, is_late = ?, submitted_at = COALESCE(?, submitted_at), updated_at = datetime('now')
+      WHERE id = ?
+    `
+    ).run(status, submissionText, isLate, submittedAt, submissionId);
+  } else {
+    db.prepare(
+      `
+      INSERT INTO homework_submissions
+      (id, homework_item_id, workspace_id, channel_id, student_id, status, submission_text, is_late, submitted_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    `
+    ).run(
+      submissionId,
+      itemId,
+      ctx.homeworkChannel.workspaceId,
+      ctx.homeworkChannel.id,
+      studentId,
+      status,
+      submissionText,
+      isLate,
+      submittedAt
+    );
+  }
+
+  const fileStmt = db.prepare(
+    `
+    INSERT INTO homework_submission_files
+    (id, submission_id, workspace_id, channel_id, file_id, file_name, mime, size_bytes, url, created_by, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  `
+  );
+  files.forEach((file) => {
+    const linked = registerHomeworkLinkedFile({
+      workspaceId: ctx.homeworkChannel.workspaceId,
+      channelId: ctx.homeworkChannel.id,
+      ownerId: studentId,
+      file,
+      purpose: 'homework_submission',
+      messageId: `homework-submission:${submissionId}`
+    });
+    if (!linked) return;
+    fileStmt.run(
+      generateId('hwsf'),
+      submissionId,
+      ctx.homeworkChannel.workspaceId,
+      ctx.homeworkChannel.id,
+      linked.fileId,
+      linked.fileName,
+      linked.mime,
+      linked.sizeBytes,
+      linked.url,
+      studentId
+    );
+  });
+
+  syncHomeworkCompletion(itemId, studentId, status);
+  const boardItem = listHomeworkBoardForChannel(ctx.homeworkChannel, ctx.user).find((row) => String(row.id) === itemId);
+  res.json({
+    submission: boardItem?.mySubmission || null,
+    item: boardItem || null
+  });
+});
+
+app.post('/api/homework/submissions/:submissionId/review', authRequired, express.json(), (req, res) => {
+  const submissionId = String(req.params.submissionId || '').trim();
+  const submission = db
+    .prepare(
+      `SELECT
+         hs.id,
+         hs.homework_item_id AS homeworkItemId,
+         hs.student_id AS studentId,
+         hs.status,
+         hi.workspace_id AS workspaceId,
+         hi.class_channel_id AS classChannelId,
+         hi.due_date AS dueDate
+       FROM homework_submissions hs
+       JOIN homework_items hi ON hi.id = hs.homework_item_id
+       WHERE hs.id = ?
+       LIMIT 1`
+    )
+    .get(submissionId);
+  if (!submission) return res.status(404).json({ error: 'Submission not found' });
+  const homeworkChannel = getHomeworkChannelForClass({
+    id: submission.classChannelId,
+    workspaceId: submission.workspaceId
+  });
+  const ctx = resolveHomeworkRequestContext(req, res, homeworkChannel?.id || '');
+  if (!ctx) return;
+  if (!canManageHomeworkChannel(ctx.user, ctx.homeworkChannel)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  const nextStatus = String(req.body?.status || 'reviewed').trim().toLowerCase();
+  if (!HOMEWORK_SUBMISSION_REVIEWABLE.has(nextStatus)) {
+    return res.status(400).json({ error: 'Invalid review status' });
+  }
+  const feedbackText = String(req.body?.feedbackText || '').trim();
+  const gradeValue = String(req.body?.gradeValue || '').trim();
+  db.prepare(
+    `
+    UPDATE homework_submissions
+    SET status = ?, feedback_text = ?, grade_value = ?, reviewed_at = datetime('now'), reviewed_by = ?, returned_at = CASE WHEN ? = 'returned' THEN datetime('now') ELSE returned_at END, updated_at = datetime('now')
+    WHERE id = ?
+  `
+  ).run(nextStatus, feedbackText, gradeValue, ctx.user.id || ctx.user.sub || null, nextStatus, submissionId);
+
+  syncHomeworkCompletion(submission.homeworkItemId, submission.studentId, nextStatus);
+  const teacherViewItem = listHomeworkBoardForChannel(ctx.homeworkChannel, ctx.user).find((row) => String(row.id) === String(submission.homeworkItemId));
+  res.json({
+    submission: teacherViewItem?.submissions?.find((row) => String(row.id) === submissionId) || null,
+    item: teacherViewItem || null
+  });
+});
+
 app.post('/api/auth/logout', authRequired, (req, res) => {
   const rt = req.cookies?.refresh_token;
   const now = Date.now();
@@ -14760,8 +15439,16 @@ function getStudentHomeworkSummary(workspaceId, studentId, classIds = null) {
              hi.due_date AS dueDate,
              hi.class_channel_id AS classChannelId,
              c.name AS className,
-             CASE WHEN hc.student_id IS NULL THEN 0 ELSE 1 END AS completed
+             hs.status AS submissionStatus,
+             CASE
+               WHEN lower(COALESCE(hs.status, '')) IN ('submitted', 'late', 'reviewed') THEN 1
+               WHEN hc.student_id IS NOT NULL THEN 1
+               ELSE 0
+             END AS completed
       FROM homework_items hi
+      LEFT JOIN homework_submissions hs
+        ON hs.homework_item_id = hi.id
+       AND hs.student_id = ?
       LEFT JOIN homework_completions hc
         ON hc.homework_id = hi.id
        AND hc.student_id = ?
@@ -14771,7 +15458,7 @@ function getStudentHomeworkSummary(workspaceId, studentId, classIds = null) {
       LIMIT 100
     `
     )
-    .all(normalizedStudentId, ...params);
+    .all(normalizedStudentId, normalizedStudentId, ...params);
   const completedItems = rows.filter((row) => Number(row.completed || 0) === 1).length;
   const totalItems = rows.length;
   return {
@@ -15672,6 +16359,10 @@ function canManageLiveSessions(user) {
   return isTeacherRole(user) || isWorkspaceAdmin(user);
 }
 
+function canStudentHostLiveMeeting(user) {
+  return getNormalizedUserRole(user) === "student";
+}
+
 function sanitizeLiveRoomSegment(value, fallback = "room") {
   const normalized = String(value || "")
     .trim()
@@ -15795,6 +16486,7 @@ function canUserManageSpecificLiveSession(user, session) {
 function canUserViewLiveSession(user, session) {
   if (!user || !session) return false;
   if (isWorkspaceAdmin(user)) return true;
+  if (String(session.created_by || "") === String(user.id || "")) return true;
   if (isUserInvitedToLiveSession(user.id, session)) return true;
   if (isTeacherRole(user)) {
     if (session.channel_id) return isUserInChannel(user.id, session.channel_id);
@@ -15845,19 +16537,28 @@ function validateLiveSessionTarget(user, { channelId, audience, existingSession 
   };
 }
 
-function validateInvitedLiveSessionUsers(workspaceId, invitedUserIds = []) {
+function validateInvitedLiveSessionUsers(workspaceId, invitedUserIds = [], options = {}) {
   const normalizedIds = normalizeLiveInvitedUserIds(invitedUserIds);
   if (!normalizedIds.length) {
     return { ok: false, error: "Please select at least one school member." };
   }
   const placeholders = normalizedIds.map(() => "?").join(",");
   const rows = db
-    .prepare(`SELECT id FROM users WHERE workspace_id = ? AND id IN (${placeholders})`)
+    .prepare(`SELECT id, role FROM users WHERE workspace_id = ? AND id IN (${placeholders})`)
     .all(workspaceId, ...normalizedIds);
   const found = new Set(rows.map((row) => String(row.id || "")));
   const invalid = normalizedIds.filter((id) => !found.has(id));
   if (invalid.length) {
     return { ok: false, error: "Selected members must belong to this school." };
+  }
+  const allowedRoles = Array.isArray(options.allowedRoles)
+    ? new Set(options.allowedRoles.map((role) => String(role || "").toLowerCase()))
+    : null;
+  if (allowedRoles && allowedRoles.size) {
+    const disallowed = rows.filter((row) => !allowedRoles.has(getNormalizedUserRole(row)));
+    if (disallowed.length) {
+      return { ok: false, error: "Selected members do not match the allowed participant type." };
+    }
   }
   return { ok: true, invitedUserIds: normalizedIds };
 }
@@ -15933,12 +16634,12 @@ function getLiveAnnouncementState(session, variant = "scheduled") {
   if (derivedStatus === "ended") {
     return {
       eventLabel: "LIVE SESSION",
-      badgeText: "Ended",
+      badgeText: "Expired",
       badgeClass: "live-announcement-badge live-announcement-badge-ended",
-      ctaText: "Session ended",
+      ctaText: "Expired",
       ctaClass: "live-announcement-cta live-announcement-cta-disabled",
       ctaDisabled: true,
-      noteText: "Session has ended.",
+      noteText: "Session has expired.",
       wrapperClass: "live-announcement-card live-announcement-card-ended",
     };
   }
@@ -15982,7 +16683,7 @@ function buildLiveAnnouncementActionHtml({ appPath, sessionId, channelId, ctaTex
   if (ctaDisabled || !appPath || !sessionId) {
     return `<span class="${ctaClass}" aria-disabled="true">${escapeHtml(ctaText)}</span>`;
   }
-  return `<a class="${ctaClass}" href="${escapeHtml(appPath)}" target="_blank" rel="noopener noreferrer">${escapeHtml(ctaText)}</a>`;
+  return `<a class="${ctaClass}" href="${escapeHtml(appPath)}" target="_blank" rel="noopener noreferrer" data-live-session-id="${escapeHtml(sessionId)}" data-live-channel-id="${escapeHtml(channelId || "")}">${escapeHtml(ctaText)}</a>`;
 }
 
 function buildLiveSessionAnnouncementText(session, channel, variant = "scheduled") {
@@ -15994,6 +16695,13 @@ function buildLiveSessionAnnouncementText(session, channel, variant = "scheduled
   const notes = String(session.student_notes || "").trim();
   const appPath = buildLiveAppPath(session);
   const state = getLiveAnnouncementState(session, variant);
+  const safeSessionId = escapeHtml(session.id || "");
+  const safeChannelId = escapeHtml(session.channel_id || session.audience || "");
+  const safeStatus = escapeHtml(session.status || "");
+  const safeDate = escapeHtml(session.date || "");
+  const safeStartTime = escapeHtml(session.start_time || "");
+  const safeEndTime = escapeHtml(session.end_time || "");
+  const safeAppPath = escapeHtml(appPath || "");
   const actionHtml = buildLiveAnnouncementActionHtml({
     appPath,
     sessionId: session.id,
@@ -16005,7 +16713,17 @@ function buildLiveSessionAnnouncementText(session, channel, variant = "scheduled
   const notesHtml = notes ? `<div class="live-announcement-note">${escapeHtml(notes)}</div>` : "";
   const stateNoteHtml = state.noteText ? `<div class="live-announcement-state-note">${escapeHtml(state.noteText)}</div>` : "";
   return `
-    <section class="${state.wrapperClass}" aria-label="Live session event">
+    <section
+      class="${state.wrapperClass}"
+      aria-label="Live session event"
+      data-live-session-id="${safeSessionId}"
+      data-live-channel-id="${safeChannelId}"
+      data-live-status="${safeStatus}"
+      data-live-date="${safeDate}"
+      data-live-start-time="${safeStartTime}"
+      data-live-end-time="${safeEndTime}"
+      data-live-app-path="${safeAppPath}"
+    >
       <div class="live-announcement-accent" aria-hidden="true">
         <i class="fa-solid fa-video"></i>
       </div>
@@ -16423,7 +17141,9 @@ app.get('/api/live-sessions', (req, res) => {
 
 app.post('/api/live-sessions', async (req, res) => {
   const user = getAuthedUser(req);
-  if (!canManageLiveSessions(user)) {
+  const canManage = canManageLiveSessions(user);
+  const canStudentHost = canStudentHostLiveMeeting(user);
+  if (!canManage && !canStudentHost) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const payload = req.body || {};
@@ -16444,11 +17164,19 @@ app.post('/api/live-sessions', async (req, res) => {
   const notifyEmail = !!payload.notify_email;
   const normalizedAudience = normalizeAudience(audience);
   const workspaceId = workspaceIdFromRequest(req);
+  const studentHostedMeeting = !canManage && canStudentHost;
   const normalizedInvitedUserIds = normalizeLiveInvitedUserIds(invitedUserIdsRaw);
   const invitedValidation = normalizedInvitedUserIds.length
-    ? validateInvitedLiveSessionUsers(workspaceId, normalizedInvitedUserIds)
+    ? validateInvitedLiveSessionUsers(
+        workspaceId,
+        normalizedInvitedUserIds,
+        studentHostedMeeting ? { allowedRoles: ['student'] } : {}
+      )
     : null;
   const hasInvitedUsers = Boolean(invitedValidation?.ok);
+  if (studentHostedMeeting && !hasInvitedUsers) {
+    return res.status(403).json({ error: 'Students can only host invited group study meetings.' });
+  }
   const requiresChannel = normalizedAudience === null && !hasInvitedUsers;
   const channelIdValue = channelId || channelIdAlt;
   if ((requiresChannel && !channelIdValue) || !date || !startTime || !endTime) {
@@ -16466,6 +17194,9 @@ app.post('/api/live-sessions', async (req, res) => {
   });
   if (!targetValidation.ok) {
     return res.status(403).json({ error: targetValidation.error });
+  }
+  if (studentHostedMeeting && (requiresChannel || normalizedAudience)) {
+    return res.status(403).json({ error: 'Students can only create invited group study meetings.' });
   }
   if (!requiresChannel && !normalizedAudience && !hasInvitedUsers) {
     return res.status(400).json({ error: 'Choose a class, audience, or invited members.' });

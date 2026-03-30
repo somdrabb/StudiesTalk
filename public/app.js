@@ -3,6 +3,15 @@
 // ===================== "REAL" DATA (from backend) =====================
 let channels = [];
 const homeworkNoteChannels = new Map();
+let homeworkBoardByChannel = {};
+let homeworkBoardInflight = new Map();
+let homeworkBoardUiState = {};
+let homeworkComposerExpanded = false;
+let homeworkFabDrag = null;
+let homeworkAssignmentModalState = null;
+let homeworkSubmissionModalState = null;
+let homeworkReviewModalState = null;
+let homeworkDetailModalState = null;
 let dms = [];
 let messagesByChannel = {}; // { [channelId]: Message[] }
 let savedMessagesById = {};
@@ -1228,6 +1237,10 @@ const LIVE_MANAGER_ROLES = new Set(["teacher", "admin", "school_admin", "super_a
 function canCurrentUserManageLive() {
   if (!sessionUser) return false;
   return LIVE_MANAGER_ROLES.has(normalizeRole(sessionUser.role || sessionUser.userRole));
+}
+
+function canCurrentUserHostStudentLiveMeeting() {
+  return normalizeRole(sessionUser?.role || sessionUser?.userRole) === "student";
 }
 
 function updateLiveCreateVisibility() {
@@ -2963,6 +2976,1155 @@ async function ensureMessagesForChannelId(channelId) {
   }
 }
 
+function normalizeHomeworkBoardItem(raw = {}) {
+  return {
+    ...raw,
+    files: Array.isArray(raw.files) ? raw.files : [],
+    submissions: Array.isArray(raw.submissions) ? raw.submissions : [],
+    mySubmission: raw.mySubmission || null,
+    submissionSummary: raw.submissionSummary || { total: 0, submitted: 0, reviewed: 0, returned: 0 }
+  };
+}
+
+async function ensureHomeworkBoardForChannel(channelId, { force = false } = {}) {
+  if (!channelId || !isHomeworkChannel(channelId) || isHomeworkNoteChannel(channelId)) return null;
+  if (!force && homeworkBoardByChannel[channelId]) return homeworkBoardByChannel[channelId];
+  if (homeworkBoardInflight.has(channelId)) return homeworkBoardInflight.get(channelId);
+  const promise = fetchJSON(`/api/homework/channels/${encodeURIComponent(channelId)}/board`)
+    .then((payload) => {
+      const normalized = {
+        channel: payload?.channel || null,
+        permissions: payload?.permissions || {},
+        items: Array.isArray(payload?.items) ? payload.items.map(normalizeHomeworkBoardItem) : []
+      };
+      homeworkBoardByChannel[channelId] = normalized;
+      return normalized;
+    })
+    .catch((err) => {
+      console.error("Failed to load homework board", err);
+      homeworkBoardByChannel[channelId] = { channel: null, permissions: {}, items: [], error: err };
+      return homeworkBoardByChannel[channelId];
+    })
+    .finally(() => {
+      homeworkBoardInflight.delete(channelId);
+    });
+  homeworkBoardInflight.set(channelId, promise);
+  return promise;
+}
+
+const HOMEWORK_FILTERS = ["all", "pending", "submitted", "reviewed", "returned", "archived"];
+let releaseHomeworkModalTrap = null;
+
+function getHomeworkBoardUiState(channelId) {
+  const key = String(channelId || "");
+  if (!homeworkBoardUiState[key]) {
+    homeworkBoardUiState[key] = {
+      filter: "all",
+      detailTab: "instructions",
+      view: "dashboard",
+      fabPosition: null
+    };
+  }
+  return homeworkBoardUiState[key];
+}
+
+function formatHomeworkDateLabel(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "No due date";
+  const dt = new Date(raw);
+  if (Number.isNaN(dt.getTime())) return raw;
+  return dt.toLocaleString([], { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function formatHomeworkDateInputValue(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const dt = new Date(raw);
+  if (Number.isNaN(dt.getTime())) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+}
+
+function normalizeHomeworkDateForApi(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const dt = new Date(raw);
+  return Number.isNaN(dt.getTime()) ? raw : dt.toISOString();
+}
+
+function escapeHomeworkHtml(value) {
+  return escapeHtml(String(value || ""));
+}
+
+function getHomeworkViewerStatus(item, permissions = {}) {
+  if (item?.isArchived) return "archived";
+  if (permissions.canManage) {
+    const rows = Array.isArray(item?.submissions) ? item.submissions : [];
+    if (rows.some((row) => String(row?.status || "").toLowerCase() === "returned")) return "returned";
+    if (rows.some((row) => String(row?.status || "").toLowerCase() === "submitted" || String(row?.status || "").toLowerCase() === "late")) return "submitted";
+    if (rows.some((row) => String(row?.status || "").toLowerCase() === "reviewed")) return "reviewed";
+    return "pending";
+  }
+  const status = String(item?.mySubmission?.status || "").toLowerCase();
+  if (status === "late") return "submitted";
+  if (status === "submitted" || status === "reviewed" || status === "returned" || status === "draft") return status;
+  return "pending";
+}
+
+function getHomeworkStatusMeta(status) {
+  const normalized = String(status || "pending").toLowerCase();
+  switch (normalized) {
+    case "submitted":
+      return { label: "Submitted", tone: "submitted", icon: "fa-solid fa-paper-plane" };
+    case "reviewed":
+      return { label: "Reviewed", tone: "reviewed", icon: "fa-solid fa-clipboard-check" };
+    case "returned":
+      return { label: "Returned", tone: "returned", icon: "fa-solid fa-rotate-left" };
+    case "archived":
+      return { label: "Archived", tone: "archived", icon: "fa-solid fa-box-archive" };
+    case "draft":
+      return { label: "Draft", tone: "draft", icon: "fa-regular fa-floppy-disk" };
+    default:
+      return { label: "Pending", tone: "pending", icon: "fa-regular fa-clock" };
+  }
+}
+
+function homeworkItemMatchesFilter(item, filter, permissions = {}) {
+  const normalized = HOMEWORK_FILTERS.includes(String(filter || "").toLowerCase()) ? String(filter).toLowerCase() : "all";
+  if (normalized === "archived") return !!item?.isArchived;
+  if (item?.isArchived) return false;
+  if (normalized === "all") return true;
+  return getHomeworkViewerStatus(item, permissions) === normalized;
+}
+
+function getHomeworkFilteredItems(board, filter) {
+  return (board?.items || []).filter((item) => homeworkItemMatchesFilter(item, filter, board?.permissions || {}));
+}
+
+function computeHomeworkStats(board) {
+  const permissions = board?.permissions || {};
+  const items = Array.isArray(board?.items) ? board.items : [];
+  const stats = {
+    total: items.length,
+    active: items.filter((item) => !item?.isArchived).length,
+    archived: items.filter((item) => !!item?.isArchived).length,
+    pending: 0,
+    submitted: 0,
+    reviewed: 0,
+    returned: 0
+  };
+  items.forEach((item) => {
+    const status = getHomeworkViewerStatus(item, permissions);
+    if (status === "pending" || status === "draft") stats.pending += 1;
+    if (status === "submitted") stats.submitted += 1;
+    if (status === "reviewed") stats.reviewed += 1;
+    if (status === "returned") stats.returned += 1;
+  });
+  return stats;
+}
+
+function renderHomeworkStatsBar(board) {
+  const stats = computeHomeworkStats(board);
+  const canManage = !!board?.permissions?.canManage;
+  const cards = [
+    { label: "Assignments", helper: "Active assignments on this board", value: stats.active, icon: "fa-solid fa-book-open", tone: "neutral", action: "open-assignments-view" },
+    { label: "Discussion", helper: "Open the class-wide homework discussion area", value: "", icon: "fa-regular fa-message", tone: "neutral", action: "open-discussion-view" },
+    { label: canManage ? "Needs attention" : "Pending", helper: canManage ? "Counts assignments with no reviewed submission yet." : "Assignments still waiting on your submission.", value: stats.pending, icon: "fa-regular fa-clock", tone: "pending", action: "open-filter-pending" },
+    { label: "Submitted", helper: "Work turned in and waiting on review", value: stats.submitted, icon: "fa-solid fa-paper-plane", tone: "submitted", action: "open-filter-submitted" },
+    { label: "Reviewed", helper: "Assignments with reviewed work", value: stats.reviewed, icon: "fa-solid fa-clipboard-check", tone: "reviewed", action: "open-filter-reviewed" }
+  ];
+  return `
+    <section class="homework-stats-wrap" aria-label="Homework summary">
+      <div class="homework-stats">
+        ${cards.map((card) => `
+          <article class="homework-stat-card homework-stat-card--${card.tone} ${Number(card.value || 0) > 0 && (card.tone === "pending" || card.tone === "returned") ? "homework-stat-card--alert" : ""} ${card.action ? "homework-stat-card--interactive" : ""}" title="${escapeHomeworkHtml(card.helper || "")}" ${card.action ? `data-homework-action="${card.action}"` : ""}>
+            <div class="homework-stat-icon"><i class="${card.icon}" aria-hidden="true"></i></div>
+            <div class="homework-stat-copy">
+              <div class="homework-stat-value">${card.value === "" ? "&nbsp;" : Number(card.value || 0)}</div>
+              <div class="homework-stat-label">${escapeHomeworkHtml(card.label)}</div>
+              <div class="homework-stat-helper">${escapeHomeworkHtml(card.helper || "")}</div>
+            </div>
+          </article>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderHomeworkFilterBar(channelId, board) {
+  const state = getHomeworkBoardUiState(channelId);
+  const permissions = board?.permissions || {};
+  const items = Array.isArray(board?.items) ? board.items : [];
+  const filterLabels = {
+    all: "All",
+    pending: "Pending",
+    submitted: "Submitted",
+    reviewed: "Reviewed",
+    returned: "Returned",
+    archived: "Archived"
+  };
+  return `
+    <div class="homework-filter-row">
+      <div class="homework-filter-group" role="tablist" aria-label="Homework filters">
+        ${HOMEWORK_FILTERS.map((filter) => {
+          const count = items.filter((item) => homeworkItemMatchesFilter(item, filter, permissions)).length;
+          const active = state.filter === filter ? "active" : "";
+          return `
+            <button class="tasks-pill homework-filter-pill ${active}" type="button" data-homework-action="filter-board" data-filter="${filter}">
+              <span>${filterLabels[filter]}</span>
+              <span class="homework-filter-count">${count}</span>
+            </button>
+          `;
+        }).join("")}
+      </div>
+      <div class="homework-filter-actions">
+        <button class="tasks-btn" type="button" data-homework-action="refresh-board">Refresh</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderHomeworkHeaderFilters(channelId, board) {
+  if (!headerHomeworkFilters) return;
+  const state = getHomeworkBoardUiState(channelId);
+  const permissions = board?.permissions || {};
+  const items = Array.isArray(board?.items) ? board.items : [];
+  const filterLabels = {
+    all: "All",
+    pending: "Pending",
+    submitted: "Submitted",
+    reviewed: "Reviewed",
+    returned: "Returned",
+    archived: "Archived"
+  };
+  headerHomeworkFilters.innerHTML = HOMEWORK_FILTERS.map((filter) => {
+    const count = items.filter((item) => homeworkItemMatchesFilter(item, filter, permissions)).length;
+    const active = state.filter === filter ? "active" : "";
+    return `
+      <button class="tasks-pill homework-filter-pill ${active}" type="button" data-homework-header-filter="${filter}">
+        <span>${filterLabels[filter]}</span>
+        <span class="homework-filter-count">${count}</span>
+      </button>
+    `;
+  }).join("");
+  headerHomeworkFilters.classList.remove("hidden");
+  headerHomeworkFilters.setAttribute("aria-hidden", "false");
+}
+
+function clearHomeworkHeaderFilters() {
+  if (!headerHomeworkFilters) return;
+  headerHomeworkFilters.innerHTML = "";
+  headerHomeworkFilters.classList.add("hidden");
+  headerHomeworkFilters.setAttribute("aria-hidden", "true");
+}
+
+function renderHomeworkFloatingAction(channelId, board) {
+  if (!board?.permissions?.canManage) return "";
+  const state = getHomeworkBoardUiState(channelId);
+  const position = state?.fabPosition || {};
+  const styleBits = [];
+  if (Number.isFinite(position.left)) styleBits.push(`left:${position.left}px`);
+  if (Number.isFinite(position.top)) styleBits.push(`top:${position.top}px`);
+  return `
+    <button
+      class="homework-fab"
+      type="button"
+      data-homework-action="new-item"
+      data-homework-fab="1"
+      aria-label="Create homework"
+      title="Create homework"
+      ${styleBits.length ? `style="${styleBits.join(";")}"` : ""}
+    >
+      <i class="fa-solid fa-plus" aria-hidden="true"></i>
+    </button>
+  `;
+}
+
+function renderHomeworkFiles(files = []) {
+  if (!Array.isArray(files) || !files.length) return "";
+  return `
+    <div class="homework-card-files">
+      ${files.map((file) => `
+        <a class="wn-attachment-pill" href="${escapeHomeworkHtml(file.url)}" target="_blank" rel="noopener noreferrer">
+          <i class="fa-solid fa-paperclip"></i>
+          <span>${escapeHomeworkHtml(file.fileName || file.name || "attachment")}</span>
+        </a>
+      `).join("")}
+    </div>
+  `;
+}
+
+async function pickHomeworkFiles() {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = true;
+    input.onchange = () => resolve(Array.from(input.files || []));
+    input.click();
+  });
+}
+
+async function uploadHomeworkFiles() {
+  const picked = await pickHomeworkFiles();
+  if (!picked.length) return [];
+  const uploaded = [];
+  for (const file of picked) {
+    const out = await uploadSingleFile(file);
+    if (out) uploaded.push(out);
+  }
+  return uploaded;
+}
+
+function openHomeworkModal(modalEl) {
+  if (!modalEl) return;
+  if (typeof releaseHomeworkModalTrap === "function") {
+    releaseHomeworkModalTrap();
+    releaseHomeworkModalTrap = null;
+  }
+  const bodyEl = modalEl.querySelector(".homework-modal-body");
+  if (bodyEl) bodyEl.scrollTop = 0;
+  modalEl.classList.remove("hidden");
+  modalEl.setAttribute("aria-hidden", "false");
+  document.body.classList.add("modal-open");
+  releaseHomeworkModalTrap = trapFocus(modalEl);
+  requestAnimationFrame(() => {
+    if (document.activeElement === document.body) {
+      modalEl.querySelector("input, textarea, select, button")?.focus();
+    }
+  });
+}
+
+function closeHomeworkModal(modalEl) {
+  if (!modalEl) return;
+  closeModal(modalEl);
+  if (typeof releaseHomeworkModalTrap === "function") {
+    releaseHomeworkModalTrap();
+    releaseHomeworkModalTrap = null;
+  }
+  if (!document.querySelector(".modal-overlay:not(.hidden)")) {
+    document.body.classList.remove("modal-open");
+  }
+}
+
+function normalizeHomeworkLinkedFile(file = {}) {
+  return {
+    fileId: String(file.fileId || file.id || ""),
+    fileName: String(file.fileName || file.name || "attachment"),
+    url: String(file.url || ""),
+    mime: String(file.mime || ""),
+    sizeBytes: Number(file.sizeBytes || file.size || 0)
+  };
+}
+
+function renderHomeworkSelectedFiles(files = [], removeAction = "") {
+  if (!Array.isArray(files) || !files.length) {
+    return `<div class="homework-empty-note">No files attached yet.</div>`;
+  }
+  return files.map((file, index) => `
+    <div class="homework-inline-file">
+      <a href="${escapeHomeworkHtml(file.url)}" target="_blank" rel="noopener noreferrer">
+        <i class="fa-solid fa-paperclip" aria-hidden="true"></i>
+        <span>${escapeHomeworkHtml(file.fileName || "attachment")}</span>
+      </a>
+      ${removeAction ? `<button type="button" class="homework-inline-file-remove" data-homework-action="${removeAction}" data-file-index="${index}" aria-label="Remove file"><i class="fa-solid fa-xmark"></i></button>` : ""}
+    </div>
+  `).join("");
+}
+
+function renderHomeworkAssignmentFileList() {
+  if (!homeworkAssignmentFilesList) return;
+  homeworkAssignmentFilesList.innerHTML = renderHomeworkSelectedFiles(homeworkAssignmentModalState?.files || [], "remove-assignment-file");
+}
+
+function renderHomeworkSubmissionFileList() {
+  if (!homeworkSubmissionFilesList) return;
+  homeworkSubmissionFilesList.innerHTML = renderHomeworkSelectedFiles(homeworkSubmissionModalState?.files || [], "remove-submission-file");
+}
+
+function setHomeworkFieldError(inputEl, errorEl, message = "") {
+  if (inputEl) {
+    inputEl.setAttribute("aria-invalid", message ? "true" : "false");
+    inputEl.classList.toggle("homework-input-invalid", !!message);
+  }
+  if (errorEl) {
+    errorEl.textContent = message || "";
+    errorEl.hidden = !message;
+  }
+}
+
+function setHomeworkFormStatus(statusEl, message = "", tone = "") {
+  if (!statusEl) return;
+  statusEl.textContent = message || "";
+  statusEl.className = "homework-form-status";
+  if (tone) statusEl.classList.add(`homework-form-status--${tone}`);
+}
+
+function setHomeworkButtonLoading(button, isLoading, idleLabel, loadingLabel = "Saving...") {
+  if (!button) return;
+  if (!button.dataset.idleLabel) button.dataset.idleLabel = idleLabel || button.textContent || "";
+  button.disabled = !!isLoading;
+  button.setAttribute("aria-busy", isLoading ? "true" : "false");
+  button.textContent = isLoading ? loadingLabel : (idleLabel || button.dataset.idleLabel || "");
+}
+
+async function refreshHomeworkBoardChannel(channelId, options = {}) {
+  if (!channelId) return;
+  await ensureHomeworkBoardForChannel(channelId, { force: true });
+  renderMessages(channelId, { restoreScroll: true, ...options });
+  if (homeworkDetailModalState?.channelId === channelId && homeworkDetailModal && !homeworkDetailModal.classList.contains("hidden")) {
+    renderHomeworkDetailModal();
+  }
+}
+
+function openHomeworkAssignmentModalForItem(channelId, item = null) {
+  if (!homeworkAssignmentModal) return;
+  if (homeworkDetailModal && !homeworkDetailModal.classList.contains("hidden")) closeHomeworkDetailModal();
+  homeworkAssignmentModalState = {
+    channelId: String(channelId || item?.homeworkChannelId || ""),
+    itemId: item?.id ? String(item.id) : "",
+    files: Array.isArray(item?.files) ? item.files.map(normalizeHomeworkLinkedFile) : []
+  };
+  if (homeworkAssignmentModalTitle) {
+    homeworkAssignmentModalTitle.textContent = item?.id ? "Edit assignment" : "New assignment";
+  }
+  if (homeworkAssignmentTitleInput) homeworkAssignmentTitleInput.value = String(item?.title || "");
+  if (homeworkAssignmentDueDateInput) homeworkAssignmentDueDateInput.value = formatHomeworkDateInputValue(item?.dueDate || "");
+  if (homeworkAssignmentResourceUrlInput) homeworkAssignmentResourceUrlInput.value = String(item?.resourceUrl || "");
+  if (homeworkAssignmentDescriptionInput) homeworkAssignmentDescriptionInput.value = String(item?.description || "");
+  setHomeworkFieldError(homeworkAssignmentTitleInput, homeworkAssignmentTitleError, "");
+  setHomeworkFormStatus(homeworkAssignmentFormStatus, "");
+  setHomeworkButtonLoading(homeworkAssignmentSaveBtn, false, item?.id ? "Save changes" : "Save assignment");
+  renderHomeworkAssignmentFileList();
+  openHomeworkModal(homeworkAssignmentModal);
+  homeworkAssignmentTitleInput?.focus();
+}
+
+function closeHomeworkAssignmentModal() {
+  homeworkAssignmentModalState = null;
+  closeHomeworkModal(homeworkAssignmentModal);
+}
+
+async function submitHomeworkAssignmentModal() {
+  if (!homeworkAssignmentModalState?.channelId) return;
+  const title = String(homeworkAssignmentTitleInput?.value || "").trim();
+  if (!title) {
+    setHomeworkFieldError(homeworkAssignmentTitleInput, homeworkAssignmentTitleError, "Title is required.");
+    setHomeworkFormStatus(homeworkAssignmentFormStatus, "Fix the highlighted field before saving.", "error");
+    homeworkAssignmentTitleInput?.focus();
+    return;
+  }
+  setHomeworkFieldError(homeworkAssignmentTitleInput, homeworkAssignmentTitleError, "");
+  setHomeworkFormStatus(homeworkAssignmentFormStatus, "Saving assignment...", "saving");
+  setHomeworkButtonLoading(homeworkAssignmentSaveBtn, true, homeworkAssignmentModalState.itemId ? "Save changes" : "Save assignment", "Saving...");
+  const body = {
+    title,
+    description: String(homeworkAssignmentDescriptionInput?.value || "").trim(),
+    dueDate: normalizeHomeworkDateForApi(homeworkAssignmentDueDateInput?.value || ""),
+    resourceUrl: String(homeworkAssignmentResourceUrlInput?.value || "").trim(),
+    files: (homeworkAssignmentModalState.files || []).map(normalizeHomeworkLinkedFile)
+  };
+  try {
+    if (homeworkAssignmentModalState.itemId) {
+      await fetchJSON(`/api/homework/items/${encodeURIComponent(homeworkAssignmentModalState.itemId)}`, {
+        method: "PATCH",
+        body: JSON.stringify(body)
+      });
+    } else {
+      await fetchJSON(`/api/homework/channels/${encodeURIComponent(homeworkAssignmentModalState.channelId)}/items`, {
+        method: "POST",
+        body: JSON.stringify(body)
+      });
+    }
+    const channelId = homeworkAssignmentModalState.channelId;
+    closeHomeworkAssignmentModal();
+    await refreshHomeworkBoardChannel(channelId);
+  } catch (err) {
+    setHomeworkFormStatus(homeworkAssignmentFormStatus, err?.message || "Could not save assignment.", "error");
+    setHomeworkButtonLoading(homeworkAssignmentSaveBtn, false, homeworkAssignmentModalState.itemId ? "Save changes" : "Save assignment");
+    throw err;
+  }
+}
+
+async function addHomeworkAssignmentFiles() {
+  if (!homeworkAssignmentModalState) return;
+  const files = await uploadHomeworkFiles();
+  if (!files.length) return;
+  homeworkAssignmentModalState.files = [...(homeworkAssignmentModalState.files || []), ...files.map(normalizeHomeworkLinkedFile)];
+  renderHomeworkAssignmentFileList();
+}
+
+function removeHomeworkAssignmentFile(index) {
+  if (!homeworkAssignmentModalState) return;
+  homeworkAssignmentModalState.files = (homeworkAssignmentModalState.files || []).filter((_, currentIndex) => currentIndex !== index);
+  renderHomeworkAssignmentFileList();
+}
+
+function openHomeworkSubmissionModalForItem(item) {
+  if (!item?.id || !item?.homeworkChannelId || !homeworkSubmissionModal) return;
+  if (homeworkDetailModal && !homeworkDetailModal.classList.contains("hidden")) closeHomeworkDetailModal();
+  const mySubmission = item.mySubmission || null;
+  homeworkSubmissionModalState = {
+    channelId: String(item.homeworkChannelId),
+    itemId: String(item.id),
+    files: Array.isArray(mySubmission?.files) ? mySubmission.files.map(normalizeHomeworkLinkedFile) : []
+  };
+  if (homeworkSubmissionModalTitle) homeworkSubmissionModalTitle.textContent = "My submission";
+  if (homeworkSubmissionContextTitle) homeworkSubmissionContextTitle.textContent = String(item.title || "Homework");
+  if (homeworkSubmissionContextMeta) {
+    homeworkSubmissionContextMeta.textContent = `Due ${formatHomeworkDateLabel(item.dueDate)}${mySubmission?.status ? ` • Current status: ${mySubmission.status}` : ""}`;
+  }
+  if (homeworkSubmissionTextInput) homeworkSubmissionTextInput.value = String(mySubmission?.submissionText || "");
+  setHomeworkFieldError(homeworkSubmissionTextInput, homeworkSubmissionTextError, "");
+  setHomeworkFormStatus(homeworkSubmissionFormStatus, "");
+  setHomeworkButtonLoading(homeworkSubmissionDraftBtn, false, "Save draft");
+  setHomeworkButtonLoading(homeworkSubmissionSubmitBtn, false, "Submit work");
+  renderHomeworkSubmissionFileList();
+  openHomeworkModal(homeworkSubmissionModal);
+  homeworkSubmissionTextInput?.focus();
+}
+
+function closeHomeworkSubmissionModal() {
+  homeworkSubmissionModalState = null;
+  closeHomeworkModal(homeworkSubmissionModal);
+}
+
+async function addHomeworkSubmissionFiles() {
+  if (!homeworkSubmissionModalState) return;
+  const files = await uploadHomeworkFiles();
+  if (!files.length) return;
+  homeworkSubmissionModalState.files = [...(homeworkSubmissionModalState.files || []), ...files.map(normalizeHomeworkLinkedFile)];
+  renderHomeworkSubmissionFileList();
+}
+
+function removeHomeworkSubmissionFile(index) {
+  if (!homeworkSubmissionModalState) return;
+  homeworkSubmissionModalState.files = (homeworkSubmissionModalState.files || []).filter((_, currentIndex) => currentIndex !== index);
+  renderHomeworkSubmissionFileList();
+}
+
+async function submitHomeworkSubmissionModal(mode = "draft") {
+  if (!homeworkSubmissionModalState?.itemId || !homeworkSubmissionModalState?.channelId) return;
+  const submissionText = String(homeworkSubmissionTextInput?.value || "").trim();
+  const hasFiles = (homeworkSubmissionModalState.files || []).length > 0;
+  if (mode === "submit" && !submissionText && !hasFiles) {
+    setHomeworkFieldError(homeworkSubmissionTextInput, homeworkSubmissionTextError, "Add submission notes or attach a file before submitting.");
+    setHomeworkFormStatus(homeworkSubmissionFormStatus, "Submission is empty.", "error");
+    homeworkSubmissionTextInput?.focus();
+    return;
+  }
+  setHomeworkFieldError(homeworkSubmissionTextInput, homeworkSubmissionTextError, "");
+  setHomeworkFormStatus(homeworkSubmissionFormStatus, mode === "submit" ? "Submitting work..." : "Saving draft...", "saving");
+  setHomeworkButtonLoading(homeworkSubmissionDraftBtn, mode === "draft", "Save draft", "Saving...");
+  setHomeworkButtonLoading(homeworkSubmissionSubmitBtn, mode === "submit", "Submit work", "Submitting...");
+  try {
+    await fetchJSON(`/api/homework/items/${encodeURIComponent(homeworkSubmissionModalState.itemId)}/submissions`, {
+      method: "POST",
+      body: JSON.stringify({
+        submissionText,
+        status: mode === "submit" ? "submitted" : "draft",
+        files: (homeworkSubmissionModalState.files || []).map(normalizeHomeworkLinkedFile)
+      })
+    });
+    const channelId = homeworkSubmissionModalState.channelId;
+    closeHomeworkSubmissionModal();
+    await refreshHomeworkBoardChannel(channelId);
+  } catch (err) {
+    setHomeworkFormStatus(homeworkSubmissionFormStatus, err?.message || "Could not save submission.", "error");
+    setHomeworkButtonLoading(homeworkSubmissionDraftBtn, false, "Save draft");
+    setHomeworkButtonLoading(homeworkSubmissionSubmitBtn, false, "Submit work");
+    throw err;
+  }
+}
+
+function openHomeworkReviewModalForSubmission(item, submission) {
+  if (!item?.homeworkChannelId || !submission?.id || !homeworkReviewModal) return;
+  if (homeworkDetailModal && !homeworkDetailModal.classList.contains("hidden")) closeHomeworkDetailModal();
+  homeworkReviewModalState = {
+    channelId: String(item.homeworkChannelId),
+    itemId: String(item.id),
+    submissionId: String(submission.id)
+  };
+  if (homeworkReviewContextTitle) {
+    homeworkReviewContextTitle.textContent = `${submission.studentName || submission.studentId || "Student"} • ${item.title || "Homework"}`;
+  }
+  if (homeworkReviewContextMeta) {
+    homeworkReviewContextMeta.textContent = `Current status: ${submission.status || "submitted"}`;
+  }
+  if (homeworkReviewStatusInput) homeworkReviewStatusInput.value = String(submission.status || "").toLowerCase() === "returned" ? "returned" : "reviewed";
+  if (homeworkReviewGradeInput) homeworkReviewGradeInput.value = String(submission.gradeValue || "");
+  if (homeworkReviewFeedbackInput) homeworkReviewFeedbackInput.value = String(submission.feedbackText || "");
+  setHomeworkFieldError(homeworkReviewFeedbackInput, homeworkReviewFeedbackError, "");
+  setHomeworkFormStatus(homeworkReviewFormStatus, "");
+  setHomeworkButtonLoading(homeworkReviewSaveBtn, false, "Save review");
+  openHomeworkModal(homeworkReviewModal);
+  homeworkReviewFeedbackInput?.focus();
+}
+
+function closeHomeworkReviewModal() {
+  homeworkReviewModalState = null;
+  closeHomeworkModal(homeworkReviewModal);
+}
+
+async function submitHomeworkReviewModal() {
+  if (!homeworkReviewModalState?.submissionId || !homeworkReviewModalState?.channelId) return;
+  const feedbackText = String(homeworkReviewFeedbackInput?.value || "").trim();
+  const gradeValue = String(homeworkReviewGradeInput?.value || "").trim();
+  if (!feedbackText && !gradeValue) {
+    setHomeworkFieldError(homeworkReviewFeedbackInput, homeworkReviewFeedbackError, "Add feedback or a grade before saving.");
+    setHomeworkFormStatus(homeworkReviewFormStatus, "Review needs feedback or a grade.", "error");
+    homeworkReviewFeedbackInput?.focus();
+    return;
+  }
+  setHomeworkFieldError(homeworkReviewFeedbackInput, homeworkReviewFeedbackError, "");
+  setHomeworkFormStatus(homeworkReviewFormStatus, "Saving review...", "saving");
+  setHomeworkButtonLoading(homeworkReviewSaveBtn, true, "Save review", "Saving...");
+  try {
+    await fetchJSON(`/api/homework/submissions/${encodeURIComponent(homeworkReviewModalState.submissionId)}/review`, {
+      method: "POST",
+      body: JSON.stringify({
+        status: String(homeworkReviewStatusInput?.value || "reviewed"),
+        feedbackText,
+        gradeValue
+      })
+    });
+    const channelId = homeworkReviewModalState.channelId;
+    closeHomeworkReviewModal();
+    await refreshHomeworkBoardChannel(channelId);
+  } catch (err) {
+    setHomeworkFormStatus(homeworkReviewFormStatus, err?.message || "Could not save review.", "error");
+    setHomeworkButtonLoading(homeworkReviewSaveBtn, false, "Save review");
+    throw err;
+  }
+}
+
+async function archiveHomeworkItem(item) {
+  if (!item?.id || !item?.homeworkChannelId) return;
+  const ok = await openConfirmModal({
+    title: "Archive assignment",
+    message: `Archive "${item.title || "this assignment"}"? Students will still be able to view it in archived filters.`,
+    confirmText: "Archive",
+    cancelText: "Cancel",
+    danger: false
+  });
+  if (!ok) return;
+  await fetchJSON(`/api/homework/items/${encodeURIComponent(item.id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ isArchived: true })
+  });
+  await refreshHomeworkBoardChannel(item.homeworkChannelId);
+}
+
+function renderHomeworkDiscussion(messages = [], limit = 12) {
+  if (!Array.isArray(messages) || !messages.length) {
+    return `
+      <div class="homework-discussion-empty">
+        <div class="homework-discussion-empty-title">No discussion yet</div>
+        <div class="homework-discussion-empty-copy">This thread is class-wide for the homework channel, not tied to a single assignment.</div>
+      </div>
+    `;
+  }
+  return messages.slice(-limit).map((msg) => `
+    <article class="task-card homework-discussion-card">
+      <div class="task-top">
+        <div class="task-main">
+          <div class="task-title">${escapeHomeworkHtml(msg.author || "Unknown")}</div>
+          <div class="task-meta">${escapeHomeworkHtml(msg.time || "")}</div>
+        </div>
+      </div>
+      <div class="task-body">${sanitizeMessageHTML(String(msg.text || ""))}</div>
+    </article>
+  `).join("");
+}
+
+function renderHomeworkStatusBadge(status) {
+  const meta = getHomeworkStatusMeta(status);
+  return `<span class="homework-status-badge homework-status-badge--${meta.tone}"><i class="${meta.icon}" aria-hidden="true"></i><span>${meta.label}</span></span>`;
+}
+
+function renderHomeworkDetailSubmissionList(item) {
+  const rows = Array.isArray(item?.submissions) ? item.submissions : [];
+  if (!rows.length) {
+    return `<div class="homework-empty-note homework-empty-note--compact">No submissions yet. Student work will appear here once something is turned in.</div>`;
+  }
+  return `
+    <div class="homework-detail-stack">
+      ${rows.map((submission) => `
+        <article class="homework-detail-review-card">
+          <div class="homework-detail-review-head">
+            <div>
+              <div class="homework-detail-review-name">${escapeHomeworkHtml(submission.studentName || submission.studentId || "Student")}</div>
+              <div class="homework-detail-review-meta">${renderHomeworkStatusBadge(submission.status || "pending")}</div>
+            </div>
+            <button class="tasks-btn" type="button" data-homework-action="review-submission" data-item-id="${escapeHomeworkHtml(item.id)}" data-submission-id="${escapeHomeworkHtml(submission.id)}">Review</button>
+          </div>
+          <div class="homework-detail-copy">${sanitizeMessageHTML(String(submission.submissionText || "No submission notes"))}</div>
+          ${renderHomeworkFiles(submission.files || [])}
+          ${submission.feedbackText ? `<div class="homework-detail-feedback"><strong>Feedback:</strong> ${escapeHomeworkHtml(submission.feedbackText)}</div>` : ""}
+          ${submission.gradeValue ? `<div class="homework-detail-feedback"><strong>Grade:</strong> ${escapeHomeworkHtml(submission.gradeValue)}</div>` : ""}
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderHomeworkDetailModal() {
+  if (!homeworkDetailModalState?.channelId || !homeworkDetailModalBody || !homeworkDetailModalFooter) return;
+  const channelId = homeworkDetailModalState.channelId;
+  const board = homeworkBoardByChannel[channelId] || { permissions: {}, items: [] };
+  const item = (board.items || []).find((entry) => String(entry.id) === String(homeworkDetailModalState.itemId));
+  if (!item) {
+    closeHomeworkDetailModal();
+    return;
+  }
+  const permissions = board.permissions || {};
+  const uiState = getHomeworkBoardUiState(channelId);
+  const tab = homeworkDetailModalState.tab || uiState.detailTab || "instructions";
+  const mySubmission = item.mySubmission || null;
+  const discussion = messagesByChannel[channelId] || [];
+  const dueLabel = formatHomeworkDateLabel(item.dueDate);
+  if (homeworkDetailModalTitle) homeworkDetailModalTitle.textContent = String(item.title || "Assignment detail");
+  if (homeworkDetailModalSubtitle) homeworkDetailModalSubtitle.textContent = `Due ${dueLabel}`;
+  if (homeworkDetailTabs) {
+    const submissionTabBtn = homeworkDetailTabs.querySelector('[data-homework-detail-tab="submission"]');
+    if (submissionTabBtn) {
+      submissionTabBtn.textContent = permissions.canManage ? "Submissions" : "My Submission";
+    }
+    homeworkDetailTabs.querySelectorAll(".homework-detail-tab").forEach((button) => {
+      const active = button.dataset.homeworkDetailTab === tab;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-selected", active ? "true" : "false");
+    });
+  }
+  if (tab === "instructions") {
+    homeworkDetailModalBody.innerHTML = `
+      <div class="homework-detail-stack">
+        <div class="homework-detail-banner">
+          ${renderHomeworkStatusBadge(getHomeworkViewerStatus(item, permissions))}
+          ${item.resourceUrl ? `<a class="homework-resource-link" href="${escapeHomeworkHtml(item.resourceUrl)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-link"></i><span>Open resource</span></a>` : ""}
+        </div>
+        <div class="homework-detail-copy">${String(item.description || "").trim() ? sanitizeMessageHTML(String(item.description || "")) : `<div class="homework-empty-note homework-empty-note--compact">No instructions added yet. Use Edit to add guidance, links, or grading notes.</div>`}</div>
+        ${renderHomeworkFiles(item.files)}
+      </div>
+    `;
+    homeworkDetailModalFooter.innerHTML = `
+      <button type="button" class="tasks-btn" data-homework-action="close-detail">Close</button>
+      ${permissions.canManage ? `<button type="button" class="tasks-btn" data-homework-action="edit-item" data-item-id="${escapeHomeworkHtml(item.id)}">Edit</button>` : ""}
+      ${permissions.canManage ? `<button type="button" class="tasks-btn homework-card-primary-action" data-homework-action="review-from-detail" data-item-id="${escapeHomeworkHtml(item.id)}">Open review queue</button>` : ""}
+      ${!permissions.canManage ? `<button type="button" class="tasks-btn homework-card-primary-action" data-homework-action="open-submission" data-item-id="${escapeHomeworkHtml(item.id)}">Update submission</button>` : ""}
+    `;
+  } else if (tab === "submission") {
+    homeworkDetailModalBody.innerHTML = permissions.canManage
+      ? renderHomeworkDetailSubmissionList(item)
+      : `
+        <div class="homework-detail-stack">
+          ${mySubmission ? renderHomeworkStatusBadge(mySubmission.status || "draft") : `<div class="homework-empty-note">You have not submitted this assignment yet.</div>`}
+          ${mySubmission ? `<div class="homework-detail-copy">${sanitizeMessageHTML(String(mySubmission.submissionText || "No submission notes"))}</div>` : ""}
+          ${mySubmission ? renderHomeworkFiles(mySubmission.files || []) : ""}
+        </div>
+      `;
+    homeworkDetailModalFooter.innerHTML = `
+      <button type="button" class="tasks-btn" data-homework-action="close-detail">Close</button>
+      ${permissions.canManage ? "" : `<button type="button" class="tasks-btn" data-homework-action="save-draft" data-item-id="${escapeHomeworkHtml(item.id)}">Edit draft</button>`}
+      ${permissions.canManage ? "" : `<button type="button" class="tasks-btn homework-card-primary-action" data-homework-action="open-submission" data-item-id="${escapeHomeworkHtml(item.id)}">Edit submission</button>`}
+    `;
+  } else if (tab === "feedback") {
+    if (permissions.canManage) {
+      homeworkDetailModalBody.innerHTML = `
+        <div class="homework-detail-stack">
+          <div class="homework-detail-feedback-grid">
+            <article class="homework-feedback-stat"><strong>${Number(item.submissionSummary?.submitted || 0)}</strong><span>Submitted</span></article>
+            <article class="homework-feedback-stat"><strong>${Number(item.submissionSummary?.reviewed || 0)}</strong><span>Reviewed</span></article>
+            <article class="homework-feedback-stat"><strong>${Number(item.submissionSummary?.returned || 0)}</strong><span>Returned</span></article>
+          </div>
+          ${renderHomeworkDetailSubmissionList(item)}
+        </div>
+      `;
+      homeworkDetailModalFooter.innerHTML = `<button type="button" class="tasks-btn" data-homework-action="close-detail">Close</button>`;
+    } else {
+      homeworkDetailModalBody.innerHTML = mySubmission
+        ? `
+          <div class="homework-detail-stack">
+            ${renderHomeworkStatusBadge(mySubmission.status || "pending")}
+            <div class="homework-detail-feedback">${mySubmission.feedbackText ? escapeHomeworkHtml(mySubmission.feedbackText) : "No teacher feedback yet."}</div>
+            ${mySubmission.gradeValue ? `<div class="homework-detail-feedback"><strong>Grade:</strong> ${escapeHomeworkHtml(mySubmission.gradeValue)}</div>` : ""}
+          </div>
+        `
+        : `<div class="homework-empty-note">Feedback will appear here after submission.</div>`;
+      homeworkDetailModalFooter.innerHTML = `<button type="button" class="tasks-btn" data-homework-action="close-detail">Close</button>`;
+    }
+  } else {
+    homeworkDetailModalBody.innerHTML = `
+      <div class="homework-detail-stack">
+        <div class="homework-empty-note">Discussion here is class-wide for the homework channel. It is not assignment-specific yet.</div>
+        <div class="homework-detail-discussion">${renderHomeworkDiscussion(discussion, 8)}</div>
+      </div>
+    `;
+    homeworkDetailModalFooter.innerHTML = `<button type="button" class="tasks-btn" data-homework-action="close-detail">Close</button>`;
+  }
+}
+
+function openHomeworkDetailModal(channelId, itemId, tab = null) {
+  if (!homeworkDetailModal || !channelId || !itemId) return;
+  const uiState = getHomeworkBoardUiState(channelId);
+  if (tab) uiState.detailTab = tab;
+  homeworkDetailModalState = {
+    channelId: String(channelId),
+    itemId: String(itemId),
+    tab: tab || uiState.detailTab || "instructions"
+  };
+  renderHomeworkDetailModal();
+  openHomeworkModal(homeworkDetailModal);
+}
+
+function closeHomeworkDetailModal() {
+  homeworkDetailModalState = null;
+  closeHomeworkModal(homeworkDetailModal);
+}
+
+function renderHomeworkBoardItem(item, permissions = {}) {
+  const canManage = !!permissions.canManage;
+  const mySubmission = item.mySubmission || null;
+  const submissionStatus = getHomeworkViewerStatus(item, permissions);
+  const reviewRows = Array.isArray(item.submissions) ? item.submissions : [];
+  const summary = item.submissionSummary || { total: 0, submitted: 0, reviewed: 0, returned: 0 };
+  const dueMeta = getHomeworkStatusMeta(item.isArchived ? "archived" : submissionStatus);
+  const dueDateValue = String(item.dueDate || "").trim();
+  const dueDate = dueDateValue ? new Date(dueDateValue) : null;
+  const overdue = dueDate && !Number.isNaN(dueDate.getTime()) && dueDate.getTime() < Date.now() && !item.isArchived && submissionStatus !== "reviewed";
+  const resourceCount = item.resourceUrl ? 1 : 0;
+  const fileCount = Array.isArray(item.files) ? item.files.length : 0;
+  const instructionsHtml = String(item.description || "").trim()
+    ? sanitizeMessageHTML(String(item.description || ""))
+    : `<div class="homework-empty-note homework-empty-note--compact">No instructions added yet. Teachers can add expectations, links, or grading notes from Edit.</div>`;
+  return `
+    <article class="task-card homework-item-card" data-homework-item-id="${escapeHomeworkHtml(item.id)}">
+      <div class="homework-card-head">
+        <div class="task-main">
+          <div class="homework-card-kicker">${escapeHomeworkHtml(item.createdByName || "Teacher")}</div>
+          <div class="task-title homework-card-title">${escapeHomeworkHtml(item.title || "Homework")}</div>
+          <div class="task-meta homework-card-meta">
+            <span class="homework-due-badge ${overdue ? "homework-due-badge--overdue" : ""}"><i class="fa-regular fa-calendar"></i><span>Due ${escapeHomeworkHtml(formatHomeworkDateLabel(item.dueDate))}</span></span>
+            ${renderHomeworkStatusBadge(dueMeta.tone)}
+            ${fileCount ? `<span class="task-pill homework-meta-pill"><i class="fa-solid fa-paperclip"></i><span>${fileCount} file${fileCount === 1 ? "" : "s"}</span></span>` : ""}
+            ${resourceCount ? `<span class="task-pill homework-meta-pill"><i class="fa-solid fa-link"></i><span>Resource</span></span>` : ""}
+          </div>
+        </div>
+        <div class="task-actions homework-card-actions">
+          <button class="task-icon" type="button" data-homework-action="open-detail" data-item-id="${escapeHomeworkHtml(item.id)}" aria-label="Open assignment details"><i class="fa-solid fa-up-right-and-down-left-from-center"></i></button>
+          ${canManage ? `<button class="task-icon" type="button" data-homework-action="edit-item" data-item-id="${escapeHomeworkHtml(item.id)}" aria-label="Edit assignment"><i class="fa-solid fa-pen"></i></button>` : ""}
+          ${canManage ? `<button class="task-icon" type="button" data-homework-action="archive-item" data-item-id="${escapeHomeworkHtml(item.id)}" aria-label="Archive assignment"><i class="fa-solid fa-box-archive"></i></button>` : ""}
+        </div>
+      </div>
+      <div class="homework-card-summary">
+        ${canManage ? `
+          <div class="homework-summary-chip"><strong>${Number(summary.submitted || 0)}</strong><span>submitted</span></div>
+          <div class="homework-summary-chip"><strong>${Number(summary.reviewed || 0)}</strong><span>reviewed</span></div>
+          <div class="homework-summary-chip"><strong>${Number(summary.returned || 0)}</strong><span>returned</span></div>
+        ` : `
+          <div class="homework-summary-chip"><strong>${escapeHomeworkHtml(getHomeworkStatusMeta(submissionStatus).label)}</strong><span>my status</span></div>
+          <div class="homework-summary-chip"><strong>${mySubmission?.gradeValue ? escapeHomeworkHtml(mySubmission.gradeValue) : "—"}</strong><span>grade</span></div>
+          <div class="homework-summary-chip"><strong>${mySubmission?.feedbackText ? "Yes" : "No"}</strong><span>feedback</span></div>
+        `}
+      </div>
+      <div class="task-body homework-card-body">
+        <div class="homework-card-copy">${instructionsHtml}</div>
+        ${item.resourceUrl ? `<a class="homework-resource-link" href="${escapeHomeworkHtml(item.resourceUrl)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-link"></i><span>${escapeHomeworkHtml(item.resourceUrl)}</span></a>` : ""}
+        ${renderHomeworkFiles(item.files)}
+        ${mySubmission ? `
+          <div class="task-comments homework-student-panel">
+            <div class="task-comment">
+              <div class="task-cbody">
+                <div class="task-cmeta">My submission · ${renderHomeworkStatusBadge(mySubmission.status || submissionStatus)}</div>
+                <div class="task-ctext">${sanitizeMessageHTML(String(mySubmission.submissionText || "No submission text"))}</div>
+                ${renderHomeworkFiles(mySubmission.files || [])}
+                ${mySubmission.feedbackText ? `<div class="task-ctext"><strong>Feedback:</strong> ${escapeHomeworkHtml(mySubmission.feedbackText)}</div>` : ""}
+                ${mySubmission.gradeValue ? `<div class="task-ctext"><strong>Grade:</strong> ${escapeHomeworkHtml(mySubmission.gradeValue)}</div>` : ""}
+              </div>
+            </div>
+          </div>
+        ` : ""}
+        ${canManage && reviewRows.length ? `
+          <div class="task-comments homework-review-list">
+            ${reviewRows.map((submission) => `
+              <div class="task-comment homework-review-row">
+                <div class="task-cbody">
+                  <div class="task-cmeta">${escapeHomeworkHtml(submission.studentName || submission.studentId || "Student")} · ${renderHomeworkStatusBadge(submission.status || "pending")}</div>
+                  <div class="task-ctext">${sanitizeMessageHTML(String(submission.submissionText || "No submission text"))}</div>
+                  ${renderHomeworkFiles(submission.files || [])}
+                  ${submission.feedbackText ? `<div class="task-ctext"><strong>Feedback:</strong> ${escapeHomeworkHtml(submission.feedbackText)}</div>` : ""}
+                  ${submission.gradeValue ? `<div class="task-ctext"><strong>Grade:</strong> ${escapeHomeworkHtml(submission.gradeValue)}</div>` : ""}
+                  <div class="task-comment-actions">
+                    <button class="tasks-btn" type="button" data-homework-action="review-submission" data-item-id="${escapeHomeworkHtml(item.id)}" data-submission-id="${escapeHomeworkHtml(submission.id)}">Review</button>
+                  </div>
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        ` : ""}
+      </div>
+      <div class="homework-card-footer">
+        ${!canManage ? `<button class="tasks-btn" type="button" data-homework-action="save-draft" data-item-id="${escapeHomeworkHtml(item.id)}">Edit draft</button>` : ""}
+        ${!canManage ? `<button class="tasks-btn homework-card-primary-action" type="button" data-homework-action="open-submission" data-item-id="${escapeHomeworkHtml(item.id)}">${mySubmission ? "Update submission" : "Start submission"}</button>` : ""}
+        ${canManage ? `<button class="tasks-btn homework-card-secondary-action" type="button" data-homework-action="open-detail" data-item-id="${escapeHomeworkHtml(item.id)}">View details</button>` : ""}
+        ${canManage ? `<button class="tasks-btn homework-card-primary-action" type="button" data-homework-action="review-from-detail" data-item-id="${escapeHomeworkHtml(item.id)}">Review queue</button>` : ""}
+      </div>
+    </article>
+  `;
+}
+
+function renderHomeworkAssignmentsView(channelId, board, visibleItems) {
+  renderHomeworkHeaderFilters(channelId, board);
+  const canManage = !!board?.permissions?.canManage;
+  return `
+    <section class="tasks-shell homework-shell homework-assignments-view">
+      <div class="homework-assignments-toolbar">
+        <div class="homework-assignments-toolbar-copy">
+          <div class="homework-assignments-toolbar-title">Assignments</div>
+        </div>
+        <div class="homework-assignments-toolbar-actions">
+          <button class="task-icon homework-view-minimize" type="button" data-homework-action="close-assignments-view" aria-label="Close assignments view" title="Close">
+            <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+          </button>
+        </div>
+      </div>
+      <div class="tasks-body">
+        ${visibleItems.length ? visibleItems.map((item) => renderHomeworkBoardItem(item, board.permissions)).join("") : `<div class="homework-empty-note">No assignments match this filter yet. Try another filter or create a new assignment.</div>`}
+      </div>
+      ${!canManage ? `
+        <div class="analytics-panel-header" style="margin-top:18px;">
+          <div>
+            <div class="analytics-panel-title">Discussion</div>
+            <div class="analytics-panel-subtitle">Optional class-wide homework chat stays available below. It is not assignment-specific yet.</div>
+          </div>
+        </div>
+      ` : ""}
+    </section>
+  `;
+}
+
+function renderHomeworkDiscussionView(channelId, board, discussion) {
+  clearHomeworkHeaderFilters();
+  return `
+    <section class="tasks-shell homework-shell homework-discussion-view">
+      <div class="homework-assignments-toolbar">
+        <div class="homework-assignments-toolbar-copy">
+          <div class="homework-assignments-toolbar-title">Discussion</div>
+          <div class="homework-assignments-toolbar-subtitle">Class-wide homework discussion for this channel. It is not assignment-specific yet.</div>
+        </div>
+        <div class="homework-assignments-toolbar-actions">
+          <button class="task-icon homework-view-minimize" type="button" data-homework-action="close-discussion-view" aria-label="Close discussion view" title="Close">
+            <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+          </button>
+        </div>
+      </div>
+      <div class="tasks-body" data-homework-discussion-section="1">
+        ${renderHomeworkDiscussion(discussion)}
+      </div>
+    </section>
+  `;
+}
+
+function bindHomeworkBoardActions(channelId, board) {
+  if (!messagesContainer) return;
+  const itemsById = new Map((board?.items || []).map((item) => [String(item.id), item]));
+  if (headerHomeworkFilters) {
+    headerHomeworkFilters.querySelectorAll("[data-homework-header-filter]").forEach((button) => {
+      if (button.dataset.homeworkBound === "1") return;
+      button.dataset.homeworkBound = "1";
+      button.addEventListener("click", () => {
+        getHomeworkBoardUiState(channelId).filter = String(button.dataset.homeworkHeaderFilter || "all");
+        renderMessages(channelId, { restoreScroll: true });
+      });
+    });
+  }
+  messagesContainer.querySelectorAll(".homework-item-card").forEach((card) => {
+    if (card.dataset.homeworkCardBound === "1") return;
+    card.dataset.homeworkCardBound = "1";
+    card.addEventListener("click", (event) => {
+      if (event.target.closest("button, a, input, textarea, select")) return;
+      const itemId = String(card.dataset.homeworkItemId || "");
+      const item = itemsById.get(itemId);
+      if (item) openHomeworkDetailModal(channelId, item.id, "instructions");
+    });
+  });
+  messagesContainer.querySelectorAll("[data-homework-action]").forEach((button) => {
+    if (button.dataset.homeworkBound === "1") return;
+    button.dataset.homeworkBound = "1";
+    button.addEventListener("click", async () => {
+      const action = button.dataset.homeworkAction;
+      const itemId = String(button.dataset.itemId || "");
+      const item = itemsById.get(itemId) || null;
+      try {
+        if (action === "new-item") {
+          openHomeworkAssignmentModalForItem(channelId);
+        } else if (action === "edit-item" && item) {
+          openHomeworkAssignmentModalForItem(channelId, item);
+        } else if (action === "archive-item" && item) {
+          await archiveHomeworkItem(item);
+        } else if (action === "save-draft" && item) {
+          openHomeworkSubmissionModalForItem(item);
+        } else if (action === "open-submission" && item) {
+          openHomeworkSubmissionModalForItem(item);
+        } else if (action === "review-submission") {
+          const submissionId = String(button.dataset.submissionId || "");
+          if (item && submissionId) {
+            const submission = (item.submissions || []).find((entry) => String(entry.id) === submissionId);
+            if (submission) openHomeworkReviewModalForSubmission(item, submission);
+          }
+        } else if (action === "review-from-detail" && item) {
+          openHomeworkDetailModal(channelId, item.id, "feedback");
+        } else if (action === "open-detail" && item) {
+          openHomeworkDetailModal(channelId, item.id, "instructions");
+        } else if (action === "open-assignments-view") {
+          getHomeworkBoardUiState(channelId).view = "assignments";
+          getHomeworkBoardUiState(channelId).filter = "all";
+          renderMessages(channelId, { restoreScroll: true });
+        } else if (action === "open-filter-pending") {
+          const uiState = getHomeworkBoardUiState(channelId);
+          uiState.view = "assignments";
+          uiState.filter = "pending";
+          renderMessages(channelId, { restoreScroll: true });
+        } else if (action === "open-filter-submitted") {
+          const uiState = getHomeworkBoardUiState(channelId);
+          uiState.view = "assignments";
+          uiState.filter = "submitted";
+          renderMessages(channelId, { restoreScroll: true });
+        } else if (action === "open-filter-reviewed") {
+          const uiState = getHomeworkBoardUiState(channelId);
+          uiState.view = "assignments";
+          uiState.filter = "reviewed";
+          renderMessages(channelId, { restoreScroll: true });
+        } else if (action === "open-discussion-view") {
+          getHomeworkBoardUiState(channelId).view = "discussion";
+          renderMessages(channelId, { restoreScroll: true });
+          requestAnimationFrame(() => {
+            setHomeworkComposerExpanded(true, { focus: true, channelId });
+          });
+        } else if (action === "close-discussion-view") {
+          getHomeworkBoardUiState(channelId).view = "dashboard";
+          renderMessages(channelId, { restoreScroll: true });
+        } else if (action === "close-assignments-view") {
+          getHomeworkBoardUiState(channelId).view = "dashboard";
+          renderMessages(channelId, { restoreScroll: true });
+        } else if (action === "filter-board") {
+          getHomeworkBoardUiState(channelId).filter = String(button.dataset.filter || "all");
+          renderMessages(channelId, { restoreScroll: true });
+        }
+      } catch (err) {
+        console.error("Homework action failed", err);
+        showToast(err?.message || "Could not update homework");
+      }
+    });
+  });
+
+  const fab = messagesContainer.querySelector('[data-homework-fab="1"]');
+  if (fab && fab.dataset.homeworkFabBound !== "1") {
+    fab.dataset.homeworkFabBound = "1";
+    fab.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      const rect = fab.getBoundingClientRect();
+      const shellRect = messagesContainer.getBoundingClientRect();
+      homeworkFabDrag = {
+        channelId,
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        offsetX: event.clientX - rect.left,
+        offsetY: event.clientY - rect.top,
+        shellLeft: shellRect.left,
+        shellTop: shellRect.top,
+        width: rect.width,
+        height: rect.height,
+        moved: false
+      };
+      fab.setPointerCapture?.(event.pointerId);
+      fab.classList.add("is-dragging");
+      event.preventDefault();
+    });
+    fab.addEventListener("pointermove", (event) => {
+      if (!homeworkFabDrag || homeworkFabDrag.pointerId !== event.pointerId) return;
+      const nextLeft = event.clientX - homeworkFabDrag.shellLeft - homeworkFabDrag.offsetX;
+      const nextTop = event.clientY - homeworkFabDrag.shellTop - homeworkFabDrag.offsetY;
+      const maxLeft = Math.max(12, messagesContainer.clientWidth - homeworkFabDrag.width - 12);
+      const maxTop = Math.max(12, messagesContainer.clientHeight - homeworkFabDrag.height - 12);
+      const clampedLeft = Math.min(Math.max(12, nextLeft), maxLeft);
+      const clampedTop = Math.min(Math.max(12, nextTop), maxTop);
+      fab.style.left = `${clampedLeft}px`;
+      fab.style.top = `${clampedTop}px`;
+      homeworkFabDrag.moved = true;
+    });
+    const finishFabDrag = (event) => {
+      if (!homeworkFabDrag || homeworkFabDrag.pointerId !== event.pointerId) return false;
+      const moved = homeworkFabDrag.moved;
+      const state = getHomeworkBoardUiState(channelId);
+      const left = Number.parseFloat(fab.style.left || "");
+      const top = Number.parseFloat(fab.style.top || "");
+      state.fabPosition = {
+        left: Number.isFinite(left) ? left : null,
+        top: Number.isFinite(top) ? top : null
+      };
+      fab.classList.remove("is-dragging");
+      fab.releasePointerCapture?.(event.pointerId);
+      homeworkFabDrag = null;
+      return moved;
+    };
+    fab.addEventListener("pointerup", (event) => {
+      const moved = finishFabDrag(event);
+      if (moved) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    });
+    fab.addEventListener("pointercancel", (event) => {
+      finishFabDrag(event);
+    });
+    fab.addEventListener("click", (event) => {
+      if (fab.classList.contains("is-dragging")) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    }, true);
+  }
+}
+
+function renderHomeworkChannel(channelId, options = {}) {
+  if (!messagesContainer) return;
+  const board = homeworkBoardByChannel[channelId] || { permissions: {}, items: [] };
+  const uiState = getHomeworkBoardUiState(channelId);
+  const discussion = messagesByChannel[channelId] || [];
+  const canManage = !!board.permissions?.canManage;
+  const visibleItems = getHomeworkFilteredItems(board, uiState.filter);
+  messagesContainer.classList.remove("school-task-chat", "teachers-task-chat", "student-task-chat");
+  if (uiState.view === "assignments") {
+    messagesContainer.innerHTML = `${renderHomeworkAssignmentsView(channelId, board, visibleItems)}${renderHomeworkFloatingAction(channelId, board)}`;
+    bindHomeworkBoardActions(channelId, board);
+    hydrateEmojiImages(messagesContainer);
+    return;
+  }
+  if (uiState.view === "discussion") {
+    messagesContainer.innerHTML = `${renderHomeworkDiscussionView(channelId, board, discussion)}${renderHomeworkFloatingAction(channelId, board)}`;
+    bindHomeworkBoardActions(channelId, board);
+    hydrateEmojiImages(messagesContainer);
+    return;
+  }
+  clearHomeworkHeaderFilters();
+  messagesContainer.innerHTML = `
+    <section class="tasks-shell homework-shell">
+      ${renderHomeworkStatsBar(board)}
+    </section>
+    ${renderHomeworkFloatingAction(channelId, board)}
+  `;
+  const refreshBtn = messagesContainer.querySelector('[data-homework-action="refresh-board"]');
+  if (refreshBtn) {
+    refreshBtn.addEventListener("click", async () => {
+      await ensureHomeworkBoardForChannel(channelId, { force: true });
+      renderMessages(channelId, options);
+    });
+  }
+  bindHomeworkBoardActions(channelId, board);
+  hydrateEmojiImages(messagesContainer);
+}
+
 function updatePrivacyRulesNavVisibility() {
   const appPrivacyItem = document.querySelector(
     '#appsContainer .sidebar-item[data-channel-name="Privacy & Rules"]'
@@ -4352,6 +5514,7 @@ async function ensureLiveSessionsLoadedForRouting() {
   try {
     const res = await fetchJSON(`/api/live-sessions?scope=${encodeURIComponent("all")}`);
     liveSessions = Array.isArray(res) ? dedupeSessions(res) : [];
+    liveSessionBackgroundFetchAt = Date.now();
   } catch (err) {
     console.error("Failed to load live sessions for routing", err);
   }
@@ -4405,6 +5568,8 @@ function primeLiveAnnouncementLinks(root) {
     linkEl.setAttribute("target", "_blank");
     linkEl.setAttribute("rel", "noopener noreferrer");
   });
+  ensureLiveSessionSurfaceRefreshTimer();
+  void refreshLiveSessionSurface(!liveSessions.length);
 }
 
 function formatLiveSessionScheduleLabel(session) {
@@ -4638,7 +5803,9 @@ function openLivePanel() {
   } catch (_err) {}
   setLivePanelView("hub");
   clearBrowserLiveRoomPath();
+  updateLivePanelRoleLayout();
   loadLiveSessions(liveScope, token);
+  void loadLiveSharedRecordings();
   updateLaunchButtonLabel();
 }
 function openAnalyticsPanel() {
@@ -7139,7 +8306,7 @@ function setAppFullScreenMode(fullscreen) {
 const LIVE_STATUS_LABELS = {
   scheduled: "Scheduled",
   live: "Live",
-  ended: "Ended",
+  ended: "Expired",
   canceled: "Canceled"
 };
 
@@ -7198,6 +8365,374 @@ function isLiveSessionExpired(session) {
   return Boolean(endAt && Date.now() > endAt.getTime());
 }
 
+function deriveLiveSessionStatusClient(session) {
+  const explicitStatus = String(session?.status || "").toLowerCase();
+  if (explicitStatus === "canceled" || explicitStatus === "cancelled") {
+    return "canceled";
+  }
+  if (isLiveSessionExpired(session)) {
+    return "ended";
+  }
+  const startAt = parseLiveSessionDateTimeValue(session, "start_time");
+  const endAt = parseLiveSessionDateTimeValue(session, "end_time");
+  const now = Date.now();
+  if (startAt && now >= startAt.getTime() && (!endAt || now <= endAt.getTime())) {
+    return "live";
+  }
+  return explicitStatus || "scheduled";
+}
+
+function getLiveSessionDisplayState(session) {
+  const derivedStatus = deriveLiveSessionStatusClient(session);
+  if (derivedStatus === "canceled") {
+    return {
+      status: "canceled",
+      eventLabel: "LIVE SESSION",
+      badgeText: "Canceled",
+      badgeClass: "live-announcement-badge live-announcement-badge-canceled",
+      ctaText: "Session canceled",
+      ctaClass: "live-announcement-cta live-announcement-cta-disabled",
+      ctaDisabled: true,
+      noteText: "This live session was canceled.",
+      wrapperClass: "live-announcement-card live-announcement-card-canceled",
+      listLinkText: "Session canceled"
+    };
+  }
+  if (derivedStatus === "ended") {
+    return {
+      status: "ended",
+      eventLabel: "LIVE SESSION",
+      badgeText: "Expired",
+      badgeClass: "live-announcement-badge live-announcement-badge-ended",
+      ctaText: "Expired",
+      ctaClass: "live-announcement-cta live-announcement-cta-disabled",
+      ctaDisabled: true,
+      noteText: "Session has expired.",
+      wrapperClass: "live-announcement-card live-announcement-card-ended",
+      listLinkText: "Link expired"
+    };
+  }
+  if (derivedStatus === "live") {
+    return {
+      status: "live",
+      eventLabel: "LIVE NOW",
+      badgeText: "Live now",
+      badgeClass: "live-announcement-badge live-announcement-badge-live",
+      ctaText: "Enter classroom",
+      ctaClass: "live-announcement-cta live-announcement-cta-live",
+      ctaDisabled: false,
+      noteText: "",
+      wrapperClass: "live-announcement-card live-announcement-card-live",
+      listLinkText: "Live now"
+    };
+  }
+  return {
+    status: "scheduled",
+    eventLabel: "SCHEDULED SESSION",
+    badgeText: "Ready to join",
+    badgeClass: "live-announcement-badge live-announcement-badge-ready",
+    ctaText: "Join class",
+    ctaClass: "live-announcement-cta live-announcement-cta-ready",
+    ctaDisabled: false,
+    noteText: "",
+    wrapperClass: "live-announcement-card",
+    listLinkText: session?.meeting_url ? "Link ready" : "Link missing"
+  };
+}
+
+function createLiveAnnouncementCtaNode({ state, href, sessionId, channelId }) {
+  if (state.ctaDisabled || !href) {
+    const disabled = document.createElement("span");
+    disabled.className = state.ctaClass;
+    disabled.setAttribute("aria-disabled", "true");
+    disabled.textContent = state.ctaText;
+    return disabled;
+  }
+  const link = document.createElement("a");
+  link.className = state.ctaClass;
+  link.href = href;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  if (sessionId) link.dataset.liveSessionId = String(sessionId);
+  if (channelId) link.dataset.liveChannelId = String(channelId);
+  link.textContent = state.ctaText;
+  return link;
+}
+
+function findLiveSessionForAnnouncementCard(card) {
+  if (!card) return null;
+  const directSessionId = String(card.dataset.liveSessionId || "").trim();
+  if (directSessionId) {
+    const direct = getLiveSessionById(directSessionId);
+    if (direct) return direct;
+  }
+  if (!Array.isArray(liveSessions) || !liveSessions.length) return null;
+  const currentChannel = String(card.dataset.liveChannelId || currentChannelId || "").trim();
+  const href = normalizeComparableUrl(
+    card.dataset.liveAppPath ||
+    card.querySelector(".live-announcement-cta[href]")?.getAttribute("href") ||
+    ""
+  );
+  const title = String(card.querySelector(".live-announcement-title")?.textContent || "").trim();
+  const byMeetingUrl = liveSessions.filter((session) => {
+    const meetingUrl = normalizeComparableUrl(session?.meeting_url || "");
+    const roomName = String(session?.room_name || "").trim();
+    return (
+      (href && meetingUrl && href === meetingUrl) ||
+      (href && roomName && href.includes(roomName))
+    );
+  });
+  const candidates = byMeetingUrl.length
+    ? byMeetingUrl
+    : liveSessions.filter((session) => String(session?.title || "").trim() === title);
+  if (!candidates.length) return null;
+  return (
+    candidates.find((session) => String(session?.channel_id || "") === currentChannel) ||
+    candidates[0] ||
+    null
+  );
+}
+
+function getFallbackLiveAnnouncementSession(card) {
+  if (!card) return null;
+  const fallback = {
+    id: String(card.dataset.liveSessionId || "").trim() || null,
+    channel_id: String(card.dataset.liveChannelId || "").trim() || null,
+    status: String(card.dataset.liveStatus || "").trim() || "scheduled",
+    date: String(card.dataset.liveDate || "").trim(),
+    start_time: String(card.dataset.liveStartTime || "").trim(),
+    end_time: String(card.dataset.liveEndTime || "").trim(),
+    meeting_url: String(card.dataset.liveAppPath || "").trim(),
+  };
+  return fallback.date || fallback.start_time || fallback.end_time || fallback.meeting_url || fallback.id
+    ? fallback
+    : null;
+}
+
+function syncLiveAnnouncementCard(card) {
+  if (!(card instanceof HTMLElement)) return;
+  const session = findLiveSessionForAnnouncementCard(card) || getFallbackLiveAnnouncementSession(card);
+  if (!session) return;
+  const state = getLiveSessionDisplayState(session);
+  card.dataset.liveStatus = state.status;
+  if (session.date) card.dataset.liveDate = session.date;
+  if (session.start_time) card.dataset.liveStartTime = session.start_time;
+  if (session.end_time) card.dataset.liveEndTime = session.end_time;
+  if (session.meeting_url) card.dataset.liveAppPath = session.meeting_url;
+  if (session.id) card.dataset.liveSessionId = String(session.id);
+  if (session.channel_id) card.dataset.liveChannelId = String(session.channel_id);
+  card.classList.remove(
+    "live-announcement-card-live",
+    "live-announcement-card-ended",
+    "live-announcement-card-canceled",
+    "live-announcement-card-updated"
+  );
+  state.wrapperClass
+    .split(/\s+/)
+    .filter(Boolean)
+    .forEach((className) => card.classList.add(className));
+
+  const labelEl = card.querySelector(".live-announcement-label");
+  if (labelEl) labelEl.textContent = state.eventLabel;
+
+  const badgeEl = card.querySelector(".live-announcement-badge");
+  if (badgeEl) {
+    badgeEl.className = state.badgeClass;
+    badgeEl.textContent = state.badgeText;
+  }
+
+  let stateNoteEl = card.querySelector(".live-announcement-state-note");
+  if (state.noteText) {
+    if (!stateNoteEl) {
+      stateNoteEl = document.createElement("div");
+      stateNoteEl.className = "live-announcement-state-note";
+      const noteAnchor = card.querySelector(".live-announcement-note") || card.querySelector(".live-announcement-actions");
+      if (noteAnchor?.parentNode) {
+        noteAnchor.parentNode.insertBefore(stateNoteEl, noteAnchor);
+      } else {
+        card.querySelector(".live-announcement-body")?.appendChild(stateNoteEl);
+      }
+    }
+    stateNoteEl.textContent = state.noteText;
+  } else if (stateNoteEl) {
+    stateNoteEl.remove();
+  }
+
+  const actionsEl = card.querySelector(".live-announcement-actions");
+  if (actionsEl) {
+    actionsEl.innerHTML = "";
+    actionsEl.appendChild(createLiveAnnouncementCtaNode({
+      state,
+      href: String(card.dataset.liveAppPath || session.meeting_url || "").trim(),
+      sessionId: card.dataset.liveSessionId || session.id || "",
+      channelId: card.dataset.liveChannelId || session.channel_id || ""
+    }));
+  }
+}
+
+function refreshLiveAnnouncementCards(root = document) {
+  if (!root) return;
+  root.querySelectorAll(".live-announcement-card").forEach((card) => syncLiveAnnouncementCard(card));
+}
+
+async function refreshLiveSessionsCacheSilently(force = false) {
+  const now = Date.now();
+  if (!force && liveSessions.length && now - liveSessionBackgroundFetchAt < 60000) {
+    return liveSessions;
+  }
+  try {
+    const res = await fetchJSON(`/api/live-sessions?scope=${encodeURIComponent("all")}`);
+    liveSessions = Array.isArray(res) ? dedupeSessions(res) : [];
+    liveSessionBackgroundFetchAt = Date.now();
+  } catch (err) {
+    console.error("Failed to refresh live sessions silently", err);
+  }
+  return liveSessions;
+}
+
+async function refreshLiveSessionSurface(forceFetch = false) {
+  const hasAnnouncementCards = !!document.querySelector(".live-announcement-card");
+  const livePanelVisible = !!livePanel && !livePanel.classList.contains("hidden");
+  if (!hasAnnouncementCards && !livePanelVisible) return;
+  if (forceFetch || !liveSessions.length || Date.now() - liveSessionBackgroundFetchAt > 60000) {
+    await refreshLiveSessionsCacheSilently(forceFetch);
+  }
+  if (livePanelVisible) {
+    renderLiveSchedule();
+    renderLiveRecents();
+  }
+  refreshLiveAnnouncementCards(document);
+}
+
+function ensureLiveSessionSurfaceRefreshTimer() {
+  if (liveSessionSurfaceRefreshTimer) return;
+  liveSessionSurfaceRefreshTimer = window.setInterval(() => {
+    void refreshLiveSessionSurface(false);
+  }, 15000);
+}
+
+function getUserNameByIdFromDirectory(userId) {
+  const target = String(userId || "").trim();
+  if (!target) return "";
+  const hit = (userDirectoryCache || []).find((user) => String(user.id || "").trim() === target);
+  return String(hit?.name || hit?.username || hit?.email || "").trim();
+}
+
+function updateLivePanelRoleLayout() {
+  const isStudentView = canCurrentUserHostStudentLiveMeeting();
+  livePanel?.classList.toggle("live-panel-student-view", isStudentView);
+  liveHubView?.classList.toggle("live-panel-student-view", isStudentView);
+  const liveWorkspaceIcon = document.querySelector("#liveHubView .live-workspace-card-icon i");
+  if (liveWorkspaceIcon) {
+    liveWorkspaceIcon.className = isStudentView
+      ? "fa-solid fa-user-group"
+      : "fa-solid fa-screen-users";
+  }
+  if (livePanelSubtitle) {
+    livePanelSubtitle.textContent = isStudentView
+      ? ""
+      : "Manage sessions and run your live room from one focused workspace.";
+    livePanelSubtitle.hidden = isStudentView;
+  }
+  if (liveSessionsHeading) {
+    liveSessionsHeading.textContent = isStudentView ? "Class sessions" : "Scheduled sessions";
+  }
+  if (liveModeToggleButtons) {
+    liveModeToggleButtons.forEach((btn) => {
+      btn.hidden = isStudentView;
+    });
+  }
+  if (liveWorkspaceTitle) {
+    liveWorkspaceTitle.textContent = isStudentView ? "Start a group study meeting" : "Open a session in a new tab";
+  }
+  if (liveWorkspaceText) {
+    liveWorkspaceText.textContent = isStudentView
+      ? "Create a student study room, invite classmates, and open the meeting in a new tab for group practice."
+      : "Join any scheduled or instant session to open the meeting in your browser without changing the live session management tools here.";
+  }
+  if (liveWorkspaceActions) {
+    liveWorkspaceActions.innerHTML = "";
+    if (isStudentView) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn btn-primary";
+      btn.id = "liveStudentHostBtn";
+      btn.innerHTML = '<i class="fa-solid fa-user-group"></i> Launch group study';
+      btn.addEventListener("click", () => {
+        void openHostMeetingModal();
+      });
+      liveWorkspaceActions.appendChild(btn);
+    }
+  }
+  if (liveHostBtn) liveHostBtn.hidden = isStudentView || !canCurrentUserManageLive();
+  if (liveCreateBtn) liveCreateBtn.hidden = isStudentView || !canCurrentUserManageLive();
+  if (liveRecordingsSection) {
+    liveRecordingsSection.classList.toggle("hidden", !isStudentView);
+  }
+}
+
+async function loadLiveSharedRecordings() {
+  if (!liveRecordingsList) return;
+  if (!canCurrentUserHostStudentLiveMeeting()) {
+    liveRecordingsList.innerHTML = "";
+    return;
+  }
+  const channelId = String(currentChannelId || "").trim();
+  if (!channelId) {
+    liveRecordingsList.innerHTML = '<div class="live-recordings-empty">Open a class channel to see shared recordings.</div>';
+    return;
+  }
+  liveRecordingsList.innerHTML = '<div class="live-recordings-empty">Loading shared recordings...</div>';
+  try {
+    await loadUserDirectory();
+    const qs = new URLSearchParams();
+    qs.set("workspaceId", currentWorkspaceId || "default");
+    qs.set("channelId", channelId);
+    const res = await fetchJSON(`/api/files/registry?${qs.toString()}`);
+    const recordings = (Array.isArray(res?.files) ? res.files : [])
+      .filter((file) => {
+        const mime = String(file?.mime || "").toLowerCase();
+        return mime.startsWith("video/") || mime.startsWith("audio/");
+      })
+      .slice(0, 12);
+    if (!recordings.length) {
+      liveRecordingsList.innerHTML = '<div class="live-recordings-empty">No class recordings have been shared yet.</div>';
+      return;
+    }
+    liveRecordingsList.innerHTML = "";
+    recordings.forEach((file) => {
+      const card = document.createElement("article");
+      card.className = "live-recording-card";
+      const isVideo = String(file?.mime || "").toLowerCase().startsWith("video/");
+      const uploader = getUserNameByIdFromDirectory(file?.uploaderId) || "School";
+      const createdAt = file?.createdAt
+        ? new Date(file.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+        : "";
+      card.innerHTML = `
+        <div class="live-recording-head">
+          <div class="live-recording-icon" aria-hidden="true">
+            <i class="fa-solid ${isVideo ? "fa-video" : "fa-microphone"}"></i>
+          </div>
+          <div class="live-recording-copy">
+            <div class="live-recording-title">${escapeHtml(file?.name || "Class recording")}</div>
+            <div class="live-recording-meta">${escapeHtml(uploader)}${createdAt ? ` · ${escapeHtml(createdAt)}` : ""}</div>
+          </div>
+        </div>
+        <div class="live-recording-actions">
+          <a class="btn btn-primary" href="${escapeHtml(file?.url || "#")}" target="_blank" rel="noopener noreferrer">
+            <i class="fa-solid fa-play"></i>
+            ${isVideo ? "Watch" : "Listen"}
+          </a>
+        </div>
+      `;
+      liveRecordingsList.appendChild(card);
+    });
+  } catch (err) {
+    console.error("Failed to load live recordings", err);
+    liveRecordingsList.innerHTML = '<div class="live-recordings-empty">Could not load shared recordings.</div>';
+  }
+}
+
 function normalizeLiveAutopostMode(mode) {
   const raw = String(mode || "").trim().toLowerCase();
   if (raw === "0" || raw === "channel" || raw === "class" || raw === "immediate") {
@@ -7225,9 +8760,14 @@ function getCurrentLiveChannelSelection() {
 }
 
 function getHostMeetingCandidates() {
+  const isStudentHost = canCurrentUserHostStudentLiveMeeting();
   return (userDirectoryCache || [])
     .filter((user) => String(user.workspaceId || currentWorkspaceId || "").trim() === String(currentWorkspaceId || "").trim())
     .filter((user) => String(user.id || "").trim() !== String(sessionUser?.id || "").trim())
+    .filter((user) => {
+      if (!isStudentHost) return true;
+      return normalizeRole(user.role || user.userRole) === "student";
+    })
     .sort((a, b) => String(a.name || a.username || a.email || "").localeCompare(String(b.name || b.username || b.email || "")));
 }
 
@@ -7282,18 +8822,34 @@ function renderHostMemberPicker() {
 
 async function openHostMeetingModal() {
   if (!liveHostModal) return;
-  if (!canCurrentUserManageLive()) {
-    showToast("Only school admins and teachers can host meetings.");
+  if (!canCurrentUserManageLive() && !canCurrentUserHostStudentLiveMeeting()) {
+    showToast("You do not have permission to host meetings.");
     return;
   }
   const defaults = getDefaultLiveSessionRange();
   liveHostMemberIds = new Set();
-  if (liveHostTitleInput) liveHostTitleInput.value = "Hosted Meeting";
+  const isStudentHost = canCurrentUserHostStudentLiveMeeting();
+  if (liveHostTitleInput) liveHostTitleInput.value = isStudentHost ? "Group Study Session" : "Hosted Meeting";
   if (liveHostDateInput) liveHostDateInput.value = defaults.date;
   if (liveHostStartInput) liveHostStartInput.value = defaults.start;
   if (liveHostEndInput) liveHostEndInput.value = defaults.end;
   if (liveHostNotesInput) liveHostNotesInput.value = "";
   if (liveHostMemberSearch) liveHostMemberSearch.value = "";
+  const liveHostTitleLabel = document.querySelector('label[for="liveHostTitleInput"]');
+  const liveHostMemberLabel = document.querySelector('label[for="liveHostMemberSearch"]');
+  if (liveHostTitleLabel) liveHostTitleLabel.textContent = isStudentHost ? "Study meeting title" : "Meeting title";
+  if (liveHostMemberLabel) liveHostMemberLabel.textContent = isStudentHost ? "Add students" : "Add school members";
+  if (liveHostTitle) liveHostTitle.textContent = isStudentHost ? "Start a group study meeting" : "Host a meeting";
+  if (liveHostMemberSearch) {
+    liveHostMemberSearch.placeholder = isStudentHost
+      ? "Search students"
+      : "Search school admins, teachers, students";
+  }
+  if (liveHostNotesInput) {
+    liveHostNotesInput.placeholder = isStudentHost
+      ? "Optional study topic or room instructions"
+      : "Optional meeting instructions";
+  }
   await loadUserDirectory();
   renderHostMemberPicker();
   liveHostModal.classList.remove("hidden");
@@ -7306,6 +8862,7 @@ function closeHostMeetingModal() {
 
 async function submitHostMeeting() {
   if (!liveHostForm) return;
+  const isStudentHost = canCurrentUserHostStudentLiveMeeting();
   const date = liveHostDateInput?.value || "";
   const start_time = liveHostStartInput?.value || "";
   const end_time = liveHostEndInput?.value || "";
@@ -7324,7 +8881,7 @@ async function submitHostMeeting() {
     const created = await fetchJSON("/api/live-sessions", {
       method: "POST",
       body: JSON.stringify({
-        title: liveHostTitleInput?.value.trim() || "Hosted Meeting",
+        title: liveHostTitleInput?.value.trim() || (isStudentHost ? "Group Study Session" : "Hosted Meeting"),
         date,
         start_time,
         end_time,
@@ -7342,7 +8899,9 @@ async function submitHostMeeting() {
     if (created?.id) {
       await openLiveSessionExternally(created);
     }
-    showToast("Meeting hosted. Only selected school members can join.");
+    showToast(isStudentHost
+      ? "Group study meeting started. Only selected students can join."
+      : "Meeting hosted. Only selected school members can join.");
   } catch (err) {
     console.error("Failed to host meeting", err);
     showToast(err?.message || "Could not host meeting.");
@@ -7350,7 +8909,20 @@ async function submitHostMeeting() {
 }
 
 function filterLiveSessions() {
-  return liveSessions
+  const currentChannel = String(currentChannelId || "").trim();
+  let list = liveSessions.slice();
+  if (canCurrentUserHostStudentLiveMeeting()) {
+    list = list.filter((session) => {
+      const sessionChannel = String(session?.channel_id || "").trim();
+      const invited = String(session?.invited_user_ids || "");
+      const invitedList = invited.split(",").map((entry) => String(entry || "").trim()).filter(Boolean);
+      return (
+        (currentChannel && sessionChannel === currentChannel) ||
+        invitedList.includes(String(sessionUser?.id || "").trim())
+      );
+    });
+  }
+  return list
     .slice()
     .sort((a, b) => {
       const aKey = `${a.date} ${a.start_time}`;
@@ -7366,8 +8938,12 @@ async function loadLiveSessions(scope = liveScope, token = uiNavigationToken) {
     const res = await fetchJSON(`/api/live-sessions?scope=${encodeURIComponent(scope)}`);
     if (!isNavigationTokenCurrent(token, "livePanel")) return;
     liveSessions = Array.isArray(res) ? dedupeSessions(res) : [];
+    liveSessionBackgroundFetchAt = Date.now();
     renderLiveSchedule();
     renderLiveRecents();
+    refreshLiveAnnouncementCards(document);
+    ensureLiveSessionSurfaceRefreshTimer();
+    void loadLiveSharedRecordings();
     if (liveRecentMeta) {
       liveRecentMeta.textContent = `${liveSessions.length} session${liveSessions.length === 1 ? "" : "s"}`;
     }
@@ -7381,29 +8957,43 @@ function renderLiveSchedule() {
   if (!liveSessionsList) return;
   const list = filterLiveSessions(liveScope);
   if (!list.length) {
-    liveSessionsList.innerHTML = `
-      <div class="live-empty-state">
-        <div class="live-empty-state-icon" aria-hidden="true">
-          <i class="fa-solid fa-video"></i>
+    const isStudentView = canCurrentUserHostStudentLiveMeeting();
+    liveSessionsList.innerHTML = isStudentView
+      ? `
+        <div class="live-empty-state">
+          <div class="live-empty-state-icon" aria-hidden="true">
+            <i class="fa-solid fa-video"></i>
+          </div>
+          <p class="live-empty-state-title">No class sessions yet</p>
+          <p class="live-empty-state-copy">Your teacher has not shared a live class for this view yet.</p>
         </div>
-        <p class="live-empty-state-title">No sessions scheduled</p>
-        <p class="live-empty-state-copy">Start a class instantly or create a scheduled session.</p>
+      `
+      : `
+        <div class="live-empty-state">
+          <div class="live-empty-state-icon" aria-hidden="true">
+            <i class="fa-solid fa-video"></i>
+          </div>
+          <p class="live-empty-state-title">No sessions scheduled</p>
+          <p class="live-empty-state-copy">Start a class instantly or create a scheduled session.</p>
 
-        <button id="launchLiveNowBtn" class="btn btn-primary live-launch-btn" type="button">
-          <i class="fa-solid fa-bolt"></i>
-          Launch Live Now
-        </button>
-      </div>
-    `;
-    const launchBtn = liveSessionsList.querySelector("#launchLiveNowBtn");
-    if (launchBtn) {
-      launchBtn.addEventListener("click", launchLiveNow);
-      updateLaunchButtonLabel();
+          <button id="launchLiveNowBtn" class="btn btn-primary live-launch-btn" type="button">
+            <i class="fa-solid fa-bolt"></i>
+            Launch Live Now
+          </button>
+        </div>
+      `;
+    if (!isStudentView) {
+      const launchBtn = liveSessionsList.querySelector("#launchLiveNowBtn");
+      if (launchBtn) {
+        launchBtn.addEventListener("click", launchLiveNow);
+        updateLaunchButtonLabel();
+      }
     }
     return;
   }
   liveSessionsList.innerHTML = "";
   list.forEach((session) => {
+    const state = getLiveSessionDisplayState(session);
     const row = document.createElement("div");
     row.className = "live-row";
     const details = document.createElement("div");
@@ -7424,8 +9014,7 @@ function renderLiveSchedule() {
     meta.innerHTML = `<span>${dateText}</span><span>${session.start_time || ""}${session.end_time ? ` - ${session.end_time}` : ""}</span>`;
     const linkInfo = document.createElement("div");
     linkInfo.className = "live-row-detail";
-    const sessionExpired = isLiveSessionExpired(session);
-    linkInfo.innerHTML = `<span>${sessionExpired ? "Link expired" : session.meeting_url ? "Link ready" : "Link missing"}</span>`;
+    linkInfo.innerHTML = `<span>${escapeHtml(state.listLinkText)}</span>`;
     details.appendChild(head);
     details.appendChild(meta);
     details.appendChild(linkInfo);
@@ -7444,7 +9033,7 @@ function renderLiveSchedule() {
       audienceValue.textContent = audienceLabel;
       channelInfo.appendChild(audienceValue);
     }
-    const statusText = LIVE_STATUS_LABELS[session.status] || session.status || "Scheduled";
+    const statusText = LIVE_STATUS_LABELS[state.status] || LIVE_STATUS_LABELS[session.status] || session.status || "Scheduled";
     if (statusText) {
       const statusValue = document.createElement("span");
       statusValue.className = "live-row-channel-status";
@@ -7456,16 +9045,17 @@ function renderLiveSchedule() {
     }
     const actions = document.createElement("div");
     actions.className = "live-row-actions live-row-actions-bottom";
-    const joinBtn = document.createElement("button");
-    joinBtn.type = "button";
-    joinBtn.className = "live-btn primary live-btn-join";
-    joinBtn.innerHTML = '<i class="fa-solid fa-video"></i>';
-    joinBtn.disabled = sessionExpired;
-    joinBtn.title = sessionExpired ? "This session has expired" : "Join live session";
-    joinBtn.addEventListener("click", () => {
-      void openLiveSessionExternally(session);
-    });
-    actions.appendChild(joinBtn);
+    if (!state.ctaDisabled && session.meeting_url) {
+      const joinBtn = document.createElement("button");
+      joinBtn.type = "button";
+      joinBtn.className = "live-btn primary live-btn-join";
+      joinBtn.innerHTML = '<i class="fa-solid fa-video"></i>';
+      joinBtn.title = state.ctaText;
+      joinBtn.addEventListener("click", () => {
+        void openLiveSessionExternally(session);
+      });
+      actions.appendChild(joinBtn);
+    }
     if (isAdminUser() || isTeacherUser()) {
       const presenterBtn = document.createElement("button");
       presenterBtn.type = "button";
@@ -7563,6 +9153,7 @@ function renderLiveRecents() {
     return;
   }
   recents.forEach((session) => {
+    const state = getLiveSessionDisplayState(session);
     const row = document.createElement("div");
     row.className = "live-row";
     const title = document.createElement("div");
@@ -7580,14 +9171,16 @@ function renderLiveRecents() {
     `;
     const actions = document.createElement("div");
     actions.className = "live-row-actions";
-    const joinBtn = document.createElement("button");
-    joinBtn.type = "button";
-    joinBtn.className = "live-btn ghost";
-    joinBtn.textContent = "View";
-    joinBtn.addEventListener("click", () => {
-      void openLiveSessionExternally(session);
-    });
-    actions.appendChild(joinBtn);
+    if (!state.ctaDisabled && session.meeting_url) {
+      const joinBtn = document.createElement("button");
+      joinBtn.type = "button";
+      joinBtn.className = "live-btn ghost";
+      joinBtn.textContent = state.ctaText;
+      joinBtn.addEventListener("click", () => {
+        void openLiveSessionExternally(session);
+      });
+      actions.appendChild(joinBtn);
+    }
     if (isAdminUser() || isTeacherUser()) {
       const presenterBtn = document.createElement("button");
       presenterBtn.type = "button";
@@ -9192,6 +10785,11 @@ function initRichTextEditor() {
     sendTypingSignal(false);
     setTimeout(() => {
       collapseComposerIfEmpty();
+      const isHomeworkBoardChannel = isHomeworkChannel(currentChannelId) && !isHomeworkNoteChannel(currentChannelId);
+      const hasDraft = !!String((messageInput?.value || "").trim() || (rteEditor?.textContent || "").trim());
+      if (isHomeworkBoardChannel && !hasDraft && !pendingUploads.length) {
+        setHomeworkComposerExpanded(false);
+      }
     }, 80);
   });
 
@@ -11330,6 +12928,13 @@ const liveHubView = document.getElementById("liveHubView");
 const liveRoomView = document.getElementById("liveRoomView");
 const liveHostBtn = document.getElementById("liveHostBtn");
 const liveCreateBtn = document.getElementById("liveCreateBtn");
+const livePanelSubtitle = document.getElementById("livePanelSubtitle");
+const liveSessionsHeading = document.getElementById("liveSessionsHeading");
+const liveWorkspaceTitle = document.getElementById("liveWorkspaceTitle");
+const liveWorkspaceText = document.getElementById("liveWorkspaceText");
+const liveWorkspaceActions = document.getElementById("liveWorkspaceActions");
+const liveRecordingsSection = document.getElementById("liveRecordingsSection");
+const liveRecordingsList = document.getElementById("liveRecordingsList");
 const liveSessionsList = document.getElementById("liveSessionsList");
 const liveRoomBackBtn = document.getElementById("liveRoomBackBtn");
 const liveFocusModeBtn = document.getElementById("liveFocusModeBtn");
@@ -11363,6 +12968,7 @@ const liveDeleteConfirmModal = document.getElementById("liveDeleteConfirmModal")
 const liveDeleteConfirmOk = document.getElementById("liveDeleteConfirmOk");
 const liveDeleteConfirmCancel = document.getElementById("liveDeleteConfirmCancel");
 const liveDeleteConfirmClose = document.getElementById("liveDeleteConfirmClose");
+const liveHostTitle = document.getElementById("liveHostTitle");
 const liveAttendanceModal = document.getElementById("liveAttendanceModal");
 const liveAttendanceMeta = document.getElementById("liveAttendanceMeta");
 const liveAttendanceList = document.getElementById("liveAttendanceList");
@@ -11472,6 +13078,8 @@ let liveSessions = [];
 let liveAttendanceData = [];
 let liveActiveSession = null;
 let liveHostMemberIds = new Set();
+let liveSessionSurfaceRefreshTimer = null;
+let liveSessionBackgroundFetchAt = 0;
 let schoolSettingsPreviousChannelId = null;
 let releaseSchoolSettingsTrap = null;
 let classSettingsPreviousChannelId = null;
@@ -11496,6 +13104,7 @@ const channelHeaderNoteMetaAuthor = document.getElementById("channelHeaderNoteMe
 const headerMemberCountStudents = document.getElementById("headerMemberCountStudents");
 const headerMemberCountTeachers = document.getElementById("headerMemberCountTeachers");
 const headerMemberCountAdmins = document.getElementById("headerMemberCountAdmins");
+const headerHomeworkFilters = document.getElementById("headerHomeworkFilters");
 const headerDocCountBtn = document.getElementById("headerDocCountBtn");
 const headerDocCountValue = document.getElementById("headerDocCountValue");
 const channelRoleTabs = document.getElementById("channelRoleTabs");
@@ -11591,6 +13200,51 @@ const channelAssignList = document.getElementById("channelAssignList");
 const channelAssignClose = document.getElementById("channelAssignClose");
 const channelAssignSearch = document.getElementById("channelAssignSearch");
 const channelAssignSave = document.getElementById("channelAssignSave");
+const homeworkAssignmentModal = document.getElementById("homeworkAssignmentModal");
+const homeworkAssignmentModalTitle = document.getElementById("homeworkAssignmentModalTitle");
+const homeworkAssignmentModalClose = document.getElementById("homeworkAssignmentModalClose");
+const homeworkAssignmentTitleInput = document.getElementById("homeworkAssignmentTitleInput");
+const homeworkAssignmentTitleError = document.getElementById("homeworkAssignmentTitleError");
+const homeworkAssignmentDueDateInput = document.getElementById("homeworkAssignmentDueDateInput");
+const homeworkAssignmentResourceUrlInput = document.getElementById("homeworkAssignmentResourceUrlInput");
+const homeworkAssignmentDescriptionInput = document.getElementById("homeworkAssignmentDescriptionInput");
+const homeworkAssignmentUploadDropzone = document.getElementById("homeworkAssignmentUploadDropzone");
+const homeworkAssignmentFilesList = document.getElementById("homeworkAssignmentFilesList");
+const homeworkAssignmentAddFilesBtn = document.getElementById("homeworkAssignmentAddFilesBtn");
+const homeworkAssignmentCancelBtn = document.getElementById("homeworkAssignmentCancelBtn");
+const homeworkAssignmentSaveBtn = document.getElementById("homeworkAssignmentSaveBtn");
+const homeworkAssignmentFormStatus = document.getElementById("homeworkAssignmentFormStatus");
+const homeworkSubmissionModal = document.getElementById("homeworkSubmissionModal");
+const homeworkSubmissionModalTitle = document.getElementById("homeworkSubmissionModalTitle");
+const homeworkSubmissionModalClose = document.getElementById("homeworkSubmissionModalClose");
+const homeworkSubmissionContextTitle = document.getElementById("homeworkSubmissionContextTitle");
+const homeworkSubmissionContextMeta = document.getElementById("homeworkSubmissionContextMeta");
+const homeworkSubmissionTextInput = document.getElementById("homeworkSubmissionTextInput");
+const homeworkSubmissionTextError = document.getElementById("homeworkSubmissionTextError");
+const homeworkSubmissionFilesList = document.getElementById("homeworkSubmissionFilesList");
+const homeworkSubmissionAddFilesBtn = document.getElementById("homeworkSubmissionAddFilesBtn");
+const homeworkSubmissionDraftBtn = document.getElementById("homeworkSubmissionDraftBtn");
+const homeworkSubmissionCancelBtn = document.getElementById("homeworkSubmissionCancelBtn");
+const homeworkSubmissionSubmitBtn = document.getElementById("homeworkSubmissionSubmitBtn");
+const homeworkSubmissionFormStatus = document.getElementById("homeworkSubmissionFormStatus");
+const homeworkReviewModal = document.getElementById("homeworkReviewModal");
+const homeworkReviewModalClose = document.getElementById("homeworkReviewModalClose");
+const homeworkReviewContextTitle = document.getElementById("homeworkReviewContextTitle");
+const homeworkReviewContextMeta = document.getElementById("homeworkReviewContextMeta");
+const homeworkReviewStatusInput = document.getElementById("homeworkReviewStatusInput");
+const homeworkReviewGradeInput = document.getElementById("homeworkReviewGradeInput");
+const homeworkReviewFeedbackInput = document.getElementById("homeworkReviewFeedbackInput");
+const homeworkReviewFeedbackError = document.getElementById("homeworkReviewFeedbackError");
+const homeworkReviewCancelBtn = document.getElementById("homeworkReviewCancelBtn");
+const homeworkReviewSaveBtn = document.getElementById("homeworkReviewSaveBtn");
+const homeworkReviewFormStatus = document.getElementById("homeworkReviewFormStatus");
+const homeworkDetailModal = document.getElementById("homeworkDetailModal");
+const homeworkDetailModalTitle = document.getElementById("homeworkDetailModalTitle");
+const homeworkDetailModalSubtitle = document.getElementById("homeworkDetailModalSubtitle");
+const homeworkDetailTabs = document.getElementById("homeworkDetailTabs");
+const homeworkDetailModalBody = document.getElementById("homeworkDetailModalBody");
+const homeworkDetailModalFooter = document.getElementById("homeworkDetailModalFooter");
+const homeworkDetailModalClose = document.getElementById("homeworkDetailModalClose");
 
 const messagesContainer = document.getElementById("messagesContainer");
 const composer = document.getElementById("composer");
@@ -11605,6 +13259,7 @@ const fileInput = document.getElementById("fileInput");
 const audioBtn = document.getElementById("audioBtn");
 const videoBtn = document.getElementById("videoBtn");
 const recordingOverlay = document.getElementById("recordingOverlay");
+const homeworkComposerTrigger = document.getElementById("homeworkComposerTrigger");
 const composerStatus = document.getElementById("composerStatus") || recordingOverlay;
 const recLabel = document.getElementById("recLabel");
 const recTimer = document.getElementById("recTimer");
@@ -11684,6 +13339,173 @@ document.addEventListener("click", (event) => {
     clearSesHistorySelection();
   }
 });
+
+if (homeworkAssignmentModalClose) {
+  homeworkAssignmentModalClose.addEventListener("click", closeHomeworkAssignmentModal);
+}
+if (homeworkAssignmentCancelBtn) {
+  homeworkAssignmentCancelBtn.addEventListener("click", closeHomeworkAssignmentModal);
+}
+if (homeworkAssignmentSaveBtn) {
+  homeworkAssignmentSaveBtn.addEventListener("click", () => {
+    submitHomeworkAssignmentModal().catch((err) => {
+      console.error("Failed to save assignment", err);
+      showToast(err?.message || "Could not save assignment");
+    });
+  });
+}
+if (homeworkAssignmentAddFilesBtn) {
+  homeworkAssignmentAddFilesBtn.addEventListener("click", () => {
+    addHomeworkAssignmentFiles().catch((err) => {
+      console.error("Failed to add assignment files", err);
+      showToast(err?.message || "Could not add files");
+    });
+  });
+}
+if (homeworkAssignmentUploadDropzone) {
+  homeworkAssignmentUploadDropzone.addEventListener("click", (event) => {
+    if (event.target.closest("button")) return;
+    homeworkAssignmentAddFilesBtn?.click();
+  });
+  homeworkAssignmentUploadDropzone.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      homeworkAssignmentAddFilesBtn?.click();
+    }
+  });
+}
+if (homeworkAssignmentFilesList) {
+  homeworkAssignmentFilesList.addEventListener("click", (event) => {
+    const button = event.target.closest('[data-homework-action="remove-assignment-file"]');
+    if (!button) return;
+    const index = Number(button.dataset.fileIndex || -1);
+    if (index >= 0) removeHomeworkAssignmentFile(index);
+  });
+}
+if (homeworkAssignmentModal) {
+  homeworkAssignmentModal.addEventListener("click", (event) => {
+    if (event.target === homeworkAssignmentModal) closeHomeworkAssignmentModal();
+  });
+}
+
+if (homeworkSubmissionModalClose) {
+  homeworkSubmissionModalClose.addEventListener("click", closeHomeworkSubmissionModal);
+}
+if (homeworkSubmissionCancelBtn) {
+  homeworkSubmissionCancelBtn.addEventListener("click", closeHomeworkSubmissionModal);
+}
+if (homeworkSubmissionDraftBtn) {
+  homeworkSubmissionDraftBtn.addEventListener("click", () => {
+    submitHomeworkSubmissionModal("draft").catch((err) => {
+      console.error("Failed to save draft", err);
+      showToast(err?.message || "Could not save draft");
+    });
+  });
+}
+if (homeworkSubmissionSubmitBtn) {
+  homeworkSubmissionSubmitBtn.addEventListener("click", () => {
+    submitHomeworkSubmissionModal("submit").catch((err) => {
+      console.error("Failed to submit homework", err);
+      showToast(err?.message || "Could not submit homework");
+    });
+  });
+}
+if (homeworkSubmissionAddFilesBtn) {
+  homeworkSubmissionAddFilesBtn.addEventListener("click", () => {
+    addHomeworkSubmissionFiles().catch((err) => {
+      console.error("Failed to add submission files", err);
+      showToast(err?.message || "Could not add files");
+    });
+  });
+}
+if (homeworkSubmissionFilesList) {
+  homeworkSubmissionFilesList.addEventListener("click", (event) => {
+    const button = event.target.closest('[data-homework-action="remove-submission-file"]');
+    if (!button) return;
+    const index = Number(button.dataset.fileIndex || -1);
+    if (index >= 0) removeHomeworkSubmissionFile(index);
+  });
+}
+if (homeworkSubmissionModal) {
+  homeworkSubmissionModal.addEventListener("click", (event) => {
+    if (event.target === homeworkSubmissionModal) closeHomeworkSubmissionModal();
+  });
+}
+
+if (homeworkReviewModalClose) {
+  homeworkReviewModalClose.addEventListener("click", closeHomeworkReviewModal);
+}
+if (homeworkReviewCancelBtn) {
+  homeworkReviewCancelBtn.addEventListener("click", closeHomeworkReviewModal);
+}
+if (homeworkReviewSaveBtn) {
+  homeworkReviewSaveBtn.addEventListener("click", () => {
+    submitHomeworkReviewModal().catch((err) => {
+      console.error("Failed to save homework review", err);
+      showToast(err?.message || "Could not save review");
+    });
+  });
+}
+if (homeworkReviewModal) {
+  homeworkReviewModal.addEventListener("click", (event) => {
+    if (event.target === homeworkReviewModal) closeHomeworkReviewModal();
+  });
+}
+
+if (homeworkDetailModalClose) {
+  homeworkDetailModalClose.addEventListener("click", closeHomeworkDetailModal);
+}
+if (homeworkDetailModal) {
+  homeworkDetailModal.addEventListener("click", (event) => {
+    if (event.target === homeworkDetailModal) closeHomeworkDetailModal();
+  });
+}
+if (homeworkDetailTabs) {
+  homeworkDetailTabs.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-homework-detail-tab]");
+    if (!button || !homeworkDetailModalState?.channelId) return;
+    const nextTab = String(button.dataset.homeworkDetailTab || "instructions");
+    homeworkDetailModalState.tab = nextTab;
+    getHomeworkBoardUiState(homeworkDetailModalState.channelId).detailTab = nextTab;
+    renderHomeworkDetailModal();
+  });
+}
+if (homeworkDetailModalFooter) {
+  homeworkDetailModalFooter.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-homework-action]");
+    if (!button || !homeworkDetailModalState?.channelId) return;
+    const action = button.dataset.homeworkAction;
+    const itemId = String(button.dataset.itemId || homeworkDetailModalState.itemId || "");
+    const board = homeworkBoardByChannel[homeworkDetailModalState.channelId] || { items: [] };
+    const item = (board.items || []).find((entry) => String(entry.id) === itemId) || null;
+    if (action === "close-detail") {
+      closeHomeworkDetailModal();
+    } else if (action === "open-submission" && item) {
+      openHomeworkSubmissionModalForItem(item);
+    } else if (action === "save-draft" && item) {
+      openHomeworkSubmissionModalForItem(item);
+    } else if (action === "edit-item" && item) {
+      openHomeworkAssignmentModalForItem(homeworkDetailModalState.channelId, item);
+    } else if (action === "review-from-detail" && item) {
+      homeworkDetailModalState.tab = "feedback";
+      renderHomeworkDetailModal();
+    }
+  });
+}
+if (homeworkDetailModalBody) {
+  homeworkDetailModalBody.addEventListener("click", (event) => {
+    const button = event.target.closest('[data-homework-action="review-submission"]');
+    if (!button || !homeworkDetailModalState?.channelId) return;
+    const itemId = String(button.dataset.itemId || "");
+    const submissionId = String(button.dataset.submissionId || "");
+    const board = homeworkBoardByChannel[homeworkDetailModalState.channelId] || { items: [] };
+    const item = (board.items || []).find((entry) => String(entry.id) === itemId) || null;
+    const submission = item ? (item.submissions || []).find((entry) => String(entry.id) === submissionId) : null;
+    if (item && submission) {
+      openHomeworkReviewModalForSubmission(item, submission);
+    }
+  });
+}
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     hideClearCulturePopup();
@@ -12987,6 +14809,7 @@ function updateComposerForChannel(channelId) {
   const isPrivacyChannel = isPrivacyRulesChannel(channelId);
   if (isPrivacyChannel) {
     if (composer) composer.classList.add("hidden");
+    if (homeworkComposerTrigger) homeworkComposerTrigger.classList.add("hidden");
     if (messageInput) messageInput.disabled = true;
     if (rteEditor) rteEditor.setAttribute("contenteditable", "false");
     if (sendButton) {
@@ -13010,6 +14833,7 @@ function updateComposerForChannel(channelId) {
   }
   if (directoryViewRole) {
     if (composer) composer.classList.add("hidden");
+    if (homeworkComposerTrigger) homeworkComposerTrigger.classList.add("hidden");
     if (messageInput) messageInput.disabled = true;
     if (rteEditor) rteEditor.setAttribute("contenteditable", "false");
     if (sendButton) sendButton.disabled = true;
@@ -13049,6 +14873,19 @@ function updateComposerForChannel(channelId) {
 
   if (messageInput) messageInput.disabled = !canCompose;
   if (rteEditor) rteEditor.setAttribute("contenteditable", canCompose ? "true" : "false");
+  const isHomeworkBoardChannel = isHomeworkChannel(channelId) && !isHomeworkNoteChannel(channelId);
+  const homeworkView = isHomeworkBoardChannel ? (getHomeworkBoardUiState(channelId).view || "dashboard") : "";
+  homeworkComposerExpanded = !isHomeworkBoardChannel;
+  if (messageInput) {
+    messageInput.placeholder = isHomeworkBoardChannel
+      ? "Post optional homework discussion…"
+      : "Write a message…";
+  }
+  if (rteEditor && rteEditor.dataset) {
+    rteEditor.dataset.placeholder = isHomeworkBoardChannel
+      ? "Post optional homework discussion…"
+      : "Write a message…";
+  }
 
   if (attachFileBtn) attachFileBtn.disabled = !canCompose;
   if (videoBtn) videoBtn.disabled = !canCompose;
@@ -13067,7 +14904,61 @@ function updateComposerForChannel(channelId) {
       updateSendButtonState();
     }
   }
+  if (canCompose) {
+    if (isHomeworkBoardChannel && homeworkView !== "discussion") {
+      if (composer) composer.classList.add("hidden");
+      if (homeworkComposerTrigger) homeworkComposerTrigger.classList.add("hidden");
+      if (composerMain) composerMain.style.display = "none";
+      return;
+    }
+    setHomeworkComposerExpanded(!isHomeworkBoardChannel, { channelId });
+  } else if (homeworkComposerTrigger) {
+    homeworkComposerTrigger.classList.add("hidden");
+  }
 }
+
+function setHomeworkComposerExpanded(expanded, { focus = false, channelId = currentChannelId } = {}) {
+  const isHomeworkBoardChannel = isHomeworkChannel(channelId) && !isHomeworkNoteChannel(channelId);
+  const homeworkView = isHomeworkBoardChannel ? (getHomeworkBoardUiState(channelId).view || "dashboard") : "";
+  homeworkComposerExpanded = !!expanded;
+  if (!composer || !composerMain || !homeworkComposerTrigger) return;
+  if (!isHomeworkBoardChannel) {
+    composer.classList.remove("homework-composer-collapsed");
+    homeworkComposerTrigger.classList.add("hidden");
+    composerMain.style.display = "";
+    return;
+  }
+  if (homeworkView !== "discussion") {
+    composer.classList.add("hidden");
+    composer.classList.remove("homework-composer-collapsed");
+    homeworkComposerTrigger.classList.add("hidden");
+    composerMain.style.display = "none";
+    return;
+  }
+  composer.classList.remove("hidden");
+  composer.classList.toggle("homework-composer-collapsed", !homeworkComposerExpanded);
+  homeworkComposerTrigger.classList.toggle("hidden", homeworkComposerExpanded);
+  homeworkComposerTrigger.setAttribute("aria-hidden", homeworkComposerExpanded ? "true" : "false");
+  composerMain.style.display = homeworkComposerExpanded ? "" : "none";
+  if (focus && homeworkComposerExpanded && rteEditor) {
+    requestAnimationFrame(() => rteEditor.focus());
+  }
+}
+
+if (homeworkComposerTrigger) {
+  homeworkComposerTrigger.addEventListener("click", () => {
+    setHomeworkComposerExpanded(true, { focus: true });
+  });
+}
+
+document.addEventListener("click", (event) => {
+  const isHomeworkBoardChannel = isHomeworkChannel(currentChannelId) && !isHomeworkNoteChannel(currentChannelId);
+  if (!isHomeworkBoardChannel || !homeworkComposerExpanded || !composer) return;
+  if (composer.contains(event.target)) return;
+  const hasDraft = !!String((messageInput?.value || "").trim() || (rteEditor?.textContent || "").trim());
+  if (hasDraft || pendingUploads.length) return;
+  setHomeworkComposerExpanded(false);
+});
 
 function getUnreadCount(channelId) {
   const state = unreadState.get(String(channelId));
@@ -17387,10 +19278,11 @@ function renderChannelHeader(channelId) {
     isHomework && homeworkParentName
       ? `${homeworkParentName} Homework`
       : String(ch.name || "").trim() || "Homework";
+  const homeworkView = isHomework ? (getHomeworkBoardUiState(ch.id).view || "dashboard") : "";
   const homeworkHeaderSubtitle =
     isHomework && homeworkParentName
-      ? `Homework for ${homeworkParentName}`
-      : "Homework for this class";
+      ? ""
+      : "";
   const chatHeaderEl = document.getElementById("chatHeader");
   if (chatHeaderEl) {
     chatHeaderEl.dataset.channelId = String(ch.id || channelId || "");
@@ -17464,6 +19356,14 @@ function renderChannelHeader(channelId) {
         : resolveSharedChannelTopic(ch);
     headerChannelTopic.textContent = rawTopic;
     headerChannelTopic.classList.toggle("hidden", !rawTopic);
+  }
+  if (headerHomeworkFilters) {
+    const showHomeworkHeaderFilters = isHomework && homeworkView === "assignments";
+    headerHomeworkFilters.classList.toggle("hidden", !showHomeworkHeaderFilters);
+    headerHomeworkFilters.setAttribute("aria-hidden", showHomeworkHeaderFilters ? "false" : "true");
+    if (!showHomeworkHeaderFilters) {
+      headerHomeworkFilters.innerHTML = "";
+    }
   }
   if (channelHeaderNoteMeta) {
     channelHeaderNoteMeta.classList.toggle("hidden", !(isNoteChannel && !isPrivacy));
@@ -18201,6 +20101,10 @@ function renderMessages(channelId, options = {}) {
   const normalizedChannelNameInitial = String(channelInfo?.name || "").trim().toLowerCase();
   if (isAnnouncementChannel(channelId)) {
     renderAnnouncementChannel(channelId, options);
+    return;
+  }
+  if (isHomeworkChannel(channelId) && !isHomeworkNoteChannel(channelId)) {
+    renderHomeworkChannel(channelId, options);
     return;
   }
   showSavedOnly = false;
@@ -19242,6 +21146,9 @@ async function selectChannel(channelId) {
   if (!isSchoolSettings && !isHomeworkNoteChannel(channelId)) {
     try {
       await ensureMessagesForChannelId(channelId);
+      if (isHomeworkChannel(channelId)) {
+        await ensureHomeworkBoardForChannel(channelId);
+      }
     } catch (err) {
       console.error("Failed to load messages", err);
       showToast("Could not load messages");
@@ -22572,6 +24479,9 @@ async function sendMessage() {
     updateSendButtonState();
     saveDraftForCurrentChannel();
     collapseComposerIfEmpty();
+    if (isHomeworkChannel(currentChannelId) && !isHomeworkNoteChannel(currentChannelId)) {
+      setHomeworkComposerExpanded(false);
+    }
     renderMessages(currentChannelId);
     scrollMessagesToBottom();
     typingActive = false;
