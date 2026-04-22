@@ -69,10 +69,11 @@ Backend:
 - Multi-tenant workspace scoping
 
 Database:
-- Relational schema design
-- Workspace-scoped entities
+- SQLite in WAL mode for concurrent reads/writes during development
+- Workspace-scoped relational schema
 - AI usage ledger tables
 - Audit trail tables
+- PostgreSQL recommended for production deployment
 
 ---
 
@@ -120,14 +121,19 @@ Key tables:
 - workspaces
 - channels
 - tasks
+- submissions
+- messages
 - invoices
 - payments
 - ai_usage_ledger
+- inbound_emails
 - ai_runtime_sessions
 - live_classes
 - slide_decks
 - slide_state
 - audit_logs
+
+See [docs/database-schema.md](/Users/jannatuladny/cat-6.1/docs/database-schema.md) for a table diagram and deployment notes.
 
 ---
 

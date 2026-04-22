@@ -60,7 +60,10 @@ const TWILIO_AUTH_TOKEN = optional('TWILIO_AUTH_TOKEN', '');
 const TWILIO_PHONE_NUMBER = optional('TWILIO_PHONE_NUMBER', '');
 const TWILIO_VERIFY_SERVICE_SID = optional('TWILIO_VERIFY_SERVICE_SID', '');
 const MOBILE_OTP_PROXY_URL = optional('MOBILE_OTP_PROXY_URL', '');
-const DB_PATH = optional('DB_PATH', 'worknest.db');
+const DB_PATH = optional('DB_PATH', 'storage/worknest.db');
+const DB_BACKUP_DIR = optional('DB_BACKUP_DIR', 'backup');
+const DB_BACKUP_INTERVAL_HOURS = int('DB_BACKUP_INTERVAL_HOURS', 24);
+const DB_BACKUP_ON_START = bool('DB_BACKUP_ON_START', false);
 const UPLOADS_DIR = optional('UPLOADS_DIR', 'uploads');
 const FFMPEG_MODE = optional('FFMPEG_MODE', 'auto').trim().toLowerCase();
 const FFMPEG_PATH = optional('FFMPEG_PATH', '');
@@ -98,6 +101,9 @@ module.exports = {
   TWILIO_VERIFY_SERVICE_SID,
   MOBILE_OTP_PROXY_URL,
   DB_PATH,
+  DB_BACKUP_DIR,
+  DB_BACKUP_INTERVAL_HOURS,
+  DB_BACKUP_ON_START,
   UPLOADS_DIR,
   FFMPEG_MODE,
   FFMPEG_PATH,

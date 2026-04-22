@@ -32,6 +32,7 @@
 <!-- Styles -->
 <link href="styles.refactor.css" rel="stylesheet" />
 <link href="Announcements/announcements.css" rel="stylesheet" />
+<link href="PlacementTest/placement-test.css" rel="stylesheet" />
 <link rel="stylesheet" href="/AIvoicepractice/aiVoicePractice.css" />
 <link href="analytics/analytics.css" rel="stylesheet" />
 <link href="calendar/calendar.css" rel="stylesheet" />
@@ -657,23 +658,6 @@
           class="sidebar-item school-tool-item branch-row branch-sub"
           role="button"
           tabindex="0"
-          aria-label="Schedule"
-          data-channel-name="Schedule"
-          data-channel-category="tools"
-          data-static-channel="1"
-        >
-          <span class="branch-connector"></span>
-          <span class="sidebar-item-icon school-tool-icon tool-schedule">
-            <i class="fa-solid fa-calendar-days" aria-hidden="true"></i>
-          </span>
-          <span class="sidebar-item-label">Schedule</span>
-          <div class="sidebar-item-meta"></div>
-        </div>
-
-        <div
-          class="sidebar-item school-tool-item branch-row branch-sub"
-          role="button"
-          tabindex="0"
           aria-label="Exam Registration"
           data-channel-name="Exam Registration"
           data-channel-category="tools"
@@ -888,6 +872,7 @@
 
               <button class="ses-header-btn" id="sesFormatBtn" type="button">Email format</button>
               <button class="ses-header-btn" id="sesInboxBtn" type="button">Inbox</button>
+              <button class="ses-header-btn hidden" id="sesContactFormBtn" type="button">Contact Form</button>
               <button class="ses-header-btn" id="sesTrashBtn" type="button">
                 <i class="fa-regular fa-trash-can" aria-hidden="true"></i>
                 <span>Trash</span>
@@ -1593,6 +1578,48 @@
 
             <div class="ses-history-list" id="sesHistoryList"></div>
             <div class="ses-history-empty hidden" id="sesHistoryEmpty">No sent emails yet.</div>
+          </div>
+          <div class="ses-contact-form-panel hidden" id="sesContactFormPanel">
+            <div class="ses-contact-form-card">
+              <div class="ses-contact-form-title">Contact School Admin</div>
+              <div class="ses-contact-form-note">
+                Send a message directly to the school admin inbox from your student email address.
+              </div>
+
+              <div class="ses-field">
+                <label for="sesContactSubject">Subject</label>
+                <input
+                  id="sesContactSubject"
+                  type="text"
+                  maxlength="120"
+                  autocomplete="off"
+                  placeholder="Write your subject"
+                />
+              </div>
+
+              <div class="ses-field">
+                <div class="ses-contact-form-label-row">
+                  <label for="sesContactMessage">Message</label>
+                  <span id="sesContactWordCount" class="ses-contact-word-count">0 / 500 words</span>
+                </div>
+                <textarea
+                  id="sesContactMessage"
+                  rows="12"
+                  maxlength="4000"
+                  autocomplete="off"
+                  placeholder="Write your message"
+                ></textarea>
+              </div>
+
+              <div class="ses-form-actions">
+                <button class="ses-btn ses-btn-primary" id="sesContactSendBtn" type="button">
+                  <i class="fa-solid fa-paper-plane"></i>
+                  <span>Send</span>
+                </button>
+              </div>
+
+              <div class="ses-status" id="sesContactStatus"></div>
+            </div>
           </div>
           <div class="hidden" id="sesInboxPanel">
             <!-- Gmail-ish Inbox (WorkNest) -->
@@ -4430,7 +4457,7 @@
         </button>
       </div>
       <div class="modal-body homework-modal-body homework-assignment-modal-body">
-        <div class="homework-form-grid">
+        <div class="homework-form-grid homework-form-grid--assignment">
           <label class="homework-field">
             <span class="homework-field-label">Title</span>
             <input type="text" id="homeworkAssignmentTitleInput" maxlength="160" placeholder="Write a clear assignment title" />
@@ -4440,11 +4467,11 @@
             <span class="homework-field-label">Due date</span>
             <input type="datetime-local" id="homeworkAssignmentDueDateInput" />
           </label>
+          <label class="homework-field homework-field--resource">
+            <span class="homework-field-label">Resource URL</span>
+            <input type="url" id="homeworkAssignmentResourceUrlInput" placeholder="https://example.com/worksheet" />
+          </label>
         </div>
-        <label class="homework-field">
-          <span class="homework-field-label">Resource URL</span>
-          <input type="url" id="homeworkAssignmentResourceUrlInput" placeholder="https://example.com/worksheet" />
-        </label>
         <label class="homework-field">
           <span class="homework-field-label">Instructions</span>
           <textarea id="homeworkAssignmentDescriptionInput" rows="8" placeholder="Add instructions, expectations, and grading notes"></textarea>
@@ -4470,6 +4497,28 @@
             </button>
           </div>
           <div class="homework-inline-files" id="homeworkAssignmentFilesList"></div>
+        </section>
+        <section class="homework-file-picker homework-assignment-upload">
+          <div class="homework-file-picker-head">
+            <div>
+              <div class="homework-field-label">Solution files</div>
+              <div class="homework-field-help">Upload answer keys, worked examples, or teacher solutions for this assignment.</div>
+            </div>
+          </div>
+          <div class="homework-upload-dropzone" id="homeworkAssignmentSolutionUploadDropzone" role="button" tabindex="0" aria-label="Upload homework solution file">
+            <div class="homework-upload-dropzone-icon">
+              <i class="fa-solid fa-file-circle-check" aria-hidden="true"></i>
+            </div>
+            <div class="homework-upload-dropzone-copy">
+              <div class="homework-upload-dropzone-title">Upload homework solution file</div>
+              <div class="homework-upload-dropzone-meta">PDF, DOCX, image, worksheet answer key, or marked sample solution</div>
+            </div>
+            <button type="button" class="tasks-btn homework-modal-primary" id="homeworkAssignmentAddSolutionFilesBtn">
+              <i class="fa-solid fa-paperclip" aria-hidden="true"></i>
+              Choose files
+            </button>
+          </div>
+          <div class="homework-inline-files" id="homeworkAssignmentSolutionFilesList"></div>
         </section>
       </div>
       <div class="modal-footer homework-modal-footer">
@@ -5376,6 +5425,7 @@
 
 <!-- ✅ If your real folder is Announcements/, keep this. If not, see note below. -->
 <script src="Announcements/announcements.js"></script>
+<script src="PlacementTest/placement-test.js"></script>
 
 <!-- ✅ If your real folder is /AIvoicepractice/, keep this. -->
 <script src="/AIvoicepractice/scenarioConfig.js"></script>

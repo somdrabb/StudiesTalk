@@ -1,6 +1,3 @@
-/* StudisNest Admin Portal (vanilla JS)
-   Auth: uses x-user-id header (same style used by your existing app) :contentReference[oaicite:5]{index=5}
-*/
 
 const $ = (id) => document.getElementById(id);
 
@@ -21,6 +18,17 @@ const state = {
   workspaces: [],
   workspaceId: "all",
   currentTab: "overview",
+  audit: {
+    q: "",
+    type: "all",
+    sort: "new",
+    rows: []
+  },
+  billing: {
+    status: "all",
+    invoices: [],
+    payments: []
+  },
   requests: {
     status: "pending",
     q: "",
@@ -79,6 +87,10 @@ const TAB_HEADERS = {
   "school-requests": {
     title: "School requests",
     subtitle: "Review new schools waiting for approval."
+  },
+  messages: {
+    title: "Messages",
+    subtitle: "Manage inbox, outgoing email, and communication settings."
   }
 };
 
@@ -106,6 +118,7 @@ function persistTab(tab) {
 }
 
 function setError(el, msg) {
+  if (!el) return;
   el.textContent = msg || "";
   el.hidden = !msg;
 }
@@ -143,10 +156,18 @@ function showModal({ title, bodyHtml, footHtml }) {
     closeModal();
     return;
   }
-  $("modalTitle").textContent = title || "Modal";
-  $("modalBody").innerHTML = bodyHtml || "";
-  $("modalFoot").innerHTML = footHtml || "";
-  $("modal").hidden = false;
+
+  const modal = $("modal");
+  const titleEl = $("modalTitle");
+  const bodyEl = $("modalBody");
+  const footEl = $("modalFoot");
+
+  if (!modal || !titleEl || !bodyEl || !footEl) return;
+
+  titleEl.textContent = title || "Modal";
+  bodyEl.innerHTML = bodyHtml || "";
+  footEl.innerHTML = footHtml || "";
+  modal.hidden = false;
 }
 
 function closeModal() {
@@ -302,6 +323,25 @@ $("aiCapSaveBtn")?.addEventListener("click", async () => {
   }
 });
 
+$("btnResetJson")?.addEventListener("click", async () => {
+  try {
+    await refreshSettings();
+    const status = $("settingsSaveStatus");
+    const error = $("settingsError");
+    if (status) status.textContent = "Editor reset to saved version.";
+    if (error) {
+      error.textContent = "";
+      error.hidden = true;
+    }
+  } catch (e) {
+    const error = $("settingsError");
+    if (error) {
+      error.textContent = e.message;
+      error.hidden = false;
+    }
+  }
+});
+
 $("aiDefaultCapSaveBtn")?.addEventListener("click", async () => {
   const input = $("aiDefaultCapInput");
   const value = Number(input?.value || 0);
@@ -346,6 +386,19 @@ $("aiCapResetUsageBtn")?.addEventListener("click", async () => {
 
 refreshAiLimitsPanel();
 
+async function refreshMessages() {
+  setText("messagesInboxCount", 0);
+  setText("messagesSentCount", 0);
+  setText("messagesFailedCount", 0);
+  setText("messagesTemplateCount", 0);
+  setText("messagesTableMeta", "0 rows");
+
+  const table = $("messagesActivityTable");
+  if (table) {
+    table.innerHTML = `<div class="muted" style="padding:14px;">No message activity loaded yet.</div>`;
+  }
+}
+
 async function api(path, { method = "GET", body = null } = {}) {
   const headers = {};
   if (body) headers["Content-Type"] = "application/json";
@@ -373,9 +426,11 @@ async function api(path, { method = "GET", body = null } = {}) {
     const msg = isJson && data && data.error
       ? data.error
       : typeof data === "string" && data.trim()
-      ? data.slice(0, 180)
-      : `HTTP ${resp.status}`;
-    throw new Error(msg);
+        ? data.slice(0, 180)
+        : `HTTP ${resp.status}`;
+    const error = new Error(msg);
+    error.status = resp.status;
+    throw error;
   }
 
   return isJson ? data : { ok: true, text: data };
@@ -451,7 +506,7 @@ function wireKpiNavigation() {
       if (target) {
         setTab(target);
         persistTab(target);
-        refreshActiveTab().catch(() => {});
+        refreshActiveTab().catch(() => { });
       }
     });
   });
@@ -466,6 +521,7 @@ function wireNavToolHighlight() {
     })
   );
 }
+
 
 function setHidden(id, hidden) {
   const el = $(id);
@@ -613,75 +669,153 @@ if (btnUpsertWorkspaceEl) {
         </select>
       </div>
     `,
-    footHtml: `<button class="btn btn-primary" id="ws_save">Save</button>`
-  });
-
-  const wsSaveEl = document.getElementById("ws_save");
-  if (wsSaveEl) {
-    wsSaveEl.addEventListener("click", async () => {
-      const payload = {
-        id: document.getElementById("ws_id").value.trim() || null,
-        name: document.getElementById("ws_name").value.trim(),
-        schoolCode: document.getElementById("ws_code").value.trim() || null,
-        status: document.getElementById("ws_status").value
-      };
-      try {
-        await api("/api/admin/workspaces/upsert", { method: "POST", body: payload });
-        closeModal();
-        await loadWorkspaces();
-        await refreshAll();
-      } catch (e) {
-        alert(e.message);
-      }
+      footHtml: `<button class="btn btn-primary" id="ws_save">Save</button>`
     });
-  }
+
+    const wsSaveEl = document.getElementById("ws_save");
+    if (wsSaveEl) {
+      wsSaveEl.addEventListener("click", async () => {
+        const payload = {
+          id: document.getElementById("ws_id").value.trim() || null,
+          name: document.getElementById("ws_name").value.trim(),
+          schoolCode: document.getElementById("ws_code").value.trim() || null,
+          status: document.getElementById("ws_status").value
+        };
+        try {
+          await api("/api/admin/workspaces/upsert", { method: "POST", body: payload });
+          closeModal();
+          await loadWorkspaces();
+          await refreshAll();
+        } catch (e) {
+          alert(e.message);
+        }
+      });
+    }
   });
 }
-
+// Start-Create Invoice POPUP Card // Billing-Section- INPU-1
 const btnCreateInvoiceEl = $("btnCreateInvoice");
 if (btnCreateInvoiceEl) {
   btnCreateInvoiceEl.addEventListener("click", () => {
+    const workspaceOptions = [
+      `<option value="">Select workspace</option>`,
+      ...(state.workspaces || []).map(
+        (ws) =>
+          `<option value="${escapeHtml(ws.id)}" ${
+            state.workspaceId === ws.id ? "selected" : ""
+          }>${escapeHtml(ws.name || ws.id)}</option>`
+      )
+    ].join("");
+
     showModal({
       title: "Create Invoice",
-    bodyHtml: `
-      <div class="admin-row">
-        <label class="admin-label">Workspace</label>
-        <div class="muted">${escapeHtml(state.workspaceId)}</div>
-      </div>
-      <div class="admin-row">
-        <label class="admin-label">Amount (EUR cents)</label>
-        <input class="admin-input" id="inv_amount" placeholder="e.g. 4999" />
-      </div>
-      <div class="admin-row">
-        <label class="admin-label">Description</label>
-        <input class="admin-input" id="inv_desc" placeholder="Monthly subscription" />
-      </div>
-      <div class="admin-row">
-        <label class="admin-label">Due date (YYYY-MM-DD)</label>
-        <input class="admin-input" id="inv_due" placeholder="2026-03-01" />
-      </div>
-    `,
-    footHtml: `<button class="btn btn-primary" id="inv_save">Create</button>`
-  });
+      bodyHtml: `
+        <div class="invoice-modal">
+          <div class="invoice-modal-hero">
+            <div class="invoice-modal-icon">
+              <i class="fa-solid fa-file-invoice-dollar" aria-hidden="true"></i>
+            </div>
+            <div>
+              <h3>Create a new invoice</h3>
+              <p class="muted">Create a billing record for a workspace and set the due date.</p>
+            </div>
+          </div>
 
-    const invSaveEl = document.getElementById("inv_save");
+          <div class="invoice-form-grid">
+            <div class="invoice-field invoice-field-full">
+              <label class="invoice-label" for="inv_workspace">Workspace</label>
+              <select class="input invoice-input" id="inv_workspace">
+                ${workspaceOptions}
+              </select>
+              <div class="invoice-help">Choose which school or workspace will receive this invoice.</div>
+            </div>
+
+            <div class="invoice-field">
+              <label class="invoice-label" for="inv_amount">Amount (EUR cents)</label>
+              <input
+                class="input invoice-input"
+                id="inv_amount"
+                type="number"
+                min="1"
+                step="1"
+                placeholder="4999"
+              />
+              <div class="invoice-help">Example: 4999 = €49.99</div>
+            </div>
+
+            <div class="invoice-field">
+              <label class="invoice-label" for="inv_due">Due date</label>
+              <input
+                class="input invoice-input"
+                id="inv_due"
+                type="date"
+              />
+              <div class="invoice-help">Select when payment should be due.</div>
+            </div>
+
+            <div class="invoice-field invoice-field-full">
+              <label class="invoice-label" for="inv_desc">Description</label>
+              <input
+                class="input invoice-input"
+                id="inv_desc"
+                placeholder="Monthly subscription"
+              />
+              <div class="invoice-help">Short billing note shown internally or on the invoice.</div>
+            </div>
+          </div>
+
+          <div class="invoice-inline-note">
+            <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
+            <span>Invoices are created in EUR and will appear immediately in the billing panel.</span>
+          </div>
+        </div>
+      `,
+      footHtml: `
+        <button class="btn btn-ghost" type="button" id="inv_cancel">Cancel</button>
+        <button class="btn btn-primary" type="button" id="inv_save">
+          <i class="fa-solid fa-plus" aria-hidden="true"></i>
+          <span>Create invoice</span>
+        </button>
+      `
+    });
+
+    $("inv_cancel")?.addEventListener("click", closeModal);
+
+    const invSaveEl = $("inv_save");
     if (invSaveEl) {
       invSaveEl.addEventListener("click", async () => {
-        const amountCents = Number(document.getElementById("inv_amount").value.trim());
-        const description = document.getElementById("inv_desc").value.trim();
-        const dueDate = document.getElementById("inv_due").value.trim() || null;
+        const workspaceId = $("inv_workspace")?.value.trim() || state.workspaceId;
+        const amountCents = Number($("inv_amount")?.value.trim());
+        const description = $("inv_desc")?.value.trim();
+        const dueDate = $("inv_due")?.value.trim() || null;
+
+        if (!workspaceId) {
+          alert("Please select a workspace.");
+          return;
+        }
+
+        if (!amountCents || amountCents <= 0) {
+          alert("Please enter a valid amount.");
+          return;
+        }
+
+        if (!description) {
+          alert("Please enter a description.");
+          return;
+        }
 
         try {
           await api("/api/admin/invoices", {
             method: "POST",
             body: {
-              workspaceId: state.workspaceId,
+              workspaceId,
               amountCents,
               currency: "EUR",
               description,
               dueDate
             }
           });
+
           closeModal();
           await refreshAll();
         } catch (e) {
@@ -691,33 +825,98 @@ if (btnCreateInvoiceEl) {
     }
   });
 }
+// End-Create Invoice POPUP Card // Billing-Section- INPU-1
 
-const btnSaveSettingsEl = $("btnSaveSettings");
-if (btnSaveSettingsEl) {
-  btnSaveSettingsEl.addEventListener("click", async () => {
-    setError($("settingsMsg"), "");
-  try {
-    const raw = $("settingsJson").value.trim() || "{}";
-    const parsed = JSON.parse(raw);
-    await api(`/api/admin/workspace-settings/${encodeURIComponent(state.workspaceId)}`, {
-      method: "PUT",
-      body: { settings: parsed }
-    });
-    setError($("settingsMsg"), "Saved ✅");
-  } catch (e) {
-    setError($("settingsMsg"), e.message);
-  }
+$("msgGoEmailSettingsPage")?.addEventListener("click", () => {
+  setTab("settings");
+  persistTab("settings");
+});
+
+$("msgGoEmailSettingsPageTop")?.addEventListener("click", () => {
+  setTab("settings");
+  persistTab("settings");
+});
+
+$("msgOpenInboxPage")?.addEventListener("click", () => {
+  alert("Inbox page is not built yet.");
+});
+
+$("msgOpenSentPage")?.addEventListener("click", () => {
+  alert("Sent mail page is not built yet.");
+});
+
+$("msgOpenFailedPage")?.addEventListener("click", () => {
+  alert("Failed mail page is not built yet.");
+});
+
+$("btnMessagesRefresh")?.addEventListener("click", () => {
+  alert("Messages refresh is not connected yet.");
+});
+$("btnCreateInvoiceTop")?.addEventListener("click", () => {
+  $("btnCreateInvoice")?.click();
+});
+
+$("btnExportBilling")?.addEventListener("click", () => {
+  const payload = {
+    workspaceId: state.workspaceId,
+    exportedAt: new Date().toISOString()
+  };
+
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {
+    type: "application/json;charset=utf-8"
   });
-}
+
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `billing-export-${Date.now()}.json`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(link.href);
+});
+
+$("billingStatusFilter")?.addEventListener("change", (e) => {
+  state.billing.status = e.target.value || "all";
+  refreshBilling().catch((err) => setError($("globalError"), err.message));
+});
+
+$("billingWorkspaceFilter")?.addEventListener("change", async (e) => {
+  state.workspaceId = e.target.value || "all";
+  const globalWorkspaceSelect = $("workspaceSelect");
+  if (globalWorkspaceSelect) globalWorkspaceSelect.value = state.workspaceId;
+  updateWorkspaceMeta();
+  await refreshAll();
+});
+
+$("btnOwnerEmailSettings")?.addEventListener("click", () => {
+  openOwnerEmailSettingsModal().catch((err) => alert(err.message));
+});
 
 const schoolSearchEl = $("schoolSearch");
 if (schoolSearchEl) {
-  schoolSearchEl.addEventListener("input", () => refreshSchools().catch(() => {}));
+  schoolSearchEl.addEventListener("input", () => refreshSchools().catch(() => { }));
 }
+
 const userSearchEl = $("userSearch");
 if (userSearchEl) {
-  userSearchEl.addEventListener("input", () => refreshUsers().catch(() => {}));
+  userSearchEl.addEventListener("input", () => refreshUsers().catch(() => { }));
 }
+
+/* ===== Audit filters ===== */
+$("auditSearch")?.addEventListener("input", (e) => {
+  state.audit.q = e.target.value || "";
+  applyAuditFilters();
+});
+
+$("auditActionFilter")?.addEventListener("change", (e) => {
+  state.audit.type = e.target.value || "all";
+  applyAuditFilters();
+});
+
+$("auditSort")?.addEventListener("change", (e) => {
+  state.audit.sort = e.target.value || "new";
+  applyAuditFilters();
+});
 
 const requestPanel = {
   searchInput: $("reqSearch"),
@@ -817,18 +1016,22 @@ if (requestPanel.nextBtn) {
 async function loadWorkspaces() {
   const sel = $("workspaceSelect");
   if (!sel) return;
+  const billingSel = $("billingWorkspaceFilter");
 
   const list = await api("/api/admin/workspaces");
   state.workspaces = list || [];
 
   sel.innerHTML = "";
   sel.insertAdjacentHTML("beforeend", `<option value="all">All workspaces</option>`);
+  if (billingSel) {
+    billingSel.innerHTML = "";
+    billingSel.insertAdjacentHTML("beforeend", `<option value="all">All workspaces</option>`);
+  }
 
   for (const ws of state.workspaces) {
-    sel.insertAdjacentHTML(
-      "beforeend",
-      `<option value="${escapeHtml(ws.id)}">${escapeHtml(ws.name || ws.id)}</option>`
-    );
+    const option = `<option value="${escapeHtml(ws.id)}">${escapeHtml(ws.name || ws.id)}</option>`;
+    sel.insertAdjacentHTML("beforeend", option);
+    billingSel?.insertAdjacentHTML("beforeend", option);
   }
 
   // Keep selection if possible
@@ -837,6 +1040,7 @@ async function loadWorkspaces() {
 
   state.workspaceId = hasOption ? desired : "all";
   sel.value = state.workspaceId;
+  if (billingSel) billingSel.value = state.workspaceId;
 
   updateWorkspaceMeta();
 }
@@ -854,15 +1058,18 @@ function updateWorkspaceMeta() {
   const meta = ws
     ? `Code: ${ws.schoolCode || "—"} • Status: ${ws.status || "—"}`
     : selectedValue === "all"
-    ? "Showing global view"
-    : "Workspace not found";
+      ? "Showing global view"
+      : "Workspace not found";
 
   metaEl.textContent = meta;
+  const billingSel = $("billingWorkspaceFilter");
+  if (billingSel && billingSel.value !== selectedValue) {
+    billingSel.value = selectedValue;
+  }
 }
 
 
 async function refreshAll() {
-  // Don’t refresh anything if not logged in
   if (!state.userId) return;
 
   updateWorkspaceMeta();
@@ -870,8 +1077,10 @@ async function refreshAll() {
 
   await refreshOverview();
   await refreshSchools();
+  await refreshApprovedMissingWorkspaces();
   await refreshUsers();
   await refreshBilling();
+  await refreshMessages();
   await refreshSettings();
   await refreshAudit();
   await refreshSchoolRequestCounts();
@@ -885,8 +1094,12 @@ async function refreshActiveTab() {
     case "overview":
       await refreshOverview().catch(() => {});
       break;
+    case "messages":
+      await refreshMessages().catch(() => {});
+      break;
     case "schools":
       await refreshSchools().catch(() => {});
+      await refreshApprovedMissingWorkspaces().catch(() => {});
       break;
     case "users":
       await refreshUsers().catch(() => {});
@@ -910,6 +1123,25 @@ async function refreshActiveTab() {
   }
 }
 
+$("btnResetJson")?.addEventListener("click", async () => {
+  try {
+    await refreshSettings();
+    const status = $("settingsSaveStatus");
+    const error = $("settingsError");
+    if (status) status.textContent = "Editor reset to saved version.";
+    if (error) {
+      error.textContent = "";
+      error.hidden = true;
+    }
+  } catch (e) {
+    const error = $("settingsError");
+    if (error) {
+      error.textContent = e.message;
+      error.hidden = false;
+    }
+  }
+});
+
 function wireLoginEnter() {
   const u = $("loginUserId");
   const p = $("loginPassword");
@@ -925,6 +1157,18 @@ function wireLoginEnter() {
 wireLoginEnter();
 wireKpiNavigation();
 wireNavToolHighlight();
+wireOverviewActions();
+
+async function refreshAccessToken() {
+  const refresh = await fetch("/api/auth/refresh", { method: "POST", credentials: "same-origin" });
+  if (!refresh.ok) return false;
+
+  const payload = await refresh.json().catch(() => ({}));
+  if (payload?.accessToken) {
+    setAccessToken(payload.accessToken);
+  }
+  return true;
+}
 
 async function restoreSessionFromStorage() {
   const savedTab = localStorage.getItem(STORAGE_TAB) || "overview";
@@ -939,16 +1183,15 @@ async function restoreSessionFromStorage() {
   }
   state.userId = storedUserId;
   try {
-    if (!accessToken) {
-      const refresh = await fetch("/api/auth/refresh", { method: "POST", credentials: "same-origin" });
-      if (refresh.ok) {
-        const payload = await refresh.json().catch(() => ({}));
-        if (payload?.accessToken) {
-          setAccessToken(payload.accessToken);
-        }
+    let me;
+    try {
+      me = await api("/api/admin/me");
+    } catch (error) {
+      if (error.status !== 401 || !(await refreshAccessToken())) {
+        throw error;
       }
+      me = await api("/api/admin/me");
     }
-    const me = await api("/api/admin/me");
     activateAdminView(me);
     await loadWorkspaces();
     await refreshAll();
@@ -960,34 +1203,196 @@ async function restoreSessionFromStorage() {
 }
 
 async function refreshOverview() {
-  const data = await api("/api/admin/overview");
-  $("kpiSchools").textContent = data.schools ?? "—";
-  $("kpiUsers").textContent = data.users ?? "—";
-  $("kpiSubs").textContent = data.activeSubscriptions ?? "—";
-  $("kpiOpenInvoices").textContent = data.openInvoices ?? "—";
+  const [overview, requestsCounts, auditRows, billingData] = await Promise.all([
+    api("/api/admin/overview").catch(() => ({})),
+    api("/api/admin/requests/counts").catch(() => ({})),
+    api(`/api/admin/audit?workspaceId=${encodeURIComponent(state.workspaceId || "all")}`).catch(() => []),
+    api(`/api/admin/billing/${encodeURIComponent(state.workspaceId || "all")}`).catch(() => ({ invoices: [], payments: [] }))
+  ]);
+
+  /* ---------- Main KPI cards ---------- */
+  setText("kpiSchools", overview.schools ?? "—");
+  setText("kpiUsers", overview.users ?? "—");
+  setText("kpiSubs", overview.activeSubscriptions ?? "—");
+  setText("kpiOpenInvoices", overview.openInvoices ?? "—");
 
   const setKpiDelta = (id, value) => {
     const el = $(id);
     if (!el) return;
-    if (value || value === 0) {
-      el.textContent = `↑ +${value} this week`;
-    } else {
-      el.textContent = "—";
-    }
+    el.textContent = value || value === 0 ? `↑ +${value} this week` : "—";
   };
-  setKpiDelta("kpiSchoolsDelta", data.schoolsDelta ?? data.delta?.schools);
-  setKpiDelta("kpiUsersDelta", data.usersDelta ?? data.delta?.users);
-  setKpiDelta("kpiSubsDelta", data.subscriptionsDelta ?? data.delta?.subscriptions);
-  setKpiDelta("kpiOpenInvoicesDelta", data.openInvoicesDelta ?? data.delta?.openInvoices);
 
+  setKpiDelta("kpiSchoolsDelta", overview.schoolsDelta ?? overview.delta?.schools);
+  setKpiDelta("kpiUsersDelta", overview.usersDelta ?? overview.delta?.users);
+  setKpiDelta("kpiSubsDelta", overview.subscriptionsDelta ?? overview.delta?.subscriptions);
+  setKpiDelta("kpiOpenInvoicesDelta", overview.openInvoicesDelta ?? overview.delta?.openInvoices);
+
+  /* ---------- Platform health ---------- */
+  setHealthCard("healthDb", "Healthy", "Connected and responsive", "good");
+
+  const failedEmails = Number(overview.failedEmailsToday ?? 0);
+  setHealthCard(
+    "healthEmail",
+    failedEmails > 0 ? "Attention" : "Healthy",
+    failedEmails > 0 ? `${failedEmails} failed email(s) today` : "Outbound delivery normal",
+    failedEmails > 0 ? "warn" : "good"
+  );
+
+  const aiUsed = Number(overview.aiUsedEur ?? 0);
+  const aiCap = Number(overview.aiCapEur ?? 0);
+  const aiNearLimit = aiCap > 0 && aiUsed >= aiCap * 0.8;
+  setHealthCard(
+    "healthAi",
+    aiNearLimit ? "Watch" : "Healthy",
+    aiCap > 0 ? `${formatEUR(aiUsed)} / ${formatEUR(aiCap)} used` : "Usage within limits",
+    aiNearLimit ? "warn" : "good"
+  );
+
+  const otpIssues = Number(overview.otpIssuesToday ?? 0);
+  setHealthCard(
+    "healthOtp",
+    otpIssues > 0 ? "Watch" : "Healthy",
+    otpIssues > 0 ? `${otpIssues} OTP issue(s) today` : "Verification service available",
+    otpIssues > 0 ? "warn" : "good"
+  );
+
+  const backupText = overview.lastBackupAt
+    ? `Last backup: ${formatAdminTimestamp(overview.lastBackupAt)}`
+    : "Last backup: —";
+
+  setHealthCard(
+    "healthBackup",
+    overview.lastBackupAt ? "Available" : "Check",
+    backupText,
+    overview.lastBackupAt ? "good" : "warn"
+  );
+
+  const pendingCount = Number(requestsCounts.pending ?? 0);
+  setHealthCard(
+    "healthRequest",
+    String(pendingCount),
+    "Pending school approvals",
+    pendingCount > 0 ? "warn" : "neutral"
+  );
+
+  /* ---------- Needs attention ---------- */
+  const attentionItems = [];
+
+  if (pendingCount > 0) {
+    attentionItems.push({
+      tone: "warn",
+      icon: "fa-inbox",
+      title: `${pendingCount} pending school request${pendingCount === 1 ? "" : "s"}`,
+      meta: "Review and approve new schools waiting for activation."
+    });
+  }
+
+  const openInvoices = Number(overview.openInvoices ?? 0);
+  if (openInvoices > 0) {
+    attentionItems.push({
+      tone: "warn",
+      icon: "fa-file-invoice-dollar",
+      title: `${openInvoices} open invoice${openInvoices === 1 ? "" : "s"}`,
+      meta: "Billing items still unpaid or waiting for action."
+    });
+  }
+
+  if (failedEmails > 0) {
+    attentionItems.push({
+      tone: "danger",
+      icon: "fa-envelope-circle-xmark",
+      title: `${failedEmails} failed email${failedEmails === 1 ? "" : "s"} today`,
+      meta: "Check outbound email delivery and retry failed operations."
+    });
+  }
+
+  const highRiskAudit = Array.isArray(auditRows)
+    ? auditRows.filter((row) => getAuditRisk(row.action || "") === "high").length
+    : 0;
+
+  if (highRiskAudit > 0) {
+    attentionItems.push({
+      tone: "danger",
+      icon: "fa-triangle-exclamation",
+      title: `${highRiskAudit} high-risk audit event${highRiskAudit === 1 ? "" : "s"}`,
+      meta: "Recent deletes or destructive actions need review."
+    });
+  }
+
+  if (attentionItems.length === 0) {
+    attentionItems.push({
+      tone: "success",
+      icon: "fa-circle-check",
+      title: "Platform looks stable",
+      meta: "No urgent owner-level action detected from current signals."
+    });
+  }
+
+  renderOverviewAttention(attentionItems);
+
+  /* ---------- Top workspaces ---------- */
+  const workspaceRows = [...(state.workspaces || [])]
+    .map((ws) => {
+      const signal = ws.status === "active" ? "Active workspace" : `Status: ${ws.status || "—"}`;
+      return {
+        ...ws,
+        activityScore:
+          (String(ws.status || "").toLowerCase() === "active" ? 10 : 0) +
+          (ws.schoolCode ? 3 : 0),
+        signal
+      };
+    })
+    .sort((a, b) => Number(b.activityScore || 0) - Number(a.activityScore || 0))
+    .slice(0, 6);
+
+  renderTopWorkspaces(workspaceRows);
+
+  /* ---------- Recent platform activity ---------- */
   renderTable($("overviewAudit"), {
     columns: [
-      { label: "Time", key: "createdAt", width: "180px", render: (r) => escapeHtml(new Date(r.createdAt).toLocaleString()) },
-      { label: "Actor", key: "actor", width: "160px", render: (r) => escapeHtml(r.actor || "—") },
-      { label: "Action", key: "action", render: (r) => escapeHtml(r.action || "—") },
-      { label: "Target", key: "target", render: (r) => escapeHtml(r.target || "—") }
+      {
+        label: "Time",
+        key: "createdAt",
+        width: "180px",
+        render: (r) => escapeHtml(formatAdminTimestamp(r.createdAt))
+      },
+      {
+        label: "Workspace",
+        key: "workspaceId",
+        width: "170px",
+        render: (r) => escapeHtml(r.workspaceId || "—")
+      },
+      {
+        label: "Actor",
+        key: "actor",
+        width: "150px",
+        render: (r) => escapeHtml(r.actor || "—")
+      },
+      {
+        label: "Action",
+        key: "action",
+        width: "260px",
+        render: (r) => `
+          <span class="audit-action-tag">
+            <i class="fa-solid ${getAuditActionIcon(r.action || "")}" aria-hidden="true"></i>
+            <span>${escapeHtml(r.action || "—")}</span>
+          </span>
+        `
+      },
+      {
+        label: "Risk",
+        key: "_risk",
+        width: "110px",
+        render: (r) => getAuditRiskBadge(r.action || "")
+      },
+      {
+        label: "Target",
+        key: "target",
+        width: "140px",
+        render: (r) => escapeHtml(r.target || "—")
+      }
     ],
-    rows: data.recentAudit || [],
+    rows: Array.isArray(auditRows) ? auditRows.slice(0, 12) : [],
     emptyText: "No recent audit events."
   });
 }
@@ -1003,24 +1408,93 @@ async function refreshSchools() {
     );
   });
 
+  const total = rows.length;
+  const approved = rows.filter((w) => String(w.status || "").toLowerCase() === "approved").length;
+  const protectedCount = rows.filter((w) => w.id === "default").length;
+
+  setText("schoolsSummaryTotal", total);
+  setText("schoolsSummaryApproved", approved);
+  setText("schoolsSummaryProtected", protectedCount);
+  setText("schoolsTableMeta", `${total} school${total === 1 ? "" : "s"}`);
+
   renderTable($("schoolsTable"), {
     columns: [
-      { label: "ID", key: "id", width: "170px", render: (r) => `<code>${escapeHtml(r.id)}</code>` },
-      { label: "Name", key: "name", render: (r) => escapeHtml(r.name || "—") },
-      { label: "Code", key: "schoolCode", width: "140px", render: (r) => escapeHtml(r.schoolCode || "—") },
-      { label: "Status", key: "status", width: "120px", render: (r) => escapeHtml(r.status || "—") },
       {
-        label: "Actions",
-        key: "_actions",
+        label: "School",
+        key: "name",
+        width: "360px",
+        render: (r) => `
+          <div class="school-primary">
+            <div class="school-primary-title">${escapeHtml(r.name || "—")}</div>
+            <div class="school-primary-sub">${escapeHtml(r.id || "—")}</div>
+          </div>
+        `
+      },
+      {
+        label: "Code",
+        key: "schoolCode",
+        width: "160px",
+        render: (r) =>
+          r.schoolCode
+            ? `<span class="school-code-badge">${escapeHtml(r.schoolCode)}</span>`
+            : `<span class="school-code-missing">Missing code</span>`
+      },
+      {
+        label: "Status",
+        key: "status",
+        width: "140px",
+        render: (r) => {
+          const status = String(r.status || "unknown").toLowerCase();
+          const cls =
+            status === "approved" ? "school-status-approved"
+              : status === "paused" || status === "archived" ? "school-status-paused"
+                : "school-status-other";
+
+          return `<span class="school-status-badge ${cls}">${escapeHtml(status)}</span>`;
+        }
+      },
+      {
+        label: "Type",
+        key: "_type",
         width: "140px",
         render: (r) =>
           r.id === "default"
-            ? `<span class="muted">Protected</span>`
-            : `<button class="btn btn-danger" data-action="delete-workspace" data-id="${escapeHtml(r.id)}">Delete</button>`
+            ? `<span class="school-tag is-system">System</span>`
+            : `<span class="school-tag">Customer</span>`
+      },
+      {
+        label: "Actions",
+        key: "_actions",
+        width: "220px",
+        render: (r) =>
+          r.id === "default"
+            ? `<span class="school-protected"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i> Protected</span>`
+            : `
+              <div class="school-actions">
+                <button class="school-btn-manage" data-action="manage-workspace" data-id="${escapeHtml(r.id)}">Manage</button>
+                <button class="school-btn-danger" data-action="delete-workspace" data-id="${escapeHtml(r.id)}">Delete</button>
+              </div>
+            `
       }
     ],
-    rows
+    rows,
+    emptyText: "No schools found."
   });
+
+  $("schoolsTable")
+    .querySelectorAll("button[data-action='manage-workspace']")
+    .forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const workspaceId = btn.getAttribute("data-id");
+        state.workspaceId = workspaceId;
+        const workspaceSelectEl = $("workspaceSelect");
+        if (workspaceSelectEl) workspaceSelectEl.value = workspaceId;
+        updateWorkspaceMeta();
+        setTab("settings");
+        persistTab("settings");
+        await refreshActiveTab().catch((e) => setError($("globalError"), e.message));
+      });
+    });
 
   $("schoolsTable")
     .querySelectorAll("button[data-action='delete-workspace']")
@@ -1153,14 +1627,14 @@ async function refreshUsers() {
         label: "Delete",
         key: "_delete",
         width: "140px",
-      render: (r) => {
-        const isSelfRow = state.me && state.me.id === r.id;
-        const disabledAttr = isSelfRow ? 'disabled title="Protected super admin account"' : "";
-        return `
+        render: (r) => {
+          const isSelfRow = state.me && state.me.id === r.id;
+          const disabledAttr = isSelfRow ? 'disabled title="Protected super admin account"' : "";
+          return `
           <button class="btn btn-danger" data-action="delete-user" data-id="${escapeHtml(r.id)}" ${disabledAttr}>Delete</button>
         `;
+        }
       }
-    }
     ],
     rows: displayRows
   });
@@ -1294,7 +1768,7 @@ async function refreshUsers() {
       });
     });
 
-  await refreshApprovedMissingWorkspaces();
+  
 }
 
 async function refreshApprovedMissingWorkspaces() {
@@ -1302,6 +1776,8 @@ async function refreshApprovedMissingWorkspaces() {
   if (!el) return;
 
   const rows = await api("/api/admin/approved-requests-missing-workspace");
+  setText("schoolsSummaryPendingCreation", rows.length);
+  setText("approvedMissingMeta", `${rows.length} pending creation`);
 
   renderTable(el, {
     columns: [
@@ -1309,31 +1785,42 @@ async function refreshApprovedMissingWorkspaces() {
         label: "Approved at",
         key: "reviewedAt",
         width: "180px",
-        render: (r) => escapeHtml(new Date(r.reviewedAt || r.createdAt).toLocaleString())
+        render: (r) => `<span class="approved-request-time">${escapeHtml(formatAdminTimestamp(r.reviewedAt || r.createdAt))}</span>`
       },
       {
         label: "School",
         key: "school",
-        render: (r) => escapeHtml(getSchoolName(r.data) || "—")
+        render: (r) => `
+          <div class="approved-request-primary">
+            <div class="approved-request-primary-title">${escapeHtml(getSchoolName(r.data) || "—")}</div>
+            <div class="approved-request-primary-sub">${escapeHtml(r.email || "—")}</div>
+          </div>
+        `
       },
-      { label: "Email", key: "email", render: (r) => escapeHtml(r.email || "—") },
       {
         label: "Workspace slug",
         key: "slug",
         width: "220px",
-        render: (r) => escapeHtml(getWorkspaceSlug(r.data) || "—")
+        render: (r) => `<span class="school-slug-badge">${escapeHtml(getWorkspaceSlug(r.data) || "—")}</span>`
       },
       {
         label: "Status",
         key: "st",
         width: "120px",
-        render: () => `<span class="badge approved">approved</span>`
+        render: () => `<span class="school-status-badge school-status-approved">approved</span>`
       },
       {
         label: "Actions",
         key: "_a",
-        width: "180px",
-        render: (r) => `<button class="btn btn-primary" data-createws="${escapeHtml(r.id)}">Create workspace</button>`
+        width: "220px",
+        render: (r) => `
+          <div class="school-actions">
+            <button class="school-btn-create" data-createws="${escapeHtml(r.id)}">
+              <i class="fa-solid fa-plus" aria-hidden="true"></i>
+              <span>Create workspace</span>
+            </button>
+          </div>
+        `
       }
     ],
     rows,
@@ -1357,18 +1844,19 @@ async function refreshApprovedMissingWorkspaces() {
             <div>
               <strong>Email:</strong>
               ${payload.emailSent
-                ? `<span style="color:#16a34a">✅ Sent via <strong>${escapeHtml(payload.emailProvider || "provider")}</strong></span>`
-                : `<span style="color:#dc2626">❌ Not sent (${escapeHtml(payload.emailError || "unknown error")})</span>`}
+              ? `<span style="color:#16a34a">✅ Sent via <strong>${escapeHtml(payload.emailProvider || "provider")}</strong></span>`
+              : `<span style="color:#dc2626">❌ Not sent (${escapeHtml(payload.emailError || "unknown error")})</span>`}
             </div>
             <p class="muted">The temporary password was emailed to the school admin. They should change it after first login.</p>
           `,
           footHtml: `<button class="btn btn-primary" id="okClose">Done</button>`
         });
-        const okCloseBtn = $("okClose");
-        if (okCloseBtn) {
-          okCloseBtn.addEventListener("click", closeModal);
-        }
+
+        $("okClose")?.addEventListener("click", closeModal);
+
         await refreshSchools();
+        await refreshApprovedMissingWorkspaces();
+        await refreshUsers();
       } catch (err) {
         alert(err.message);
       }
@@ -1380,24 +1868,139 @@ async function refreshBilling() {
   const ws = state.workspaceId;
   const data = await api(`/api/admin/billing/${encodeURIComponent(ws)}`);
 
+  const invoices = data.invoices || [];
+  const payments = data.payments || [];
+  state.billing.invoices = invoices;
+  state.billing.payments = payments;
+
+  const now = Date.now();
+
+  const openInvoices = invoices.filter((row) => String(row.status || "").toLowerCase() !== "paid");
+  const overdueInvoices = openInvoices.filter((row) => {
+    if (!row.dueDate) return false;
+    const due = new Date(row.dueDate).getTime();
+    return !Number.isNaN(due) && due < now;
+  });
+
+  const collectedAmount = payments.reduce((sum, row) => sum + Number(row.amountCents || 0), 0);
+
+  setText("billingOpenInvoicesCount", openInvoices.length);
+  setText("billingOverdueCount", overdueInvoices.length);
+  setText("billingCollectedAmount", moneyEUR(collectedAmount));
+  setText("billingPaymentsCount", payments.length);
+  setText("billingInvoicesMeta", `${invoices.length} invoice${invoices.length === 1 ? "" : "s"}`);
+  setText("billingPaymentsMeta", `${payments.length} payment${payments.length === 1 ? "" : "s"}`);
+
+  const attentionItems = [];
+
+  if (overdueInvoices.length > 0) {
+    attentionItems.push({
+      tone: "danger",
+      title: `${overdueInvoices.length} overdue invoice${overdueInvoices.length === 1 ? "" : "s"}`,
+      meta: "These invoices are past due and need follow-up."
+    });
+  }
+
+  if (openInvoices.length > 0) {
+    attentionItems.push({
+      tone: "warn",
+      title: `${openInvoices.length} open invoice${openInvoices.length === 1 ? "" : "s"}`,
+      meta: "There are unpaid billing items waiting for action."
+    });
+  }
+
+  if (payments.length === 0) {
+    attentionItems.push({
+      tone: "info",
+      title: "No payments recorded yet",
+      meta: "Once invoices are paid, they will appear here."
+    });
+  }
+
+  const attentionEl = $("billingAttentionList");
+  if (attentionEl) {
+    attentionEl.innerHTML = attentionItems.length
+      ? attentionItems.map((item) => `
+          <div class="billing-attention-item is-${item.tone}">
+            <div class="billing-attention-icon">
+              <i class="fa-solid ${item.tone === "danger" ? "fa-triangle-exclamation"
+          : item.tone === "warn" ? "fa-clock"
+            : "fa-circle-info"
+        }" aria-hidden="true"></i>
+            </div>
+            <div class="billing-attention-content">
+              <div class="billing-attention-title">${escapeHtml(item.title)}</div>
+              <div class="billing-attention-meta">${escapeHtml(item.meta)}</div>
+            </div>
+          </div>
+        `).join("")
+      : `
+        <div class="billing-attention-item is-info">
+          <div class="billing-attention-icon">
+            <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
+          </div>
+          <div class="billing-attention-content">
+            <div class="billing-attention-title">No billing alerts yet</div>
+            <div class="billing-attention-meta">Once invoices and payments exist, this area will show follow-up actions.</div>
+          </div>
+        </div>
+      `;
+  }
+
   renderTable($("invoicesTable"), {
     columns: [
-      { label: "Invoice", key: "id", width: "140px", render: (r) => `<code>${escapeHtml(r.id)}</code>` },
-      { label: "Amount", key: "amountCents", width: "140px", render: (r) => escapeHtml(moneyEUR(r.amountCents)) },
-      { label: "Status", key: "status", width: "110px", render: (r) => escapeHtml(r.status) },
-      { label: "Due", key: "dueDate", width: "120px", render: (r) => escapeHtml(r.dueDate || "—") },
+      {
+        label: "Invoice",
+        key: "id",
+        width: "180px",
+        render: (r) => `
+          <div class="billing-id">${escapeHtml(r.id || "—")}</div>
+        `
+      },
+      {
+        label: "Amount",
+        key: "amountCents",
+        width: "140px",
+        render: (r) => `<span class="billing-amount">${escapeHtml(moneyEUR(r.amountCents))}</span>`
+      },
+      {
+        label: "Status",
+        key: "status",
+        width: "120px",
+        render: (r) => {
+          const status = String(r.status || "unknown").toLowerCase();
+          const cls =
+            status === "paid" ? "billing-status-paid"
+              : status === "open" ? "billing-status-open"
+                : status === "void" ? "billing-status-void"
+                  : "billing-status-other";
+
+          return `<span class="billing-status-badge ${cls}">${escapeHtml(status)}</span>`;
+        }
+      },
+      {
+        label: "Due",
+        key: "dueDate",
+        width: "140px",
+        render: (r) => {
+          if (!r.dueDate) return "—";
+          const dueTs = new Date(r.dueDate).getTime();
+          const overdue = !Number.isNaN(dueTs) && dueTs < now && String(r.status || "").toLowerCase() !== "paid";
+          return `<span class="${overdue ? "billing-due-overdue" : ""}">${escapeHtml(r.dueDate)}</span>`;
+        }
+      },
       {
         label: "Action",
         key: "_a",
         width: "160px",
         render: (r) =>
-          r.status === "paid"
-            ? `<span class="muted">—</span>`
+          String(r.status || "").toLowerCase() === "paid"
+            ? `<span class="muted">Paid</span>`
             : `<button class="btn btn-secondary" data-action="mark-paid" data-id="${escapeHtml(r.id)}">Mark paid</button>`
       }
     ],
-    rows: data.invoices || [],
-    emptyText: "No invoices."
+    rows: invoices,
+    emptyText: "No invoices created yet."
   });
 
   $("invoicesTable").querySelectorAll("button[data-action='mark-paid']").forEach((btn) => {
@@ -1418,41 +2021,260 @@ async function refreshBilling() {
 
   renderTable($("paymentsTable"), {
     columns: [
-      { label: "Payment", key: "id", width: "140px", render: (r) => `<code>${escapeHtml(r.id)}</code>` },
-      { label: "Invoice", key: "invoiceId", width: "140px", render: (r) => `<code>${escapeHtml(r.invoiceId)}</code>` },
-      { label: "Amount", key: "amountCents", width: "140px", render: (r) => escapeHtml(moneyEUR(r.amountCents)) },
-      { label: "Provider", key: "provider", width: "110px", render: (r) => escapeHtml(r.provider || "manual") },
-      { label: "Time", key: "createdAt", render: (r) => escapeHtml(new Date(r.createdAt).toLocaleString()) }
+      {
+        label: "Payment",
+        key: "id",
+        width: "180px",
+        render: (r) => `<div class="billing-id">${escapeHtml(r.id || "—")}</div>`
+      },
+      {
+        label: "Invoice",
+        key: "invoiceId",
+        width: "180px",
+        render: (r) => `<div class="billing-id">${escapeHtml(r.invoiceId || "—")}</div>`
+      },
+      {
+        label: "Amount",
+        key: "amountCents",
+        width: "140px",
+        render: (r) => `<span class="billing-amount">${escapeHtml(moneyEUR(r.amountCents))}</span>`
+      },
+      {
+        label: "Provider",
+        key: "provider",
+        width: "120px",
+        render: (r) => escapeHtml(r.provider || "manual")
+      },
+      {
+        label: "Paid at",
+        key: "createdAt",
+        render: (r) => escapeHtml(formatAdminTimestamp(r.createdAt))
+      }
     ],
-    rows: data.payments || [],
-    emptyText: "No payments."
+    rows: payments,
+    emptyText: "No payments recorded yet."
   });
+}
+
+function updateWorkspaceWarning() {
+  const warning = $("settingsWorkspaceWarning");
+
+  if (!warning) return;
+
+  if (!state.workspaceId || state.workspaceId === "all") {
+    warning.style.display = "block";
+  } else {
+    warning.style.display = "none";
+  }
 }
 
 async function refreshSettings() {
   const ws = state.workspaceId;
+  const status = $("settingsSaveStatus");
+  const error = $("settingsError");
+  const workspaceName = $("settingsWorkspaceName");
+
+  if (status) status.textContent = "";
+  if (error) {
+    error.textContent = "";
+    error.hidden = true;
+  }
+  if (workspaceName) {
+    const selected = (state.workspaces || []).find((workspace) => String(workspace.id) === String(ws));
+    workspaceName.textContent = ws === "all" ? "All workspaces" : selected?.name || ws || "No workspace selected";
+  }
+  updateWorkspaceWarning();
+
   if (ws === "all") {
     $("settingsJson").value = JSON.stringify({ note: "Select a specific workspace to edit settings." }, null, 2);
+    if (status) status.textContent = "Select a workspace before saving.";
     return;
   }
   const data = await api(`/api/admin/workspace-settings/${encodeURIComponent(ws)}`);
   $("settingsJson").value = JSON.stringify(data.settings || {}, null, 2);
 }
+function getAuditGroup(action = "") {
+  const value = String(action || "").toLowerCase();
+
+  if (value.startsWith("user.")) return "User";
+  if (value.startsWith("workspace.")) return "Workspace";
+  if (value.startsWith("school_request.")) return "School Request";
+  if (value.startsWith("billing.") || value.includes("invoice") || value.includes("payment")) return "Billing";
+  if (value.startsWith("settings.") || value.includes("config")) return "Settings";
+  return "General";
+}
+
+function getAuditRisk(action = "") {
+  const value = String(action || "").toLowerCase();
+
+  if (
+    value.includes("delete") ||
+    value.includes("reject") ||
+    value.includes("disable") ||
+    value.includes("remove")
+  ) return "high";
+
+  if (
+    value.includes("update") ||
+    value.includes("approve") ||
+    value.includes("create_workspace") ||
+    value.includes("bulk")
+  ) return "medium";
+
+  return "low";
+}
+
+function getAuditRiskBadge(action = "") {
+  const risk = getAuditRisk(action);
+  const label = risk.charAt(0).toUpperCase() + risk.slice(1);
+  return `<span class="audit-badge audit-badge-${risk}">${label}</span>`;
+}
+
+function getAuditActionIcon(action = "") {
+  const value = String(action || "").toLowerCase();
+
+  if (value.startsWith("user.")) return "fa-user-gear";
+  if (value.startsWith("workspace.")) return "fa-building";
+  if (value.startsWith("school_request.")) return "fa-school";
+  if (value.includes("invoice") || value.includes("payment")) return "fa-file-invoice-dollar";
+  if (value.includes("settings") || value.includes("config")) return "fa-sliders";
+  if (value.includes("delete")) return "fa-trash";
+  return "fa-clipboard-list";
+}
+
+function buildAuditDetails(row) {
+  const parts = [];
+
+  if (row.workspaceId) parts.push(`Workspace: ${row.workspaceId}`);
+  if (row.actor) parts.push(`Actor: ${row.actor}`);
+  if (row.target) parts.push(`Target: ${row.target}`);
+  if (row.action) parts.push(`Action: ${row.action}`);
+
+  return parts.join(" • ") || "No extra details";
+}
+
+function renderAuditTable(rows) {
+  const el = $("auditTable");
+  const summary = $("auditSummary");
+
+  if (!el) return;
+
+  if (!rows || !rows.length) {
+    el.innerHTML = `<div class="audit-empty">No audit rows found.</div>`;
+    if (summary) summary.textContent = "0 rows";
+    return;
+  }
+
+  if (summary) {
+    summary.textContent = `${rows.length} row${rows.length === 1 ? "" : "s"}`;
+  }
+
+  const thead = `
+    <thead>
+      <tr>
+        <th class="audit-col-time">Time</th>
+        <th class="audit-col-workspace">Workspace</th>
+        <th class="audit-col-actor">Actor</th>
+        <th class="audit-col-action">Action</th>
+        <th class="audit-col-target">Target</th>
+        <th class="audit-col-group">Group</th>
+        <th class="audit-col-risk">Risk</th>
+        <th class="audit-col-details">Details</th>
+      </tr>
+    </thead>
+  `;
+
+  const tbody = rows.map((row) => {
+    const action = row.action || "—";
+    const actor = row.actor || "—";
+    const workspace = row.workspaceId || "—";
+    const target = row.target || "—";
+    const group = getAuditGroup(action);
+    const details = buildAuditDetails(row);
+
+    return `
+      <tr>
+        <td class="audit-col-time">
+          <div class="audit-cell-main">${escapeHtml(formatAdminTimestamp(row.createdAt))}</div>
+        </td>
+
+        <td class="audit-col-workspace">
+          <div class="audit-cell-main">${escapeHtml(workspace)}</div>
+        </td>
+
+        <td class="audit-col-actor">
+          <div class="audit-cell-main">${escapeHtml(actor)}</div>
+        </td>
+
+        <td class="audit-col-action">
+          <div class="audit-action-tag">
+            <i class="fa-solid ${getAuditActionIcon(action)}" aria-hidden="true"></i>
+            <span>${escapeHtml(action)}</span>
+          </div>
+        </td>
+
+        <td class="audit-col-target">
+          <div class="audit-cell-main">${escapeHtml(target)}</div>
+        </td>
+
+        <td class="audit-col-group">
+          <div class="audit-cell-main">${escapeHtml(group)}</div>
+        </td>
+
+        <td class="audit-col-risk">
+          ${getAuditRiskBadge(action)}
+        </td>
+
+        <td class="audit-col-details">
+          ${escapeHtml(details)}
+        </td>
+      </tr>
+    `;
+  }).join("");
+
+  el.innerHTML = `<table>${thead}<tbody>${tbody}</tbody></table>`;
+}
 
 async function refreshAudit() {
   const ws = state.workspaceId;
   const data = await api(`/api/admin/audit?workspaceId=${encodeURIComponent(ws)}`);
-  renderTable($("auditTable"), {
-    columns: [
-      { label: "Time", key: "createdAt", width: "180px", render: (r) => escapeHtml(new Date(r.createdAt).toLocaleString()) },
-      { label: "Workspace", key: "workspaceId", width: "140px", render: (r) => escapeHtml(r.workspaceId || "—") },
-      { label: "Actor", key: "actor", width: "160px", render: (r) => escapeHtml(r.actor || "—") },
-      { label: "Action", key: "action", render: (r) => escapeHtml(r.action || "—") },
-      { label: "Target", key: "target", render: (r) => escapeHtml(r.target || "—") }
-    ],
-    rows: data || [],
-    emptyText: "No audit rows."
+
+  state.audit.rows = Array.isArray(data) ? data : [];
+
+  applyAuditFilters();
+}
+function applyAuditFilters() {
+  let rows = [...(state.audit.rows || [])];
+
+  const q = String(state.audit.q || "").trim().toLowerCase();
+  const type = String(state.audit.type || "all").toLowerCase();
+  const sort = String(state.audit.sort || "new").toLowerCase();
+
+  if (q) {
+    rows = rows.filter((row) => {
+      return [
+        row.createdAt,
+        row.workspaceId,
+        row.actor,
+        row.action,
+        row.target
+      ]
+        .map((v) => String(v || "").toLowerCase())
+        .some((v) => v.includes(q));
+    });
+  }
+
+  if (type !== "all") {
+    rows = rows.filter((row) => String(row.action || "").toLowerCase().startsWith(`${type}.`));
+  }
+
+  rows.sort((a, b) => {
+    const aTime = new Date(a.createdAt || 0).getTime();
+    const bTime = new Date(b.createdAt || 0).getTime();
+    return sort === "old" ? aTime - bTime : bTime - aTime;
   });
+
+  renderAuditTable(rows);
 }
 
 async function refreshSchoolRequestCounts() {
@@ -1509,18 +2331,25 @@ function updateRequestPagination({ pageSize = 0, hasNext = false } = {}) {
   if (requestPanel.prevBtn) requestPanel.prevBtn.disabled = state.requests.cursorHistory.length === 0;
   if (requestPanel.nextBtn) requestPanel.nextBtn.disabled = !hasNext;
 }
-
+// =========================================================
+// School requests - Start - SCRE-1
+// =========================================================
 async function refreshSchoolRequests({ reset = false } = {}) {
   if (reset) {
     resetRequestPagination({ clearSelection: true });
   }
+
   const tableEl = $("requestsTable");
   if (!tableEl) return;
 
+  // -------------------------------------------------------
+  // Local config
+  // -------------------------------------------------------
   const status = state.requests.status || "pending";
   const search = state.requests.q || "";
   const sort = state.requests.sort || "new";
   const limit = Number(state.requests.limit) || 25;
+
   const STATUS_OPTIONS = ["pending", "approved", "rejected", "flagged"];
   const STATUS_LABELS = {
     pending: "Pending",
@@ -1534,21 +2363,46 @@ async function refreshSchoolRequests({ reset = false } = {}) {
     flagged: "flag"
   };
 
-  const params = new URLSearchParams({
-    status,
-    sort,
-    limit: String(limit)
-  });
-  if (search) params.set("search", search);
-  if (state.requests.cursor) params.set("cursor", state.requests.cursor);
+  // -------------------------------------------------------
+  // Helpers
+  // -------------------------------------------------------
+  const buildParams = () => {
+    const params = new URLSearchParams({
+      status,
+      sort,
+      limit: String(limit)
+    });
+
+    if (search) params.set("search", search);
+    if (state.requests.cursor) params.set("cursor", state.requests.cursor);
+
+    return params;
+  };
+
+  const renderLoadingState = () => {
+    tableEl.innerHTML = `
+      <div class="requests-empty-state">
+        <div class="requests-empty-visual">
+          <div class="requests-empty-icon">
+            <i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i>
+          </div>
+        </div>
+        <div class="requests-empty-content">
+          <h3>Loading requests</h3>
+          <p>Please wait while we fetch the latest school applications.</p>
+        </div>
+      </div>
+    `;
+  };
 
   const renderStatusSelect = (row) => {
     const current = String(row.status || "pending").toLowerCase();
     const reason = (row.reviewNote || row.reason || "").trim();
+
     const options = STATUS_OPTIONS.map(
-      (opt) =>
-        `<option value="${opt}"${opt === current ? " selected" : ""}>${STATUS_LABELS[opt]}</option>`
+      (opt) => `<option value="${opt}"${opt === current ? " selected" : ""}>${STATUS_LABELS[opt]}</option>`
     ).join("");
+
     return `
       <div class="status-cell"${reason ? ` title="${escapeHtml(reason)}"` : ""}>
         <select class="req-status-select" data-id="${escapeHtml(row.id)}" data-status="${escapeHtml(current)}">
@@ -1563,26 +2417,96 @@ async function refreshSchoolRequests({ reset = false } = {}) {
     `;
   };
 
-  state.requests.loading = true;
-  tableEl.innerHTML = `<div class="muted" style="padding:16px">Loading school requests…</div>`;
+  const renderEmptyState = () => {
+    const isFiltered = Boolean(search) || status !== "all";
 
-  try {
-    const payload = await api(`/api/admin/requests?${params.toString()}`);
-    const rows = Array.isArray(payload?.items) ? payload.items : [];
-    state.requests.items = rows;
-    state.requests.nextCursor = payload?.nextCursor || null;
-    state.requests.currentCursor = state.requests.cursor;
-    if (payload?.counts) {
-      state.requests.counts = {
-        pending: payload.counts.pending ?? 0,
-        approved: payload.counts.approved ?? 0,
-        rejected: payload.counts.rejected ?? 0,
-        flagged: payload.counts.flagged ?? 0,
-        all: payload.counts.all ?? 0
-      };
-      updateChipCounts(state.requests.counts);
-    }
+    tableEl.innerHTML = isFiltered
+      ? `
+        <div class="requests-empty-state is-filtered">
+          <div class="requests-empty-visual">
+            <div class="requests-empty-icon">
+              <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+            </div>
+            <div class="requests-empty-orbit orbit-1"></div>
+            <div class="requests-empty-orbit orbit-2"></div>
+          </div>
 
+          <div class="requests-empty-content">
+            <h3>No matching requests found</h3>
+            <p>
+              There are no school requests for the current filter or search.
+              Try changing the status, clearing the search, or switching the sort.
+            </p>
+          </div>
+
+          <div class="requests-empty-actions">
+            <button class="btn btn-ghost" type="button" id="reqClearFiltersBtn">
+              Clear filters
+            </button>
+          </div>
+        </div>
+      `
+      : `
+        <div class="requests-empty-state is-success">
+          <div class="requests-empty-visual">
+            <div class="requests-empty-icon">
+              <i class="fa-solid fa-circle-check" aria-hidden="true"></i>
+            </div>
+            <div class="requests-empty-orbit orbit-1"></div>
+            <div class="requests-empty-orbit orbit-2"></div>
+          </div>
+
+          <div class="requests-empty-content">
+            <h3>All caught up</h3>
+            <p>
+              There are currently no school requests waiting for review.
+              New requests will appear here automatically when schools apply.
+            </p>
+          </div>
+
+          <div class="requests-empty-meta">
+            <div class="requests-empty-meta-card">
+              <span>Pending</span>
+              <strong>${escapeHtml(String(state.requests.counts.pending ?? 0))}</strong>
+            </div>
+            <div class="requests-empty-meta-card">
+              <span>Approved</span>
+              <strong>${escapeHtml(String(state.requests.counts.approved ?? 0))}</strong>
+            </div>
+            <div class="requests-empty-meta-card">
+              <span>Rejected</span>
+              <strong>${escapeHtml(String(state.requests.counts.rejected ?? 0))}</strong>
+            </div>
+            <div class="requests-empty-meta-card">
+              <span>Flagged</span>
+              <strong>${escapeHtml(String(state.requests.counts.flagged ?? 0))}</strong>
+            </div>
+          </div>
+        </div>
+      `;
+
+    $("reqClearFiltersBtn")?.addEventListener("click", () => {
+      state.requests.q = "";
+      state.requests.status = "all";
+      state.requests.sort = "new";
+
+      if ($("reqSearch")) $("reqSearch").value = "";
+      if ($("reqSort")) $("reqSort").value = "new";
+
+      document.querySelectorAll("#reqChips .chip").forEach((chip) => {
+        chip.classList.toggle("is-active", chip.dataset.status === "all");
+      });
+
+      refreshSchoolRequests({ reset: true }).catch((e) => {
+        setError($("globalError"), e.message);
+      });
+    });
+
+    updateBulkBar();
+    updateRequestPagination({ pageSize: 0, hasNext: false });
+  };
+
+  const renderRequestTable = (rows) => {
     renderTable(tableEl, {
       columns: [
         {
@@ -1590,10 +2514,19 @@ async function refreshSchoolRequests({ reset = false } = {}) {
           key: "_sel",
           width: "42px",
           render: (r) => `
-            <input type="checkbox" data-sel="${escapeHtml(r.id)}" ${state.requests.selected.has(r.id) ? "checked" : ""} />
+            <input
+              type="checkbox"
+              data-sel="${escapeHtml(r.id)}"
+              ${state.requests.selected.has(r.id) ? "checked" : ""}
+            />
           `
         },
-        { label: "Created", key: "createdAt", width: "180px", render: (r) => escapeHtml(new Date(r.createdAt).toLocaleString()) },
+        {
+          label: "Created",
+          key: "createdAt",
+          width: "180px",
+          render: (r) => escapeHtml(new Date(r.createdAt).toLocaleString())
+        },
         {
           label: "School",
           key: "school",
@@ -1603,20 +2536,43 @@ async function refreshSchoolRequests({ reset = false } = {}) {
             return `${escapeHtml(name)} ${dup}`;
           }
         },
-        { label: "Email", key: "email", render: (r) => escapeHtml(r.email || "—") },
-        { label: "Phone", key: "phone", width: "160px", render: (r) => escapeHtml(getPhone(r.data) || "—") },
-        { label: "Status", key: "status", width: "150px", render: (r) => renderStatusSelect(r) },
+        {
+          label: "Email",
+          key: "email",
+          render: (r) => escapeHtml(r.email || "—")
+        },
+        {
+          label: "Phone",
+          key: "phone",
+          width: "160px",
+          render: (r) => escapeHtml(getPhone(r.data) || "—")
+        },
+        {
+          label: "Status",
+          key: "status",
+          width: "150px",
+          render: (r) => renderStatusSelect(r)
+        },
         {
           label: "Actions",
           key: "_a",
           width: "320px",
           render: (r) => {
-            const isPending = String(r.status).toLowerCase() === "pending";
-            const isFlagged = String(r.status).toLowerCase() === "flagged";
+            const currentStatus = String(r.status || "").toLowerCase();
+            const isPending = currentStatus === "pending";
+            const isFlagged = currentStatus === "flagged";
 
-            const approveBtn = isPending ? `<button class="btn btn-primary" data-approve="${escapeHtml(r.id)}">Approve</button>` : "";
-            const rejectBtn = isPending ? `<button class="btn btn-ghost" data-reject="${escapeHtml(r.id)}">Reject</button>` : "";
-            const flagBtn = (isPending || isFlagged) ? `<button class="btn btn-ghost" data-flag="${escapeHtml(r.id)}">Flag</button>` : "";
+            const approveBtn = isPending
+              ? `<button class="btn btn-primary" data-approve="${escapeHtml(r.id)}">Approve</button>`
+              : "";
+
+            const rejectBtn = isPending
+              ? `<button class="btn btn-ghost" data-reject="${escapeHtml(r.id)}">Reject</button>`
+              : "";
+
+            const flagBtn = (isPending || isFlagged)
+              ? `<button class="btn btn-ghost" data-flag="${escapeHtml(r.id)}">Flag</button>`
+              : "";
 
             return `
               <div class="req-actions">
@@ -1629,33 +2585,43 @@ async function refreshSchoolRequests({ reset = false } = {}) {
           }
         }
       ],
-      rows,
-      emptyText: "No school requests."
+      rows
     });
+  };
 
-    tableEl.querySelectorAll("input[data-sel]").forEach((cb) => {
-      cb.addEventListener("change", () => {
-        const id = cb.getAttribute("data-sel");
-        if (cb.checked) state.requests.selected.add(id);
+  const bindSelectionEvents = () => {
+    tableEl.querySelectorAll("input[data-sel]").forEach((checkbox) => {
+      checkbox.addEventListener("change", () => {
+        const id = checkbox.getAttribute("data-sel");
+        if (!id) return;
+
+        if (checkbox.checked) state.requests.selected.add(id);
         else state.requests.selected.delete(id);
+
         updateBulkBar();
       });
     });
+  };
 
+  const bindStatusEvents = () => {
     tableEl.querySelectorAll(".req-status-select").forEach((select) => {
       select.addEventListener("change", (event) => {
         const target = event.currentTarget;
         const id = target.getAttribute("data-id");
         const oldStatus = target.getAttribute("data-status");
         const newStatus = target.value;
-        if (newStatus === oldStatus) return;
+
+        if (!id || newStatus === oldStatus) return;
+
         const action = STATUS_ACTIONS[newStatus];
         if (!action) {
           target.value = oldStatus;
           return;
         }
+
         target.disabled = true;
         target.value = oldStatus;
+
         actionModal(action, id)
           .catch((err) => setError($("globalError"), err.message))
           .finally(() => {
@@ -1663,97 +2629,102 @@ async function refreshSchoolRequests({ reset = false } = {}) {
           });
       });
     });
+  };
 
-    const openDetails = (id) => {
-      const r = rows.find((x) => String(x.id) === id);
-      if (!r) return;
-      const d = r.data || {};
-      const raw = JSON.stringify(d, null, 2);
-      showModal({
-        title: "School request details",
-        bodyHtml: `
-          <div class="admin-row">
-            <div><b>School:</b> ${escapeHtml(getSchoolName(d) || "—")}</div>
-            <div><b>Email:</b> ${escapeHtml(r.email || "—")}</div>
-            <div><b>Phone:</b> ${escapeHtml(getPhone(d) || "—")}</div>
-            <div><b>Contact:</b> ${escapeHtml(getContact(d) || "—")}</div>
-            <div><b>Address:</b> ${escapeHtml(getAddress(d) || "—")}</div>
-            <div><b>City/Country:</b> ${escapeHtml(`${getCity(d) || "—"} / ${getCountry(d) || "—"}`)}</div>
-            <div><b>Workspace slug:</b> ${escapeHtml(getWorkspaceSlug(d) || "—")}</div>
-            <div><b>Status:</b> ${badge(r.status)}</div>
-            <div><b>Internal note:</b> ${escapeHtml(r.reviewNote || "—")}</div>
-          </div>
-          <hr class="admin-hr" />
-          <details>
-            <summary><b>Raw JSON</b></summary>
-            <pre style="white-space:pre-wrap;margin:10px 0 0 0">${escapeHtml(raw)}</pre>
-          </details>
-        `,
-        footHtml: `<button class="btn btn-ghost" id="modalCloseBtn">Close</button>`
+  const openDetails = (id, rows) => {
+    const row = rows.find((item) => String(item.id) === String(id));
+    if (!row) return;
+
+    const data = row.data || {};
+    const raw = JSON.stringify(data, null, 2);
+
+    showModal({
+      title: "School request details",
+      bodyHtml: `
+        <div class="admin-row">
+          <div><b>School:</b> ${escapeHtml(getSchoolName(data) || "—")}</div>
+          <div><b>Email:</b> ${escapeHtml(row.email || "—")}</div>
+          <div><b>Phone:</b> ${escapeHtml(getPhone(data) || "—")}</div>
+          <div><b>Contact:</b> ${escapeHtml(getContact(data) || "—")}</div>
+          <div><b>Address:</b> ${escapeHtml(getAddress(data) || "—")}</div>
+          <div><b>City/Country:</b> ${escapeHtml(`${getCity(data) || "—"} / ${getCountry(data) || "—"}`)}</div>
+          <div><b>Workspace slug:</b> ${escapeHtml(getWorkspaceSlug(data) || "—")}</div>
+          <div><b>Status:</b> ${badge(row.status)}</div>
+          <div><b>Internal note:</b> ${escapeHtml(row.reviewNote || "—")}</div>
+        </div>
+        <hr class="admin-hr" />
+        <details>
+          <summary><b>Raw JSON</b></summary>
+          <pre style="white-space:pre-wrap;margin:10px 0 0 0">${escapeHtml(raw)}</pre>
+        </details>
+      `,
+      footHtml: `<button class="btn btn-ghost" id="modalCloseBtn">Close</button>`
+    });
+
+    $("modalCloseBtn")?.addEventListener("click", closeModal);
+  };
+
+  const actionModal = async (action, id) => {
+    const pretty =
+      action === "approve" ? "Approve" :
+      action === "reject" ? "Reject" :
+      "Flag";
+
+    showModal({
+      title: `${pretty} request`,
+      bodyHtml: `
+        <div class="admin-row">
+          <div class="muted">You are about to <b>${pretty.toLowerCase()}</b> this request.</div>
+        </div>
+        <div class="admin-row">
+          <label class="admin-label">Internal note (optional)</label>
+          <textarea class="admin-input admin-textarea" id="noteText" style="min-height:140px"></textarea>
+        </div>
+      `,
+      footHtml: `
+        <button class="btn btn-ghost" id="actCancel">Cancel</button>
+        <button class="btn btn-primary" id="actConfirm">${pretty}</button>
+      `
+    });
+
+    $("actCancel")?.addEventListener("click", closeModal);
+
+    $("actConfirm")?.addEventListener("click", async () => {
+      const note = $("noteText")?.value.trim() || "";
+
+      await api(`/api/admin/school-requests/${encodeURIComponent(id)}/${action}`, {
+        method: "POST",
+        body: { note }
       });
-      const modalCloseBtnElm = $("modalCloseBtn");
-      if (modalCloseBtnElm) {
-        modalCloseBtnElm.addEventListener("click", closeModal);
-      }
-    };
 
-    async function actionModal(action, id) {
-      const pretty = action === "approve" ? "Approve" : action === "reject" ? "Reject" : "Flag";
-      showModal({
-        title: `${pretty} request`,
-        bodyHtml: `
-          <div class="admin-row">
-            <div class="muted">You are about to <b>${pretty.toLowerCase()}</b> this request.</div>
-          </div>
-          <div class="admin-row">
-            <label class="admin-label">Internal note (optional)</label>
-            <textarea class="admin-input admin-textarea" id="noteText" style="min-height:140px"></textarea>
-          </div>
-        `,
-        footHtml: `
-          <button class="btn btn-ghost" id="actCancel">Cancel</button>
-          <button class="btn btn-primary" id="actConfirm">${pretty}</button>
-        `
-      });
+      closeModal();
+      state.requests.selected.delete(id);
+      updateBulkBar();
+      await refreshSchoolRequestCounts();
+      await refreshSchoolRequests();
+    });
+  };
 
-      const actCancelBtn = $("actCancel");
-      if (actCancelBtn) {
-        actCancelBtn.addEventListener("click", closeModal);
-      }
-      const actConfirmBtn = $("actConfirm");
-      if (actConfirmBtn) {
-        actConfirmBtn.addEventListener("click", async () => {
-          const noteTextarea = $("noteText");
-          if (!noteTextarea) return;
-          const note = noteTextarea.value.trim();
-          await api(`/api/admin/school-requests/${encodeURIComponent(id)}/${action}`, {
-            method: "POST",
-            body: { note }
-          });
-          closeModal();
-          state.requests.selected.delete(id);
-          updateBulkBar();
-          await refreshSchoolRequestCounts();
-          await refreshSchoolRequests();
-        });
-      }
-    }
-
+  const bindActionEvents = (rows) => {
     const handleClick = (event) => {
       const btn = event.target.closest("button");
       if (!btn) return;
+
       if (btn.dataset.view) {
-        openDetails(btn.dataset.view);
+        openDetails(btn.dataset.view, rows);
         return;
       }
+
       if (btn.dataset.approve) {
         actionModal("approve", btn.dataset.approve).catch((e) => alert(e.message));
         return;
       }
+
       if (btn.dataset.reject) {
         actionModal("reject", btn.dataset.reject).catch((e) => alert(e.message));
         return;
       }
+
       if (btn.dataset.flag) {
         actionModal("flag", btn.dataset.flag).catch((e) => alert(e.message));
       }
@@ -1762,18 +2733,63 @@ async function refreshSchoolRequests({ reset = false } = {}) {
     if (tableEl._schoolRequestHandler) {
       tableEl.removeEventListener("click", tableEl._schoolRequestHandler);
     }
+
     tableEl._schoolRequestHandler = handleClick;
     tableEl.addEventListener("click", handleClick);
+  };
+
+  // -------------------------------------------------------
+  // Start loading
+  // -------------------------------------------------------
+  state.requests.loading = true;
+  renderLoadingState();
+
+  try {
+    const payload = await api(`/api/admin/requests?${buildParams().toString()}`);
+    const rows = Array.isArray(payload?.items) ? payload.items : [];
+
+    state.requests.items = rows;
+    state.requests.nextCursor = payload?.nextCursor || null;
+    state.requests.currentCursor = state.requests.cursor;
+
+    if (payload?.counts) {
+      state.requests.counts = {
+        pending: payload.counts.pending ?? 0,
+        approved: payload.counts.approved ?? 0,
+        rejected: payload.counts.rejected ?? 0,
+        flagged: payload.counts.flagged ?? 0,
+        all: payload.counts.all ?? 0
+      };
+      updateChipCounts(state.requests.counts);
+    }
+
+    if (!rows.length) {
+      renderEmptyState();
+      return;
+    }
+
+    renderRequestTable(rows);
+    bindSelectionEvents();
+    bindStatusEvents();
+    bindActionEvents(rows);
 
     updateBulkBar();
-    updateRequestPagination({ pageSize: rows.length, hasNext: Boolean(state.requests.nextCursor) });
+    updateRequestPagination({
+      pageSize: rows.length,
+      hasNext: Boolean(state.requests.nextCursor)
+    });
   } catch (err) {
-    tableEl.innerHTML = `<div class="muted" style="padding:16px">Failed to load school requests. ${escapeHtml(err.message)}</div>`;
+    tableEl.innerHTML = `
+      <div class="muted" style="padding:16px">
+        Failed to load school requests. ${escapeHtml(err.message)}
+      </div>
+    `;
     throw err;
   } finally {
     state.requests.loading = false;
   }
 }
+// School requests - End - SCRE-1
 
 async function downloadRequestsCsv({ ids } = {}) {
   const headers = {};
@@ -2035,8 +3051,67 @@ function showSchoolRequestDetails(row) {
     footHtml: `<button class="btn btn-ghost" onclick="closeModal()">Close</button>`
   });
 }
- 
 
+// ===============================
+// SETTINGS PAGE UX IMPROVEMENTS
+// ===============================
+
+// Format JSON
+$("btnFormatJson")?.addEventListener("click", () => {
+  try {
+    const raw = $("settingsJson").value;
+    const parsed = JSON.parse(raw);
+    $("settingsJson").value = JSON.stringify(parsed, null, 2);
+  } catch {
+    alert("Invalid JSON");
+  }
+});
+
+// Validate JSON
+$("btnValidateJson")?.addEventListener("click", () => {
+  try {
+    JSON.parse($("settingsJson").value);
+    alert("✅ JSON is valid");
+  } catch (e) {
+    alert("❌ Invalid JSON:\n" + e.message);
+  }
+});
+
+// Save feedback (override your old one visually)
+$("btnSaveSettings")?.addEventListener("click", async () => {
+  const status = $("settingsSaveStatus");
+  const error = $("settingsError");
+  if (status) status.textContent = "";
+  if (error) {
+    error.textContent = "";
+    error.hidden = true;
+  }
+
+  if (!state.workspaceId || state.workspaceId === "all") {
+    if (status) status.textContent = "Select a specific workspace before saving.";
+    return;
+  }
+
+  if (status) status.textContent = "Saving...";
+
+  try {
+    const raw = $("settingsJson").value;
+    const parsed = JSON.parse(raw);
+
+    await api(`/api/admin/workspace-settings/${encodeURIComponent(state.workspaceId)}`, {
+      method: "PUT",
+      body: { settings: parsed }
+    });
+
+    if (status) status.textContent = "✅ Saved successfully";
+  } catch (e) {
+    if (error) {
+      error.textContent = e.message;
+      error.hidden = false;
+    }
+    if (status) status.textContent = "Save failed";
+  }
+});
 // initial view
 (async () => {
   await restoreSessionFromStorage();
@@ -2192,3 +3267,442 @@ function showSchoolRequestDetails(row) {
     syncPending();
   }
 })();
+
+/* =========================================
+   OVERVIEW HELPERS
+   Platform owner dashboard logic
+========================================= */
+
+function setText(id, value, fallback = "—") {
+  const el = $(id);
+  if (!el) return;
+  el.textContent = value ?? fallback;
+}
+
+function setHealthCard(idPrefix, status, meta, tone = "neutral") {
+  const valueEl = $(`${idPrefix}Status`);
+  const metaEl = $(`${idPrefix}Meta`);
+
+  if (valueEl) valueEl.textContent = status || "—";
+  if (metaEl) metaEl.textContent = meta || "—";
+
+  const card = valueEl?.closest(".health-card");
+  if (card) {
+    card.classList.remove("is-good", "is-warn", "is-neutral", "is-danger");
+    card.classList.add(
+      tone === "good" ? "is-good" :
+        tone === "warn" ? "is-warn" :
+          tone === "danger" ? "is-danger" :
+            "is-neutral"
+    );
+  }
+}
+
+function renderOverviewAttention(items = []) {
+  const el = $("overviewAttentionList");
+  const countEl = $("attentionCount");
+  if (!el) return;
+
+  if (!items.length) {
+    el.innerHTML = `
+      <div class="attention-item is-info">
+        <div class="attention-icon"><i class="fa-solid fa-circle-info" aria-hidden="true"></i></div>
+        <div class="attention-content">
+          <div class="attention-title">No alerts loaded yet</div>
+          <div class="attention-meta">Connect real overview signals here</div>
+        </div>
+      </div>
+    `;
+    if (countEl) countEl.textContent = "0 active items";
+    return;
+  }
+
+  if (countEl) {
+    countEl.textContent = `${items.length} active item${items.length === 1 ? "" : "s"}`;
+  }
+
+  el.innerHTML = items.map((item) => `
+    <div class="attention-item is-${escapeHtml(item.tone || "info")}">
+      <div class="attention-icon">
+        <i class="fa-solid ${escapeHtml(item.icon || "fa-circle-info")}" aria-hidden="true"></i>
+      </div>
+      <div class="attention-content">
+        <div class="attention-title">${escapeHtml(item.title || "Alert")}</div>
+        <div class="attention-meta">${escapeHtml(item.meta || "")}</div>
+      </div>
+    </div>
+  `).join("");
+}
+
+function renderTopWorkspaces(rows = []) {
+  const el = $("topWorkspacesTable");
+  const summaryEl = $("topWorkspaceSummary");
+  if (!el) return;
+
+  if (!rows.length) {
+    el.innerHTML = `<div class="muted" style="padding: 14px;">No workspace summary loaded yet.</div>`;
+    if (summaryEl) summaryEl.textContent = "Platform-wide tenant snapshot";
+    return;
+  }
+
+  if (summaryEl) {
+    summaryEl.textContent = `${rows.length} workspace${rows.length === 1 ? "" : "s"} shown`;
+  }
+
+  renderTable(el, {
+    columns: [
+      {
+        label: "Workspace",
+        key: "name",
+        width: "220px",
+        render: (r) => `
+          <div style="font-weight:800">${escapeHtml(r.name || r.id || "—")}</div>
+          <div class="muted" style="font-size:12px">${escapeHtml(r.id || "—")}</div>
+        `
+      },
+      {
+        label: "Code",
+        key: "schoolCode",
+        width: "130px",
+        render: (r) => escapeHtml(r.schoolCode || "—")
+      },
+      {
+        label: "Status",
+        key: "status",
+        width: "120px",
+        render: (r) => escapeHtml(r.status || "—")
+      },
+      {
+        label: "Activity",
+        key: "activity",
+        width: "160px",
+        render: (r) => {
+          const score = Number(r.activityScore || 0);
+          return `
+            <div style="font-weight:800">${score}</div>
+            <div class="muted" style="font-size:12px">derived score</div>
+          `;
+        }
+      },
+      {
+        label: "School Code / Signal",
+        key: "_signal",
+        render: (r) => escapeHtml(r.signal || "Active workspace")
+      }
+    ],
+    rows,
+    emptyText: "No workspace summary loaded yet."
+  });
+}
+
+function exportOverviewSnapshot() {
+  const payload = {
+    generatedAt: new Date().toISOString(),
+    workspaceFilter: state.workspaceId,
+    overview: {
+      schools: $("kpiSchools")?.textContent || "—",
+      users: $("kpiUsers")?.textContent || "—",
+      subscriptions: $("kpiSubs")?.textContent || "—",
+      openInvoices: $("kpiOpenInvoices")?.textContent || "—"
+    }
+  };
+
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {
+    type: "application/json;charset=utf-8"
+  });
+
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `platform-overview-${Date.now()}.json`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(link.href);
+}
+
+function ownerEmailStatus(message, tone = "") {
+  const el = $("ownerEmailStatus");
+  if (!el) return;
+  el.textContent = message || "";
+  el.className = `owner-email-status ${tone ? `is-${tone}` : ""}`.trim();
+}
+
+function setInputValue(id, value) {
+  const el = $(id);
+  if (el) el.value = value ?? "";
+}
+
+function getOwnerEmailWorkspaceId() {
+  const select = $("ownerEmailWorkspaceSelect");
+  return String(select?.value || "").trim();
+}
+
+function fillOwnerEmailWorkspaceSelect() {
+  const select = $("ownerEmailWorkspaceSelect");
+  if (!select) return;
+  select.innerHTML = "";
+  const workspaces = Array.isArray(state.workspaces) ? state.workspaces : [];
+  workspaces.forEach((workspace) => {
+    select.insertAdjacentHTML(
+      "beforeend",
+      `<option value="${escapeHtml(workspace.id)}">${escapeHtml(workspace.name || workspace.id)}</option>`
+    );
+  });
+  const desired = state.workspaceId && state.workspaceId !== "all" ? state.workspaceId : workspaces[0]?.id || "";
+  if (desired) select.value = desired;
+}
+
+async function loadOwnerEmailSettingsIntoModal() {
+  const settings = await api("/api/admin/owner-email-settings");
+  const enabled = $("ownerEmailEnabled");
+  if (enabled) enabled.checked = !!settings.enabled;
+  setInputValue("ownerEmailDisplayName", settings.display_name || "Platform Owner");
+  setInputValue("ownerEmailAddress", settings.owner_email || "");
+  setInputValue("ownerEmailSubjectPrefix", settings.subject_prefix || "");
+  setInputValue("ownerEmailFooter", settings.footer_text || "");
+}
+
+async function loadWorkspaceEmailSettingsIntoModal() {
+  const workspaceId = getOwnerEmailWorkspaceId();
+  const panel = $("ownerWorkspaceEmailPanel");
+  if (!workspaceId) {
+    if (panel) panel.hidden = true;
+    return;
+  }
+  if (panel) panel.hidden = false;
+  const settings = await api(`/api/admin/workspace-email-settings/${encodeURIComponent(workspaceId)}`);
+  const enabled = $("workspaceEmailEnabled");
+  if (enabled) enabled.checked = !!settings.enabled;
+  setInputValue("workspaceEmailBrand", settings.brand_school_name || "");
+  setInputValue("workspaceEmailReplyTo", settings.reply_to_email || "");
+  setInputValue("workspaceEmailSubjectPrefix", settings.subject_prefix || "");
+  setInputValue("workspaceEmailFooter", settings.footer_text || "");
+}
+
+async function openOwnerEmailSettingsModal() {
+  if (!state.workspaces.length) {
+    await loadWorkspaces();
+  }
+
+  showModal({
+    title: "Owner email setup",
+    bodyHtml: `
+      <div class="owner-email-modern">
+
+  <!-- HEADER -->
+  <div class="owner-email-top">
+    <div>
+      <h2>📧 Owner Email Setup</h2>
+      <p>Manage system-wide and workspace email behavior</p>
+    </div>
+  </div>
+
+  <!-- GRID -->
+  <div class="owner-email-grid-modern">
+
+    <!-- OWNER EMAIL -->
+    <div class="email-card">
+      <div class="email-card-head">
+        <div>
+          <h3>Owner Email</h3>
+          <p>Main platform email identity</p>
+        </div>
+
+        <label class="toggle">
+          <input id="ownerEmailEnabled" type="checkbox" />
+          <span>Enabled</span>
+        </label>
+      </div>
+
+      <div class="email-form">
+        <input id="ownerEmailDisplayName" placeholder="Display name (e.g. Platform Owner)" />
+        <input id="ownerEmailAddress" type="email" placeholder="owner@example.com" />
+        <input id="ownerEmailSubjectPrefix" placeholder="[WorkNest Owner]" />
+        <textarea id="ownerEmailFooter" placeholder="Signature / footer"></textarea>
+      </div>
+
+      <div class="email-actions">
+        <button class="btn-primary" id="ownerEmailSaveBtn">Save owner email</button>
+      </div>
+    </div>
+
+    <!-- WORKSPACE EMAIL -->
+    <div class="email-card">
+      <div class="email-card-head">
+        <div>
+          <h3>Workspace Email</h3>
+          <p>Override email per school</p>
+        </div>
+      </div>
+
+      <div class="email-form">
+        <select id="ownerEmailWorkspaceSelect"></select>
+
+        <label class="toggle">
+          <input id="workspaceEmailEnabled" type="checkbox" />
+          <span>Enable workspace email</span>
+        </label>
+
+        <input id="workspaceEmailBrand" placeholder="School / brand name" />
+
+        <div class="inline">
+          <input id="workspaceEmailReplyTo" type="email" placeholder="school-admin@example.com" />
+          <button class="btn-ghost" id="workspaceUseOwnerEmailBtn">Use owner</button>
+        </div>
+
+        <input id="workspaceEmailSubjectPrefix" placeholder="[School]" />
+        <textarea id="workspaceEmailFooter" placeholder="Signature / footer"></textarea>
+      </div>
+
+      <div class="email-actions">
+        <button class="btn-primary" id="workspaceEmailSaveBtn">Save workspace email</button>
+      </div>
+    </div>
+
+    <!-- TEST EMAIL -->
+    <div class="email-card test">
+      <div class="email-card-head">
+        <h3>Send Test Email</h3>
+      </div>
+
+      <div class="email-form">
+        <input id="ownerEmailTestTo" type="email" placeholder="recipient@example.com" />
+        <input id="ownerEmailTestSubject" placeholder="Test subject" />
+
+        <select id="ownerEmailTestScope">
+          <option value="owner">Owner email</option>
+          <option value="workspace">Workspace email</option>
+        </select>
+
+        <textarea id="ownerEmailTestBody" placeholder="Write a test message..."></textarea>
+      </div>
+
+      <div class="email-actions">
+        <button class="btn-secondary" id="ownerEmailTestBtn">Send test</button>
+        <div id="ownerEmailStatus" class="status"></div>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+    `,
+    footHtml: `<button class="btn btn-ghost" type="button" id="ownerEmailCloseBtn">Close</button>`
+  });
+
+  fillOwnerEmailWorkspaceSelect();
+  $("ownerEmailCloseBtn")?.addEventListener("click", closeModal);
+  $("ownerEmailWorkspaceSelect")?.addEventListener("change", () => {
+    loadWorkspaceEmailSettingsIntoModal().catch((err) => ownerEmailStatus(err.message, "error"));
+  });
+  $("workspaceUseOwnerEmailBtn")?.addEventListener("click", () => {
+    setInputValue("workspaceEmailReplyTo", $("ownerEmailAddress")?.value || "");
+  });
+  $("ownerEmailSaveBtn")?.addEventListener("click", async () => {
+    ownerEmailStatus("Saving owner email...");
+    try {
+      await api("/api/admin/owner-email-settings", {
+        method: "POST",
+        body: {
+          enabled: $("ownerEmailEnabled")?.checked ? 1 : 0,
+          display_name: $("ownerEmailDisplayName")?.value || "",
+          owner_email: $("ownerEmailAddress")?.value || "",
+          subject_prefix: $("ownerEmailSubjectPrefix")?.value || "",
+          footer_text: $("ownerEmailFooter")?.value || ""
+        }
+      });
+      ownerEmailStatus("Owner email saved.", "success");
+    } catch (err) {
+      ownerEmailStatus(err.message, "error");
+    }
+  });
+  $("workspaceEmailSaveBtn")?.addEventListener("click", async () => {
+    const workspaceId = getOwnerEmailWorkspaceId();
+    if (!workspaceId) return ownerEmailStatus("Select a workspace first.", "error");
+    ownerEmailStatus("Saving workspace email...");
+    try {
+      await api(`/api/admin/workspace-email-settings/${encodeURIComponent(workspaceId)}`, {
+        method: "POST",
+        body: {
+          enabled: $("workspaceEmailEnabled")?.checked ? 1 : 0,
+          brand_school_name: $("workspaceEmailBrand")?.value || "",
+          reply_to_email: $("workspaceEmailReplyTo")?.value || "",
+          subject_prefix: $("workspaceEmailSubjectPrefix")?.value || "",
+          footer_text: $("workspaceEmailFooter")?.value || "",
+          manual_body_text: ""
+        }
+      });
+      ownerEmailStatus("Workspace email saved.", "success");
+    } catch (err) {
+      ownerEmailStatus(err.message, "error");
+    }
+  });
+  $("ownerEmailTestBtn")?.addEventListener("click", async () => {
+    const scope = $("ownerEmailTestScope")?.value || "owner";
+    const workspaceId = getOwnerEmailWorkspaceId();
+    if (scope === "workspace" && !workspaceId) {
+      return ownerEmailStatus("Select a workspace first.", "error");
+    }
+    ownerEmailStatus("Sending test email...");
+    try {
+      const path = scope === "workspace"
+        ? `/api/admin/workspace-email-settings/${encodeURIComponent(workspaceId)}/test`
+        : "/api/admin/owner-email-settings/test";
+      await api(path, {
+        method: "POST",
+        body: {
+          to: $("ownerEmailTestTo")?.value || "",
+          subject: $("ownerEmailTestSubject")?.value || "",
+          body: $("ownerEmailTestBody")?.value || ""
+        }
+      });
+      ownerEmailStatus("Test email sent.", "success");
+    } catch (err) {
+      ownerEmailStatus(err.message, "error");
+    }
+  });
+
+  await loadOwnerEmailSettingsIntoModal();
+  await loadWorkspaceEmailSettingsIntoModal();
+}
+
+function wireOverviewActions() {
+  $("btnOverviewRefresh")?.addEventListener("click", () => {
+    refreshOverview().catch((e) => setError($("globalError"), e.message));
+  });
+
+  $("btnOverviewExport")?.addEventListener("click", () => {
+    exportOverviewSnapshot();
+  });
+
+  $("qaAddSchool")?.addEventListener("click", () => {
+    $("btnUpsertWorkspace")?.click();
+  });
+
+  $("qaApproveRequests")?.addEventListener("click", async () => {
+    setTab("school-requests");
+    persistTab("school-requests");
+    await refreshActiveTab().catch((e) => setError($("globalError"), e.message));
+  });
+
+  $("qaCreateInvoice")?.addEventListener("click", () => {
+    $("btnCreateInvoice")?.click();
+  });
+
+  $("qaOpenAi")?.addEventListener("click", () => {
+    $("btnSpeakingPractice")?.click();
+  });
+
+  $("qaOpenAudit")?.addEventListener("click", async () => {
+    setTab("audit");
+    persistTab("audit");
+    await refreshActiveTab().catch((e) => setError($("globalError"), e.message));
+  });
+
+  $("qaOpenSettings")?.addEventListener("click", async () => {
+    setTab("settings");
+    persistTab("settings");
+    await refreshActiveTab().catch((e) => setError($("globalError"), e.message));
+  });
+}
+/* ========================================= OVERVIEW HELPERS - END Hier ========================================= */

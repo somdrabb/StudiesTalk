@@ -12,6 +12,11 @@ let homeworkAssignmentModalState = null;
 let homeworkSubmissionModalState = null;
 let homeworkReviewModalState = null;
 let homeworkDetailModalState = null;
+let homeworkLiveSyncTimer = null;
+let homeworkLiveSyncChannelId = "";
+let homeworkLiveSyncInflight = null;
+let homeworkLiveSyncBindingsAttached = false;
+const homeworkLastSyncAtByChannel = new Map();
 let dms = [];
 let messagesByChannel = {}; // { [channelId]: Message[] }
 let savedMessagesById = {};
@@ -2930,6 +2935,43 @@ function getMessageRoleDisplay(msg, isMaterialsChannel = false, resolvedRoleRaw 
   return normalized || raw || "";
 }
 
+function isLearningMaterialsChannel(channelId) {
+  const channel = findChannelById(channelId);
+  return String(channel?.name || "").trim().toLowerCase() === "learning materials";
+}
+
+const LEARNING_MATERIAL_BUCKETS = [
+  { key: "a1", label: "A1", icon: "fa-solid fa-seedling", accent: "is-a1" },
+  { key: "a2", label: "A2", icon: "fa-solid fa-book-open", accent: "is-a2" },
+  { key: "b1", label: "B1", icon: "fa-solid fa-layer-group", accent: "is-b1" },
+  { key: "b2", label: "B2", icon: "fa-solid fa-graduation-cap", accent: "is-b2" },
+  { key: "c1", label: "C1", icon: "fa-solid fa-trophy", accent: "is-c1" },
+  { key: "c2", label: "C2", icon: "fa-solid fa-medal", accent: "is-c2" },
+  { key: "prufungtest", label: "PrüfungTest", icon: "fa-solid fa-file-signature", accent: "is-test" }
+];
+const learningMaterialsViewState = new Map();
+
+function getLearningMaterialsBucketMeta(bucketKey = "") {
+  return LEARNING_MATERIAL_BUCKETS.find((item) => item.key === String(bucketKey || "").trim().toLowerCase()) || null;
+}
+
+function getLearningMaterialsActiveBucket(channelId) {
+  return String(learningMaterialsViewState.get(String(channelId || "")) || "").trim().toLowerCase();
+}
+
+function setLearningMaterialsActiveBucket(channelId, bucketKey = "") {
+  learningMaterialsViewState.set(String(channelId || ""), String(bucketKey || "").trim().toLowerCase());
+}
+
+function parseLearningMaterialsBucket(text = "") {
+  const match = String(text || "").match(/\[LM:([A-Za-z0-9_-]+)\]/i);
+  return match ? String(match[1] || "").trim().toLowerCase() : "";
+}
+
+function stripLearningMaterialsBucketMarker(text = "") {
+  return String(text || "").replace(/\s*\[LM:[A-Za-z0-9_-]+\]\s*/i, "").trim();
+}
+
 // ===================== RICH TEXT COMPOSER =====================
 
 function syncEditorToTextarea() {
@@ -2977,11 +3019,13 @@ async function ensureMessagesForChannelId(channelId) {
 }
 
 function normalizeHomeworkBoardItem(raw = {}) {
+  const allFiles = Array.isArray(raw.files) ? raw.files : [];
   return {
     ...raw,
-    files: Array.isArray(raw.files) ? raw.files : [],
-    submissions: Array.isArray(raw.submissions) ? raw.submissions : [],
-    mySubmission: raw.mySubmission || null,
+    files: allFiles.filter((file) => String(file?.fileRole || "task").toLowerCase() !== "solution"),
+    solutionFiles: allFiles.filter((file) => String(file?.fileRole || "").toLowerCase() === "solution"),
+    submissions: Array.isArray(raw.submissions) ? raw.submissions.map((submission) => ({ ...submission, comments: Array.isArray(submission?.comments) ? submission.comments : [] })) : [],
+    mySubmission: raw.mySubmission ? { ...raw.mySubmission, comments: Array.isArray(raw.mySubmission?.comments) ? raw.mySubmission.comments : [] } : null,
     submissionSummary: raw.submissionSummary || { total: 0, submitted: 0, reviewed: 0, returned: 0 }
   };
 }
@@ -3012,6 +3056,84 @@ async function ensureHomeworkBoardForChannel(channelId, { force = false } = {}) 
   return promise;
 }
 
+async function fetchHomeworkChannelMessages(channelId, { force = false } = {}) {
+  if (!channelId || !isHomeworkChannel(channelId) || isHomeworkNoteChannel(channelId)) return [];
+  if (!force && Array.isArray(messagesByChannel[channelId])) return messagesByChannel[channelId];
+  const msgs = await fetchJSON(`/api/channels/${encodeURIComponent(channelId)}/messages`);
+  messagesByChannel[channelId] = Array.isArray(msgs) ? msgs : [];
+  return messagesByChannel[channelId];
+}
+
+async function syncHomeworkChannelLive(channelId, { render = true, restoreScroll = true } = {}) {
+  if (!channelId || !isHomeworkChannel(channelId) || isHomeworkNoteChannel(channelId)) return null;
+  if (homeworkLiveSyncInflight?.channelId === channelId) return homeworkLiveSyncInflight.promise;
+  const promise = Promise.all([
+    ensureHomeworkBoardForChannel(channelId, { force: true }),
+    fetchHomeworkChannelMessages(channelId, { force: true })
+  ])
+    .then(() => {
+      homeworkLastSyncAtByChannel.set(String(channelId), Date.now());
+      if (render && currentChannelId === channelId) {
+        renderMessages(channelId, { restoreScroll });
+      }
+    })
+    .catch((err) => {
+      console.error("Homework live sync failed", err);
+      return null;
+    })
+    .finally(() => {
+      if (homeworkLiveSyncInflight?.channelId === channelId) {
+        homeworkLiveSyncInflight = null;
+      }
+    });
+  homeworkLiveSyncInflight = { channelId: String(channelId), promise };
+  return promise;
+}
+
+function stopHomeworkLiveSync() {
+  if (homeworkLiveSyncTimer) {
+    clearInterval(homeworkLiveSyncTimer);
+    homeworkLiveSyncTimer = null;
+  }
+  homeworkLiveSyncChannelId = "";
+}
+
+function maybeScheduleHomeworkLiveSync(channelId, { force = false, render = true, restoreScroll = true } = {}) {
+  if (!channelId || !isHomeworkChannel(channelId) || isHomeworkNoteChannel(channelId)) return;
+  const lastSyncAt = Number(homeworkLastSyncAtByChannel.get(String(channelId)) || 0);
+  if (!force && Date.now() - lastSyncAt < 8000) return;
+  void syncHomeworkChannelLive(channelId, { render, restoreScroll });
+}
+
+function startHomeworkLiveSync(channelId) {
+  if (!channelId || !isHomeworkChannel(channelId) || isHomeworkNoteChannel(channelId)) {
+    stopHomeworkLiveSync();
+    return;
+  }
+  const normalizedChannelId = String(channelId);
+  const switchedChannel = homeworkLiveSyncChannelId !== normalizedChannelId;
+  homeworkLiveSyncChannelId = normalizedChannelId;
+  if (homeworkLiveSyncTimer) clearInterval(homeworkLiveSyncTimer);
+  homeworkLiveSyncTimer = setInterval(() => {
+    if (document.hidden) return;
+    if (currentChannelId !== normalizedChannelId) return;
+    maybeScheduleHomeworkLiveSync(normalizedChannelId, { force: true, render: true, restoreScroll: true });
+  }, 15000);
+  if (!homeworkLiveSyncBindingsAttached) {
+    homeworkLiveSyncBindingsAttached = true;
+    window.addEventListener("focus", () => {
+      if (!homeworkLiveSyncChannelId || currentChannelId !== homeworkLiveSyncChannelId) return;
+      maybeScheduleHomeworkLiveSync(homeworkLiveSyncChannelId, { force: true, render: true, restoreScroll: true });
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) return;
+      if (!homeworkLiveSyncChannelId || currentChannelId !== homeworkLiveSyncChannelId) return;
+      maybeScheduleHomeworkLiveSync(homeworkLiveSyncChannelId, { force: true, render: true, restoreScroll: true });
+    });
+  }
+  maybeScheduleHomeworkLiveSync(normalizedChannelId, { force: switchedChannel, render: true, restoreScroll: true });
+}
+
 const HOMEWORK_FILTERS = ["all", "pending", "submitted", "reviewed", "returned", "archived"];
 let releaseHomeworkModalTrap = null;
 
@@ -3036,6 +3158,98 @@ function formatHomeworkDateLabel(value) {
   return dt.toLocaleString([], { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
+function formatHomeworkSignatureLabel(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const dt = new Date(raw);
+  if (Number.isNaN(dt.getTime())) return raw;
+  return dt.toLocaleString([], { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function isHomeworkEdited(createdAt, updatedAt) {
+  const createdMs = Date.parse(String(createdAt || ""));
+  const updatedMs = Date.parse(String(updatedAt || ""));
+  if (!Number.isFinite(createdMs) || !Number.isFinite(updatedMs)) return false;
+  return Math.abs(updatedMs - createdMs) > 1000;
+}
+
+function renderHomeworkItemSignature(item = {}) {
+  const bits = [];
+  const createdLabel = formatHomeworkSignatureLabel(item.createdAt);
+  if (createdLabel) bits.push(`Created ${createdLabel}`);
+  if (isHomeworkEdited(item.createdAt, item.updatedAt)) {
+    const editedLabel = formatHomeworkSignatureLabel(item.updatedAt);
+    if (editedLabel) bits.push(`Edited ${editedLabel}`);
+  }
+  if (!bits.length) return "";
+  return `<div class="homework-item-signature">${bits.map((bit) => `<span>${escapeHomeworkHtml(bit)}</span>`).join("<span aria-hidden=\"true\">•</span>")}</div>`;
+}
+
+function renderHomeworkSubmissionSignature(submission = {}) {
+  const bits = [];
+  const submittedLabel = formatHomeworkSignatureLabel(submission.submittedAt || submission.createdAt);
+  if (submittedLabel) bits.push(`Submitted ${submittedLabel}`);
+  if (isHomeworkEdited(submission.createdAt || submission.submittedAt, submission.updatedAt)) {
+    const editedLabel = formatHomeworkSignatureLabel(submission.updatedAt);
+    if (editedLabel) bits.push(`Edited ${editedLabel}`);
+  }
+  if (!bits.length) return "";
+  return `<div class="homework-submission-signature">${bits.map((bit) => `<span>${escapeHomeworkHtml(bit)}</span>`).join("<span aria-hidden=\"true\">•</span>")}</div>`;
+}
+
+function canStudentEditHomeworkSubmission(submission = null) {
+  const status = String(submission?.status || "").trim().toLowerCase();
+  return !status || status === "draft";
+}
+
+function renderHomeworkSubmissionComments(submission = {}, { canComment = false, itemId = "" } = {}) {
+  const comments = Array.isArray(submission?.comments) ? submission.comments : [];
+  const listMarkup = comments.length
+    ? `
+      <div class="homework-submission-comments-list">
+        ${comments.map((comment) => `
+          <div class="homework-submission-comment">
+            <div class="homework-submission-comment-meta">
+              <strong>${escapeHomeworkHtml(comment.authorName || "Student")}</strong>
+              <span>${escapeHomeworkHtml(formatHomeworkSignatureLabel(comment.createdAt))}</span>
+            </div>
+            <div class="homework-submission-comment-text">${sanitizeMessageHTML(String(comment.commentText || ""))}</div>
+          </div>
+        `).join("")}
+      </div>
+    `
+    : "";
+  const composerMarkup = canComment
+    ? `
+      <div class="homework-comment-composer">
+        <textarea class="homework-comment-input" rows="2" placeholder="Send a comment about your submitted homework..." data-homework-comment-input="1"></textarea>
+        <div class="homework-comment-actions">
+          <button class="tasks-btn homework-comment-send" type="button" data-homework-action="post-submission-comment" data-item-id="${escapeHomeworkHtml(itemId)}" data-submission-id="${escapeHomeworkHtml(submission.id || "")}">Send comment</button>
+        </div>
+      </div>
+    `
+    : "";
+  if (!listMarkup && !composerMarkup) return "";
+  return `
+    <div class="homework-submission-comments">
+      <div class="homework-submission-comments-title">Comments</div>
+      ${listMarkup || `<div class="homework-empty-note homework-empty-note--compact">No comments yet.</div>`}
+      ${composerMarkup}
+    </div>
+  `;
+}
+
+async function postHomeworkSubmissionComment(itemId, submissionId, text) {
+  const item = String(itemId || "").trim();
+  const submission = String(submissionId || "").trim();
+  const commentText = String(text || "").trim();
+  if (!item || !submission || !commentText) throw new Error("Comment is required.");
+  await fetchJSON(`/api/homework/submissions/${encodeURIComponent(submission)}/comments`, {
+    method: "POST",
+    body: JSON.stringify({ commentText })
+  });
+}
+
 function formatHomeworkDateInputValue(value) {
   const raw = String(value || "").trim();
   if (!raw) return "";
@@ -3050,6 +3264,17 @@ function normalizeHomeworkDateForApi(value) {
   if (!raw) return "";
   const dt = new Date(raw);
   return Number.isNaN(dt.getTime()) ? raw : dt.toISOString();
+}
+
+function isHomeworkSubmissionDeadlinePassed(dueDate) {
+  const raw = String(dueDate || "").trim();
+  if (!raw) return false;
+  const dt = new Date(raw);
+  return !Number.isNaN(dt.getTime()) && dt.getTime() < Date.now();
+}
+
+function isHomeworkItemLocked(item = {}) {
+  return !!item?.isLocked || isHomeworkSubmissionDeadlinePassed(item?.dueDate);
 }
 
 function escapeHomeworkHtml(value) {
@@ -3123,6 +3348,26 @@ function computeHomeworkStats(board) {
   return stats;
 }
 
+function buildHomeworkAssignmentTemplate() {
+  return {
+    title: "Weekly homework template",
+    description: [
+      "Instructions",
+      "",
+      "1. Explain the task clearly for students.",
+      "2. Attach any worksheet, PDF, audio, or reading file.",
+      "3. Add the deadline and what good work should include.",
+      "",
+      "Submission checklist",
+      "- Complete the task",
+      "- Upload files if needed",
+      "- Add a short note for the teacher"
+    ].join("\n"),
+    dueDate: "",
+    resourceUrl: ""
+  };
+}
+
 function renderHomeworkStatsBar(board) {
   const stats = computeHomeworkStats(board);
   const canManage = !!board?.permissions?.canManage;
@@ -3137,7 +3382,7 @@ function renderHomeworkStatsBar(board) {
     <section class="homework-stats-wrap" aria-label="Homework summary">
       <div class="homework-stats">
         ${cards.map((card) => `
-          <article class="homework-stat-card homework-stat-card--${card.tone} ${Number(card.value || 0) > 0 && (card.tone === "pending" || card.tone === "returned") ? "homework-stat-card--alert" : ""} ${card.action ? "homework-stat-card--interactive" : ""}" title="${escapeHomeworkHtml(card.helper || "")}" ${card.action ? `data-homework-action="${card.action}"` : ""}>
+          <article class="homework-stat-card homework-stat-card--${card.tone} ${Number(card.value || 0) > 0 && (card.tone === "pending" || card.tone === "returned") ? "homework-stat-card--alert" : ""} ${card.action ? "homework-stat-card--interactive" : ""}" title="${escapeHomeworkHtml(card.helper || "")}" ${card.action ? `data-homework-action="${card.action}" role="button" tabindex="0" aria-label="${escapeHomeworkHtml(`${card.label}. ${card.helper || ""}`.trim())}"` : ""}>
             <div class="homework-stat-icon"><i class="${card.icon}" aria-hidden="true"></i></div>
             <div class="homework-stat-copy">
               <div class="homework-stat-value">${card.value === "" ? "&nbsp;" : Number(card.value || 0)}</div>
@@ -3220,11 +3465,6 @@ function clearHomeworkHeaderFilters() {
 
 function renderHomeworkFloatingAction(channelId, board) {
   if (!board?.permissions?.canManage) return "";
-  const state = getHomeworkBoardUiState(channelId);
-  const position = state?.fabPosition || {};
-  const styleBits = [];
-  if (Number.isFinite(position.left)) styleBits.push(`left:${position.left}px`);
-  if (Number.isFinite(position.top)) styleBits.push(`top:${position.top}px`);
   return `
     <button
       class="homework-fab"
@@ -3233,7 +3473,6 @@ function renderHomeworkFloatingAction(channelId, board) {
       data-homework-fab="1"
       aria-label="Create homework"
       title="Create homework"
-      ${styleBits.length ? `style="${styleBits.join(";")}"` : ""}
     >
       <i class="fa-solid fa-plus" aria-hidden="true"></i>
     </button>
@@ -3248,6 +3487,7 @@ function renderHomeworkFiles(files = []) {
         <a class="wn-attachment-pill" href="${escapeHomeworkHtml(file.url)}" target="_blank" rel="noopener noreferrer">
           <i class="fa-solid fa-paperclip"></i>
           <span>${escapeHomeworkHtml(file.fileName || file.name || "attachment")}</span>
+          ${file.createdAt ? `<span class="homework-file-signature">${escapeHomeworkHtml(formatHomeworkSignatureLabel(file.createdAt))}</span>` : ""}
         </a>
       `).join("")}
     </div>
@@ -3309,14 +3549,15 @@ function closeHomeworkModal(modalEl) {
 function normalizeHomeworkLinkedFile(file = {}) {
   return {
     fileId: String(file.fileId || file.id || ""),
-    fileName: String(file.fileName || file.name || "attachment"),
+    fileName: String(file.fileName || file.originalName || file.name || "attachment"),
     url: String(file.url || ""),
-    mime: String(file.mime || ""),
-    sizeBytes: Number(file.sizeBytes || file.size || 0)
+    mime: String(file.mime || file.mimeType || ""),
+    sizeBytes: Number(file.sizeBytes || file.size || 0),
+    fileRole: String(file.fileRole || "task").toLowerCase() === "solution" ? "solution" : "task"
   };
 }
 
-function renderHomeworkSelectedFiles(files = [], removeAction = "") {
+function renderHomeworkSelectedFiles(files = [], removeAction = "", { labelOverride = "" } = {}) {
   if (!Array.isArray(files) || !files.length) {
     return `<div class="homework-empty-note">No files attached yet.</div>`;
   }
@@ -3324,7 +3565,7 @@ function renderHomeworkSelectedFiles(files = [], removeAction = "") {
     <div class="homework-inline-file">
       <a href="${escapeHomeworkHtml(file.url)}" target="_blank" rel="noopener noreferrer">
         <i class="fa-solid fa-paperclip" aria-hidden="true"></i>
-        <span>${escapeHomeworkHtml(file.fileName || "attachment")}</span>
+        <span>${escapeHomeworkHtml(labelOverride || file.fileName || "attachment")}</span>
       </a>
       ${removeAction ? `<button type="button" class="homework-inline-file-remove" data-homework-action="${removeAction}" data-file-index="${index}" aria-label="Remove file"><i class="fa-solid fa-xmark"></i></button>` : ""}
     </div>
@@ -3336,9 +3577,19 @@ function renderHomeworkAssignmentFileList() {
   homeworkAssignmentFilesList.innerHTML = renderHomeworkSelectedFiles(homeworkAssignmentModalState?.files || [], "remove-assignment-file");
 }
 
+function renderHomeworkAssignmentSolutionFileList() {
+  if (!homeworkAssignmentSolutionFilesList) return;
+  homeworkAssignmentSolutionFilesList.innerHTML = renderHomeworkSelectedFiles(
+    homeworkAssignmentModalState?.solutionFiles || [],
+    "remove-assignment-solution-file",
+    { labelOverride: "Solution" }
+  );
+}
+
 function renderHomeworkSubmissionFileList() {
   if (!homeworkSubmissionFilesList) return;
-  homeworkSubmissionFilesList.innerHTML = renderHomeworkSelectedFiles(homeworkSubmissionModalState?.files || [], "remove-submission-file");
+  const removeAction = homeworkSubmissionModalState?.locked ? "" : "remove-submission-file";
+  homeworkSubmissionFilesList.innerHTML = renderHomeworkSelectedFiles(homeworkSubmissionModalState?.files || [], removeAction);
 }
 
 function setHomeworkFieldError(inputEl, errorEl, message = "") {
@@ -3382,7 +3633,9 @@ function openHomeworkAssignmentModalForItem(channelId, item = null) {
   homeworkAssignmentModalState = {
     channelId: String(channelId || item?.homeworkChannelId || ""),
     itemId: item?.id ? String(item.id) : "",
-    files: Array.isArray(item?.files) ? item.files.map(normalizeHomeworkLinkedFile) : []
+    isLocked: !!item?.isLocked,
+    files: Array.isArray(item?.files) ? item.files.map((file) => normalizeHomeworkLinkedFile({ ...file, fileRole: "task" })) : [],
+    solutionFiles: Array.isArray(item?.solutionFiles) ? item.solutionFiles.map((file) => normalizeHomeworkLinkedFile({ ...file, fileRole: "solution" })) : []
   };
   if (homeworkAssignmentModalTitle) {
     homeworkAssignmentModalTitle.textContent = item?.id ? "Edit assignment" : "New assignment";
@@ -3395,6 +3648,7 @@ function openHomeworkAssignmentModalForItem(channelId, item = null) {
   setHomeworkFormStatus(homeworkAssignmentFormStatus, "");
   setHomeworkButtonLoading(homeworkAssignmentSaveBtn, false, item?.id ? "Save changes" : "Save assignment");
   renderHomeworkAssignmentFileList();
+  renderHomeworkAssignmentSolutionFileList();
   openHomeworkModal(homeworkAssignmentModal);
   homeworkAssignmentTitleInput?.focus();
 }
@@ -3421,7 +3675,9 @@ async function submitHomeworkAssignmentModal() {
     description: String(homeworkAssignmentDescriptionInput?.value || "").trim(),
     dueDate: normalizeHomeworkDateForApi(homeworkAssignmentDueDateInput?.value || ""),
     resourceUrl: String(homeworkAssignmentResourceUrlInput?.value || "").trim(),
-    files: (homeworkAssignmentModalState.files || []).map(normalizeHomeworkLinkedFile)
+    isLocked: !!homeworkAssignmentModalState?.isLocked,
+    files: (homeworkAssignmentModalState.files || []).map((file) => normalizeHomeworkLinkedFile({ ...file, fileRole: "task" })),
+    solutionFiles: (homeworkAssignmentModalState.solutionFiles || []).map((file) => normalizeHomeworkLinkedFile({ ...file, fileRole: "solution" }))
   };
   try {
     if (homeworkAssignmentModalState.itemId) {
@@ -3449,7 +3705,7 @@ async function addHomeworkAssignmentFiles() {
   if (!homeworkAssignmentModalState) return;
   const files = await uploadHomeworkFiles();
   if (!files.length) return;
-  homeworkAssignmentModalState.files = [...(homeworkAssignmentModalState.files || []), ...files.map(normalizeHomeworkLinkedFile)];
+  homeworkAssignmentModalState.files = [...(homeworkAssignmentModalState.files || []), ...files.map((file) => normalizeHomeworkLinkedFile({ ...file, fileRole: "task" }))];
   renderHomeworkAssignmentFileList();
 }
 
@@ -3459,28 +3715,55 @@ function removeHomeworkAssignmentFile(index) {
   renderHomeworkAssignmentFileList();
 }
 
+async function addHomeworkAssignmentSolutionFiles() {
+  if (!homeworkAssignmentModalState) return;
+  const files = await uploadHomeworkFiles();
+  if (!files.length) return;
+  homeworkAssignmentModalState.solutionFiles = [...(homeworkAssignmentModalState.solutionFiles || []), ...files.map((file) => normalizeHomeworkLinkedFile({ ...file, fileRole: "solution" }))];
+  renderHomeworkAssignmentSolutionFileList();
+}
+
+function removeHomeworkAssignmentSolutionFile(index) {
+  if (!homeworkAssignmentModalState) return;
+  homeworkAssignmentModalState.solutionFiles = (homeworkAssignmentModalState.solutionFiles || []).filter((_, currentIndex) => currentIndex !== index);
+  renderHomeworkAssignmentSolutionFileList();
+}
+
 function openHomeworkSubmissionModalForItem(item) {
   if (!item?.id || !item?.homeworkChannelId || !homeworkSubmissionModal) return;
   if (homeworkDetailModal && !homeworkDetailModal.classList.contains("hidden")) closeHomeworkDetailModal();
   const mySubmission = item.mySubmission || null;
+  const locked = isHomeworkItemLocked(item);
   homeworkSubmissionModalState = {
     channelId: String(item.homeworkChannelId),
     itemId: String(item.id),
-    files: Array.isArray(mySubmission?.files) ? mySubmission.files.map(normalizeHomeworkLinkedFile) : []
+    files: Array.isArray(mySubmission?.files) ? mySubmission.files.map(normalizeHomeworkLinkedFile) : [],
+    locked
   };
   if (homeworkSubmissionModalTitle) homeworkSubmissionModalTitle.textContent = "My submission";
   if (homeworkSubmissionContextTitle) homeworkSubmissionContextTitle.textContent = String(item.title || "Homework");
   if (homeworkSubmissionContextMeta) {
-    homeworkSubmissionContextMeta.textContent = `Due ${formatHomeworkDateLabel(item.dueDate)}${mySubmission?.status ? ` • Current status: ${mySubmission.status}` : ""}`;
+    const lockedReason = item?.isLocked ? " • Locked by teacher" : (locked ? " • Submission closed" : "");
+    homeworkSubmissionContextMeta.textContent = `Due ${formatHomeworkDateLabel(item.dueDate)}${mySubmission?.status ? ` • Current status: ${mySubmission.status}` : ""}${lockedReason}`;
   }
   if (homeworkSubmissionTextInput) homeworkSubmissionTextInput.value = String(mySubmission?.submissionText || "");
   setHomeworkFieldError(homeworkSubmissionTextInput, homeworkSubmissionTextError, "");
-  setHomeworkFormStatus(homeworkSubmissionFormStatus, "");
+  setHomeworkFormStatus(homeworkSubmissionFormStatus, locked ? "The submission deadline has passed. Students can no longer upload or edit work." : "");
   setHomeworkButtonLoading(homeworkSubmissionDraftBtn, false, "Save draft");
   setHomeworkButtonLoading(homeworkSubmissionSubmitBtn, false, "Submit work");
+  if (homeworkSubmissionTextInput) homeworkSubmissionTextInput.disabled = locked;
+  if (homeworkSubmissionAddFilesBtn) homeworkSubmissionAddFilesBtn.disabled = locked;
+  if (homeworkSubmissionDraftBtn) {
+    homeworkSubmissionDraftBtn.disabled = locked;
+    homeworkSubmissionDraftBtn.textContent = locked ? "Submission locked" : "Save draft";
+  }
+  if (homeworkSubmissionSubmitBtn) {
+    homeworkSubmissionSubmitBtn.disabled = locked;
+    homeworkSubmissionSubmitBtn.textContent = locked ? "Submission closed" : "Submit work";
+  }
   renderHomeworkSubmissionFileList();
   openHomeworkModal(homeworkSubmissionModal);
-  homeworkSubmissionTextInput?.focus();
+  if (!locked) homeworkSubmissionTextInput?.focus();
 }
 
 function closeHomeworkSubmissionModal() {
@@ -3490,6 +3773,10 @@ function closeHomeworkSubmissionModal() {
 
 async function addHomeworkSubmissionFiles() {
   if (!homeworkSubmissionModalState) return;
+  if (homeworkSubmissionModalState.locked) {
+    setHomeworkFormStatus(homeworkSubmissionFormStatus, "The submission deadline has passed. File uploads are closed.", "error");
+    return;
+  }
   const files = await uploadHomeworkFiles();
   if (!files.length) return;
   homeworkSubmissionModalState.files = [...(homeworkSubmissionModalState.files || []), ...files.map(normalizeHomeworkLinkedFile)];
@@ -3504,6 +3791,10 @@ function removeHomeworkSubmissionFile(index) {
 
 async function submitHomeworkSubmissionModal(mode = "draft") {
   if (!homeworkSubmissionModalState?.itemId || !homeworkSubmissionModalState?.channelId) return;
+  if (homeworkSubmissionModalState.locked) {
+    setHomeworkFormStatus(homeworkSubmissionFormStatus, "The submission deadline has passed. You can no longer upload homework.", "error");
+    return;
+  }
   const submissionText = String(homeworkSubmissionTextInput?.value || "").trim();
   const hasFiles = (homeworkSubmissionModalState.files || []).length > 0;
   if (mode === "submit" && !submissionText && !hasFiles) {
@@ -3614,6 +3905,15 @@ async function archiveHomeworkItem(item) {
   await refreshHomeworkBoardChannel(item.homeworkChannelId);
 }
 
+async function setHomeworkItemLocked(item, isLocked) {
+  if (!item?.id) return;
+  await fetchJSON(`/api/homework/items/${encodeURIComponent(item.id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ isLocked: !!isLocked })
+  });
+  await refreshHomeworkBoardChannel(item.homeworkChannelId);
+}
+
 function renderHomeworkDiscussion(messages = [], limit = 12) {
   if (!Array.isArray(messages) || !messages.length) {
     return `
@@ -3638,7 +3938,7 @@ function renderHomeworkDiscussion(messages = [], limit = 12) {
 
 function renderHomeworkStatusBadge(status) {
   const meta = getHomeworkStatusMeta(status);
-  return `<span class="homework-status-badge homework-status-badge--${meta.tone}"><i class="${meta.icon}" aria-hidden="true"></i><span>${meta.label}</span></span>`;
+  return `<span class="homework-status-badge homework-status-badge--${meta.tone}"><i class="${meta.icon} homework-ui-icon" aria-hidden="true"></i><span>${meta.label}</span></span>`;
 }
 
 function renderHomeworkDetailSubmissionList(item) {
@@ -3680,6 +3980,8 @@ function renderHomeworkDetailModal() {
   const uiState = getHomeworkBoardUiState(channelId);
   const tab = homeworkDetailModalState.tab || uiState.detailTab || "instructions";
   const mySubmission = item.mySubmission || null;
+  const submissionEditable = canStudentEditHomeworkSubmission(mySubmission);
+  const submissionLocked = !permissions.canManage && isHomeworkItemLocked(item);
   const discussion = messagesByChannel[channelId] || [];
   const dueLabel = formatHomeworkDateLabel(item.dueDate);
   if (homeworkDetailModalTitle) homeworkDetailModalTitle.textContent = String(item.title || "Assignment detail");
@@ -3697,15 +3999,16 @@ function renderHomeworkDetailModal() {
   }
   if (tab === "instructions") {
     homeworkDetailModalBody.innerHTML = `
-      <div class="homework-detail-stack">
-        <div class="homework-detail-banner">
-          ${renderHomeworkStatusBadge(getHomeworkViewerStatus(item, permissions))}
-          ${item.resourceUrl ? `<a class="homework-resource-link" href="${escapeHomeworkHtml(item.resourceUrl)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-link"></i><span>Open resource</span></a>` : ""}
+        <div class="homework-detail-stack">
+          <div class="homework-detail-banner">
+            ${renderHomeworkStatusBadge(getHomeworkViewerStatus(item, permissions))}
+            ${item.resourceUrl ? `<a class="homework-resource-link" href="${escapeHomeworkHtml(item.resourceUrl)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-link"></i><span>Open resource</span></a>` : ""}
+          </div>
+          <div class="homework-detail-copy">${String(item.description || "").trim() ? sanitizeMessageHTML(String(item.description || "")) : `<div class="homework-empty-note homework-empty-note--compact">No instructions added yet. Use Edit to add guidance, links, or grading notes.</div>`}</div>
+          ${renderHomeworkFiles(item.files)}
+          ${renderHomeworkFiles(item.solutionFiles || [])}
         </div>
-        <div class="homework-detail-copy">${String(item.description || "").trim() ? sanitizeMessageHTML(String(item.description || "")) : `<div class="homework-empty-note homework-empty-note--compact">No instructions added yet. Use Edit to add guidance, links, or grading notes.</div>`}</div>
-        ${renderHomeworkFiles(item.files)}
-      </div>
-    `;
+      `;
     homeworkDetailModalFooter.innerHTML = `
       <button type="button" class="tasks-btn" data-homework-action="close-detail">Close</button>
       ${permissions.canManage ? `<button type="button" class="tasks-btn" data-homework-action="edit-item" data-item-id="${escapeHomeworkHtml(item.id)}">Edit</button>` : ""}
@@ -3720,12 +4023,13 @@ function renderHomeworkDetailModal() {
           ${mySubmission ? renderHomeworkStatusBadge(mySubmission.status || "draft") : `<div class="homework-empty-note">You have not submitted this assignment yet.</div>`}
           ${mySubmission ? `<div class="homework-detail-copy">${sanitizeMessageHTML(String(mySubmission.submissionText || "No submission notes"))}</div>` : ""}
           ${mySubmission ? renderHomeworkFiles(mySubmission.files || []) : ""}
+          ${mySubmission ? renderHomeworkSubmissionComments(mySubmission, { canComment: !permissions.canManage && !submissionEditable, itemId: item.id }) : ""}
         </div>
       `;
     homeworkDetailModalFooter.innerHTML = `
       <button type="button" class="tasks-btn" data-homework-action="close-detail">Close</button>
-      ${permissions.canManage ? "" : `<button type="button" class="tasks-btn" data-homework-action="save-draft" data-item-id="${escapeHomeworkHtml(item.id)}">Edit draft</button>`}
-      ${permissions.canManage ? "" : `<button type="button" class="tasks-btn homework-card-primary-action" data-homework-action="open-submission" data-item-id="${escapeHomeworkHtml(item.id)}">Edit submission</button>`}
+      ${permissions.canManage ? "" : (submissionEditable ? `<button type="button" class="tasks-btn" data-homework-action="save-draft" data-item-id="${escapeHomeworkHtml(item.id)}" ${submissionLocked ? "disabled" : ""}>${submissionLocked ? "Submission locked" : "Edit draft"}</button>` : "")}
+      ${permissions.canManage ? "" : (submissionEditable ? `<button type="button" class="tasks-btn homework-card-primary-action" data-homework-action="open-submission" data-item-id="${escapeHomeworkHtml(item.id)}" ${submissionLocked ? "disabled" : ""}>${submissionLocked ? "Submission closed" : "Edit submission"}</button>` : `<button type="button" class="tasks-btn" disabled>Submitted work locked</button>`)}
     `;
   } else if (tab === "feedback") {
     if (permissions.canManage) {
@@ -3784,6 +4088,7 @@ function closeHomeworkDetailModal() {
 function renderHomeworkBoardItem(item, permissions = {}) {
   const canManage = !!permissions.canManage;
   const mySubmission = item.mySubmission || null;
+  const submissionEditable = canStudentEditHomeworkSubmission(mySubmission);
   const submissionStatus = getHomeworkViewerStatus(item, permissions);
   const reviewRows = Array.isArray(item.submissions) ? item.submissions : [];
   const summary = item.submissionSummary || { total: 0, submitted: 0, reviewed: 0, returned: 0 };
@@ -3791,70 +4096,85 @@ function renderHomeworkBoardItem(item, permissions = {}) {
   const dueDateValue = String(item.dueDate || "").trim();
   const dueDate = dueDateValue ? new Date(dueDateValue) : null;
   const overdue = dueDate && !Number.isNaN(dueDate.getTime()) && dueDate.getTime() < Date.now() && !item.isArchived && submissionStatus !== "reviewed";
+  const submissionLocked = !canManage && isHomeworkItemLocked(item);
+  const teacherLockActive = !!item?.isLocked;
+  const deadlineLockActive = isHomeworkSubmissionDeadlinePassed(item?.dueDate);
+  const effectiveLockActive = isHomeworkItemLocked(item);
   const resourceCount = item.resourceUrl ? 1 : 0;
   const fileCount = Array.isArray(item.files) ? item.files.length : 0;
-  const instructionsHtml = String(item.description || "").trim()
+  const solutionFileCount = Array.isArray(item.solutionFiles) ? item.solutionFiles.length : 0;
+  const hasInstructions = !!String(item.description || "").trim();
+  const instructionsHtml = hasInstructions
     ? sanitizeMessageHTML(String(item.description || ""))
-    : `<div class="homework-empty-note homework-empty-note--compact">No instructions added yet. Teachers can add expectations, links, or grading notes from Edit.</div>`;
+    : "";
   return `
-    <article class="task-card homework-item-card" data-homework-item-id="${escapeHomeworkHtml(item.id)}">
+    <article class="task-card homework-item-card" data-homework-item-id="${escapeHomeworkHtml(item.id)}" role="button" tabindex="0" aria-label="Open assignment ${escapeHomeworkHtml(item.title || "Homework")} details">
       <div class="homework-card-head">
         <div class="task-main">
-          <div class="homework-card-kicker">${escapeHomeworkHtml(item.createdByName || "Teacher")}</div>
+          <div class="homework-card-kicker"><i class="fa-solid fa-user-shield homework-ui-icon" aria-hidden="true"></i><span>${escapeHomeworkHtml(item.createdByName || "Teacher")}</span></div>
           <div class="task-title homework-card-title">${escapeHomeworkHtml(item.title || "Homework")}</div>
+          ${renderHomeworkItemSignature(item)}
           <div class="task-meta homework-card-meta">
-            <span class="homework-due-badge ${overdue ? "homework-due-badge--overdue" : ""}"><i class="fa-regular fa-calendar"></i><span>Due ${escapeHomeworkHtml(formatHomeworkDateLabel(item.dueDate))}</span></span>
+            <span class="homework-due-badge ${overdue ? "homework-due-badge--overdue" : ""}"><i class="fa-regular fa-calendar homework-ui-icon" aria-hidden="true"></i><span>Due ${escapeHomeworkHtml(formatHomeworkDateLabel(item.dueDate))}</span></span>
             ${renderHomeworkStatusBadge(dueMeta.tone)}
-            ${fileCount ? `<span class="task-pill homework-meta-pill"><i class="fa-solid fa-paperclip"></i><span>${fileCount} file${fileCount === 1 ? "" : "s"}</span></span>` : ""}
-            ${resourceCount ? `<span class="task-pill homework-meta-pill"><i class="fa-solid fa-link"></i><span>Resource</span></span>` : ""}
+            ${fileCount ? `<span class="task-pill homework-meta-pill"><i class="fa-solid fa-paperclip homework-ui-icon" aria-hidden="true"></i><span>${fileCount} file${fileCount === 1 ? "" : "s"}</span></span>` : ""}
+            ${solutionFileCount ? `<span class="task-pill homework-meta-pill"><i class="fa-solid fa-file-circle-check homework-ui-icon" aria-hidden="true"></i><span>${solutionFileCount} solution${solutionFileCount === 1 ? "" : "s"}</span></span>` : ""}
+            ${resourceCount ? `<span class="task-pill homework-meta-pill"><i class="fa-solid fa-link homework-ui-icon" aria-hidden="true"></i><span>Resource</span></span>` : ""}
+            ${hasInstructions ? `<span class="task-pill homework-meta-pill"><i class="fa-regular fa-note-sticky homework-ui-icon" aria-hidden="true"></i><span>Instructions</span></span>` : ""}
           </div>
         </div>
         <div class="task-actions homework-card-actions">
-          <button class="task-icon" type="button" data-homework-action="open-detail" data-item-id="${escapeHomeworkHtml(item.id)}" aria-label="Open assignment details"><i class="fa-solid fa-up-right-and-down-left-from-center"></i></button>
-          ${canManage ? `<button class="task-icon" type="button" data-homework-action="edit-item" data-item-id="${escapeHomeworkHtml(item.id)}" aria-label="Edit assignment"><i class="fa-solid fa-pen"></i></button>` : ""}
-          ${canManage ? `<button class="task-icon" type="button" data-homework-action="archive-item" data-item-id="${escapeHomeworkHtml(item.id)}" aria-label="Archive assignment"><i class="fa-solid fa-box-archive"></i></button>` : ""}
+          <button class="task-icon homework-card-icon homework-card-icon--open" type="button" data-homework-action="open-detail" data-item-id="${escapeHomeworkHtml(item.id)}" aria-label="Open assignment details" title="Open details"><i class="fa-solid fa-up-right-and-down-left-from-center homework-ui-icon" aria-hidden="true"></i></button>
+          ${canManage ? `<button class="task-icon homework-card-icon homework-card-icon--edit" type="button" data-homework-action="edit-item" data-item-id="${escapeHomeworkHtml(item.id)}" aria-label="Edit assignment" title="Edit assignment"><i class="fa-solid fa-pen homework-ui-icon" aria-hidden="true"></i></button>` : ""}
+          ${canManage ? `<button class="task-icon homework-card-icon homework-card-icon--lock ${effectiveLockActive ? "is-locked" : ""}" type="button" ${deadlineLockActive && !teacherLockActive ? "disabled" : ""} data-homework-action="${teacherLockActive ? "unlock-item" : "lock-item"}" data-item-id="${escapeHomeworkHtml(item.id)}" aria-label="${deadlineLockActive && !teacherLockActive ? "Assignment locked after deadline" : (teacherLockActive ? "Unlock assignment" : "Lock assignment")}" title="${deadlineLockActive && !teacherLockActive ? "Assignment locked after deadline" : (teacherLockActive ? "Unlock assignment" : "Lock assignment")}"><i class="fa-solid ${effectiveLockActive ? "fa-lock" : "fa-lock-open"} homework-ui-icon" aria-hidden="true"></i></button>` : ""}
         </div>
       </div>
       <div class="homework-card-summary">
         ${canManage ? `
-          <div class="homework-summary-chip"><strong>${Number(summary.submitted || 0)}</strong><span>submitted</span></div>
-          <div class="homework-summary-chip"><strong>${Number(summary.reviewed || 0)}</strong><span>reviewed</span></div>
-          <div class="homework-summary-chip"><strong>${Number(summary.returned || 0)}</strong><span>returned</span></div>
+          <div class="homework-summary-chip homework-summary-chip--submitted"><i class="fa-solid fa-paper-plane homework-ui-icon homework-stat-chip-icon" aria-hidden="true"></i><div><strong>${Number(summary.submitted || 0)}</strong><span>Submitted</span></div></div>
+          <div class="homework-summary-chip homework-summary-chip--reviewed"><i class="fa-solid fa-circle-check homework-ui-icon homework-stat-chip-icon" aria-hidden="true"></i><div><strong>${Number(summary.reviewed || 0)}</strong><span>Reviewed</span></div></div>
+          <div class="homework-summary-chip homework-summary-chip--returned"><i class="fa-solid fa-rotate-left homework-ui-icon homework-stat-chip-icon" aria-hidden="true"></i><div><strong>${Number(summary.returned || 0)}</strong><span>Returned</span></div></div>
         ` : `
-          <div class="homework-summary-chip"><strong>${escapeHomeworkHtml(getHomeworkStatusMeta(submissionStatus).label)}</strong><span>my status</span></div>
-          <div class="homework-summary-chip"><strong>${mySubmission?.gradeValue ? escapeHomeworkHtml(mySubmission.gradeValue) : "—"}</strong><span>grade</span></div>
-          <div class="homework-summary-chip"><strong>${mySubmission?.feedbackText ? "Yes" : "No"}</strong><span>feedback</span></div>
+          <div class="homework-summary-chip"><i class="fa-solid fa-flag homework-ui-icon homework-stat-chip-icon" aria-hidden="true"></i><div><strong>${escapeHomeworkHtml(getHomeworkStatusMeta(submissionStatus).label)}</strong><span>My status</span></div></div>
+          <div class="homework-summary-chip"><i class="fa-solid fa-award homework-ui-icon homework-stat-chip-icon" aria-hidden="true"></i><div><strong>${mySubmission?.gradeValue ? escapeHomeworkHtml(mySubmission.gradeValue) : "—"}</strong><span>Grade</span></div></div>
+          <div class="homework-summary-chip"><i class="fa-solid fa-message homework-ui-icon homework-stat-chip-icon" aria-hidden="true"></i><div><strong>${mySubmission?.feedbackText ? "Yes" : "No"}</strong><span>Feedback</span></div></div>
         `}
       </div>
       <div class="task-body homework-card-body">
-        <div class="homework-card-copy">${instructionsHtml}</div>
-        ${item.resourceUrl ? `<a class="homework-resource-link" href="${escapeHomeworkHtml(item.resourceUrl)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-link"></i><span>${escapeHomeworkHtml(item.resourceUrl)}</span></a>` : ""}
+        ${instructionsHtml ? `<div class="homework-card-copy">${instructionsHtml}</div>` : ""}
+        ${item.resourceUrl ? `<a class="homework-resource-link" href="${escapeHomeworkHtml(item.resourceUrl)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-link homework-ui-icon" aria-hidden="true"></i><span>${escapeHomeworkHtml(item.resourceUrl)}</span></a>` : ""}
         ${renderHomeworkFiles(item.files)}
+        ${renderHomeworkFiles(item.solutionFiles || [])}
         ${mySubmission ? `
           <div class="task-comments homework-student-panel">
             <div class="task-comment">
               <div class="task-cbody">
                 <div class="task-cmeta">My submission · ${renderHomeworkStatusBadge(mySubmission.status || submissionStatus)}</div>
-                <div class="task-ctext">${sanitizeMessageHTML(String(mySubmission.submissionText || "No submission text"))}</div>
+                ${renderHomeworkSubmissionSignature(mySubmission)}
+                ${String(mySubmission.submissionText || "").trim() ? `<div class="task-ctext">${sanitizeMessageHTML(String(mySubmission.submissionText || ""))}</div>` : ""}
                 ${renderHomeworkFiles(mySubmission.files || [])}
                 ${mySubmission.feedbackText ? `<div class="task-ctext"><strong>Feedback:</strong> ${escapeHomeworkHtml(mySubmission.feedbackText)}</div>` : ""}
                 ${mySubmission.gradeValue ? `<div class="task-ctext"><strong>Grade:</strong> ${escapeHomeworkHtml(mySubmission.gradeValue)}</div>` : ""}
+                ${renderHomeworkSubmissionComments(mySubmission, { canComment: !submissionEditable, itemId: item.id })}
               </div>
             </div>
           </div>
         ` : ""}
         ${canManage && reviewRows.length ? `
           <div class="task-comments homework-review-list">
+            <div class="homework-review-heading"><i class="fa-solid fa-inbox" aria-hidden="true"></i><span>Submission queue</span></div>
             ${reviewRows.map((submission) => `
               <div class="task-comment homework-review-row">
                 <div class="task-cbody">
-                  <div class="task-cmeta">${escapeHomeworkHtml(submission.studentName || submission.studentId || "Student")} · ${renderHomeworkStatusBadge(submission.status || "pending")}</div>
-                  <div class="task-ctext">${sanitizeMessageHTML(String(submission.submissionText || "No submission text"))}</div>
+                  <div class="task-cmeta"><span class="homework-review-student">${escapeHomeworkHtml(submission.studentName || submission.studentId || "Student")}</span>${renderHomeworkStatusBadge(submission.status || "pending")}</div>
+                  ${renderHomeworkSubmissionSignature(submission)}
+                  ${String(submission.submissionText || "").trim() ? `<div class="task-ctext">${sanitizeMessageHTML(String(submission.submissionText || ""))}</div>` : ""}
                   ${renderHomeworkFiles(submission.files || [])}
                   ${submission.feedbackText ? `<div class="task-ctext"><strong>Feedback:</strong> ${escapeHomeworkHtml(submission.feedbackText)}</div>` : ""}
                   ${submission.gradeValue ? `<div class="task-ctext"><strong>Grade:</strong> ${escapeHomeworkHtml(submission.gradeValue)}</div>` : ""}
+                  ${renderHomeworkSubmissionComments(submission, { canComment: false, itemId: item.id })}
                   <div class="task-comment-actions">
-                    <button class="tasks-btn" type="button" data-homework-action="review-submission" data-item-id="${escapeHomeworkHtml(item.id)}" data-submission-id="${escapeHomeworkHtml(submission.id)}">Review</button>
+                    <button class="tasks-btn homework-review-action" type="button" data-homework-action="review-submission" data-item-id="${escapeHomeworkHtml(item.id)}" data-submission-id="${escapeHomeworkHtml(submission.id)}"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i><span>Review</span></button>
                   </div>
                 </div>
               </div>
@@ -3863,12 +4183,161 @@ function renderHomeworkBoardItem(item, permissions = {}) {
         ` : ""}
       </div>
       <div class="homework-card-footer">
-        ${!canManage ? `<button class="tasks-btn" type="button" data-homework-action="save-draft" data-item-id="${escapeHomeworkHtml(item.id)}">Edit draft</button>` : ""}
-        ${!canManage ? `<button class="tasks-btn homework-card-primary-action" type="button" data-homework-action="open-submission" data-item-id="${escapeHomeworkHtml(item.id)}">${mySubmission ? "Update submission" : "Start submission"}</button>` : ""}
+        ${!canManage ? (submissionEditable && mySubmission ? `<button class="tasks-btn" type="button" data-homework-action="save-draft" data-item-id="${escapeHomeworkHtml(item.id)}" ${submissionLocked ? "disabled" : ""}>${submissionLocked ? "Submission locked" : "Edit draft"}</button>` : "") : ""}
+        ${!canManage ? (submissionEditable ? `<button class="tasks-btn homework-card-primary-action" type="button" data-homework-action="open-submission" data-item-id="${escapeHomeworkHtml(item.id)}" ${submissionLocked ? "disabled" : ""}>${submissionLocked ? "Submission closed" : (mySubmission ? "Update submission" : "Start submission")}</button>` : `<button class="tasks-btn" type="button" disabled>Submitted work locked</button>`) : ""}
         ${canManage ? `<button class="tasks-btn homework-card-secondary-action" type="button" data-homework-action="open-detail" data-item-id="${escapeHomeworkHtml(item.id)}">View details</button>` : ""}
         ${canManage ? `<button class="tasks-btn homework-card-primary-action" type="button" data-homework-action="review-from-detail" data-item-id="${escapeHomeworkHtml(item.id)}">Review queue</button>` : ""}
       </div>
     </article>
+  `;
+}
+
+function buildHomeworkRecentActivity(board, discussion = []) {
+  const activity = [];
+  const items = Array.isArray(board?.items) ? board.items : [];
+  items.forEach((item) => {
+    activity.push({
+      icon: "fa-regular fa-note-sticky",
+      title: item.title || "Homework",
+      meta: `Assignment${item.dueDate ? ` · Due ${formatHomeworkDateLabel(item.dueDate)}` : ""}`
+    });
+    (Array.isArray(item.submissions) ? item.submissions : []).forEach((submission) => {
+      activity.push({
+        icon: "fa-solid fa-paper-plane",
+        title: submission.studentName || submission.studentId || "Student submission",
+        meta: `${getHomeworkStatusMeta(submission.status || "pending").label}${submission.updatedAt ? ` · ${formatHomeworkSignatureLabel(submission.updatedAt)}` : ""}`
+      });
+    });
+  });
+  discussion.slice(-4).forEach((msg) => {
+    activity.push({
+      icon: "fa-regular fa-message",
+      title: msg.author || "Discussion",
+      meta: `${msg.time || ""}${msg.text ? ` · ${extractPlainTextFromHtml(String(msg.text || "")).slice(0, 48)}` : ""}`
+    });
+  });
+  return activity.slice(-6).reverse();
+}
+
+function syncHomeworkDashboardScrollPositions() {
+  if (!messagesContainer) return;
+  const boardScroll = messagesContainer.querySelector(".homework-board-scroll");
+  if (boardScroll && boardScroll.scrollHeight > boardScroll.clientHeight) {
+    boardScroll.scrollTop = boardScroll.scrollHeight;
+  }
+  const discussionScroll = messagesContainer.querySelector(".homework-side-stack");
+  if (discussionScroll && discussionScroll.scrollHeight > discussionScroll.clientHeight) {
+    discussionScroll.scrollTop = discussionScroll.scrollHeight;
+  }
+  const activityScroll = messagesContainer.querySelector(".homework-activity-list");
+  if (activityScroll && activityScroll.scrollHeight > activityScroll.clientHeight) {
+    activityScroll.scrollTop = 0;
+  }
+}
+
+function renderHomeworkDashboardWorkspace(channelId, board, visibleItems, discussion) {
+  const canManage = !!board?.permissions?.canManage;
+  const boardPreviewItems = visibleItems.slice(-3);
+  const activity = buildHomeworkRecentActivity(board, discussion);
+  const uiState = getHomeworkBoardUiState(channelId);
+  const quickAction = String(uiState?.quickAction || "");
+  const isBoardActive = uiState.view === "assignments" && uiState.filter === "all";
+  const isDiscussionActive = uiState.view === "discussion";
+  const isAttentionActive = canManage
+    ? (uiState.view === "assignments" && uiState.filter === "pending")
+    : (uiState.view === "assignments" && uiState.filter === "submitted");
+  return `
+    <section class="tasks-shell homework-shell homework-dashboard-shell">
+      ${renderHomeworkStatsBar(board)}
+      <div class="homework-dashboard-content">
+        <section class="homework-workspace-panel homework-workspace-panel--board">
+          <div class="homework-workspace-head">
+            <div>
+              <h2>${canManage ? "Assignments overview" : "Your assignments"}</h2>
+            </div>
+            <div class="homework-workspace-head-actions">
+              ${visibleItems.length ? `<button class="tasks-btn homework-card-secondary-action" type="button" data-homework-action="open-assignments-view">Open board</button>` : ""}
+              ${canManage ? `<button class="tasks-btn homework-card-primary-action homework-workspace-create-btn" type="button" data-homework-action="new-item"><i class="fa-solid fa-plus" aria-hidden="true"></i><span>Create assignment</span></button>` : ""}
+            </div>
+          </div>
+          <div class="homework-board-scroll">
+            ${boardPreviewItems.length ? boardPreviewItems.map((item) => renderHomeworkBoardItem(item, board.permissions)).join("") : `
+              ${canManage ? `
+                <div class="homework-dashboard-empty homework-dashboard-empty--create" aria-label="Empty homework board">
+                  <div class="homework-dashboard-empty-hero">
+                    <div class="homework-dashboard-empty-icon homework-dashboard-empty-icon--create" aria-hidden="true">
+                      <i class="fa-regular fa-clipboard"></i>
+                    </div>
+                    <div class="homework-dashboard-empty-hero-copy">
+                      <div class="homework-dashboard-empty-eyebrow">Nothing assigned yet</div>
+                      <h3>Start your class with structured homework</h3>
+                    </div>
+                  </div>
+                  <div class="homework-dashboard-empty-copy">
+                    <p>Create assignments with:</p>
+                    <ul class="homework-dashboard-empty-list">
+                      <li>Instructions and attachments</li>
+                      <li>Deadlines and reminders</li>
+                      <li>Student submissions and feedback</li>
+                    </ul>
+                    <p>Students will see everything in one place. No WhatsApp, no confusion.</p>
+                  </div>
+                  <div class="homework-dashboard-empty-tip"><i class="fa-regular fa-lightbulb" aria-hidden="true"></i><span>Tip: You can attach PDFs, audio, or homework files.</span></div>
+                  <div class="homework-dashboard-empty-actions">
+                    <button class="tasks-btn homework-card-secondary-action" type="button" data-homework-action="use-template">Use template</button>
+                  </div>
+                  <div class="homework-dashboard-empty-activity">
+                    <strong>No activity yet</strong>
+                    <span>Once you create assignments, you'll see submissions, student progress, and recent activity here.</span>
+                  </div>
+                </div>
+              ` : `
+                <div class="homework-dashboard-empty">
+                  <div class="homework-dashboard-empty-icon"><i class="fa-regular fa-clipboard" aria-hidden="true"></i></div>
+                  <h3>No homework yet</h3>
+                  <p>Assignments, instructions, and submission tasks will appear here as soon as your teacher posts them.</p>
+                  <div class="homework-dashboard-empty-actions">
+                    <button class="tasks-btn homework-card-secondary-action" type="button" data-homework-action="open-discussion-view">Open discussion</button>
+                  </div>
+                </div>
+              `}
+            `}
+          </div>
+        </section>
+        <aside class="homework-dashboard-side">
+          <section class="homework-workspace-panel homework-workspace-panel--aside homework-workspace-panel--aside-actions">
+            <div class="homework-workspace-kicker">Quick actions</div>
+            <div class="homework-side-actions">
+              ${canManage ? `<button class="tasks-btn homework-side-action homework-side-action--primary ${quickAction === "new-item" ? "is-active" : ""}" type="button" data-homework-action="new-item"><i class="fa-solid fa-square-plus" aria-hidden="true"></i><span>New assignment</span></button>` : ""}
+              ${canManage ? `<button class="tasks-btn homework-card-secondary-action homework-side-action homework-side-action--template ${quickAction === "use-template" ? "is-active" : ""}" type="button" data-homework-action="use-template"><i class="fa-solid fa-layer-group" aria-hidden="true"></i><span>Use template</span></button>` : ""}
+              <button class="tasks-btn homework-card-secondary-action homework-side-action homework-side-action--board ${isBoardActive ? "is-active" : ""}" type="button" data-homework-action="open-assignments-view"><i class="fa-solid fa-table-columns" aria-hidden="true"></i><span>Open board</span></button>
+              <button class="tasks-btn homework-card-secondary-action homework-side-action homework-side-action--discussion ${isDiscussionActive ? "is-active" : ""}" type="button" data-homework-action="open-discussion-view"><i class="fa-solid fa-comments" aria-hidden="true"></i><span>Class discussion</span></button>
+              ${canManage ? `<button class="tasks-btn homework-card-secondary-action homework-side-action homework-side-action--attention ${isAttentionActive ? "is-active" : ""}" type="button" data-homework-action="open-filter-pending"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i><span>Needs attention</span></button>` : `<button class="tasks-btn homework-card-secondary-action homework-side-action homework-side-action--submitted ${isAttentionActive ? "is-active" : ""}" type="button" data-homework-action="open-filter-submitted"><i class="fa-solid fa-paper-plane" aria-hidden="true"></i><span>Submitted work</span></button>`}
+            </div>
+          </section>
+          <section class="homework-workspace-panel homework-workspace-panel--aside homework-workspace-panel--aside-discussion homework-panel-link" role="button" tabindex="0" data-homework-action="open-discussion-view" aria-label="Open class discussion">
+            <div class="homework-workspace-kicker">Class discussion</div>
+            <div class="homework-side-stack">
+              ${renderHomeworkDiscussion(discussion, 3)}
+            </div>
+          </section>
+          <section class="homework-workspace-panel homework-workspace-panel--aside homework-workspace-panel--aside-activity">
+            <div class="homework-workspace-kicker">Recent activity</div>
+            <div class="homework-activity-list">
+              ${activity.length ? activity.map((entry) => `
+                <article class="homework-activity-item">
+                  <div class="homework-activity-icon"><i class="${entry.icon}" aria-hidden="true"></i></div>
+                  <div class="homework-activity-copy">
+                    <strong>${escapeHomeworkHtml(entry.title)}</strong>
+                    <span>${escapeHomeworkHtml(entry.meta)}</span>
+                  </div>
+                </article>
+              `).join("") : `<div class="homework-empty-note homework-empty-note--compact"><strong>No activity yet</strong><br>Once you create assignments, you'll see submissions, student progress, and recent activity.</div>`}
+            </div>
+          </section>
+        </aside>
+      </div>
+    </section>
   `;
 }
 
@@ -3946,6 +4415,31 @@ function bindHomeworkBoardActions(channelId, board) {
       const item = itemsById.get(itemId);
       if (item) openHomeworkDetailModal(channelId, item.id, "instructions");
     });
+    card.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      if (event.target.closest("button, a, input, textarea, select")) return;
+      event.preventDefault();
+      card.click();
+    });
+  });
+  messagesContainer.querySelectorAll(".homework-panel-link").forEach((panel) => {
+    if (panel.dataset.homeworkCardBound === "1") return;
+    panel.dataset.homeworkCardBound = "1";
+    panel.addEventListener("click", (event) => {
+      if (event.target.closest("button, a, input, textarea, select")) return;
+      const action = String(panel.dataset.homeworkAction || "");
+      if (!action) return;
+      if (action === "open-discussion-view") {
+        const uiState = getHomeworkBoardUiState(channelId);
+        uiState.view = "discussion";
+        renderMessages(channelId, { restoreScroll: true });
+      }
+    });
+    panel.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      panel.click();
+    });
   });
   messagesContainer.querySelectorAll("[data-homework-action]").forEach((button) => {
     if (button.dataset.homeworkBound === "1") return;
@@ -3954,13 +4448,26 @@ function bindHomeworkBoardActions(channelId, board) {
       const action = button.dataset.homeworkAction;
       const itemId = String(button.dataset.itemId || "");
       const item = itemsById.get(itemId) || null;
+      const quickActionButton = button.closest(".homework-side-action");
+      if (quickActionButton) {
+        const uiState = getHomeworkBoardUiState(channelId);
+        uiState.quickAction = String(action || "");
+        messagesContainer.querySelectorAll(".homework-side-action").forEach((entry) => entry.classList.remove("is-active"));
+        quickActionButton.classList.add("is-active");
+      }
       try {
         if (action === "new-item") {
           openHomeworkAssignmentModalForItem(channelId);
+        } else if (action === "use-template") {
+          openHomeworkAssignmentModalForItem(channelId, buildHomeworkAssignmentTemplate());
         } else if (action === "edit-item" && item) {
           openHomeworkAssignmentModalForItem(channelId, item);
         } else if (action === "archive-item" && item) {
           await archiveHomeworkItem(item);
+        } else if (action === "lock-item" && item) {
+          await setHomeworkItemLocked(item, true);
+        } else if (action === "unlock-item" && item) {
+          await setHomeworkItemLocked(item, false);
         } else if (action === "save-draft" && item) {
           openHomeworkSubmissionModalForItem(item);
         } else if (action === "open-submission" && item) {
@@ -3971,6 +4478,17 @@ function bindHomeworkBoardActions(channelId, board) {
             const submission = (item.submissions || []).find((entry) => String(entry.id) === submissionId);
             if (submission) openHomeworkReviewModalForSubmission(item, submission);
           }
+        } else if (action === "post-submission-comment") {
+          const submissionId = String(button.dataset.submissionId || "");
+          const composer = button.closest(".homework-comment-composer");
+          const input = composer?.querySelector("[data-homework-comment-input]");
+          const commentText = String(input?.value || "").trim();
+          if (!submissionId || !commentText) {
+            showToast("Write a comment before sending.");
+            return;
+          }
+          await postHomeworkSubmissionComment(itemId, submissionId, commentText);
+          await refreshHomeworkBoardChannel(channelId, { restoreScroll: true });
         } else if (action === "review-from-detail" && item) {
           openHomeworkDetailModal(channelId, item.id, "feedback");
         } else if (action === "open-detail" && item) {
@@ -4015,80 +4533,25 @@ function bindHomeworkBoardActions(channelId, board) {
         showToast(err?.message || "Could not update homework");
       }
     });
+    if (!button.matches("button")) {
+      button.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        button.click();
+      });
+    }
   });
 
   const fab = messagesContainer.querySelector('[data-homework-fab="1"]');
   if (fab && fab.dataset.homeworkFabBound !== "1") {
     fab.dataset.homeworkFabBound = "1";
-    fab.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0) return;
-      const rect = fab.getBoundingClientRect();
-      const shellRect = messagesContainer.getBoundingClientRect();
-      homeworkFabDrag = {
-        channelId,
-        pointerId: event.pointerId,
-        startX: event.clientX,
-        startY: event.clientY,
-        offsetX: event.clientX - rect.left,
-        offsetY: event.clientY - rect.top,
-        shellLeft: shellRect.left,
-        shellTop: shellRect.top,
-        width: rect.width,
-        height: rect.height,
-        moved: false
-      };
-      fab.setPointerCapture?.(event.pointerId);
-      fab.classList.add("is-dragging");
-      event.preventDefault();
-    });
-    fab.addEventListener("pointermove", (event) => {
-      if (!homeworkFabDrag || homeworkFabDrag.pointerId !== event.pointerId) return;
-      const nextLeft = event.clientX - homeworkFabDrag.shellLeft - homeworkFabDrag.offsetX;
-      const nextTop = event.clientY - homeworkFabDrag.shellTop - homeworkFabDrag.offsetY;
-      const maxLeft = Math.max(12, messagesContainer.clientWidth - homeworkFabDrag.width - 12);
-      const maxTop = Math.max(12, messagesContainer.clientHeight - homeworkFabDrag.height - 12);
-      const clampedLeft = Math.min(Math.max(12, nextLeft), maxLeft);
-      const clampedTop = Math.min(Math.max(12, nextTop), maxTop);
-      fab.style.left = `${clampedLeft}px`;
-      fab.style.top = `${clampedTop}px`;
-      homeworkFabDrag.moved = true;
-    });
-    const finishFabDrag = (event) => {
-      if (!homeworkFabDrag || homeworkFabDrag.pointerId !== event.pointerId) return false;
-      const moved = homeworkFabDrag.moved;
-      const state = getHomeworkBoardUiState(channelId);
-      const left = Number.parseFloat(fab.style.left || "");
-      const top = Number.parseFloat(fab.style.top || "");
-      state.fabPosition = {
-        left: Number.isFinite(left) ? left : null,
-        top: Number.isFinite(top) ? top : null
-      };
-      fab.classList.remove("is-dragging");
-      fab.releasePointerCapture?.(event.pointerId);
-      homeworkFabDrag = null;
-      return moved;
-    };
-    fab.addEventListener("pointerup", (event) => {
-      const moved = finishFabDrag(event);
-      if (moved) {
-        event.preventDefault();
-        event.stopPropagation();
-      }
-    });
-    fab.addEventListener("pointercancel", (event) => {
-      finishFabDrag(event);
-    });
-    fab.addEventListener("click", (event) => {
-      if (fab.classList.contains("is-dragging")) {
-        event.preventDefault();
-        event.stopPropagation();
-      }
-    }, true);
+    getHomeworkBoardUiState(channelId).fabPosition = null;
   }
 }
 
 function renderHomeworkChannel(channelId, options = {}) {
   if (!messagesContainer) return;
+  startHomeworkLiveSync(channelId);
   const board = homeworkBoardByChannel[channelId] || { permissions: {}, items: [] };
   const uiState = getHomeworkBoardUiState(channelId);
   const discussion = messagesByChannel[channelId] || [];
@@ -4109,9 +4572,7 @@ function renderHomeworkChannel(channelId, options = {}) {
   }
   clearHomeworkHeaderFilters();
   messagesContainer.innerHTML = `
-    <section class="tasks-shell homework-shell">
-      ${renderHomeworkStatsBar(board)}
-    </section>
+    ${renderHomeworkDashboardWorkspace(channelId, board, visibleItems, discussion)}
     ${renderHomeworkFloatingAction(channelId, board)}
   `;
   const refreshBtn = messagesContainer.querySelector('[data-homework-action="refresh-board"]');
@@ -4123,6 +4584,1388 @@ function renderHomeworkChannel(channelId, options = {}) {
   }
   bindHomeworkBoardActions(channelId, board);
   hydrateEmojiImages(messagesContainer);
+  requestAnimationFrame(() => syncHomeworkDashboardScrollPositions());
+}
+
+const CLASSNOTE_TYPE_OPTIONS = [
+  { key: "all", label: "All", icon: "fa-table-list" },
+  { key: "pinned", label: "Pinned", icon: "fa-bookmark" },
+  { key: "grammar", label: "Grammar", icon: "fa-language" },
+  { key: "vocabulary", label: "Vocabulary", icon: "fa-book-open" },
+  { key: "files", label: "Files", icon: "fa-folder-open" },
+  { key: "export", label: "Export PDF", icon: "fa-file-pdf" }
+];
+
+const CLASSNOTE_FILTER_CHIPS = [
+  { key: "all", label: "All" },
+  { key: "pinned", label: "Pinned" },
+  { key: "grammar", label: "Grammar" },
+  { key: "vocabulary", label: "Vocabulary" },
+  { key: "questions", label: "Questions" },
+  { key: "files", label: "Files" }
+];
+
+const CLASSNOTE_COMPOSER_TYPES = [
+  { key: "note", label: "Note", icon: "fa-note-sticky" },
+  { key: "question", label: "Question", icon: "fa-circle-question" },
+  { key: "vocabulary", label: "Vocabulary", icon: "fa-book" },
+  { key: "homework_help", label: "Homework Tip", icon: "fa-lightbulb" }
+];
+
+const classNoteViewStateByChannel = new Map();
+
+function getClassNoteSourceChannelId(channelId) {
+  const channel = getChannelById(channelId);
+  return String(channel?.homeworkChannelId || channelId || "").trim();
+}
+
+function getClassNoteWorkspaceMeta(channelId) {
+  const ch = getChannelById(channelId) || {};
+  const parentClassId = String(ch.parentClassId || homeworkParentByChannelId.get(String(channelId)) || "").trim();
+  const parentClass = parentClassId ? getChannelById(parentClassId) : null;
+  const parentName = String(parentClass?.name || "").trim();
+  return {
+    title: parentName ? `${parentName} Notes` : "Class Notes",
+    subtitle: "Shared lesson notes, explanations, and study materials",
+    summary: "Shared lesson notes, explanations, and study materials.",
+    channel: ch,
+    parentName
+  };
+}
+
+function getClassNoteViewState(channelId) {
+  const key = String(channelId || "");
+  if (!classNoteViewStateByChannel.has(key)) {
+    classNoteViewStateByChannel.set(key, {
+      filter: "all",
+      selectedId: "",
+      composerType: "note",
+      draftText: "",
+      editingMessageId: "",
+      openMenuId: "",
+      feedScrollTop: 0,
+      detailScrollTop: 0,
+      sidebarScrollTop: 0,
+      pendingDetailFocusId: "",
+      pendingCommentFocusId: "",
+      pendingUploads: [],
+      postingCommentId: ""
+    });
+  }
+  return classNoteViewStateByChannel.get(key);
+}
+
+function saveClassNoteScrollPositions(channelId) {
+  if (!messagesContainer?.classList.contains("classnote-shell")) return;
+  const state = getClassNoteViewState(channelId);
+  const feedList = messagesContainer.querySelector(".classnote-feed-list");
+  const detail = messagesContainer.querySelector(".classnote-detail-scroll");
+  const sidebar = messagesContainer.querySelector(".classnote-sidebar");
+  if (feedList) state.feedScrollTop = feedList.scrollTop;
+  if (detail) state.detailScrollTop = detail.scrollTop;
+  if (sidebar) state.sidebarScrollTop = sidebar.scrollTop;
+}
+
+function restoreClassNoteScrollPositions(channelId) {
+  if (!messagesContainer?.classList.contains("classnote-shell")) return;
+  const state = getClassNoteViewState(channelId);
+  const feedList = messagesContainer.querySelector(".classnote-feed-list");
+  const detail = messagesContainer.querySelector(".classnote-detail-scroll");
+  const sidebar = messagesContainer.querySelector(".classnote-sidebar");
+  if (feedList) feedList.scrollTop = Number(state.feedScrollTop || 0);
+  if (detail) detail.scrollTop = Number(state.detailScrollTop || 0);
+  if (sidebar) sidebar.scrollTop = Number(state.sidebarScrollTop || 0);
+
+  const pendingSectionId = String(state.pendingDetailFocusId || "");
+  if (pendingSectionId && detail) {
+    const section = detail.querySelector(`[data-classnote-comments-section="${CSS.escape(pendingSectionId)}"]`);
+    if (section) {
+      const top = Math.max(0, section.offsetTop - 12);
+      detail.scrollTop = top;
+    }
+    state.pendingDetailFocusId = "";
+  }
+
+  const pendingInputId = String(state.pendingCommentFocusId || "");
+  if (pendingInputId) {
+    const input = messagesContainer.querySelector(`[data-classnote-comment-input="${CSS.escape(pendingInputId)}"]`);
+    input?.focus?.({ preventScroll: true });
+    state.pendingCommentFocusId = "";
+  }
+}
+
+function getClassNoteSelectionData(channelId, targetItemId = "") {
+  const state = getClassNoteViewState(channelId);
+  const items = getClassNoteItems(channelId);
+  const visibleItems = filterClassNoteItems(items, state.filter);
+  const requestedId = String(targetItemId || state.selectedId || "").trim();
+  const selected = visibleItems.find((item) => String(item.id) === requestedId) || visibleItems[0] || null;
+  const relatedItems = visibleItems.filter((item) => String(item.id) !== String(selected?.id || "")).slice(0, 2);
+  return { items, visibleItems, selected, relatedItems };
+}
+
+function bindClassNoteDetailEvents(channelId) {
+  const detailRoot = messagesContainer?.querySelector(".classnote-detail");
+  if (!detailRoot) return;
+
+  detailRoot.querySelectorAll("[data-classnote-select], [data-classnote-open]").forEach((button) => {
+    if (button.dataset.classnoteBound === "1") return;
+    button.dataset.classnoteBound = "1";
+    button.addEventListener("click", () => {
+      const itemId = String(button.getAttribute("data-classnote-select") || button.getAttribute("data-classnote-open") || "").trim();
+      if (!itemId) return;
+      updateClassNoteSelection(channelId, itemId);
+    });
+  });
+
+  detailRoot.querySelectorAll("[data-classnote-edit]").forEach((button) => {
+    if (button.dataset.classnoteBound === "1") return;
+    button.dataset.classnoteBound = "1";
+    button.addEventListener("click", () => {
+      startClassNoteEditing(channelId, String(button.getAttribute("data-classnote-edit") || ""));
+    });
+  });
+
+  detailRoot.querySelectorAll("[data-classnote-comments]").forEach((button) => {
+    if (button.dataset.classnoteBound === "1") return;
+    button.dataset.classnoteBound = "1";
+    button.addEventListener("click", () => {
+      focusClassNoteComments(channelId, String(button.getAttribute("data-classnote-comments") || ""));
+    });
+  });
+
+  detailRoot.querySelectorAll("[data-classnote-send-comment]").forEach((button) => {
+    if (button.dataset.classnoteBound === "1") return;
+    button.dataset.classnoteBound = "1";
+    button.addEventListener("click", async () => {
+      await postClassNoteReply(channelId, String(button.getAttribute("data-classnote-send-comment") || ""));
+    });
+  });
+
+  detailRoot.querySelectorAll("[data-classnote-comment-input]").forEach((input) => {
+    if (input.dataset.classnoteBound === "1") return;
+    input.dataset.classnoteBound = "1";
+    input.addEventListener("keydown", async (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        event.preventDefault();
+        await postClassNoteReply(channelId, String(input.getAttribute("data-classnote-comment-input") || ""));
+      }
+    });
+  });
+}
+
+function positionClassNoteMenu(menuEl, toggleEl) {
+  if (!menuEl || !toggleEl) return;
+  menuEl.hidden = false;
+  menuEl.classList.remove("classnote-card-menu--up");
+
+  const toggleRect = toggleEl.getBoundingClientRect();
+  const spacing = 8;
+  const menuHeight = menuEl.offsetHeight || 120;
+  const spaceBelow = window.innerHeight - toggleRect.bottom;
+  const openUpward = spaceBelow < menuHeight + spacing;
+
+  if (openUpward) {
+    menuEl.classList.add("classnote-card-menu--up");
+  }
+}
+
+let classNoteMenuOutsideHandler = null;
+let classNoteMenuViewportHandler = null;
+
+function cleanupClassNoteMenuHandlers() {
+  if (classNoteMenuOutsideHandler) {
+    document.removeEventListener("click", classNoteMenuOutsideHandler, true);
+    classNoteMenuOutsideHandler = null;
+  }
+  if (classNoteMenuViewportHandler) {
+    window.removeEventListener("resize", classNoteMenuViewportHandler);
+    window.removeEventListener("scroll", classNoteMenuViewportHandler, true);
+    classNoteMenuViewportHandler = null;
+  }
+}
+
+function snapshotClassNoteWorkspaceScroll() {
+  return {
+    feed: messagesContainer?.querySelector(".classnote-feed-list")?.scrollTop || 0,
+    detail: messagesContainer?.querySelector(".classnote-detail")?.scrollTop || 0,
+    sidebar: messagesContainer?.querySelector(".classnote-sidebar")?.scrollTop || 0,
+    pageX: window.scrollX || 0,
+    pageY: window.scrollY || 0
+  };
+}
+
+function restoreClassNoteWorkspaceScroll(snapshot = null) {
+  if (!snapshot) return;
+  const feed = messagesContainer?.querySelector(".classnote-feed-list");
+  const detail = messagesContainer?.querySelector(".classnote-detail");
+  const sidebar = messagesContainer?.querySelector(".classnote-sidebar");
+  if (feed) feed.scrollTop = snapshot.feed || 0;
+  if (detail) detail.scrollTop = snapshot.detail || 0;
+  if (sidebar) sidebar.scrollTop = snapshot.sidebar || 0;
+  if ((window.scrollX || 0) !== (snapshot.pageX || 0) || (window.scrollY || 0) !== (snapshot.pageY || 0)) {
+    window.scrollTo(snapshot.pageX || 0, snapshot.pageY || 0);
+  }
+}
+
+function closeClassNoteMenu(channelId) {
+  const state = getClassNoteViewState(channelId);
+  const openMenuId = String(state.openMenuId || "");
+  cleanupClassNoteMenuHandlers();
+  if (!messagesContainer) {
+    state.openMenuId = "";
+    return;
+  }
+  if (openMenuId) {
+    const menu = messagesContainer.querySelector(`[data-classnote-menu="${CSS.escape(openMenuId)}"]`);
+    const toggle = messagesContainer.querySelector(`[data-classnote-menu-toggle="${CSS.escape(openMenuId)}"]`);
+    if (menu) {
+      menu.hidden = true;
+      menu.classList.remove("classnote-card-menu--up");
+    }
+    if (toggle) toggle.setAttribute("aria-expanded", "false");
+  }
+  state.openMenuId = "";
+}
+
+function openClassNoteMenu(channelId, itemId, toggleEl) {
+  if (!messagesContainer || !itemId || !toggleEl) return;
+  closeClassNoteMenu(channelId);
+  const state = getClassNoteViewState(channelId);
+  const normalizedId = String(itemId || "");
+  const menu = messagesContainer.querySelector(`[data-classnote-menu="${CSS.escape(normalizedId)}"]`);
+  const toggle = messagesContainer.querySelector(`[data-classnote-menu-toggle="${CSS.escape(normalizedId)}"]`) || toggleEl;
+  if (!menu || !toggle) {
+    state.openMenuId = "";
+    return;
+  }
+
+  state.openMenuId = normalizedId;
+  toggle.setAttribute("aria-expanded", "true");
+  positionClassNoteMenu(menu, toggle);
+
+  classNoteMenuOutsideHandler = (event) => {
+    if (event.target.closest("[data-classnote-menu]") || event.target.closest("[data-classnote-menu-toggle]")) return;
+    closeClassNoteMenu(channelId);
+  };
+  classNoteMenuViewportHandler = () => {
+    const activeId = String(getClassNoteViewState(channelId).openMenuId || "");
+    if (activeId !== normalizedId) return;
+    const activeMenu = messagesContainer?.querySelector(`[data-classnote-menu="${CSS.escape(normalizedId)}"]`);
+    const activeToggle = messagesContainer?.querySelector(`[data-classnote-menu-toggle="${CSS.escape(normalizedId)}"]`);
+    if (!activeMenu || !activeToggle) {
+      closeClassNoteMenu(channelId);
+      return;
+    }
+    positionClassNoteMenu(activeMenu, activeToggle);
+  };
+
+  if (classNoteMenuOutsideHandler) document.addEventListener("click", classNoteMenuOutsideHandler, true);
+  if (classNoteMenuViewportHandler) {
+    window.addEventListener("resize", classNoteMenuViewportHandler);
+    window.addEventListener("scroll", classNoteMenuViewportHandler, true);
+  }
+}
+
+function toggleClassNoteMenu(channelId, itemId, toggleEl) {
+  const state = getClassNoteViewState(channelId);
+  const normalizedId = String(itemId || "");
+  if (!normalizedId) return;
+  if (String(state.openMenuId || "") === normalizedId) {
+    closeClassNoteMenu(channelId);
+    return;
+  }
+  openClassNoteMenu(channelId, normalizedId, toggleEl);
+}
+
+function isClassNoteActionTarget(target) {
+  return !!target?.closest?.(
+    "[data-classnote-menu-toggle], [data-classnote-menu], [data-classnote-edit], [data-classnote-open], [data-classnote-delete], [data-classnote-comments], [data-classnote-send-comment], [data-classnote-focus-composer], .classnote-attachment-pill, .classnote-comment-input"
+  );
+}
+
+function updateClassNoteSelection(channelId, itemId, { commentsMode = false } = {}) {
+  if (!messagesContainer?.classList.contains("classnote-shell")) {
+    renderMessages(channelId, { restoreScroll: false });
+    return;
+  }
+  const state = getClassNoteViewState(channelId);
+  const feedList = messagesContainer.querySelector(".classnote-feed-list");
+  const detail = messagesContainer.querySelector(".classnote-detail-scroll");
+  const feedScrollTop = feedList?.scrollTop || 0;
+  const detailScrollTop = detail?.scrollTop || 0;
+
+  state.selectedId = String(itemId || "").trim();
+  state.feedScrollTop = feedScrollTop;
+  state.detailScrollTop = detailScrollTop;
+
+  const { selected, relatedItems } = getClassNoteSelectionData(channelId, state.selectedId);
+  if (!selected) return;
+  state.selectedId = String(selected.id || "");
+
+  messagesContainer.querySelectorAll(".classnote-card.is-selected").forEach((card) => {
+    card.classList.remove("is-selected");
+  });
+  messagesContainer.querySelectorAll(`.classnote-card[data-classnote-select="${CSS.escape(state.selectedId)}"]`).forEach((card) => {
+    card.classList.add("is-selected");
+  });
+
+  const currentDetail = messagesContainer.querySelector(".classnote-detail");
+  if (currentDetail) {
+    currentDetail.outerHTML = renderClassNoteDetail(selected, relatedItems);
+  }
+  hydrateEmojiImages(messagesContainer);
+  bindClassNoteDetailEvents(channelId);
+
+  if (feedList) feedList.scrollTop = feedScrollTop;
+  const nextDetail = messagesContainer.querySelector(".classnote-detail-scroll");
+  if (nextDetail) {
+    if (commentsMode) {
+      const section = nextDetail.querySelector(`[data-classnote-comments-section="${CSS.escape(state.selectedId)}"]`);
+      nextDetail.scrollTop = section ? Math.max(0, section.offsetTop - 12) : detailScrollTop;
+    } else {
+      nextDetail.scrollTop = detailScrollTop;
+    }
+  }
+}
+
+function normalizeClassNoteCategoryKey(value = "") {
+  const normalized = String(value || "").trim().toLowerCase().replace(/\s+/g, "_");
+  if (["grammar", "vocabulary", "question", "questions", "files", "pinned", "homework_help", "homework"].includes(normalized)) {
+    return normalized === "questions" ? "question" : normalized === "homework" ? "homework_help" : normalized;
+  }
+  return "note";
+}
+
+function getClassNoteCategoryMeta(categoryKey = "note") {
+  switch (normalizeClassNoteCategoryKey(categoryKey)) {
+    case "grammar":
+      return { key: "grammar", label: "Grammar", icon: "fa-language", accent: "blue" };
+    case "vocabulary":
+      return { key: "vocabulary", label: "Vocabulary", icon: "fa-book-open", accent: "green" };
+    case "question":
+      return { key: "question", label: "Question", icon: "fa-circle-question", accent: "blue" };
+    case "homework_help":
+      return { key: "homework_help", label: "Homework Help", icon: "fa-lightbulb", accent: "amber" };
+    case "files":
+      return { key: "files", label: "Files", icon: "fa-folder-open", accent: "slate" };
+    default:
+      return { key: "note", label: "Note", icon: "fa-note-sticky", accent: "slate" };
+  }
+}
+
+function buildClassNoteReferenceItem(overrides = {}) {
+  const category = getClassNoteCategoryMeta(overrides.categoryKey || "note");
+  return {
+    id: String(overrides.id || `classnote-ref-${category.key}`),
+    sourceId: String(overrides.sourceId || "reference"),
+    category,
+    title: String(overrides.title || "Class note"),
+    preview: String(overrides.preview || "Shared lesson note ready for the class feed."),
+    contentHtml: String(overrides.contentHtml || ""),
+    plainText: normalizeClassNoteText(overrides.plainText || overrides.preview || overrides.title || "Class note"),
+    author: String(overrides.author || "Teacher Anna"),
+    authorSecondary: String(overrides.authorSecondary || ""),
+    dateLabel: String(overrides.dateLabel || "Today"),
+    attachments: Array.isArray(overrides.attachments) ? overrides.attachments : [],
+    comments: Array.isArray(overrides.comments) ? overrides.comments : [],
+    pinned: !!overrides.pinned,
+    vocabulary: Array.isArray(overrides.vocabulary) ? overrides.vocabulary : [],
+    message: overrides.message || null,
+    highlightLabel: String(overrides.highlightLabel || category.label),
+    highlightTag: String(overrides.highlightTag || ""),
+    highlightMeta: String(overrides.highlightMeta || ""),
+    groupLabel: String(overrides.groupLabel || category.label),
+    detailFooterLabel: String(overrides.detailFooterLabel || ""),
+    attachmentSummary: String(overrides.attachmentSummary || "")
+  };
+}
+
+function getClassNoteReferenceItems(channelId, meta = {}) {
+  const sourceId = getClassNoteSourceChannelId(channelId);
+  const titleBase = meta.title || "A1-Noon Notes";
+  return [
+    buildClassNoteReferenceItem({
+      id: `${sourceId}-ref-perfekt`,
+      sourceId,
+      categoryKey: "grammar",
+      title: "Perfekt mit haben",
+      preview: "Today we practiced the trick, the prepositions and regular endings using haben.",
+      author: "Teacher Anna",
+      dateLabel: "Today",
+      pinned: true,
+      attachments: [
+        { name: "Worksheet.pdf", url: "#" },
+        { name: "Audio.mps", url: "#" }
+      ],
+      comments: [
+        { author: "Lisa Müller", createdAt: "20:45", text: "is it the same as sein?" },
+        { author: "Max Becker", createdAt: "22:55", text: "Only movement verbs use sein." },
+        { author: "Sara", createdAt: "21:30", text: "I want to review the exercises on page 95.1" },
+        { author: "Paul Schröder", createdAt: "21:30", text: "Can we get one more example with gestern?" }
+      ],
+      vocabulary: [
+        "haben (hat, hat gehabt)",
+        "gespielt (spielen)",
+        "gemacht (machen)"
+      ],
+      highlightLabel: "Grammar · note 01ing",
+      highlightMeta: "Teacher Anna · 1 week ago",
+      groupLabel: "Grammar",
+      attachmentSummary: "Attached (1 + 92)",
+      contentHtml: `
+        <p>In today's lesson, we practiced <strong>Perfekt</strong> (the present perfect tense) using the auxiliary "haben" with regular verbs in the past tense.</p>
+        <p><strong>Examples:</strong></p>
+        <ul>
+          <li>Ich habe <strong>Tennis gespielt</strong>.</li>
+          <li>Wir haben gestern <strong>Pizza gemacht</strong>.</li>
+        </ul>
+      `
+    }),
+    buildClassNoteReferenceItem({
+      id: `${sourceId}-ref-tagesablauf`,
+      sourceId,
+      categoryKey: "vocabulary",
+      title: "Tagesablauf",
+      preview: "aufstehen, frühstücken, zurüse, sigma, ziaout, mit…",
+      author: "Teacher Anna",
+      dateLabel: "4 days ago",
+      pinned: true,
+      attachments: [
+        { name: "Vocabulary.pdf", url: "#" }
+      ],
+      comments: [
+        { author: "Lisa Müller", createdAt: "20:45", text: "Can we have this as flashcards too?" }
+      ],
+      vocabulary: [
+        "aufstehen",
+        "frühstücken",
+        "nach Hause",
+        "einschlafen"
+      ],
+      highlightLabel: "Vocabulary · from",
+      highlightMeta: "Teacher Maria · 4 days ago",
+      groupLabel: "Exam Tips",
+      contentHtml: `
+        <p>Use this vocabulary set to describe your daily routine in complete sentences.</p>
+        <ul>
+          <li>Ich stehe um sieben Uhr auf.</li>
+          <li>Danach frühstücke ich mit meiner Familie.</li>
+          <li>Am Abend lerne ich Deutsch und schlafe früh ein.</li>
+        </ul>
+      `
+    }),
+    buildClassNoteReferenceItem({
+      id: `${sourceId}-ref-brief`,
+      sourceId,
+      categoryKey: "homework_help",
+      title: "Wie schreibe ich einen Brief?",
+      preview: "Tips for writing a simple letter opening, request, and closing line in German.",
+      author: "Teacher Anna",
+      dateLabel: "Today",
+      attachments: [
+        { name: "Letter writing guide.pdf", url: "#" },
+        { name: "Sample letter.docx", url: "#" }
+      ],
+      comments: [],
+      vocabulary: [
+        "Liebe Grüße",
+        "Mit freundlichen Grüßen",
+        "ich schreibe dir"
+      ],
+      groupLabel: "Notes",
+      contentHtml: `
+        <p>Tips for writing a simple informal or formal letter. Start with a greeting, explain your reason clearly, and finish with a polite closing.</p>
+        <ul>
+          <li>Opening: <strong>Liebe Anna,</strong> / <strong>Sehr geehrte Damen und Herren,</strong></li>
+          <li>Main part: explain why you are writing in two short paragraphs.</li>
+          <li>Closing: <strong>Liebe Grüße</strong> / <strong>Mit freundlichen Grüßen</strong></li>
+        </ul>
+      `
+    }),
+    buildClassNoteReferenceItem({
+      id: `${sourceId}-ref-examtips`,
+      sourceId,
+      categoryKey: "note",
+      title: "Exam Tips",
+      preview: "Review article endings, sentence order, and speaking phrases before the B1 practice check.",
+      author: "Teacher Maria",
+      dateLabel: "2 weeks ago",
+      attachments: [],
+      comments: [],
+      vocabulary: [],
+      highlightLabel: "Exam tip from tixe",
+      highlightTag: "B1",
+      highlightMeta: "Teacher Maria · 2 weeks ago",
+      groupLabel: "Exam Tips"
+    }),
+    buildClassNoteReferenceItem({
+      id: `${sourceId}-ref-week4`,
+      sourceId,
+      categoryKey: "vocabulary",
+      title: "Vocabulary Week 4",
+      preview: "Useful classroom and daily routine words for quick revision.",
+      author: "Teacher Maria",
+      dateLabel: "4 days ago",
+      attachments: [],
+      comments: [],
+      vocabulary: [],
+      highlightLabel: "Vocabulary · from",
+      highlightMeta: "Teacher Maria · 4 days ago",
+      groupLabel: "Notes"
+    })
+  ];
+}
+
+function extractClassNoteAttachments(rawHtml = "") {
+  if (!rawHtml) return [];
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(String(rawHtml || ""), "text/html");
+  const files = [];
+  const pushFile = (name, url = "#") => {
+    const normalizedName = String(name || "").trim();
+    const normalizedUrl = String(url || "").trim() || "#";
+    if (!normalizedName) return;
+    if (files.some((file) => file.name === normalizedName && file.url === normalizedUrl)) return;
+    files.push({ name: normalizedName, url: normalizedUrl });
+  };
+  doc.querySelectorAll(".pdf-card-modern").forEach((card) => {
+    pushFile(
+      card.getAttribute("data-file-name") || card.querySelector(".pdf-mini-name")?.textContent || "Attachment",
+      card.getAttribute("data-file-url") || "#"
+    );
+  });
+  doc.querySelectorAll(".att-card[data-att-url]").forEach((card) => {
+    const name =
+      card.querySelector(".att-name")?.textContent ||
+      card.getAttribute("data-file-name") ||
+      card.getAttribute("data-att-url")?.split("/").pop() ||
+      "Attachment";
+    pushFile(name, card.getAttribute("data-att-url") || "#");
+  });
+  doc.querySelectorAll(".att-audio-ui[data-audio-url]").forEach((audioUi) => {
+    const url = audioUi.getAttribute("data-audio-url") || "#";
+    const name = url.split("/").pop() || "Audio";
+    pushFile(name, url);
+  });
+  doc.querySelectorAll("a[href]").forEach((anchor) => {
+    const text = String(anchor.textContent || "").replace(/\s+/g, " ").trim();
+    const href = anchor.getAttribute("href") || "#";
+    if (!text) return;
+    if (/\.(pdf|docx?|pptx?|xlsx?|mp3|mp4|wav|png|jpe?g|gif|webp|txt|zip|rar)$/i.test(text) || href !== "#") {
+      pushFile(text, href);
+    }
+  });
+  return files;
+}
+
+function inferClassNoteCategoryFromText(text = "", attachments = []) {
+  const plain = String(text || "").toLowerCase();
+  if (/^\[(grammar)\]/i.test(String(text || "")) || /\b(perfekt|grammatik|grammar|verb|tense)\b/.test(plain)) return "grammar";
+  if (/^\[(vocabulary)\]/i.test(String(text || "")) || /\b(vocabulary|wortschatz|phrase|tagesablauf|word list)\b/.test(plain)) return "vocabulary";
+  if (/^\[(question)\]/i.test(String(text || "")) || /\?/.test(plain)) return "question";
+  if (/^\[(homework tip|homework help)\]/i.test(String(text || "")) || /\b(homework|brief|worksheet|guide)\b/.test(plain)) return "homework_help";
+  return "note";
+}
+
+function stripClassNotePrefix(text = "") {
+  return String(text || "").replace(/^\s*\[[^\]]+\]\s*/i, "").trim();
+}
+
+function normalizeClassNoteText(text = "") {
+  return stripClassNotePrefix(String(text || ""))
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/\s*([,.;:!?])\s*/g, "$1 ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isWeakClassNoteTitle(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  const plain = normalized.replace(/[^a-z0-9]+/g, "");
+  if (!plain || plain.length < 4) return true;
+  return ["hi", "hello", "ok", "okay", "hey", "test", "yo"].includes(normalized);
+}
+
+function formatClassNoteDateLabel(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return formatRelativeTime(value);
+  }
+  const raw = String(value || "").trim();
+  if (!raw) return "Today";
+  const parsed = Date.parse(raw);
+  if (!Number.isFinite(parsed)) return raw.length <= 24 ? raw : "Today";
+  const label = formatRelativeTime(parsed);
+  return label && !/nan/i.test(label) ? label : "Today";
+}
+
+function deriveClassNoteTitle(text = "", fallback = "Untitled note") {
+  const cleaned = normalizeClassNoteText(text);
+  const firstLine = cleaned.split(/\n+/).map((line) => line.trim()).find(Boolean) || "";
+  const sentence = firstLine.split(/[.!?]/).map((part) => part.trim()).find(Boolean) || "";
+  const base = sentence || firstLine || cleaned;
+  const title = base.length > 58 ? `${base.slice(0, 58).trim()}…` : base;
+  if (!title || isWeakClassNoteTitle(title)) return fallback;
+  return title;
+}
+
+function deriveClassNotePreview(text = "", title = "") {
+  const cleaned = normalizeClassNoteText(text);
+  if (!cleaned) return "Shared lesson note ready for the class feed.";
+  const withoutTitle = cleaned.toLowerCase().startsWith(String(title || "").toLowerCase())
+    ? cleaned.slice(String(title || "").length).trim()
+    : cleaned;
+  const preview = withoutTitle || cleaned;
+  const normalizedPreview = preview.replace(/^[,.;:!?-]+/, "").trim();
+  if (!normalizedPreview || normalizedPreview.length < 12) {
+    return "Shared lesson note ready for the class feed.";
+  }
+  return normalizedPreview.length > 168 ? `${normalizedPreview.slice(0, 168).trim()}…` : normalizedPreview;
+}
+
+function buildClassNoteVocabularyHighlights(text = "", category = "") {
+  const source = normalizeClassNoteText(text);
+  const matches = source.match(/\b[a-zA-ZäöüÄÖÜß]{5,}\b/g) || [];
+  const unique = [];
+  matches.forEach((word) => {
+    const normalized = word.toLowerCase();
+    if (!unique.includes(normalized)) unique.push(normalized);
+  });
+  const picked = unique.slice(0, 4);
+  if (!picked.length && normalizeClassNoteCategoryKey(category) === "vocabulary") {
+    return ["vocabulary", "practice", "lesson"];
+  }
+  return picked;
+}
+
+function isRenderableClassNoteMessage(text = "", attachments = []) {
+  return normalizeClassNoteText(text).length >= 2 || attachments.length > 0;
+}
+
+function isMeaningfulClassNoteItem(item = null) {
+  if (!item) return false;
+  if (item.attachments.length) return true;
+  return !isWeakClassNoteTitle(item.title) && String(item.preview || "").trim().length >= 18;
+}
+
+function shouldUseClassNoteReferenceContent(items = []) {
+  if (!Array.isArray(items) || items.length < 3) return true;
+  const meaningfulCount = items.filter((item) => isMeaningfulClassNoteItem(item)).length;
+  return meaningfulCount < 3;
+}
+
+function getClassNoteItems(channelId) {
+  const sourceId = getClassNoteSourceChannelId(channelId);
+  const rows = Array.isArray(messagesByChannel[sourceId]) ? messagesByChannel[sourceId] : [];
+  const normalizedItems = rows.map((msg, index) => {
+    const rawHtml = String(msg.text || "");
+    const { textOnlyHtml } = splitMessageTextAndAttachments(rawHtml);
+    const extractedText = extractPlainTextFromHtml(textOnlyHtml);
+    const plainText = normalizeClassNoteText(extractedText);
+    const attachments = extractClassNoteAttachments(rawHtml);
+    if (!isRenderableClassNoteMessage(plainText, attachments)) return null;
+    const categoryKey = inferClassNoteCategoryFromText(extractedText, attachments);
+    const category = getClassNoteCategoryMeta(categoryKey);
+    const title = deriveClassNoteTitle(plainText, "Class note");
+    const preview = deriveClassNotePreview(plainText, title);
+    const comments = Array.isArray(msg.replies) ? msg.replies : [];
+    const timestamp = msg.createdAt || msg.created_at || msg.timestamp || msg.ts || "";
+    return {
+      id: String(msg.id || `classnote-${index}`),
+      sourceId,
+      category,
+      title,
+      preview,
+      contentHtml: sanitizeMessageHTML(textOnlyHtml || plainToSafeHtml(plainText || preview)),
+      plainText,
+      author: String(msg.authorName || msg.author || msg.username || "Teacher").trim() || "Teacher",
+      dateLabel: formatClassNoteDateLabel(timestamp),
+      attachments,
+      comments,
+      pinned: false,
+      vocabulary: buildClassNoteVocabularyHighlights(plainText, category.key),
+      message: msg
+    };
+  }).filter(Boolean);
+  return normalizedItems.map((item, index) => ({
+    ...item,
+    pinned: index < 2
+  }));
+}
+
+function filterClassNoteItems(items = [], filter = "all") {
+  const key = String(filter || "all").trim().toLowerCase();
+  if (key === "all") return items;
+  if (key === "pinned") return items.filter((item) => item.pinned);
+  if (key === "files") return items.filter((item) => item.attachments.length);
+  if (key === "questions") return items.filter((item) => item.category.key === "question");
+  return items.filter((item) => item.category.key === key);
+}
+
+function renderClassNoteToolbar(filter = "all", options = {}) {
+  const extraClass = options.compact ? " classnote-toolbar-header" : "";
+  return `<div class="classnote-toolbar${extraClass}">
+    <div class="classnote-toolbar-main">${CLASSNOTE_TYPE_OPTIONS.map((item) => `
+      <button type="button" class="classnote-toolbar-btn ${filter === item.key ? "is-active" : ""}" data-classnote-toolbar="${escapeHtml(item.key)}">
+        <i class="fa-solid ${escapeHtml(item.icon)}" aria-hidden="true"></i>
+        <span>${escapeHtml(item.label)}</span>
+        ${item.key === "files" ? '<i class="fa-solid fa-chevron-down classnote-toolbar-caret" aria-hidden="true"></i>' : ""}
+      </button>`).join("")}</div>
+  </div>`;
+}
+
+function renderClassNoteHighlightsSummary(items = []) {
+  if (!items.length) return "";
+  const summaryItem = items[0];
+  return `<aside class="classnote-highlights-summary">
+    <div class="classnote-highlights-summary-head">
+      <span class="classnote-sidebar-label">Recent notes</span>
+    </div>
+    <div class="classnote-highlights-summary-list">
+      <button type="button" class="classnote-highlights-summary-item" data-classnote-select="${escapeHtml(summaryItem.id)}">
+        <span class="classnote-highlights-summary-icon"><i class="fa-solid ${escapeHtml(summaryItem.category.icon)}" aria-hidden="true"></i></span>
+        <span class="classnote-highlights-summary-copy">
+          <strong>${escapeHtml(summaryItem.title || "Class note")}</strong>
+          <span>${escapeHtml(summaryItem.category.label || "Note")}</span>
+          <small>${escapeHtml(summaryItem.author || "School Admin")} · ${escapeHtml(summaryItem.dateLabel || "Today")}</small>
+        </span>
+      </button>
+    </div>
+  </aside>`;
+}
+
+function renderClassNoteHighlightCards(items = []) {
+  const highlights = items.filter((item) => isMeaningfulClassNoteItem(item)).slice(0, 6);
+  if (!highlights.length) return "";
+  const featureCards = highlights.slice(0, 2);
+  const summaryItems = highlights.slice(0, 3);
+  return `<div class="classnote-highlights classnote-highlights-with-summary">${featureCards.map((item) => `
+    <button type="button" class="classnote-highlight-card classnote-highlight-card-compact classnote-accent-${escapeHtml(item.category.accent)}" data-classnote-select="${escapeHtml(item.id)}">
+      <div class="classnote-highlight-icon"><i class="fa-solid ${escapeHtml(item.category.icon)}" aria-hidden="true"></i></div>
+      <div class="classnote-highlight-body">
+        <div class="classnote-highlight-title">${escapeHtml(item.title || "Class note")}</div>
+        <div class="classnote-highlight-label">${escapeHtml(item.category.label || "Note")}</div>
+        <div class="classnote-highlight-meta">${escapeHtml(item.author || "School Admin")} · ${escapeHtml(item.dateLabel || "Today")}</div>
+      </div>
+    </button>`).join("")}
+    ${renderClassNoteHighlightsSummary(summaryItems)}
+  </div>`;
+}
+
+function renderClassNoteFilterChips(filter = "all") {
+  return `<div class="classnote-chip-row">${CLASSNOTE_FILTER_CHIPS.map((chip) => `
+    <button type="button" class="classnote-filter-chip ${filter === chip.key ? "is-active" : ""}" data-classnote-filter="${escapeHtml(chip.key)}">${escapeHtml(chip.label)}</button>`).join("")}
+    <button type="button" class="classnote-filter-chip classnote-filter-chip-icon" aria-label="More filters"><i class="fa-solid fa-ellipsis" aria-hidden="true"></i></button>
+  </div>`;
+}
+
+function renderClassNoteSidebar(items = [], selectedId = "", meta = {}) {
+  return "";
+}
+
+function renderClassNoteCard(item, isSelected = false) {
+  const canDelete = canManageClassNoteDelete() && !!item.message?.id;
+  const menuActions = item.message?.id ? `
+    <div class="classnote-card-menu" data-classnote-menu="${escapeHtml(item.id)}" hidden>
+      <button type="button" class="classnote-card-menu-item" data-classnote-open="${escapeHtml(item.id)}">Open note</button>
+      <button type="button" class="classnote-card-menu-item" data-classnote-edit="${escapeHtml(item.id)}">Edit note</button>
+      ${canDelete ? `<button type="button" class="classnote-card-menu-item is-danger" data-classnote-delete="${escapeHtml(item.id)}">Delete note</button>` : ""}
+    </div>
+  ` : `
+    <div class="classnote-card-menu" data-classnote-menu="${escapeHtml(item.id)}" hidden>
+      <button type="button" class="classnote-card-menu-item" data-classnote-open="${escapeHtml(item.id)}">Open note</button>
+      <button type="button" class="classnote-card-menu-item" data-classnote-comments="${escapeHtml(item.id)}">View comments</button>
+    </div>
+  `;
+  return `<article class="classnote-card ${isSelected ? "is-selected" : ""}" data-classnote-select="${escapeHtml(item.id)}">
+    <div class="classnote-card-top">
+      <div class="classnote-card-meta">
+        <span class="classnote-badge classnote-badge-${escapeHtml(item.category.accent)}"><i class="fa-solid ${escapeHtml(item.category.icon)}" aria-hidden="true"></i>${escapeHtml(item.category.label)}</span>
+        <span class="classnote-card-author">${escapeHtml(item.author)}</span>
+        <span class="classnote-card-sep">•</span>
+        <span class="classnote-card-date">${escapeHtml(item.dateLabel)}</span>
+      </div>
+      <div class="classnote-card-actions">
+        <button type="button" class="classnote-icon-btn" data-classnote-edit="${escapeHtml(item.id)}" aria-label="Edit note"><i class="fa-solid fa-pen" aria-hidden="true"></i></button>
+        <button type="button" class="classnote-icon-btn" data-classnote-open="${escapeHtml(item.id)}" aria-label="Open note"><i class="fa-solid fa-table-list" aria-hidden="true"></i></button>
+      </div>
+    </div>
+    <h3 class="classnote-card-title">${escapeHtml(item.title)}</h3>
+    <p class="classnote-card-preview">${escapeHtml(item.preview || "Shared lesson note ready for the class feed.")}</p>
+    <div class="classnote-card-footer">
+      <div class="classnote-attachment-pills">
+        ${item.attachments.slice(0, 2).map((file) => `<a class="classnote-attachment-pill" href="${escapeHtml(file.url || "#")}" target="_blank" rel="noopener"><i class="fa-solid fa-paperclip" aria-hidden="true"></i><span>${escapeHtml(file.name)}</span></a>`).join("")}
+        <button type="button" class="classnote-attachment-pill classnote-comment-trigger" data-classnote-comments="${escapeHtml(item.id)}"><i class="fa-regular fa-comment" aria-hidden="true"></i><span>${item.comments.length} Comments</span></button>
+      </div>
+      <div class="classnote-card-menu-wrap">
+        <button type="button" class="classnote-overflow-btn" data-classnote-menu-toggle="${escapeHtml(item.id)}" aria-label="More note actions" aria-expanded="false"><i class="fa-solid fa-ellipsis" aria-hidden="true"></i></button>
+        ${menuActions}
+      </div>
+    </div>
+  </article>`;
+}
+
+function renderClassNoteEmptyState() {
+  return `<div class="classnote-empty-state">
+    <div class="classnote-empty-icon"><i class="fa-solid fa-note-sticky" aria-hidden="true"></i></div>
+    <h3>No class notes yet</h3>
+    <p>Teachers and students can share lesson summaries, grammar explanations, vocabulary lists, and study materials here.</p>
+    <div class="classnote-empty-actions">
+      <button type="button" class="classnote-empty-btn is-primary" data-classnote-focus-composer="1">Create first note</button>
+      <button type="button" class="classnote-empty-btn">Use template</button>
+    </div>
+  </div>`;
+}
+
+function renderClassNoteDetail(item, relatedItems = []) {
+  if (!item) {
+    return `<aside class="classnote-detail"><div class="classnote-detail-empty"><h3>Select a note</h3><p>Choose a note from the feed to read the full explanation, attachments, and discussion.</p></div></aside>`;
+  }
+  return `<aside class="classnote-detail">
+    <div class="classnote-detail-scroll">
+      <div class="classnote-detail-head">
+        <div>
+          <h2 class="classnote-detail-title">${escapeHtml(item.title)}</h2>
+          <div class="classnote-detail-meta">
+            <span class="classnote-badge classnote-badge-${escapeHtml(item.category.accent)}"><i class="fa-solid ${escapeHtml(item.category.icon)}" aria-hidden="true"></i>${escapeHtml(item.category.label)}</span>
+            <span>${escapeHtml(item.author)}</span><span>·</span><span>${escapeHtml(item.dateLabel)}</span>
+          </div>
+        </div>
+        <div class="classnote-detail-actions">
+          <button type="button" class="classnote-icon-btn" data-classnote-edit="${escapeHtml(item.id)}" aria-label="Edit note"><i class="fa-solid fa-pen" aria-hidden="true"></i></button>
+          <button type="button" class="classnote-icon-btn" data-classnote-comments="${escapeHtml(item.id)}" aria-label="Open comments"><i class="fa-regular fa-comment" aria-hidden="true"></i></button>
+        </div>
+      </div>
+      <div class="classnote-detail-body">${item.contentHtml || `<p>${escapeHtml(item.preview)}</p>`}</div>
+      ${item.attachments.length ? `
+        <div class="classnote-detail-files">
+          ${item.attachments.map((file) => `<a class="classnote-attachment-pill" href="${escapeHtml(file.url || "#")}" target="_blank" rel="noopener"><i class="fa-solid fa-paperclip" aria-hidden="true"></i><span>${escapeHtml(file.name)}</span></a>`).join("")}
+        </div>
+      ` : ""}
+      ${item.attachmentSummary ? `<div class="classnote-detail-summary">${escapeHtml(item.attachmentSummary)}</div>` : ""}
+      <section class="classnote-comments" data-classnote-comments-section="${escapeHtml(item.id)}">
+        <div class="classnote-comments-title">Comments</div>
+        ${item.comments.length ? item.comments.slice(0, 4).map((reply, index) => `
+          <div class="classnote-comment-item">
+            <div class="classnote-comment-avatar">${escapeHtml(generateInitials(reply.author || item.author || `N${index + 1}`))}</div>
+            <div class="classnote-comment-body">
+              <div class="classnote-comment-meta"><strong>${escapeHtml(reply.author || item.author || "Class member")}</strong><span>${escapeHtml(formatClassNoteDateLabel(reply.createdAt || reply.created_at || Date.now()))}</span></div>
+              <p>${escapeHtml(normalizeClassNoteText(String(reply.text || reply.body || "Shared feedback on the lesson note.")) || "Shared feedback on the lesson note.")}</p>
+            </div>
+          </div>`).join("") : `<div class="classnote-comment-empty">No discussion yet.</div>`}
+      </section>
+    </div>
+    ${item.message?.id ? `
+      <div class="classnote-comment-compose classnote-comment-compose-fixed">
+        <textarea class="classnote-comment-input" data-classnote-comment-input="${escapeHtml(item.id)}" placeholder="Write a comment on this note..."></textarea>
+        <div class="classnote-comment-compose-actions">
+          <button type="button" class="classnote-post-btn classnote-comment-post-btn" data-classnote-send-comment="${escapeHtml(item.id)}">Post comment</button>
+        </div>
+      </div>
+    ` : ""}
+  </aside>`;
+}
+
+function renderClassNotePendingUploads(channelId) {
+  const state = getClassNoteViewState(channelId);
+  const uploads = Array.isArray(state.pendingUploads) ? state.pendingUploads : [];
+  if (!uploads.length) return "";
+  return `<div class="composer-chips classnote-composer-chips">${uploads.map((file, idx) => {
+    const name = escapeHtml(file.originalName || file.name || file.label || `attachment-${idx + 1}`);
+    const icon = iconForMime(file.mimeType || "", name);
+    return `
+      <div class="attach-chip attachment-chip" data-classnote-upload-id="${escapeHtml(file.id || `upload-${idx}`)}" data-classnote-upload-idx="${idx}">
+        <i class="fa-solid ${icon}"></i>
+        <span class="chip-name">${name}</span>
+        <span class="chip-meta">Ready to send</span>
+        <button type="button" class="chip-x" data-classnote-remove-upload="${escapeHtml(file.id || `upload-${idx}`)}" aria-label="Remove attachment" title="Remove">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+    `;
+  }).join("")}</div>`;
+}
+
+function renderClassNoteComposer(channelId, composerType = "note", draftText = "") {
+  const state = getClassNoteViewState(channelId);
+  const isEditing = !!String(state?.editingMessageId || "").trim();
+  return `<section class="classnote-composer" data-classnote-composer-channel="${escapeHtml(channelId)}">
+    <textarea class="classnote-composer-input" id="classnoteComposerInput" placeholder="Write a class note, grammar explanation, summary, or attach study material...">${escapeHtml(draftText)}</textarea>
+    ${renderClassNotePendingUploads(channelId)}
+    <div class="classnote-composer-footer">
+      <div class="classnote-type-pills">${CLASSNOTE_COMPOSER_TYPES.map((item) => `
+        <button type="button" class="classnote-type-pill ${composerType === item.key ? "is-active" : ""}" data-classnote-type="${escapeHtml(item.key)}">
+          <i class="fa-solid ${escapeHtml(item.icon)}" aria-hidden="true"></i><span>${escapeHtml(item.label)}</span>
+        </button>`).join("")}
+        <button type="button" class="classnote-type-pill classnote-upload-btn" data-classnote-upload-trigger="1" aria-label="Upload file">
+          <i class="fa-solid fa-paperclip" aria-hidden="true"></i><span>File</span>
+        </button>
+        <input type="file" id="classnoteFileInput" data-classnote-file-input="1" multiple hidden />
+      </div>
+      <div class="classnote-composer-cta">
+        ${isEditing ? `<button type="button" class="classnote-cancel-btn" id="classnoteCancelEditBtn">Cancel</button>` : ""}
+        <button type="button" class="classnote-post-btn" id="classnotePostBtn">${isEditing ? "Save Note" : "Post Note"}</button>
+      </div>
+    </div>
+  </section>`;
+}
+
+function setClassNoteComposerExpanded(input, expanded) {
+  if (!input) return;
+  input.classList.toggle("is-expanded", !!expanded);
+}
+
+async function exportClassNotesPdf(channelId) {
+  const meta = getClassNoteWorkspaceMeta(channelId);
+  const state = getClassNoteViewState(channelId);
+  const items = filterClassNoteItems(getClassNoteItems(channelId), state.filter);
+  const popup = window.open("", "_blank", "noopener,noreferrer,width=980,height=780");
+  if (!popup) {
+    showToast("Allow pop-ups to export the notes view.", "info");
+    return;
+  }
+  popup.document.write(`<html><head><title>${escapeHtml(meta.title)}</title><style>body{font-family:Georgia,serif;padding:32px;color:#0f172a}h1{margin:0 0 8px;font-size:28px}p{color:#475569}article{border:1px solid #dbe7f3;border-radius:16px;padding:18px;margin:0 0 18px}.meta{font-size:12px;color:#64748b;margin-bottom:8px}</style></head><body><h1>${escapeHtml(meta.title)}</h1><p>${escapeHtml(meta.subtitle)}</p>${items.map((item) => `<article><div class="meta">${escapeHtml(item.category.label)} · ${escapeHtml(item.author)} · ${escapeHtml(item.dateLabel)}</div><h2>${escapeHtml(item.title)}</h2><div>${item.contentHtml}</div></article>`).join("")}</body></html>`);
+  popup.document.close();
+  popup.focus();
+  popup.print();
+}
+
+async function postClassNoteMessage(channelId) {
+  const input = document.getElementById("classnoteComposerInput");
+  const state = getClassNoteViewState(channelId);
+  const isEditing = !!String(state.editingMessageId || "").trim();
+  state.draftText = String(input?.value || "");
+  const readyUploads = Array.isArray(state.pendingUploads) ? state.pendingUploads.filter((file) => file && file.url) : [];
+  const composerTypeMeta =
+    CLASSNOTE_TYPE_OPTIONS.find((item) => item.key === state.composerType) ||
+    CLASSNOTE_COMPOSER_TYPES.find((item) => item.key === state.composerType) ||
+    CLASSNOTE_COMPOSER_TYPES[0];
+  const rawText = state.draftText.trim();
+  if (!rawText && !readyUploads.length) {
+    showToast("Write a note before posting.", "info");
+    input?.focus();
+    return;
+  }
+  const sourceId = getClassNoteSourceChannelId(channelId);
+  const authorName = (sessionUser && (sessionUser.name || sessionUser.username || sessionUser.email)) || "You";
+  const initials = generateInitials(authorName) || "YOU";
+  const avatarUrl = sessionUser ? sessionUser.avatarUrl || null : null;
+  try {
+    const attachmentHtml = readyUploads.map((file) => buildAttachmentCard(file)).join("");
+    const payloadText = sanitizeMessageHTML(`[${composerTypeMeta.label}] ${rawText.replace(/\n/g, "<br>")}${attachmentHtml}`);
+    const attachments = readyUploads.map((file) => ({
+      url: file.url,
+      originalName: file.originalName || file.name || file.label,
+      mimeType: file.mimeType,
+      size: file.size
+    }));
+    if (state.editingMessageId) {
+      const updated = await fetchJSON(`/api/messages/${encodeURIComponent(state.editingMessageId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          author: authorName,
+          text: payloadText,
+          attachments
+        })
+      });
+      const sourceRows = Array.isArray(messagesByChannel[sourceId]) ? messagesByChannel[sourceId] : [];
+      const nextRows = sourceRows.map((entry) => String(entry.id) === String(updated.id) ? { ...entry, ...updated, text: updated.text, attachments } : entry);
+      messagesByChannel[sourceId] = nextRows;
+      messagesByChannel[channelId] = nextRows;
+      state.selectedId = String(updated.id || state.selectedId || "");
+    } else {
+      const msg = await fetchJSON(`/api/channels/${sourceId}/messages`, {
+        method: "POST",
+        body: JSON.stringify({
+          author: authorName,
+          initials,
+          avatarUrl,
+          attachments,
+          text: payloadText
+        })
+      });
+      msg.avatarUrl = avatarUrl;
+      msg.attachments = attachments;
+      if (!messagesByChannel[sourceId]) messagesByChannel[sourceId] = [];
+      messagesByChannel[channelId] = messagesByChannel[sourceId];
+      if (!messagesByChannel[sourceId].some((entry) => String(entry.id) === String(msg.id))) {
+        messagesByChannel[sourceId].push(msg);
+      }
+      state.selectedId = String(msg.id || "");
+    }
+    input.value = "";
+    state.draftText = "";
+    state.editingMessageId = "";
+    state.pendingUploads = [];
+    closeClassNoteMenu(channelId);
+    renderMessages(channelId, { restoreScroll: false });
+    showToast(isEditing ? "Note updated" : "Note posted", "success");
+  } catch (error) {
+    console.error("Failed to post note", error);
+    showToast(isEditing ? "Could not update note" : "Could not post note", "error");
+  }
+}
+
+function findClassNoteItemById(channelId, itemId) {
+  return getClassNoteItems(channelId).find((item) => String(item.id) === String(itemId || "")) || null;
+}
+
+function mapClassNoteCategoryToComposerType(categoryKey = "") {
+  const normalized = normalizeClassNoteCategoryKey(categoryKey);
+  if (["question", "vocabulary", "homework_help"].includes(normalized)) return normalized;
+  return "note";
+}
+
+function canManageClassNoteDelete() {
+  const role = normalizeRole(sessionUser?.role || sessionUser?.userRole || "");
+  return ["teacher", "school_admin", "admin", "super_admin"].includes(role);
+}
+
+function startClassNoteEditing(channelId, itemId) {
+  const state = getClassNoteViewState(channelId);
+  const item = findClassNoteItemById(channelId, itemId);
+  if (!item?.message?.id) {
+    showToast("This note cannot be edited here.", "info");
+    return;
+  }
+  if (Array.isArray(item.comments) && item.comments.length) {
+    showToast("Notes with comments cannot be edited.", "info");
+    return;
+  }
+  saveClassNoteScrollPositions(channelId);
+  closeClassNoteMenu(channelId);
+  state.selectedId = String(item.id);
+  state.composerType = mapClassNoteCategoryToComposerType(item.category?.key);
+  state.draftText = String(item.plainText || extractPlainTextFromHtml(item.contentHtml || "") || "").trim();
+  state.editingMessageId = String(item.message.id);
+  renderMessages(channelId, { restoreScroll: false });
+  requestAnimationFrame(() => {
+    const input = document.getElementById("classnoteComposerInput");
+    input?.focus?.({ preventScroll: true });
+    input?.setSelectionRange?.(input.value.length, input.value.length);
+  });
+}
+
+function cancelClassNoteEditing(channelId) {
+  const state = getClassNoteViewState(channelId);
+  saveClassNoteScrollPositions(channelId);
+  closeClassNoteMenu(channelId);
+  state.editingMessageId = "";
+  state.draftText = "";
+  state.pendingUploads = [];
+  renderMessages(channelId, { restoreScroll: false });
+}
+
+async function handleClassNoteFileUpload(channelId, files = []) {
+  const pickedFiles = Array.from(files || []).filter(Boolean);
+  if (!pickedFiles.length) return;
+  const state = getClassNoteViewState(channelId);
+  for (const file of pickedFiles) {
+    const uploaded = await uploadSingleFile(file);
+    if (!uploaded) {
+      showToast(`Could not upload ${file.name || "file"}`, "error");
+      continue;
+    }
+    state.pendingUploads.push({
+      ...uploaded,
+      id: uploaded.id || uploaded.file_id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      originalName: uploaded.originalName || uploaded.name || file.name,
+      mimeType: uploaded.mimeType || file.type || "",
+      size: uploaded.size || file.size || 0
+    });
+  }
+  renderMessages(channelId, { restoreScroll: false });
+}
+
+function focusClassNoteComments(channelId, itemId) {
+  closeClassNoteMenu(channelId);
+  updateClassNoteSelection(channelId, itemId, { commentsMode: true });
+}
+
+async function postClassNoteReply(channelId, itemId) {
+  const state = getClassNoteViewState(channelId);
+  const normalizedItemId = String(itemId || "");
+  if (String(state.postingCommentId || "") === normalizedItemId) return;
+  const item = findClassNoteItemById(channelId, itemId);
+  const input = messagesContainer?.querySelector(`[data-classnote-comment-input="${CSS.escape(String(itemId || ""))}"]`);
+  const text = String(input?.value || "").trim();
+  if (!item?.message?.id || !text) {
+    showToast("Write a comment before posting.", "info");
+    input?.focus();
+    return;
+  }
+  state.postingCommentId = normalizedItemId;
+  if (input) input.value = "";
+  const sourceId = getClassNoteSourceChannelId(channelId);
+  const authorName = (sessionUser && (sessionUser.name || sessionUser.username || sessionUser.email)) || "You";
+  const initials = generateInitials(authorName) || "YOU";
+  const avatarUrl = sessionUser ? sessionUser.avatarUrl || null : null;
+  try {
+    const reply = await fetchJSON(`/api/channels/${encodeURIComponent(sourceId)}/messages/${encodeURIComponent(item.message.id)}/replies`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ author: authorName, initials, avatarUrl, text })
+    });
+    const sourceRows = Array.isArray(messagesByChannel[sourceId]) ? messagesByChannel[sourceId] : [];
+    const nextRows = sourceRows.map((entry) => {
+      if (String(entry.id) !== String(item.message.id)) return entry;
+      const replies = Array.isArray(entry.replies) ? entry.replies.slice() : [];
+      if (!replies.some((existing) => String(existing?.id) === String(reply?.id))) {
+        replies.push(reply);
+      }
+      return { ...entry, replies };
+    });
+    saveClassNoteScrollPositions(channelId);
+    messagesByChannel[sourceId] = nextRows;
+    messagesByChannel[channelId] = nextRows;
+    state.pendingDetailFocusId = String(itemId || "");
+    state.pendingCommentFocusId = String(itemId || "");
+    renderMessages(channelId, { restoreScroll: false });
+  } catch (error) {
+    if (input) input.value = text;
+    console.error("Failed to post note comment", error);
+    showToast(error?.message || "Could not post comment", "error");
+  } finally {
+    if (String(state.postingCommentId || "") === normalizedItemId) {
+      state.postingCommentId = "";
+    }
+  }
+}
+
+async function deleteClassNoteItem(channelId, itemId, anchorEl = null) {
+  const item = findClassNoteItemById(channelId, itemId);
+  if (!item?.message?.id) {
+    showToast("This note cannot be deleted here.", "info");
+    return;
+  }
+  if (!canManageClassNoteDelete()) {
+    showToast("Only teachers and school admins can delete notes.", "info");
+    return;
+  }
+  const ok = await openConfirmModal({
+    title: "Delete note",
+    message: `Delete "${item.title || "this note"}"? This will remove it from the database.`,
+    confirmText: "Delete",
+    cancelText: "Cancel",
+    danger: true,
+    anchorEl
+  });
+  if (!ok) return;
+  const sourceId = getClassNoteSourceChannelId(channelId);
+  const authorName = (sessionUser && (sessionUser.name || sessionUser.username || sessionUser.email)) || "You";
+  try {
+    await fetchJSON(`/api/messages/${encodeURIComponent(item.message.id)}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ author: authorName })
+    });
+    const sourceRows = Array.isArray(messagesByChannel[sourceId]) ? messagesByChannel[sourceId] : [];
+    const nextRows = sourceRows.filter((entry) => String(entry.id) !== String(item.message.id));
+    const state = getClassNoteViewState(channelId);
+    saveClassNoteScrollPositions(channelId);
+    closeClassNoteMenu(channelId);
+    messagesByChannel[sourceId] = nextRows;
+    messagesByChannel[channelId] = nextRows;
+    if (String(state.selectedId) === String(item.id)) state.selectedId = "";
+    if (String(state.editingMessageId) === String(item.message.id)) state.editingMessageId = "";
+    renderMessages(channelId, { restoreScroll: false });
+    showToast("Note deleted", "success");
+  } catch (error) {
+    console.error("Failed to delete note", error);
+    showToast(error?.message || "Could not delete note", "error");
+  }
+}
+
+function bindClassNoteWorkspaceEvents(channelId) {
+  messagesContainer.querySelectorAll("[data-classnote-select], [data-classnote-open]").forEach((button) => {
+    if (button.closest(".classnote-detail")) return;
+    button.addEventListener("click", (event) => {
+      if (button.hasAttribute("data-classnote-select") && isClassNoteActionTarget(event.target)) return;
+      const state = getClassNoteViewState(channelId);
+      state.draftText = String(document.getElementById("classnoteComposerInput")?.value || state.draftText || "");
+      const itemId = String(button.getAttribute("data-classnote-select") || button.getAttribute("data-classnote-open") || "").trim();
+      if (!itemId) return;
+      updateClassNoteSelection(channelId, itemId);
+    });
+  });
+  messagesContainer.querySelectorAll("[data-classnote-filter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const state = getClassNoteViewState(channelId);
+      saveClassNoteScrollPositions(channelId);
+      state.draftText = String(document.getElementById("classnoteComposerInput")?.value || state.draftText || "");
+      state.filter = String(button.getAttribute("data-classnote-filter") || "all").trim().toLowerCase();
+      state.selectedId = "";
+      renderMessages(channelId, { restoreScroll: false });
+    });
+  });
+  document.querySelectorAll("#chatHeader [data-classnote-toolbar], .messages [data-classnote-toolbar]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const key = String(button.getAttribute("data-classnote-toolbar") || "all").trim().toLowerCase();
+      if (key === "export") {
+        await exportClassNotesPdf(channelId);
+        return;
+      }
+      const state = getClassNoteViewState(channelId);
+      saveClassNoteScrollPositions(channelId);
+      state.draftText = String(document.getElementById("classnoteComposerInput")?.value || state.draftText || "");
+      state.filter = key;
+      state.selectedId = "";
+      renderMessages(channelId, { restoreScroll: false });
+    });
+  });
+  messagesContainer.querySelectorAll("[data-classnote-type]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const state = getClassNoteViewState(channelId);
+      saveClassNoteScrollPositions(channelId);
+      state.draftText = String(document.getElementById("classnoteComposerInput")?.value || state.draftText || "");
+      state.composerType = String(button.getAttribute("data-classnote-type") || "note").trim().toLowerCase();
+      renderMessages(channelId, { restoreScroll: false });
+      document.getElementById("classnoteComposerInput")?.focus?.({ preventScroll: true });
+    });
+  });
+  messagesContainer.querySelectorAll("[data-classnote-upload-trigger]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      document.getElementById("classnoteFileInput")?.click();
+    });
+  });
+  document.getElementById("classnoteFileInput")?.addEventListener("change", async (event) => {
+    const files = Array.from(event.target?.files || []);
+    if (!files.length) return;
+    await handleClassNoteFileUpload(channelId, files);
+    event.target.value = "";
+  });
+  messagesContainer.querySelectorAll("[data-classnote-remove-upload]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const state = getClassNoteViewState(channelId);
+      const removeId = String(button.getAttribute("data-classnote-remove-upload") || "");
+      state.pendingUploads = (Array.isArray(state.pendingUploads) ? state.pendingUploads : []).filter((file, idx) => {
+        const fileId = String(file?.id || `upload-${idx}`);
+        return fileId !== removeId;
+      });
+      renderMessages(channelId, { restoreScroll: false });
+    });
+  });
+  messagesContainer.querySelectorAll("[data-classnote-focus-composer]").forEach((button) => {
+    button.addEventListener("click", () => document.getElementById("classnoteComposerInput")?.focus?.({ preventScroll: true }));
+  });
+  messagesContainer.querySelectorAll("[data-classnote-edit]").forEach((button) => {
+    if (button.closest(".classnote-detail")) return;
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      startClassNoteEditing(channelId, String(button.getAttribute("data-classnote-edit") || ""));
+    });
+  });
+  messagesContainer.querySelectorAll("[data-classnote-comments]").forEach((button) => {
+    if (button.closest(".classnote-detail")) return;
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      focusClassNoteComments(channelId, String(button.getAttribute("data-classnote-comments") || ""));
+    });
+  });
+  messagesContainer.querySelectorAll("[data-classnote-menu-toggle]").forEach((button) => {
+    button.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const itemId = String(button.getAttribute("data-classnote-menu-toggle") || "");
+      toggleClassNoteMenu(channelId, itemId, button);
+    });
+    button.addEventListener("mousedown", (event) => {
+      event.stopPropagation();
+    });
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+  });
+  messagesContainer.querySelectorAll("[data-classnote-delete]").forEach((button) => {
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      await deleteClassNoteItem(channelId, String(button.getAttribute("data-classnote-delete") || ""), button);
+    });
+  });
+  messagesContainer.querySelectorAll("[data-classnote-send-comment]").forEach((button) => {
+    if (button.closest(".classnote-detail")) return;
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      await postClassNoteReply(channelId, String(button.getAttribute("data-classnote-send-comment") || ""));
+    });
+  });
+  messagesContainer.querySelectorAll("[data-classnote-comment-input]").forEach((input) => {
+    if (input.closest(".classnote-detail")) return;
+    input.addEventListener("keydown", async (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        event.preventDefault();
+        await postClassNoteReply(channelId, String(input.getAttribute("data-classnote-comment-input") || ""));
+      }
+    });
+  });
+  document.getElementById("classnotePostBtn")?.addEventListener("click", () => postClassNoteMessage(channelId));
+  document.getElementById("classnoteCancelEditBtn")?.addEventListener("click", () => cancelClassNoteEditing(channelId));
+  document.getElementById("classnoteComposerInput")?.addEventListener("focus", (event) => {
+    setClassNoteComposerExpanded(event.target, true);
+  });
+  document.getElementById("classnoteComposerInput")?.addEventListener("blur", (event) => {
+    setClassNoteComposerExpanded(event.target, false);
+  });
+  document.getElementById("classnoteComposerInput")?.addEventListener("input", (event) => {
+    const state = getClassNoteViewState(channelId);
+    state.draftText = String(event.target?.value || "");
+  });
+  document.getElementById("classnoteComposerInput")?.addEventListener("keydown", (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+      event.preventDefault();
+      postClassNoteMessage(channelId);
+    }
+  });
+  const openMenuId = String(getClassNoteViewState(channelId).openMenuId || "");
+  if (openMenuId) {
+    const toggle = messagesContainer.querySelector(`[data-classnote-menu-toggle="${CSS.escape(openMenuId)}"]`);
+    if (toggle) openClassNoteMenu(channelId, openMenuId, toggle);
+  } else {
+    cleanupClassNoteMenuHandlers();
+  }
+  bindClassNoteDetailEvents(channelId);
+}
+
+function renderClassNoteWorkspace(channelId) {
+  if (!messagesContainer) return;
+  saveClassNoteScrollPositions(channelId);
+  document.body?.classList.add("note-workspace-active");
+  document.documentElement?.classList.add("note-workspace-active");
+  composer?.classList.add("hidden");
+  if (composerMain) composerMain.style.display = "none";
+  const meta = getClassNoteWorkspaceMeta(channelId);
+  const state = getClassNoteViewState(channelId);
+  const items = getClassNoteItems(channelId);
+  const visibleItems = filterClassNoteItems(items, state.filter);
+  const selected = visibleItems.find((item) => String(item.id) === String(state.selectedId)) || visibleItems[0] || null;
+  const relatedItems = visibleItems.filter((item) => String(item.id) !== String(selected?.id || "")).slice(0, 2);
+  if (!selected && visibleItems.length) state.selectedId = String(visibleItems[0].id);
+  messagesContainer.classList.remove("school-task-chat", "teachers-task-chat", "student-task-chat");
+  messagesContainer.classList.add("classnote-shell");
+  messagesContainer.innerHTML = `
+    <div class="classnote-layout classnote-layout-no-sidebar">
+      <section class="classnote-feed">
+        ${renderClassNoteFilterChips(state.filter)}
+        <div class="classnote-feed-list">${visibleItems.length ? visibleItems.map((item) => renderClassNoteCard(item, String(item.id) === String(selected?.id || ""))).join("") : renderClassNoteEmptyState()}</div>
+      </section>
+      ${renderClassNoteDetail(selected, relatedItems)}
+      <div class="classnote-composer-wrap">${renderClassNoteComposer(channelId, state.composerType, state.draftText || "")}</div>
+    </div>
+  `;
+  bindClassNoteWorkspaceEvents(channelId);
+  hydrateEmojiImages(messagesContainer);
+  requestAnimationFrame(() => restoreClassNoteScrollPositions(channelId));
 }
 
 function updatePrivacyRulesNavVisibility() {
@@ -5337,6 +7180,7 @@ function clearSectionHeaderState() {
       "school-settings-header",
       "privacy-channel-active",
       "exam-registration-active",
+      "placement-test-header",
       "speaking-practice-active",
       "schedule-channel-active",
       "grammar-channel-active",
@@ -5442,6 +7286,7 @@ function showPanel(panelId) {
     if (panelId === "calendarPanel") {
       document.dispatchEvent(new Event("calendarPanelOpened"));
     }
+    document.dispatchEvent(new CustomEvent("worknest:panel-shown", { detail: { panelId } }));
   }
 
   const chatHeader = document.getElementById("chatHeader");
@@ -7010,9 +8855,11 @@ function updateLearningMaterialsDocCount(channelId) {
     channel && String(channel.name || "").trim().toLowerCase() === "learning materials";
   headerDocCountBtn.classList.toggle("hidden", !isMaterials);
   if (!isMaterials) return;
-  const docCount = messagesContainer
-    ? messagesContainer.querySelectorAll(".pdf-card-modern").length
-    : 0;
+  const activeBucket = getLearningMaterialsActiveBucket(channelId);
+  const entries = buildLearningMaterialsEntries(channelId);
+  const docCount = activeBucket
+    ? entries.filter((item) => item.bucketKey === activeBucket).length
+    : entries.length;
   headerDocCountValue.textContent = String(docCount);
 }
 
@@ -9629,6 +11476,7 @@ function attachLiveEvents() {
     });
   }
   wireSesTabButtons();
+  wireSesContactForm();
   wireSesInboxActions();
   wireSesInboxDetailControls();
   updateSesMailboxPermissionsUI();
@@ -10100,6 +11948,10 @@ function canAccessSchoolMailbox() {
   return canManageSchoolMailbox() || isStudentUser();
 }
 
+function canUseStudentContactForm() {
+  return isStudentUser();
+}
+
 function getDefaultSesSettingsView() {
   return canManageSchoolMailbox() ? "sent" : "inbox";
 }
@@ -10112,7 +11964,7 @@ function normalizeSesSettingsView(view) {
     }
     return "sent";
   }
-  if (["inbox", "trash"].includes(requested)) {
+  if (["inbox", "trash", "contact"].includes(requested)) {
     return requested;
   }
   return "inbox";
@@ -10125,6 +11977,7 @@ function updateSesMailboxPermissionsUI() {
   const historyBtn = document.getElementById("sesHistoryBtn");
   const formatBtn = document.getElementById("sesFormatBtn");
   const inboxBtn = document.getElementById("sesInboxBtn");
+  const contactBtn = document.getElementById("sesContactFormBtn");
   const trashBtn = document.getElementById("sesTrashBtn");
   const headerActions = document.getElementById("schoolEmailHeaderActions");
   const replyBtn = document.getElementById("detailReplyBtn");
@@ -10143,6 +11996,11 @@ function updateSesMailboxPermissionsUI() {
     btn.classList.toggle("hidden", !allowMailbox);
     btn.setAttribute("aria-hidden", allowMailbox ? "false" : "true");
   });
+  if (contactBtn) {
+    const allowContactForm = canUseStudentContactForm();
+    contactBtn.classList.toggle("hidden", !allowContactForm);
+    contactBtn.setAttribute("aria-hidden", allowContactForm ? "false" : "true");
+  }
   if (headerActions) {
     headerActions.classList.toggle("hidden", !allowMailbox);
     headerActions.setAttribute("aria-hidden", allowMailbox ? "false" : "true");
@@ -10154,7 +12012,10 @@ function updateSesMailboxPermissionsUI() {
     replyPanel?.classList.add("hidden");
     replyActions?.classList.add("hidden");
   }
-  if (!allowManagement && !["inbox", "trash"].includes(normalizeSesSettingsView(sesCurrentMailboxFolder))) {
+  if (
+    !allowManagement &&
+    !["inbox", "trash", "contact"].includes(normalizeSesSettingsView(sesCurrentMailboxFolder))
+  ) {
     sesCurrentMailboxFolder = "inbox";
   }
 }
@@ -10162,7 +12023,7 @@ function updateSesMailboxPermissionsUI() {
 // --- SES tab routing (Sent / History / Email format) ---
 function setSesSettingsView(view) {
   collapseClassSettingsView();
-  // view: "sent" | "history" | "format" | "inbox" | "trash"
+  // view: "sent" | "history" | "format" | "inbox" | "trash" | "contact"
   view = normalizeSesSettingsView(view);
   const body = document.querySelector(".ses-body");
   const formCol = document.querySelector(".ses-form");
@@ -10171,17 +12032,19 @@ function setSesSettingsView(view) {
   const historyPanel = document.getElementById("sesEmailHistory");
   const formatCard = document.getElementById("sesFormatCard");
   const inboxPanel = document.getElementById("sesInboxPanel");
+  const contactPanel = document.getElementById("sesContactFormPanel");
 
   const sentBtn = document.getElementById("sesSentBtn");
   const historyBtn = document.getElementById("sesHistoryBtn");
   const formatBtn = document.getElementById("sesFormatBtn");
   const inboxBtn = document.getElementById("sesInboxBtn");
+  const contactBtn = document.getElementById("sesContactFormBtn");
   const trashBtn = document.getElementById("sesTrashBtn");
 
   if (!body || !formCol || !metaCol || !historyPanel || !formatCard) return;
 
   body.classList.remove("ses-view-sent", "ses-view-history", "ses-view-format");
-  body.classList.remove("ses-view-inbox", "ses-view-trash");
+  body.classList.remove("ses-view-inbox", "ses-view-trash", "ses-view-contact");
   body.classList.remove("hidden");
 
   formCol.classList.add("hidden");
@@ -10189,6 +12052,9 @@ function setSesSettingsView(view) {
   historyPanel.classList.add("hidden");
   if (inboxPanel) {
     inboxPanel.classList.add("hidden");
+  }
+  if (contactPanel) {
+    contactPanel.classList.add("hidden");
   }
   formatCard.classList.add("hidden");
 
@@ -10205,6 +12071,7 @@ function setSesSettingsView(view) {
   setActive(historyBtn, view === "history");
   setActive(formatBtn, view === "format");
   setActive(inboxBtn, view === "inbox");
+  setActive(contactBtn, view === "contact");
   setActive(trashBtn, view === "trash");
 
   updateSesMailboxPermissionsUI();
@@ -10245,6 +12112,15 @@ function setSesSettingsView(view) {
     sesCurrentMailboxFolder = "trash";
     loadSesInboxMessages({ folder: "trash", sync: false });
     renderSesInboxView();
+  } else if (view === "contact") {
+    body.classList.add("ses-view-contact");
+    metaCol.classList.remove("hidden");
+    if (contactPanel) {
+      contactPanel.classList.remove("hidden");
+    }
+    historyPanel.classList.add("hidden");
+    sesCurrentMailboxFolder = "contact";
+    updateSesContactWordCount();
   }
 }
 
@@ -10254,6 +12130,7 @@ function wireSesTabButtons() {
   const formatBtn = document.getElementById("sesFormatBtn");
   const formatBackBtn = document.getElementById("sesFormatBackBtn");
   const inboxBtn = document.getElementById("sesInboxBtn");
+  const contactBtn = document.getElementById("sesContactFormBtn");
   const trashBtn = document.getElementById("sesTrashBtn");
 
   sentBtn?.addEventListener("click", () => setSesSettingsView("sent"));
@@ -10268,7 +12145,81 @@ function wireSesTabButtons() {
   formatBtn?.addEventListener("click", () => setSesSettingsView("format"));
   formatBackBtn?.addEventListener("click", () => setSesSettingsView("sent"));
   inboxBtn?.addEventListener("click", () => setSesSettingsView("inbox"));
+  contactBtn?.addEventListener("click", () => setSesSettingsView("contact"));
   trashBtn?.addEventListener("click", () => setSesSettingsView("trash"));
+}
+
+function getSesContactWordCount() {
+  const text = (sesContactMessage?.value || "").trim();
+  if (!text) return 0;
+  return text.split(/\s+/).filter(Boolean).length;
+}
+
+function updateSesContactWordCount() {
+  if (!sesContactWordCount) return;
+  sesContactWordCount.textContent = `${getSesContactWordCount()} / 500 words`;
+}
+
+function clearSesContactForm({ keepStatus = false } = {}) {
+  if (sesContactSubject) sesContactSubject.value = "";
+  if (sesContactMessage) sesContactMessage.value = "";
+  updateSesContactWordCount();
+  if (!keepStatus && sesContactStatus) sesContactStatus.textContent = "";
+}
+
+function wireSesContactForm() {
+  sesContactMessage?.addEventListener("input", () => {
+    updateSesContactWordCount();
+  });
+
+  sesContactSendBtn?.addEventListener("click", async () => {
+    if (!canUseStudentContactForm()) {
+      showToast("Only students can use the contact form.", "info");
+      return;
+    }
+    const subject = (sesContactSubject?.value || "").trim();
+    const message = (sesContactMessage?.value || "").trim();
+    const wordCount = getSesContactWordCount();
+
+    if (!subject) {
+      showToast("Enter a subject.", "info");
+      sesContactSubject?.focus();
+      return;
+    }
+    if (!message) {
+      showToast("Write your message before sending.", "info");
+      sesContactMessage?.focus();
+      return;
+    }
+    if (wordCount > 500) {
+      showToast("Keep the message within 500 words.", "info");
+      sesContactMessage?.focus();
+      return;
+    }
+
+    if (sesContactStatus) sesContactStatus.textContent = "Sending...";
+    if (sesContactSendBtn) sesContactSendBtn.disabled = true;
+
+    try {
+      const response = await apiFetch("/api/admin/inbox/contact-form", {
+        method: "POST",
+        body: JSON.stringify({ subject, message })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || "Could not send contact form");
+      }
+      if (sesContactStatus) sesContactStatus.textContent = "Message sent to school admin.";
+      clearSesContactForm({ keepStatus: true });
+      showToast("Contact form sent", "success");
+    } catch (error) {
+      console.error("Contact form send failed", error);
+      if (sesContactStatus) sesContactStatus.textContent = error.message || "Could not send contact form.";
+      showToast(error.message || "Could not send contact form", "error");
+    } finally {
+      if (sesContactSendBtn) sesContactSendBtn.disabled = false;
+    }
+  });
 }
 
 function wireSesInboxActions() {
@@ -12999,8 +14950,15 @@ const emailPanelBody = document.getElementById("emailPanelBody");
 const sesFormatBtn = document.getElementById("sesFormatBtn");
 const sesFormatCard = document.getElementById("sesFormatCard");
 const sesInboxBtn = document.getElementById("sesInboxBtn");
+const sesContactFormBtn = document.getElementById("sesContactFormBtn");
 const sesTrashBtn = document.getElementById("sesTrashBtn");
 const sesInboxPanel = document.getElementById("sesInboxPanel");
+const sesContactFormPanel = document.getElementById("sesContactFormPanel");
+const sesContactSubject = document.getElementById("sesContactSubject");
+const sesContactMessage = document.getElementById("sesContactMessage");
+const sesContactWordCount = document.getElementById("sesContactWordCount");
+const sesContactSendBtn = document.getElementById("sesContactSendBtn");
+const sesContactStatus = document.getElementById("sesContactStatus");
 const sesInboxList = document.getElementById("sesInboxList");
 const sesInboxPlaceholder = document.getElementById("sesInboxPlaceholder");
 const sesInboxCount = document.getElementById("sesInboxCount");
@@ -13209,8 +15167,11 @@ const homeworkAssignmentDueDateInput = document.getElementById("homeworkAssignme
 const homeworkAssignmentResourceUrlInput = document.getElementById("homeworkAssignmentResourceUrlInput");
 const homeworkAssignmentDescriptionInput = document.getElementById("homeworkAssignmentDescriptionInput");
 const homeworkAssignmentUploadDropzone = document.getElementById("homeworkAssignmentUploadDropzone");
+const homeworkAssignmentSolutionUploadDropzone = document.getElementById("homeworkAssignmentSolutionUploadDropzone");
 const homeworkAssignmentFilesList = document.getElementById("homeworkAssignmentFilesList");
+const homeworkAssignmentSolutionFilesList = document.getElementById("homeworkAssignmentSolutionFilesList");
 const homeworkAssignmentAddFilesBtn = document.getElementById("homeworkAssignmentAddFilesBtn");
+const homeworkAssignmentAddSolutionFilesBtn = document.getElementById("homeworkAssignmentAddSolutionFilesBtn");
 const homeworkAssignmentCancelBtn = document.getElementById("homeworkAssignmentCancelBtn");
 const homeworkAssignmentSaveBtn = document.getElementById("homeworkAssignmentSaveBtn");
 const homeworkAssignmentFormStatus = document.getElementById("homeworkAssignmentFormStatus");
@@ -13362,6 +15323,14 @@ if (homeworkAssignmentAddFilesBtn) {
     });
   });
 }
+if (homeworkAssignmentAddSolutionFilesBtn) {
+  homeworkAssignmentAddSolutionFilesBtn.addEventListener("click", () => {
+    addHomeworkAssignmentSolutionFiles().catch((err) => {
+      console.error("Failed to add assignment solution files", err);
+      showToast(err?.message || "Could not add solution files");
+    });
+  });
+}
 if (homeworkAssignmentUploadDropzone) {
   homeworkAssignmentUploadDropzone.addEventListener("click", (event) => {
     if (event.target.closest("button")) return;
@@ -13374,12 +15343,32 @@ if (homeworkAssignmentUploadDropzone) {
     }
   });
 }
+if (homeworkAssignmentSolutionUploadDropzone) {
+  homeworkAssignmentSolutionUploadDropzone.addEventListener("click", (event) => {
+    if (event.target.closest("button")) return;
+    homeworkAssignmentAddSolutionFilesBtn?.click();
+  });
+  homeworkAssignmentSolutionUploadDropzone.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      homeworkAssignmentAddSolutionFilesBtn?.click();
+    }
+  });
+}
 if (homeworkAssignmentFilesList) {
   homeworkAssignmentFilesList.addEventListener("click", (event) => {
     const button = event.target.closest('[data-homework-action="remove-assignment-file"]');
     if (!button) return;
     const index = Number(button.dataset.fileIndex || -1);
     if (index >= 0) removeHomeworkAssignmentFile(index);
+  });
+}
+if (homeworkAssignmentSolutionFilesList) {
+  homeworkAssignmentSolutionFilesList.addEventListener("click", (event) => {
+    const button = event.target.closest('[data-homework-action="remove-assignment-solution-file"]');
+    if (!button) return;
+    const index = Number(button.dataset.fileIndex || -1);
+    if (index >= 0) removeHomeworkAssignmentSolutionFile(index);
   });
 }
 if (homeworkAssignmentModal) {
@@ -14806,6 +16795,11 @@ function exitDirectoryView() {
 
 function updateComposerForChannel(channelId) {
   if (showSavedOnly) return;
+  const isMaterialsUploadChannel = isLearningMaterialsChannel(channelId);
+  const activeMaterialsBucket = getLearningMaterialsActiveBucket(channelId);
+  const showMaterialsUploader = isMaterialsUploadChannel && !!activeMaterialsBucket;
+  document.body?.classList.toggle("learning-materials-upload-mode", isMaterialsUploadChannel);
+  document.documentElement?.classList.toggle("learning-materials-upload-mode", isMaterialsUploadChannel);
   const isPrivacyChannel = isPrivacyRulesChannel(channelId);
   if (isPrivacyChannel) {
     if (composer) composer.classList.add("hidden");
@@ -14871,6 +16865,48 @@ function updateComposerForChannel(channelId) {
     voiceOnlyEl.style.display = "none";
   }
 
+  if (isMaterialsUploadChannel && !showMaterialsUploader) {
+    if (composer) composer.classList.add("hidden");
+    if (messageInput) {
+      messageInput.disabled = true;
+      messageInput.placeholder = "";
+    }
+    if (rteEditor) {
+      rteEditor.setAttribute("contenteditable", "false");
+      if (rteEditor.dataset) rteEditor.dataset.placeholder = "";
+    }
+    if (sendButton) {
+      sendButton.classList.remove("learning-materials-upload-btn");
+      sendButton.innerHTML = '<span class="send-label">Send</span>';
+    }
+    return;
+  }
+
+  if (isMaterialsUploadChannel) {
+    if (composer) composer.classList.remove("hidden");
+    if (messageInput) {
+      messageInput.disabled = true;
+      messageInput.placeholder = "";
+    }
+    if (rteEditor) {
+      rteEditor.setAttribute("contenteditable", "false");
+      if (rteEditor.dataset) rteEditor.dataset.placeholder = "";
+    }
+    if (attachFileBtn) attachFileBtn.disabled = !canCompose;
+    if (videoBtn) videoBtn.disabled = true;
+    if (audioBtn) audioBtn.disabled = true;
+    if (emojiInputBtn) emojiInputBtn.disabled = true;
+    if (sendButton) {
+      sendButton.disabled = !canCompose;
+      sendButton.style.opacity = canCompose ? "1" : "0.55";
+      sendButton.classList.add("learning-materials-upload-btn");
+      const bucketMeta = getLearningMaterialsBucketMeta(activeMaterialsBucket);
+      sendButton.innerHTML = `<i class="fa-solid fa-file-arrow-up" aria-hidden="true"></i><span class="send-label">Upload to ${escapeHtml(bucketMeta?.label || "Folder")}</span>`;
+    }
+    if (homeworkComposerTrigger) homeworkComposerTrigger.classList.add("hidden");
+    return;
+  }
+
   if (messageInput) messageInput.disabled = !canCompose;
   if (rteEditor) rteEditor.setAttribute("contenteditable", canCompose ? "true" : "false");
   const isHomeworkBoardChannel = isHomeworkChannel(channelId) && !isHomeworkNoteChannel(channelId);
@@ -14897,6 +16933,8 @@ function updateComposerForChannel(channelId) {
   }
 
   if (sendButton) {
+    sendButton.classList.remove("learning-materials-upload-btn");
+    sendButton.innerHTML = '<span class="send-label">Send</span>';
     if (!canCompose) {
       sendButton.disabled = true;
       sendButton.style.opacity = "0.55";
@@ -19272,8 +21310,8 @@ function renderChannelHeader(channelId) {
     : "";
   const noteParentClass = noteParentClassId ? getChannelById(noteParentClassId) : null;
   const noteParentName = String(noteParentClass?.name || homeworkParentName || "").trim();
-  const noteHeaderTitle = String(ch.name || "").trim() || "Note";
-  const noteHeaderSubtitle = noteParentName ? `Notes for ${noteParentName}` : "Shared notes for this class";
+  const noteHeaderTitle = noteParentName ? `${noteParentName} Notes` : "Class Notes";
+  const noteHeaderSubtitle = "";
   const homeworkHeaderTitle =
     isHomework && homeworkParentName
       ? `${homeworkParentName} Homework`
@@ -19308,6 +21346,7 @@ function renderChannelHeader(channelId) {
   const isSchedule = isScheduleChannel(channelId);
   const isGrammar = isGrammarChannel(channelId);
   const isListeningPractice = isListeningPracticeChannel(channelId);
+  const isPlacementTestChannel = normalizedChannelName === "placement test";
   if (examRegistrationPanels) {
     examRegistrationPanels.classList.toggle("admin-visible", isExamRegistration && isAdminUser());
   }
@@ -19351,11 +21390,12 @@ function renderChannelHeader(channelId) {
       ? ""
       : isNoteChannel
         ? noteHeaderSubtitle
-      : isHomework
-        ? homeworkHeaderSubtitle
-        : resolveSharedChannelTopic(ch);
-    headerChannelTopic.textContent = rawTopic;
-    headerChannelTopic.classList.toggle("hidden", !rawTopic);
+        : isHomework
+          ? homeworkHeaderSubtitle
+          : resolveSharedChannelTopic(ch);
+    const nextTopic = isPlacementTestChannel ? "" : rawTopic;
+    headerChannelTopic.textContent = nextTopic;
+    headerChannelTopic.classList.toggle("hidden", !nextTopic);
   }
   if (headerHomeworkFilters) {
     const showHomeworkHeaderFilters = isHomework && homeworkView === "assignments";
@@ -19372,7 +21412,7 @@ function renderChannelHeader(channelId) {
       const noteMessages = Array.isArray(messagesByChannel[ch.id]) ? messagesByChannel[ch.id] : [];
       const latestMessage = noteMessages.length ? noteMessages[noteMessages.length - 1] : null;
       const latestTs = latestMessage?.ts || latestMessage?.createdAt || latestMessage?.created_at || null;
-      const updatedLabel = latestTs ? formatRelativeTime(latestTs) : "No updates yet";
+      const updatedLabel = latestTs ? formatClassNoteDateLabel(latestTs) : "No updates yet";
       const creatorLabel =
         latestMessage?.authorName ||
         latestMessage?.author ||
@@ -19400,6 +21440,9 @@ function renderChannelHeader(channelId) {
     channelRoleTabs
       .querySelectorAll('[data-role="student"]')
       .forEach((btn) => btn.classList.toggle("hidden", isSchoolTaskChannel || isStudentTaskChannel));
+    channelRoleTabs
+      .querySelectorAll('[data-role="admin"]')
+      .forEach((btn) => btn.classList.toggle("hidden", isNoteChannel));
     channelRoleTabs.querySelectorAll(".member-pill").forEach((btn) => {
       const roleKey = String(btn.dataset.role || "").toLowerCase();
       const hideForStudent = isClassesScopedHeader && !canManageClassesHeader && roleKey === "admin";
@@ -19407,7 +21450,7 @@ function renderChannelHeader(channelId) {
         isClassesScopedHeader &&
         !canManageClassesHeader &&
         (roleKey === "student" || roleKey === "teacher");
-      btn.classList.toggle("hidden", hideForStudent || (isSchoolTaskChannel && roleKey === "student"));
+      btn.classList.toggle("hidden", hideForStudent || (isSchoolTaskChannel && roleKey === "student") || (isNoteChannel && roleKey === "admin"));
       btn.classList.toggle("member-pill-readonly", makeReadonly);
       btn.setAttribute("aria-disabled", makeReadonly ? "true" : "false");
       btn.tabIndex = makeReadonly ? -1 : 0;
@@ -19417,6 +21460,7 @@ function renderChannelHeader(channelId) {
     chatHeaderEl.classList.toggle("school-task-header", isSchoolTaskChannel);
     chatHeaderEl.classList.toggle("teachers-task-header", isTeacherTaskChannel);
     chatHeaderEl.classList.toggle("student-task-header", isStudentTaskChannel);
+    chatHeaderEl.classList.toggle("placement-test-header", isPlacementTestChannel);
   }
   updateChannelRoleCounts([]);
   if (bannerChannelName) bannerChannelName.textContent = `#${ch.name}`;
@@ -19437,7 +21481,7 @@ function renderChannelHeader(channelId) {
   }
   if (channelAddMemberBtn) {
     const canManage = isAdminUser() || isTeacherUser();
-    channelAddMemberBtn.classList.toggle("hidden", !canManage || isPrivacy);
+    channelAddMemberBtn.classList.toggle("hidden", !canManage || isPrivacy || isNoteChannel);
   }
   document.body?.classList.toggle("wordmeaning-channel-active", isWordmeaning);
   document.documentElement?.classList.toggle("wordmeaning-channel-active", isWordmeaning);
@@ -19454,6 +21498,7 @@ function renderChannelHeader(channelId) {
         isTeacherTaskChannel ||
         isStudentTaskChannel ||
         isWordmeaning ||
+        isNoteChannel ||
         hideForAnnouncements ||
         isSpeakingPracticeChannel ||
         (isClassesScopedHeader && !canManageClassesHeader)
@@ -19466,12 +21511,14 @@ function renderChannelHeader(channelId) {
         isTeacherTaskChannel ||
         isStudentTaskChannel ||
         isWordmeaning ||
+        isNoteChannel ||
         hideForAnnouncements ||
         isSpeakingPracticeChannel
     );
   }
   if (channelSearchInput) {
     channelSearchInput.closest(".channel-search")?.classList.toggle("hidden", isPrivacy);
+    channelSearchInput.placeholder = isNoteChannel ? "Search notes..." : "Search this channel…";
   }
   if (dmAddMemberBtn) dmAddMemberBtn.classList.add("hidden");
   syncChannelSearchForChannel(channelId);
@@ -19517,11 +21564,17 @@ function renderChannelHeader(channelId) {
         (!isClassesScopedHeader && isAdminUser())) &&
       !isDmChannel(ch.id) &&
       !isPrivacy &&
+      !isNoteChannel &&
       !isWordmeaning &&
       !isSpeakingPracticeChannel;
     headerClearCultureBtn.classList.toggle("hidden", !showClearBtn);
   }
-  const hideComposerControls = isWordmeaning || hideForAnnouncements || isSpeakingPracticeChannel;
+  const hideComposerControls =
+    isWordmeaning ||
+    hideForAnnouncements ||
+    isSpeakingPracticeChannel ||
+    isNoteChannel ||
+    isPlacementTestChannel;
   if (composer) {
     composer.classList.toggle("hidden", hideComposerControls);
   }
@@ -20010,15 +22063,135 @@ function isCultureExchangeChannel(channelOrId) {
 
 function splitMessageTextAndAttachments(html = "") {
   const raw = String(html || "");
-  const marker = '<div class="att-card';
-  const index = raw.indexOf(marker);
-  if (index === -1) {
+  const markers = ['<div class="att-card', '<div class="pdf-card-modern'];
+  const indexes = markers
+    .map((marker) => raw.indexOf(marker))
+    .filter((index) => index >= 0);
+  if (!indexes.length) {
     return { textOnlyHtml: raw, attachmentsHtml: "" };
   }
+  const index = Math.min(...indexes);
   return {
     textOnlyHtml: raw.slice(0, index),
     attachmentsHtml: raw.slice(index)
   };
+}
+
+function buildLearningMaterialsEntries(channelId, searchTerm = "") {
+  const normalizedTerm = String(searchTerm || "").trim().toLowerCase();
+  const messages = messagesByChannel[channelId] || [];
+  const entries = [];
+
+  messages.forEach((msg) => {
+    const bucketKey = parseLearningMaterialsBucket(msg.text || "");
+    const safeBucketKey = getLearningMaterialsBucketMeta(bucketKey)?.key || "";
+    const attachments = Array.isArray(msg.attachments) ? msg.attachments.filter(Boolean) : [];
+    if (!attachments.length) return;
+
+    attachments.forEach((file, index) => {
+      const fileName = String(file.originalName || file.name || `File ${index + 1}`).trim();
+      const bucketMeta = getLearningMaterialsBucketMeta(safeBucketKey);
+      const haystack = `${fileName} ${bucketMeta?.label || ""} ${msg.author || ""}`.toLowerCase();
+      if (normalizedTerm && !haystack.includes(normalizedTerm)) return;
+      entries.push({
+        bucketKey: safeBucketKey,
+        bucketLabel: bucketMeta?.label || "",
+        file,
+        msg,
+        fileName,
+        timestamp: msg.createdAt || msg.created_at || msg.timestamp || msg.ts || "",
+        dateLabel: formatRelativeDay(parseChatDate(msg.createdAt || msg.created_at || msg.timestamp || msg.ts || new Date()) || new Date())
+      });
+    });
+  });
+
+  return entries;
+}
+
+function buildLearningMaterialsHome(channelId, entries, searchTerm = "") {
+  const normalizedTerm = String(searchTerm || "").trim().toLowerCase();
+  const cards = LEARNING_MATERIAL_BUCKETS
+    .map((bucket) => {
+      const docCount = entries.filter((item) => item.bucketKey === bucket.key).length;
+      const matchable = `${bucket.label} ${docCount}`.toLowerCase();
+      if (normalizedTerm && !matchable.includes(normalizedTerm)) return "";
+      return `
+        <button type="button" class="materials-folder-card ${bucket.accent}" data-material-folder="${escapeHtml(bucket.key)}">
+          <div class="materials-folder-icon"><i class="${bucket.icon}" aria-hidden="true"></i></div>
+          <div class="materials-folder-main">
+            <div class="materials-folder-title">${escapeHtml(bucket.label)}</div>
+            <div class="materials-folder-sub">${docCount} ${docCount === 1 ? "document" : "documents"}</div>
+          </div>
+          <div class="materials-folder-arrow"><i class="fa-solid fa-arrow-right" aria-hidden="true"></i></div>
+        </button>
+      `;
+    })
+    .filter(Boolean)
+    .join("");
+
+  return `
+    <section class="materials-home-shell">
+      <div class="materials-home-grid">
+        ${cards || `<div class="materials-folder-empty"><i class="fa-regular fa-folder-open" aria-hidden="true"></i><h3>No folders matched</h3><p>Try another search term or create uploads inside one of the level folders.</p></div>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderLearningMaterialsWorkspace(channelId, searchTerm = "") {
+  const activeBucket = getLearningMaterialsActiveBucket(channelId);
+  const activeMeta = getLearningMaterialsBucketMeta(activeBucket);
+  const entries = buildLearningMaterialsEntries(channelId, searchTerm);
+  messagesContainer.classList.add("learning-materials-workspace");
+
+  if (!activeMeta) {
+    messagesContainer.innerHTML = buildLearningMaterialsHome(channelId, entries, searchTerm);
+    messagesContainer.querySelectorAll("[data-material-folder]").forEach((button) => {
+      button.addEventListener("click", () => {
+        setLearningMaterialsActiveBucket(channelId, button.getAttribute("data-material-folder") || "");
+        updateComposerForChannel(channelId);
+        renderMessages(channelId, { restoreScroll: false });
+      });
+    });
+    updateLearningMaterialsDocCount(channelId);
+    return;
+  }
+
+  const folderEntries = entries.filter((item) => item.bucketKey === activeMeta.key);
+  const cardsMarkup = folderEntries.length
+    ? folderEntries.map((entry) => buildAttachmentCard(entry.file)).join("")
+    : `<div class="materials-folder-empty is-inner"><i class="fa-regular fa-file-lines" aria-hidden="true"></i><h3>No files in ${escapeHtml(activeMeta.label)}</h3><p>Use the upload button below to add files that will stay saved inside this folder.</p></div>`;
+
+  messagesContainer.innerHTML = `
+    <section class="materials-folder-shell">
+      <div class="materials-folder-topbar">
+        <button type="button" class="materials-back-btn" data-material-folder-back="1">
+          <i class="fa-solid fa-arrow-left" aria-hidden="true"></i>
+          <span>Back to folders</span>
+        </button>
+        <div class="materials-folder-heading">
+          <div class="materials-folder-kicker">Learning Materials</div>
+          <h2>${escapeHtml(activeMeta.label)}</h2>
+          <p>${folderEntries.length} ${folderEntries.length === 1 ? "file" : "files"} saved in this folder.</p>
+        </div>
+      </div>
+      <div class="materials-files-grid">${cardsMarkup}</div>
+    </section>
+  `;
+
+  const backBtn = messagesContainer.querySelector("[data-material-folder-back]");
+  if (backBtn) {
+    backBtn.addEventListener("click", () => {
+      setLearningMaterialsActiveBucket(channelId, "");
+      updateComposerForChannel(channelId);
+      renderMessages(channelId, { restoreScroll: false });
+    });
+  }
+
+  hydratePdfThumbs(messagesContainer);
+  hydratePdfStats(messagesContainer);
+  bindPdfMiniCardClicks(messagesContainer);
+  updateLearningMaterialsDocCount(channelId);
 }
 
 function extractPlainTextFromHtml(html = "") {
@@ -20093,18 +22266,29 @@ async function requestCultureTranslation({
 function renderMessages(channelId, options = {}) {
   if (!messagesContainer) return;
   if (directoryViewRole) return;
+  const channelInfo = getChannelById(channelId);
+  const isHomeworkWorkspaceChannel = isHomeworkChannel(channelId) && !isHomeworkNoteChannel(channelId);
+  if (!isHomeworkWorkspaceChannel) stopHomeworkLiveSync();
+  const isNoteWorkspaceChannel =
+    isHomeworkNoteChannel(channelId) || normalizeChannelCategory(channelInfo?.category) === "notes";
+  document.body?.classList.toggle("note-workspace-active", isNoteWorkspaceChannel);
+  document.documentElement?.classList.toggle("note-workspace-active", isNoteWorkspaceChannel);
+  messagesContainer.classList.toggle("classnote-shell", isNoteWorkspaceChannel);
   if (isWordmeaningChannel(channelId)) {
     messagesContainer.innerHTML = renderWordmeaningTable();
     return;
   }
-  const channelInfo = getChannelById(channelId);
   const normalizedChannelNameInitial = String(channelInfo?.name || "").trim().toLowerCase();
   if (isAnnouncementChannel(channelId)) {
     renderAnnouncementChannel(channelId, options);
     return;
   }
-  if (isHomeworkChannel(channelId) && !isHomeworkNoteChannel(channelId)) {
+  if (isHomeworkWorkspaceChannel) {
     renderHomeworkChannel(channelId, options);
+    return;
+  }
+  if (isNoteWorkspaceChannel) {
+    renderClassNoteWorkspace(channelId);
     return;
   }
   showSavedOnly = false;
@@ -20128,6 +22312,11 @@ function renderMessages(channelId, options = {}) {
   const msgs = messagesByChannel[channelId] || [];
   const term = (channelSearchTerms[String(channelId)] || "").trim();
   const normalizedTerm = term.toLowerCase();
+  messagesContainer.classList.toggle("learning-materials-workspace", isMaterialsChannel);
+  if (isMaterialsChannel) {
+    renderLearningMaterialsWorkspace(channelId, term);
+    return;
+  }
   const filtered = normalizedTerm
     ? msgs.filter((msg) => messageMatchesTerm(msg, channelId, normalizedTerm))
     : msgs;
@@ -20262,9 +22451,10 @@ function renderMessages(channelId, options = {}) {
       typeof msg.text === "string" &&
       (msg.text.includes("policy-doc") || msg.text.includes("privacy-rules")) &&
       String(msg.author || "").toLowerCase() === "system";
-    const shouldShowHeader = !isPolicyDocument && !isContinuationGroup;
+    const hideSenderMetaForMaterials = isMaterialsChannel;
+    const shouldShowHeader = !isPolicyDocument && !isContinuationGroup && !hideSenderMetaForMaterials;
     const shouldShowContinuationMeta =
-      !isPolicyDocument && isContinuationGroup && shouldShowContinuationStamp;
+      !isPolicyDocument && isContinuationGroup && shouldShowContinuationStamp && !hideSenderMetaForMaterials;
 
     const text = document.createElement("div");
     text.className = "message-text";
@@ -20424,6 +22614,7 @@ function renderMessages(channelId, options = {}) {
     });
     row.classList.toggle("message-row-continued", isContinuationGroup);
     row.classList.toggle("message-row-live-announcement", isLiveAnnouncementCard);
+    row.classList.toggle("message-row-materials-clean", hideSenderMetaForMaterials);
 
     // avatar column
     const avatarCol = document.createElement("div");
@@ -20464,6 +22655,9 @@ function renderMessages(channelId, options = {}) {
       avatarDisplayTarget.classList.add("message-avatar-hidden");
     }
     if (isLiveAnnouncementCard && avatarDisplayTarget) {
+      avatarDisplayTarget.classList.add("message-avatar-hidden");
+    }
+    if (hideSenderMetaForMaterials && avatarDisplayTarget) {
       avatarDisplayTarget.classList.add("message-avatar-hidden");
     }
     if (hasAudioCard) {
@@ -20809,7 +23003,7 @@ function renderMessages(channelId, options = {}) {
       setContinuationVisibility(group, group.expanded);
       updateContinuationLabel(group);
     }
-    if (!isTaskStyleChannel) {
+    if (!isTaskStyleChannel && !hideSenderMetaForMaterials) {
       row.appendChild(avatarCol);
     }
     row.appendChild(bubble);
@@ -21152,6 +23346,23 @@ async function selectChannel(channelId) {
     } catch (err) {
       console.error("Failed to load messages", err);
       showToast("Could not load messages");
+      return;
+    }
+    if (!isNavigationTokenCurrent(panelToken, "chatPanel") || currentChannelId !== channelId) {
+      return;
+    }
+  } else if (!isSchoolSettings && isHomeworkNoteChannel(channelId)) {
+    try {
+      const sourceChannelId = getClassNoteSourceChannelId(channelId);
+      if (sourceChannelId) {
+        await ensureMessagesForChannelId(sourceChannelId);
+        messagesByChannel[channelId] = messagesByChannel[sourceChannelId] || [];
+      } else if (!messagesByChannel[channelId]) {
+        messagesByChannel[channelId] = [];
+      }
+    } catch (err) {
+      console.error("Failed to load note messages", err);
+      showToast("Could not load class notes");
       return;
     }
     if (!isNavigationTokenCurrent(panelToken, "chatPanel") || currentChannelId !== channelId) {
@@ -22539,9 +24750,11 @@ async function renderPdfThumbToImg(pdfUrl, img) {
   if (!pdf) return;
   const page = await pdf.getPage(1);
   const baseViewport = page.getViewport({ scale: 1 });
-  const availableWidth = Math.max(img.clientWidth || 360, 240);
-  const dpr = Math.min(window.devicePixelRatio || 1.5, 2);
-  const targetWidth = Math.ceil(availableWidth * dpr);
+  const previewHost = img.closest(".pdf-preview, .pdf-mini-thumb");
+  const hostWidth = previewHost?.clientWidth || 0;
+  const availableWidth = Math.max(img.clientWidth || hostWidth || 220, 180);
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.2);
+  const targetWidth = Math.min(Math.ceil(availableWidth * dpr), 320);
   const scale = targetWidth / baseViewport.width;
   const viewport = page.getViewport({ scale });
 
@@ -22553,6 +24766,14 @@ async function renderPdfThumbToImg(pdfUrl, img) {
   await page.render({ canvasContext: ctx, viewport }).promise;
 
   try {
+    img.onload = () => {
+      img.style.opacity = "1";
+      const fallback = img.closest(".pdf-card-modern")?.querySelector(".pdf-thumb-fallback");
+      if (fallback) fallback.style.display = "none";
+    };
+    img.onerror = () => {
+      attachPdfIframeFallback(img.closest(".pdf-card-modern"), pdfUrl);
+    };
     img.src = canvas.toDataURL("image/png");
   } catch (err) {
     console.error("Failed to set PDF thumbnail data URL", err);
@@ -22578,6 +24799,8 @@ function attachPdfIframeFallback(card, url) {
   iframe.setAttribute("loading", "lazy");
   iframe.addEventListener("load", () => {
     iframe.style.opacity = "1";
+    const fallback = card.querySelector(".pdf-thumb-fallback");
+    if (fallback) fallback.style.display = "none";
   });
   preview.appendChild(iframe);
   const img = card.querySelector(".pdf-preview-img");
@@ -22589,11 +24812,6 @@ function attachPdfIframeFallback(card, url) {
 
 function hydratePdfThumbs(container) {
   if (!container) return;
-  if (!window.pdfjsLib) {
-    setTimeout(() => hydratePdfThumbs(container), 250);
-    return;
-  }
-
   container.querySelectorAll(".pdf-card-modern").forEach(async (card) => {
     const url = card.getAttribute("data-file-url") || card.getAttribute("data-pdf-url");
     const img = card.querySelector(".pdf-preview-img");
@@ -22606,11 +24824,6 @@ function hydratePdfThumbs(container) {
     }
     try {
       await renderPdfThumbToImg(url, img);
-      img.style.opacity = "1";
-      const fallback = card.querySelector(".pdf-thumb-fallback");
-      if (fallback) {
-        fallback.style.display = "none";
-      }
     } catch (err) {
       console.warn("PDF thumb failed:", err);
       const errEl = card.querySelector(".pdf-error");
@@ -22995,7 +25208,16 @@ function uploadFilesWithProgress(files, onProgress) {
 
     xhr.onload = () => {
       try {
-        if (xhr.status < 200 || xhr.status >= 300) throw new Error("Upload failed");
+        if (xhr.status < 200 || xhr.status >= 300) {
+          let serverMessage = "Upload failed";
+          try {
+            const payload = JSON.parse(xhr.responseText || "{}");
+            if (payload && payload.error) serverMessage = String(payload.error);
+          } catch (_err) {
+            /* ignore json parse failure */
+          }
+          throw new Error(serverMessage);
+        }
         resolve(JSON.parse(xhr.responseText));
       } catch (e) {
         reject(e);
@@ -23642,6 +25864,12 @@ function updateSendButtonState() {
     sendButton.classList.remove("is-ready");
     return;
   }
+  if (isLearningMaterialsChannel(currentChannelId)) {
+    sendButton.disabled = false;
+    sendButton.style.opacity = "1";
+    sendButton.classList.add("is-ready");
+    return;
+  }
   syncEditorToTextarea();
   const html = (messageInput.value || "").replace(/<br\s*\/?>/gi, "").trim();
   const hasText = html.length > 0;
@@ -23813,7 +26041,13 @@ function buildPdfGmailMarkup({ name, url, sizeLabel = "", sizeBytes = 0 }) {
   return `
     <div class="pdf-card-modern pdf-mini" data-file-url="${safeUrl}" data-file-name="${safeName}" data-file-size="${numericSize}">
       <div class="pdf-preview pdf-mini-thumb" role="button" tabindex="0" aria-label="Open PDF">
-        <div class="pdf-thumb-fallback">PDF</div>
+        <div class="pdf-thumb-fallback">
+          <div class="pdf-thumb-sheet">
+            <i class="fa-solid fa-file-pdf" aria-hidden="true"></i>
+            <span>PDF</span>
+          </div>
+          <div class="pdf-thumb-caption">Study material preview</div>
+        </div>
         <img class="pdf-preview-img" alt="PDF preview" />
         <div class="pdf-mini-top">
           <span class="pdf-mini-btn pdf-mini-btn-open" data-action="open">
@@ -24377,7 +26611,8 @@ function setupAudioCardOptions(root = document) {
 
 // ===================== MESSAGE SENDING =====================
 
-async function sendMessage() {
+async function sendMessage(options = {}) {
+  const bypassMaterialsPicker = !!options?.bypassMaterialsPicker;
   if (showSavedOnly) return;
   if (!messageInput) return;
   if (isPolicyAcceptanceRequired() && !policyAccepted) {
@@ -24387,6 +26622,10 @@ async function sendMessage() {
   }
   if (!canPostInChannel(currentChannelId)) {
     showToast("You do not have permission to post in this channel.");
+    return;
+  }
+  if (isLearningMaterialsChannel(currentChannelId) && !bypassMaterialsPicker) {
+    fileInput?.click();
     return;
   }
   if (pendingUploads.some((u) => u.status === "uploading")) {
@@ -24400,6 +26639,9 @@ async function sendMessage() {
   const baseText = sanitizeMessageHTML(rawText).trim();
   const readyAttachments = pendingUploads.filter((f) => !f.status || f.status === "ready");
   const voiceOnly = isVoiceOnlyClubChannel(currentChannelId);
+  const activeMaterialsBucket = isLearningMaterialsChannel(currentChannelId)
+    ? getLearningMaterialsActiveBucket(currentChannelId)
+    : "";
   const speakingClubAttachments = readyAttachments.filter((f) =>
     String(f.mimeType || "").toLowerCase().startsWith("audio/")
   );
@@ -24421,7 +26663,9 @@ async function sendMessage() {
 
   const attachmentsToSend = voiceOnly ? speakingClubAttachments : readyAttachments;
   const attachmentHtml = attachmentsToSend.map((f) => buildAttachmentCard(f)).join("");
-  const text = sanitizeMessageHTML(`${baseText}${attachmentHtml}`).trim();
+  const materialsMarker = activeMaterialsBucket ? `[LM:${activeMaterialsBucket}]` : "";
+  const composedText = `${materialsMarker}${baseText}${attachmentHtml}`;
+  const text = sanitizeMessageHTML(composedText).trim();
   const attachments = attachmentsToSend.map((f) => ({
     url: f.url,
     originalName: f.originalName,
@@ -26612,11 +28856,14 @@ if (attachFileBtn && fileInput) {
         });
         renderPendingAttachments();
         showToast("Uploads finished");
+        if (isLearningMaterialsChannel(currentChannelId)) {
+          await sendMessage({ bypassMaterialsPicker: true });
+        }
       } catch (err) {
         console.error(err);
         pendingUploads = pendingUploads.filter((x) => !ids.includes(x.id));
         renderPendingAttachments();
-        showToast("Could not upload files");
+        showToast(err?.message || "Could not upload files");
       } finally {
         fileInput.value = "";
       }
@@ -30594,6 +32841,7 @@ window.addEventListener("popstate", () => {
 
   // ===== Gmail-ish Inbox (vanilla) =====
   (function initGmailishInbox() {
+    const emailPanelEl = document.getElementById("emailPanel");
     const listEl = document.getElementById("inboxList");
     const countEl = document.getElementById("mbxCount");
     const titleEl = document.querySelector("#wnMailbox .mbx-name");
@@ -30795,6 +33043,13 @@ window.addEventListener("popstate", () => {
     let mailboxPollTimer = null;
     let mailboxPollInFlight = false;
     let mailboxFailureCount = 0;
+
+    function isElementActuallyVisible(element) {
+      if (!element) return false;
+      if (element.classList.contains("hidden")) return false;
+      if (element.getAttribute("aria-hidden") === "true") return false;
+      return element.offsetParent !== null;
+    }
 
     function canCurrentUserAccessMailbox() {
       const role = normalizeRole(sessionUser?.role || sessionUser?.userRole || "");
@@ -31057,6 +33312,9 @@ window.addEventListener("popstate", () => {
         sesInboxActiveMessage = null;
         updateReplyGreeting("");
         renderDetailReplies(null);
+        if (detailActionsPanel) {
+          detailActionsPanel.classList.add("hidden");
+        }
         return;
       }
 
@@ -31069,6 +33327,9 @@ window.addEventListener("popstate", () => {
 
       sesInboxActiveMessage = mail;
       updateReplyGreeting(mail.from_name || mail.from_email || mail.sender || "");
+      if (detailActionsPanel) {
+        detailActionsPanel.classList.toggle("hidden", !canManageSchoolMailbox());
+      }
 
       const bodyHtml = mail.html_body || "";
       if (bodyHtml) {
@@ -31085,9 +33346,6 @@ window.addEventListener("popstate", () => {
         if (dAttachCount) {
           dAttachCount.textContent =
             attachmentCount === 1 ? "One attachment" : `${attachmentCount} attachments`;
-        }
-        if (detailActionsPanel) {
-          detailActionsPanel.classList.remove("hidden");
         }
 
         for (const att of atts) {
@@ -31143,9 +33401,6 @@ window.addEventListener("popstate", () => {
         dAttachGrid.innerHTML = "";
         if (dAttachCount) {
           dAttachCount.textContent = "";
-        }
-        if (detailActionsPanel) {
-          detailActionsPanel.classList.add("hidden");
         }
       }
       renderDetailReplies(mail);
@@ -31204,8 +33459,9 @@ window.addEventListener("popstate", () => {
 
     function isMailboxPanelVisible() {
       return Boolean(
-        sesInboxPanel &&
-        !sesInboxPanel.classList.contains("hidden") &&
+        isElementActuallyVisible(emailPanelEl) &&
+        isElementActuallyVisible(sesInboxPanel) &&
+        isElementActuallyVisible(mailboxEl) &&
         currentFolder &&
         ["inbox", "trash"].includes(currentFolder)
       );
@@ -31256,6 +33512,7 @@ window.addEventListener("popstate", () => {
         resetMailboxState();
         return;
       }
+      if (!isMailboxPanelVisible() && !force) return;
       if (mailboxBootstrapped && !force) return;
       mailboxBootstrapped = true;
       await loadInbox({ sync: false, folder: currentFolder });
@@ -31568,10 +33825,14 @@ window.addEventListener("popstate", () => {
     });
 
     syncMailboxHeading();
-    bootstrapMailbox().catch((e) => {
-      console.error("Inbox load failed", e);
-    });
     window.addEventListener("worknestWorkspaceReady", () => {
+      if (!isMailboxPanelVisible()) return;
+      bootstrapMailbox(true).catch((e) => {
+        console.error("Inbox load failed", e);
+      });
+    });
+    document.addEventListener("worknest:panel-shown", (event) => {
+      if (event?.detail?.panelId !== "emailPanel") return;
       bootstrapMailbox(true).catch((e) => {
         console.error("Inbox load failed", e);
       });

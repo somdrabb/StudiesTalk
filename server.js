@@ -52,7 +52,43 @@ const FFMPEG_CMD = (() => {
   }
 })();
 
-const DB_PATH = String(ENV.DB_PATH || path.join(__dirname, 'worknest.db')).trim();
+const LEGACY_DB_PATH = path.join(__dirname, 'worknest.db');
+const DEFAULT_DB_PATH = path.join(__dirname, 'storage', 'worknest.db');
+const DEFAULT_BACKUP_DIR = path.join(__dirname, 'backup');
+
+function resolveAppPath(inputPath, fallbackAbsPath) {
+  const raw = String(inputPath || '').trim();
+  if (!raw) return fallbackAbsPath;
+  return path.isAbsolute(raw) ? raw : path.join(__dirname, raw);
+}
+
+function migrateLegacyDatabaseFiles(sourceDbPath, targetDbPath) {
+  if (!sourceDbPath || !targetDbPath || sourceDbPath === targetDbPath) return;
+  if (!fs.existsSync(sourceDbPath) || fs.existsSync(targetDbPath)) return;
+
+  ensureDir(path.dirname(targetDbPath));
+  for (const suffix of ['', '-wal', '-shm']) {
+    const sourcePath = `${sourceDbPath}${suffix}`;
+    const targetPath = `${targetDbPath}${suffix}`;
+    if (fs.existsSync(sourcePath) && !fs.existsSync(targetPath)) {
+      fs.renameSync(sourcePath, targetPath);
+    }
+  }
+  console.log(`[Storage] Migrated SQLite database to ${targetDbPath}`);
+}
+
+const DB_PATH = (() => {
+  const explicitDbPath = String(process.env.DB_PATH || '').trim();
+  if (explicitDbPath) {
+    return resolveAppPath(explicitDbPath, DEFAULT_DB_PATH);
+  }
+
+  migrateLegacyDatabaseFiles(LEGACY_DB_PATH, DEFAULT_DB_PATH);
+  if (fs.existsSync(DEFAULT_DB_PATH)) return DEFAULT_DB_PATH;
+  if (fs.existsSync(LEGACY_DB_PATH)) return LEGACY_DB_PATH;
+  return DEFAULT_DB_PATH;
+})();
+const BACKUP_DIR = resolveAppPath(ENV.DB_BACKUP_DIR, DEFAULT_BACKUP_DIR);
 const UPLOADS_DIR = String(ENV.UPLOADS_DIR || path.join(__dirname, 'uploads')).trim();
 const ATTACHMENTS_DIR = path.join(process.cwd(), 'storage', 'email_attachments');
 
@@ -224,6 +260,149 @@ function workspaceUploadsPath(workspaceId, ...parts) {
   return path.join(WS_UPLOADS_DIR, String(workspaceId), ...parts.map((p) => String(p)));
 }
 
+function normalizePhoneCountryCode(value = '') {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const digits = raw.replace(/[^\d]/g, '');
+  return digits ? `+${digits}` : '';
+}
+
+function normalizePhoneNationalNumber(value = '') {
+  return String(value || '').replace(/[^\d]/g, '');
+}
+
+function normalizePhoneValue(value = '', explicitCountryCode = '') {
+  const raw = String(value || '').trim();
+  const countryCode = normalizePhoneCountryCode(explicitCountryCode);
+  if (!raw && !countryCode) return '';
+  if (countryCode) {
+    const localDigits = normalizePhoneNationalNumber(raw).replace(/^0+/, '');
+    return localDigits ? `${countryCode}${localDigits}` : countryCode;
+  }
+  if (!raw) return '';
+  const compact = raw.replace(/[\s().-]+/g, '');
+  if (compact.startsWith('+')) {
+    const digits = compact.slice(1).replace(/[^\d]/g, '');
+    return digits ? `+${digits}` : '';
+  }
+  if (compact.startsWith('00')) {
+    const digits = compact.slice(2).replace(/[^\d]/g, '');
+    return digits ? `+${digits}` : '';
+  }
+  return compact.replace(/[^\d]/g, '');
+}
+
+function buildUserPhoneValue(phoneCountry = '', phoneNumber = '') {
+  const normalized = normalizePhoneValue(phoneNumber, phoneCountry);
+  if (normalized) return normalized;
+  return [String(phoneCountry || '').trim(), String(phoneNumber || '').trim()].filter(Boolean).join(' ').trim();
+}
+
+function normalizePhoneForCompare(value) {
+  return normalizePhoneValue(value).replace(/[^\d+]/g, '');
+}
+
+function phoneMatchesUserRow(phone, row) {
+  const target = normalizePhoneForCompare(phone);
+  if (!target) return false;
+  const candidates = [
+    row?.phone,
+    row?.phone_number,
+    buildUserPhoneValue(row?.phone_country, row?.phone_number)
+  ]
+    .map((value) => normalizePhoneForCompare(value))
+    .filter(Boolean);
+  return candidates.includes(target);
+}
+
+function phonesEquivalent(a, b) {
+  const left = normalizePhoneForCompare(a);
+  const right = normalizePhoneForCompare(b);
+  return Boolean(left && right && left === right);
+}
+
+const PHONE_COUNTRY_PREFIXES = ['+49', '+44', '+61', '+1'];
+
+function decomposeNormalizedPhone(phone) {
+  const normalized = normalizePhoneValue(phone);
+  if (!normalized) return null;
+  const prefix = PHONE_COUNTRY_PREFIXES.find((candidate) => normalized.startsWith(candidate));
+  if (!prefix) {
+    return {
+      normalized,
+      countryCode: '',
+      nationalNumber: normalized.startsWith('+') ? normalized.slice(1) : normalized
+    };
+  }
+  return {
+    normalized,
+    countryCode: prefix,
+    nationalNumber: normalized.slice(prefix.length)
+  };
+}
+
+function buildPhoneLookupCandidates(phone) {
+  const parsed = decomposeNormalizedPhone(phone);
+  if (!parsed?.normalized) {
+    return { normalizedPhones: [], countryCodes: [], localNumbers: [] };
+  }
+  const normalizedPhones = new Set([parsed.normalized]);
+  const countryCodes = new Set();
+  const localNumbers = new Set();
+  if (parsed.countryCode) {
+    countryCodes.add(parsed.countryCode);
+    if (parsed.nationalNumber) {
+      localNumbers.add(parsed.nationalNumber);
+      localNumbers.add(`0${parsed.nationalNumber}`);
+      normalizedPhones.add(`${parsed.countryCode} ${parsed.nationalNumber}`);
+      normalizedPhones.add(`${parsed.countryCode}${parsed.nationalNumber}`);
+      normalizedPhones.add(`${parsed.countryCode}0${parsed.nationalNumber}`);
+    }
+  }
+  const rawDigits = normalizePhoneNationalNumber(phone);
+  if (rawDigits) {
+    localNumbers.add(rawDigits);
+    normalizedPhones.add(rawDigits);
+  }
+  return {
+    normalizedPhones: Array.from(normalizedPhones).filter(Boolean),
+    countryCodes: Array.from(countryCodes).filter(Boolean),
+    localNumbers: Array.from(localNumbers).filter(Boolean)
+  };
+}
+
+function findUsersByPhoneForVerification(phone) {
+  const candidates = buildPhoneLookupCandidates(phone);
+  if (!candidates.normalizedPhones.length && !candidates.localNumbers.length) return [];
+  const clauses = [];
+  const params = [];
+  if (candidates.normalizedPhones.length) {
+    clauses.push(`phone IN (${candidates.normalizedPhones.map(() => '?').join(', ')})`);
+    params.push(...candidates.normalizedPhones);
+  }
+  if (candidates.localNumbers.length) {
+    clauses.push(`phone_number IN (${candidates.localNumbers.map(() => '?').join(', ')})`);
+    params.push(...candidates.localNumbers);
+  }
+  if (candidates.countryCodes.length && candidates.localNumbers.length) {
+    clauses.push(
+      `(phone_country IN (${candidates.countryCodes.map(() => '?').join(', ')}) AND phone_number IN (${candidates.localNumbers
+        .map(() => '?')
+        .join(', ')}))`
+    );
+    params.push(...candidates.countryCodes, ...candidates.localNumbers);
+  }
+  if (!clauses.length) return [];
+  const rows = db
+    .prepare(
+      `SELECT id, phone, phone_country, phone_number, phone_verified
+       FROM users
+       WHERE ${clauses.join(' OR ')}`
+    )
+    .all(...params);
+  return rows.filter((row) => phoneMatchesUserRow(phone, row));
+}
+
   ensureDir(UPLOADS_DIR);
   ensureDir(WS_UPLOADS_DIR);
 
@@ -379,6 +558,26 @@ function buildQuotedText(original = {}) {
   return `\n\nOn ${dt || 'Unknown Date'}, ${from || 'Sender'} wrote:\nSubject: ${subj}\n\n${quoted}\n`;
 }
 
+function buildReplyHtml(replyText = '', original = {}) {
+  const dt = original.received_at
+    ? new Date(original.received_at).toLocaleString()
+    : 'Unknown Date';
+  const from = String(original.sender || '').trim() || 'Sender';
+  const subj = String(original.subject || '').trim() || '(no subject)';
+  const originalBody = escapeHtml(String(original.text_body || '').trim()).replace(/\n/g, '<br>');
+  const replyBody = escapeHtml(String(replyText || '').trim()).replace(/\n/g, '<br>');
+  return `
+    <div style="white-space:normal;">
+      <div style="white-space:pre-wrap;">${replyBody}</div>
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid #dbe2ea;color:#5f6368;font-size:13px;">
+        <div><strong>On ${escapeHtml(dt)}, ${escapeHtml(from)} wrote:</strong></div>
+        <div style="margin-top:4px;"><strong>Subject:</strong> ${escapeHtml(subj)}</div>
+        <div style="margin-top:12px;white-space:pre-wrap;">${originalBody}</div>
+      </div>
+    </div>
+  `.trim();
+}
+
 const transporter = nodemailer.createTransport({
   host: process.env.IONOS_SMTP_HOST,
   port: Number(process.env.IONOS_SMTP_PORT),
@@ -440,6 +639,85 @@ function streamAttachmentResponse(res, filePath, attachment, disposition = 'atta
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 db.pragma('busy_timeout = 5000');
+
+async function backupDatabase(label = 'backup') {
+  ensureDir(BACKUP_DIR);
+  const safeLabel = String(label || 'backup').toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+  const backupPath = path.join(BACKUP_DIR, `worknest-${safeLabel}-${Date.now()}.db`);
+  if (typeof db.backup === 'function') {
+    await db.backup(backupPath);
+  } else {
+    db.pragma('wal_checkpoint(PASSIVE)');
+    fs.copyFileSync(DB_PATH, backupPath);
+  }
+  return backupPath;
+}
+
+function scheduleDatabaseBackups() {
+  const hours = Number(ENV.DB_BACKUP_INTERVAL_HOURS);
+  if (!Number.isFinite(hours) || hours <= 0) return;
+  const timer = setInterval(() => {
+    backupDatabase('scheduled')
+      .then((backupPath) => console.log(`[Backup] Created ${backupPath}`))
+      .catch((err) => console.error('[Backup] Scheduled backup failed', err));
+  }, hours * 60 * 60 * 1000);
+  if (typeof timer.unref === 'function') timer.unref();
+}
+
+function backfillUserPhoneColumn() {
+  if (!hasColumn('users', 'phone')) return;
+  db.prepare(`
+    UPDATE users
+    SET phone = TRIM(
+      COALESCE(NULLIF(phone_country, ''), '') ||
+      CASE
+        WHEN COALESCE(NULLIF(phone_country, ''), '') != '' AND COALESCE(NULLIF(phone_number, ''), '') != '' THEN ' '
+        ELSE ''
+      END ||
+      COALESCE(NULLIF(phone_number, ''), '')
+    )
+    WHERE COALESCE(NULLIF(phone, ''), '') = ''
+      AND (COALESCE(NULLIF(phone_country, ''), '') != '' OR COALESCE(NULLIF(phone_number, ''), '') != '')
+  `).run();
+}
+
+function markUsersPhoneVerified(phone) {
+  if (!hasColumn('users', 'phone_verified')) {
+    return { matched: 0, updated: 0, skipped: 'phone_verified_missing' };
+  }
+  const normalizedPhone = normalizePhoneValue(phone);
+  if (!normalizedPhone) {
+    return { matched: 0, updated: 0, skipped: 'missing_phone' };
+  }
+  const matches = findUsersByPhoneForVerification(normalizedPhone);
+  if (!matches.length) {
+    return { matched: 0, updated: 0, skipped: 'no_matching_user' };
+  }
+  if (matches.length > 1) {
+    return {
+      matched: matches.length,
+      updated: 0,
+      skipped: 'duplicate_phone_matches',
+      userIds: matches.map((row) => row.id)
+    };
+  }
+  const matchedUser = matches[0];
+  const result = db
+    .prepare(
+      `UPDATE users
+       SET phone = ?,
+           phone_verified = 1
+       WHERE id = ?`
+    )
+    .run(normalizedPhone, matchedUser.id);
+  return {
+    matched: 1,
+    updated: result.changes || 0,
+    userId: matchedUser.id,
+    phone: normalizedPhone
+  };
+}
+
 function safeAlter(sql) {
   try {
     db.exec(sql);
@@ -540,9 +818,12 @@ CREATE TABLE IF NOT EXISTS registration_review_requests (
 safeAlter(`ALTER TABLE registration_review_requests ADD COLUMN reviewed_by TEXT;`);
 safeAlter(`ALTER TABLE registration_review_requests ADD COLUMN reviewed_at INTEGER;`);
 safeAlter(`ALTER TABLE registration_review_requests ADD COLUMN review_note TEXT;`);
+safeAlter(`ALTER TABLE users ADD COLUMN phone TEXT DEFAULT '';`);
+safeAlter(`ALTER TABLE users ADD COLUMN phone_verified INTEGER DEFAULT 0;`);
 safeAlter(`ALTER TABLE users ADD COLUMN must_change_password INTEGER DEFAULT 0;`);
 safeAlter(`ALTER TABLE users ADD COLUMN password_changed_at INTEGER;`);
 safeAlter(`ALTER TABLE users ADD COLUMN temp_login_started_at INTEGER;`);
+backfillUserPhoneColumn();
 // ---------- ADMIN PORTAL TABLES ----------
 db.exec(`
 CREATE TABLE IF NOT EXISTS workspace_billing (
@@ -552,7 +833,8 @@ CREATE TABLE IF NOT EXISTS workspace_billing (
   currency TEXT DEFAULT 'EUR',
   monthly_price_cents INTEGER DEFAULT 0,
   billing_email TEXT,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
 );
 `);
 
@@ -566,7 +848,11 @@ CREATE TABLE IF NOT EXISTS invoices (
   status TEXT DEFAULT 'open', -- open|paid|void
   due_date TEXT,
   created_at INTEGER NOT NULL,
-  paid_at INTEGER
+  paid_at INTEGER,
+  student_user_id TEXT,
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+  FOREIGN KEY (student_user_id) REFERENCES users(id) ON DELETE SET NULL,
+  CHECK (status IN ('open','paid','void'))
 );
 `);
 
@@ -579,7 +865,12 @@ CREATE TABLE IF NOT EXISTS payments (
   currency TEXT DEFAULT 'EUR',
   provider TEXT DEFAULT 'manual', -- manual|stripe|paypal
   provider_ref TEXT,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  student_user_id TEXT,
+  FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE,
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+  FOREIGN KEY (student_user_id) REFERENCES users(id) ON DELETE SET NULL,
+  CHECK (provider IN ('manual','stripe','paypal'))
 );
 `);
 safeAlter(`ALTER TABLE invoices ADD COLUMN student_user_id TEXT;`);
@@ -640,6 +931,7 @@ CREATE TABLE IF NOT EXISTS revoked_access_tokens (
 );
 `);
 
+/* ========== LEGACY AUDIT LOG (deprecated; keep only for compatibility) ========== */
 db.exec(`
 CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -697,7 +989,13 @@ CREATE TABLE IF NOT EXISTS tasks (
   assigned_to TEXT,       -- optional user id
 
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+  FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT,
+  FOREIGN KEY (assigned_to) REFERENCES users(id) ON DELETE SET NULL,
+  CHECK (status IN ('open','doing','done')),
+  CHECK (priority IN ('low','normal','high','urgent'))
 );
 `);
 
@@ -718,7 +1016,9 @@ CREATE TABLE IF NOT EXISTS task_comments (
   task_id TEXT NOT NULL,
   user_id TEXT NOT NULL,
   body TEXT NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT
 );
 `);
 
@@ -1087,6 +1387,7 @@ function requireAdmin(req, res, next) {
 }
 
 const PLATFORM_SETTING_AI_DEFAULT_BUDGET_KEY = 'ai_default_monthly_cap_eur';
+const PLATFORM_OWNER_EMAIL_SETTINGS_KEY = 'owner_email_settings';
 
 function getPlatformSetting(key, fallback = null) {
   if (!key) return fallback;
@@ -1108,6 +1409,36 @@ function setPlatformSetting(key, value) {
       updated_at = excluded.updated_at
   `).run(String(key), String(value), now);
   return { key: String(key), value: String(value), updated_at: now };
+}
+
+function getPlatformOwnerEmailSettings() {
+  const defaults = {
+    enabled: 0,
+    display_name: 'Platform Owner',
+    owner_email: '',
+    subject_prefix: '[WorkNest Owner]',
+    footer_text: 'Kind regards,\nPlatform Owner'
+  };
+  const raw = getPlatformSetting(PLATFORM_OWNER_EMAIL_SETTINGS_KEY, '');
+  if (!raw) return defaults;
+  try {
+    const parsed = JSON.parse(raw);
+    return { ...defaults, ...(parsed && typeof parsed === 'object' ? parsed : {}) };
+  } catch (_err) {
+    return defaults;
+  }
+}
+
+function savePlatformOwnerEmailSettings(input = {}) {
+  const settings = {
+    enabled: input.enabled ? 1 : 0,
+    display_name: String(input.display_name || input.displayName || 'Platform Owner').trim(),
+    owner_email: String(input.owner_email || input.ownerEmail || '').trim(),
+    subject_prefix: String(input.subject_prefix || input.subjectPrefix || '').trim(),
+    footer_text: String(input.footer_text || input.footerText || '').trim()
+  };
+  setPlatformSetting(PLATFORM_OWNER_EMAIL_SETTINGS_KEY, JSON.stringify(settings));
+  return settings;
 }
 
 function getDefaultAiCapEur() {
@@ -1506,8 +1837,10 @@ function updateRegistrationSessionRecord(sessionId, updates = {}) {
     if (!allowed.has(key)) return;
     if (key === 'email_verified' || key === 'mobile_verified') {
       sanitized[key] = value ? 1 : 0;
-    } else if (key === 'email' || key === 'phone') {
-      sanitized[key] = String(value || '').trim();
+    } else if (key === 'email') {
+      sanitized[key] = normalizeRegistrationEmail(value);
+    } else if (key === 'phone') {
+      sanitized[key] = normalizePhoneValue(value);
     } else {
       sanitized[key] = value;
     }
@@ -1527,6 +1860,28 @@ function updateRegistrationSessionRecord(sessionId, updates = {}) {
 function getRegistrationSession(req, res) {
   const session = ensureRegistrationSession(req, res);
   if (!session) return null;
+  return loadRegistrationSessionById(session.sessionId);
+}
+
+function setRegistrationEmailVerified(req, res, email) {
+  const session = getRegistrationSession(req, res);
+  const normalizedEmail = normalizeRegistrationEmail(email);
+  if (!session?.sessionId || !normalizedEmail) return null;
+  updateRegistrationSessionRecord(session.sessionId, {
+    email: normalizedEmail,
+    email_verified: 1
+  });
+  return loadRegistrationSessionById(session.sessionId);
+}
+
+function setRegistrationMobileVerified(req, res, phone) {
+  const session = getRegistrationSession(req, res);
+  const normalizedPhone = normalizePhoneValue(phone);
+  if (!session?.sessionId || !normalizedPhone) return null;
+  updateRegistrationSessionRecord(session.sessionId, {
+    phone: normalizedPhone,
+    mobile_verified: 1
+  });
   return loadRegistrationSessionById(session.sessionId);
 }
 
@@ -1950,7 +2305,9 @@ function recordEmailLog({
   type = 'test',
   status = 'sent',
   errorMessage = '',
-  messageId = ''
+  messageId = '',
+  inReplyTo = '',
+  referencesHeader = ''
 }) {
   ensureEmailLogStmt().run(
     id,
@@ -1979,7 +2336,9 @@ function recordEmailLog({
       bodyText,
       bodyHtml,
       type,
-      messageId
+      messageId,
+      inReplyTo,
+      referencesHeader
     });
   }
 }
@@ -2027,7 +2386,9 @@ function mirrorEmailLogToStudentMailbox({
   bodyText,
   bodyHtml,
   type,
-  messageId
+  messageId,
+  inReplyTo = '',
+  referencesHeader = ''
 }) {
   const recipient = findWorkspaceUserByEmail(workspaceId, toEmail);
   if (!recipient || !isMailboxStudentRole(recipient.role)) {
@@ -2047,7 +2408,7 @@ function mirrorEmailLogToStudentMailbox({
       mailbox_type, mailbox_owner_user_id, sender_user_id, recipient_user_id,
       direction, visibility_scope, sender_role
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, '', '', ?, 'inbox', '', ?, 0, 'user', ?, ?, ?, 'outbound', 'user', ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'inbox', '', ?, 0, 'user', ?, ?, ?, 'outbound', 'user', ?)
   `
   ).run(
     workspaceId,
@@ -2057,6 +2418,8 @@ function mirrorEmailLogToStudentMailbox({
     subject || '',
     bodyText || '',
     bodyHtml || '',
+    String(inReplyTo || '').trim(),
+    String(referencesHeader || '').trim(),
     id || '',
     new Date().toISOString(),
     recipient.id,
@@ -2419,7 +2782,8 @@ db.prepare(`
   CREATE TABLE IF NOT EXISTS ai_budget_settings (
     workspace_id TEXT PRIMARY KEY,
     monthly_cap_eur REAL NOT NULL DEFAULT 0,
-    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
   )
 `).run();
 
@@ -2431,7 +2795,8 @@ db.prepare(`
     cost_eur REAL NOT NULL,
     tokens_input INTEGER DEFAULT 0,
     tokens_output INTEGER DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
   )
 `).run();
 
@@ -2451,7 +2816,12 @@ db.prepare(`
     seconds_accumulated INTEGER NOT NULL DEFAULT 0,
     ended_at INTEGER,
     status TEXT NOT NULL DEFAULT 'active',
-    end_reason TEXT
+    end_reason TEXT,
+    FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (conversation_id) REFERENCES ai_conversations(id) ON DELETE SET NULL,
+    CHECK (status IN ('active','ended')),
+    CHECK (end_reason IS NULL OR end_reason IN ('idle_timeout','user_stop'))
   )
 `).run();
 safeAlter(`ALTER TABLE ai_runtime_sessions ADD COLUMN conversation_id TEXT;`);
@@ -2478,7 +2848,10 @@ db.prepare(`
     scenario TEXT,
     mode TEXT,
     started_at INTEGER NOT NULL,
-    ended_at INTEGER
+    ended_at INTEGER,
+    FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT,
+    CHECK (mode IS NULL OR mode IN ('assistant','ptt','vad'))
   )
 `).run();
 
@@ -2488,7 +2861,9 @@ db.prepare(`
     conversation_id TEXT NOT NULL,
     role TEXT NOT NULL,
     content TEXT NOT NULL,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (conversation_id) REFERENCES ai_conversations(id) ON DELETE CASCADE,
+    CHECK (role IN ('system','user','assistant'))
   )
 `).run();
 
@@ -2559,16 +2934,12 @@ app.get('/admin', (req, res) => {
 });
 
 app.post('/admin/backup-db', requireAdmin, (req, res) => {
-  try {
-    const backupDir = '/var/backups/worknest';
-    fs.mkdirSync(backupDir, { recursive: true });
-    const backupPath = path.join(backupDir, `manual-${Date.now()}.db`);
-    fs.copyFileSync(DB_PATH, backupPath);
-    return res.json({ ok: true, path: backupPath });
-  } catch (err) {
-    console.error('Manual DB backup failed', err);
-    return res.status(500).json({ error: 'Backup failed' });
-  }
+  backupDatabase('manual')
+    .then((backupPath) => res.json({ ok: true, path: backupPath }))
+    .catch((err) => {
+      console.error('Manual DB backup failed', err);
+      return res.status(500).json({ error: 'Backup failed' });
+    });
 });
 app.use(
   '/uploads',
@@ -2608,6 +2979,14 @@ app.post('/api/register/otp/send', strictLimiter, async (req, res) => {
         ON CONFLICT(email) DO UPDATE SET code = excluded.code, expires_at = excluded.expires_at
       `
     ).run(email, code, expiresAt);
+    const session = getRegistrationSession(req, res);
+    if (session?.sessionId) {
+      updateRegistrationSessionRecord(session.sessionId, {
+        email,
+        email_verified: 0,
+        otp_sent_at: nowMs()
+      });
+    }
     await sendRegistrationOtpEmail(email, code);
     return res.json({ ok: true, expiresAt });
   } catch (error) {
@@ -2638,16 +3017,29 @@ app.post('/api/register/otp/verify', strictLimiter, (req, res) => {
     return res.status(400).json({ error: 'OTP code is incorrect or has expired.' });
   }
   db.prepare('DELETE FROM register_otps WHERE email = ?').run(email);
-  return res.json({ ok: true });
+  const session = setRegistrationEmailVerified(req, res, email);
+  return res.json({
+    ok: true,
+    email_verified: true,
+    session: session || null
+  });
 });
 
 app.post('/api/register/mobile-otp/send', strictLimiter, async (req, res) => {
   try {
-    const phone = String(req.body?.phone || '').trim();
+    const phone = normalizePhoneValue(req.body?.phone);
     const channel = req.body?.channel === 'call' ? 'call' : 'sms';
 
     if (!phone) {
       return res.status(400).json({ error: 'phone is required (E.164 format)' });
+    }
+    const session = getRegistrationSession(req, res);
+    if (session?.sessionId) {
+      const currentPhone = normalizePhoneValue(session.phone);
+      updateRegistrationSessionRecord(session.sessionId, {
+        phone,
+        mobile_verified: currentPhone && currentPhone === phone ? session.mobile_verified : 0
+      });
     }
     if (!twilioClient || !twilioVerifyServiceSid) {
       try {
@@ -2671,7 +3063,7 @@ app.post('/api/register/mobile-otp/send', strictLimiter, async (req, res) => {
 
 app.post('/api/register/mobile-otp/verify', strictLimiter, async (req, res) => {
   try {
-    const phone = String(req.body?.phone || '').trim();
+    const phone = normalizePhoneValue(req.body?.phone);
     const code = String(req.body?.code || '').trim();
 
     if (!phone || !code) {
@@ -2683,7 +3075,16 @@ app.post('/api/register/mobile-otp/verify', strictLimiter, async (req, res) => {
         if (!payload?.valid) {
           return res.status(400).json({ error: 'Invalid or expired OTP.' });
         }
-        return res.json({ ok: true, status: payload?.status });
+        const session = setRegistrationMobileVerified(req, res, phone);
+        const userMatch = markUsersPhoneVerified(phone);
+        return res.json({
+          ok: true,
+          status: payload?.status,
+          mobile_verified: true,
+          session: session || null,
+          matched_users: Number(userMatch?.matched || 0),
+          updated_users: Number(userMatch?.updated || 0)
+        });
       } catch (err) {
         console.error('Mobile OTP proxy verify failed', err);
         return res.status(500).json({ error: err.message });
@@ -2699,7 +3100,16 @@ app.post('/api/register/mobile-otp/verify', strictLimiter, async (req, res) => {
       return res.status(400).json({ error: 'Invalid or expired OTP.' });
     }
 
-    return res.json({ ok: true, status: check.status });
+    const session = setRegistrationMobileVerified(req, res, phone);
+    const userMatch = markUsersPhoneVerified(phone);
+    return res.json({
+      ok: true,
+      status: check.status,
+      mobile_verified: true,
+      session: session || null,
+      matched_users: Number(userMatch?.matched || 0),
+      updated_users: Number(userMatch?.updated || 0)
+    });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -2725,8 +3135,8 @@ app.post('/api/register/session', (req, res) => {
   const payload = req.body || {};
   const updates = {};
   if (typeof payload.step === 'string') updates.step = payload.step;
-  if (typeof payload.email === 'string') updates.email = payload.email.trim();
-  if (typeof payload.phone === 'string') updates.phone = payload.phone.trim();
+  if (typeof payload.email === 'string') updates.email = normalizeRegistrationEmail(payload.email);
+  if (typeof payload.phone === 'string') updates.phone = normalizePhoneValue(payload.phone);
   if (payload.emailVerified !== undefined) updates.email_verified = payload.emailVerified;
   if (payload.mobileVerified !== undefined) updates.mobile_verified = payload.mobileVerified;
   if (payload.otpSentAt !== undefined) {
@@ -2753,8 +3163,8 @@ app.post('/api/register/session', (req, res) => {
   const payload = req.body || {};
   const updates = {};
   if (typeof payload.step === 'string') updates.step = payload.step;
-  if (typeof payload.email === 'string') updates.email = payload.email.trim();
-  if (typeof payload.phone === 'string') updates.phone = payload.phone.trim();
+  if (typeof payload.email === 'string') updates.email = normalizeRegistrationEmail(payload.email);
+  if (typeof payload.phone === 'string') updates.phone = normalizePhoneValue(payload.phone);
   if (payload.emailVerified !== undefined) updates.email_verified = payload.emailVerified;
   if (payload.mobileVerified !== undefined) updates.mobile_verified = payload.mobileVerified;
   if (payload.otpSentAt !== undefined) {
@@ -3375,10 +3785,37 @@ app.post('/api/register/complete', async (req, res) => {
         workspaceId: linkRow.workspaceId
       });
     }
-    if (finalPhoneNumber) {
+    const registrationSession = getRegistrationSession(req, res);
+    const verifiedSessionPhone = normalizePhoneValue(registrationSession?.phone);
+    const finalStoredPhone = buildUserPhoneValue(finalPhoneCountry, finalPhoneNumber) || verifiedSessionPhone || null;
+    const verifiedPhoneInSession =
+      Boolean(registrationSession?.mobile_verified) &&
+      Boolean(verifiedSessionPhone) &&
+      (!finalStoredPhone || phonesEquivalent(verifiedSessionPhone, finalStoredPhone));
+
+    if (finalStoredPhone) {
+      const sessionNationalNumber = normalizePhoneNationalNumber(verifiedSessionPhone).replace(/^0+/, '');
+      const candidatePhoneNumber = String(finalPhoneNumber || sessionNationalNumber || '').trim();
       const existingPhone = db
-        .prepare('SELECT id FROM users WHERE workspace_id = ? AND phone_number = ? LIMIT 1')
-        .get(linkRow.workspaceId, finalPhoneNumber);
+        .prepare(
+          `SELECT id
+           FROM users
+           WHERE workspace_id = ?
+             AND (
+               phone = ?
+                OR phone_number = ?
+                OR (phone_country = ? AND phone_number IN (?, ?))
+             )
+           LIMIT 1`
+        )
+        .get(
+          linkRow.workspaceId,
+          finalStoredPhone,
+          candidatePhoneNumber,
+          finalPhoneCountry || '',
+          candidatePhoneNumber,
+          sessionNationalNumber
+        );
       if (existingPhone) {
         return res.status(409).json({
           error: 'This phone number is already registered. Please login or contact your school admin.',
@@ -3432,6 +3869,8 @@ app.post('/api/register/complete', async (req, res) => {
         salutation: finalSalutation,
         gender: genderValue,
         date_of_birth: finalDateOfBirth,
+        phone: finalStoredPhone,
+        phone_verified: verifiedPhoneInSession ? 1 : 0,
         phone_country: finalPhoneCountry,
         phone_number: finalPhoneNumber,
         native_language: finalNativeLanguage,
@@ -4901,7 +5340,7 @@ CREATE TABLE IF NOT EXISTS announcements (
   CREATE TABLE IF NOT EXISTS files_registry (
     file_id       TEXT PRIMARY KEY,
     workspace_id  TEXT NOT NULL,
-    channel_id    TEXT NOT NULL,
+    channel_id    TEXT,
     message_id    TEXT NOT NULL,
     uploader_id   TEXT,
     purpose       TEXT DEFAULT 'media',
@@ -4913,7 +5352,10 @@ CREATE TABLE IF NOT EXISTS announcements (
     deleted       INTEGER DEFAULT 0,
     replaced_from TEXT,
     created_at    TEXT DEFAULT (datetime('now')),
-    updated_at    TEXT
+    updated_at    TEXT,
+    FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+    FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE SET NULL,
+    FOREIGN KEY (uploader_id) REFERENCES users(id) ON DELETE SET NULL
   );
 
   CREATE INDEX IF NOT EXISTS idx_files_registry_ws
@@ -4941,7 +5383,8 @@ CREATE TABLE IF NOT EXISTS announcements (
     file_name    TEXT,
     mime         TEXT,
     file_url     TEXT,
-    created_at   TEXT DEFAULT (datetime('now'))
+    created_at   TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (file_id) REFERENCES files_registry(file_id) ON DELETE CASCADE
   );
 
   CREATE INDEX IF NOT EXISTS idx_file_events_workspace
@@ -4979,6 +5422,8 @@ CREATE TABLE IF NOT EXISTS announcements (
     salutation   TEXT DEFAULT '',
     gender       TEXT DEFAULT '',
     date_of_birth TEXT,
+    phone        TEXT DEFAULT '',
+    phone_verified INTEGER DEFAULT 0,
     phone_country TEXT DEFAULT '',
     phone_number TEXT DEFAULT '',
     teaching_languages TEXT DEFAULT '',
@@ -5095,7 +5540,10 @@ CREATE TABLE IF NOT EXISTS announcements (
     due_date         TEXT,
     is_archived      INTEGER NOT NULL DEFAULT 0,
     created_by       TEXT,
-    created_at       TEXT DEFAULT (datetime('now'))
+    created_at       TEXT DEFAULT (datetime('now')),
+    is_locked        INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+    FOREIGN KEY (class_channel_id) REFERENCES channels(id) ON DELETE CASCADE
   );
 
   CREATE INDEX IF NOT EXISTS idx_homework_items_ws_class
@@ -5124,8 +5572,11 @@ CREATE TABLE IF NOT EXISTS announcements (
     mime          TEXT DEFAULT 'application/octet-stream',
     size_bytes    INTEGER DEFAULT 0,
     url           TEXT NOT NULL,
+    file_role     TEXT DEFAULT 'task',
     created_by    TEXT,
-    created_at    TEXT DEFAULT (datetime('now'))
+    created_at    TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (item_id) REFERENCES homework_items(id) ON DELETE CASCADE,
+    FOREIGN KEY (file_id) REFERENCES files_registry(file_id) ON DELETE CASCADE
   );
 
   CREATE INDEX IF NOT EXISTS idx_homework_item_files_item
@@ -5147,7 +5598,10 @@ CREATE TABLE IF NOT EXISTS announcements (
     feedback_text    TEXT DEFAULT '',
     grade_value      TEXT DEFAULT '',
     created_at       TEXT DEFAULT (datetime('now')),
-    updated_at       TEXT DEFAULT (datetime('now'))
+    updated_at       TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (homework_item_id) REFERENCES homework_items(id) ON DELETE CASCADE,
+    FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL
   );
 
   CREATE UNIQUE INDEX IF NOT EXISTS idx_homework_submissions_item_student
@@ -5167,11 +5621,29 @@ CREATE TABLE IF NOT EXISTS announcements (
     size_bytes    INTEGER DEFAULT 0,
     url           TEXT NOT NULL,
     created_by    TEXT,
-    created_at    TEXT DEFAULT (datetime('now'))
+    created_at    TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (submission_id) REFERENCES homework_submissions(id) ON DELETE CASCADE,
+    FOREIGN KEY (file_id) REFERENCES files_registry(file_id) ON DELETE CASCADE
   );
 
   CREATE INDEX IF NOT EXISTS idx_homework_submission_files_submission
     ON homework_submission_files(submission_id, created_at);
+
+  CREATE TABLE IF NOT EXISTS homework_submission_comments (
+    id            TEXT PRIMARY KEY,
+    submission_id TEXT NOT NULL,
+    workspace_id  TEXT NOT NULL,
+    channel_id    TEXT NOT NULL,
+    author_id     TEXT NOT NULL,
+    comment_text  TEXT NOT NULL,
+    created_at    TEXT DEFAULT (datetime('now')),
+    updated_at    TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (submission_id) REFERENCES homework_submissions(id) ON DELETE CASCADE,
+    FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE RESTRICT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_homework_submission_comments_submission
+    ON homework_submission_comments(submission_id, created_at);
 
   CREATE TABLE IF NOT EXISTS certificates (
     id               TEXT PRIMARY KEY,
@@ -5250,6 +5722,8 @@ CREATE TABLE IF NOT EXISTS announcements (
   CREATE INDEX IF NOT EXISTS idx_registration_links_email ON registration_links(email);
   CREATE INDEX IF NOT EXISTS idx_registration_links_ws ON registration_links(workspace_id);
 `);
+safeAlter(`ALTER TABLE homework_items ADD COLUMN is_locked INTEGER NOT NULL DEFAULT 0`);
+safeAlter(`ALTER TABLE homework_item_files ADD COLUMN file_role TEXT DEFAULT 'task'`);
 
 safeAlter(`
   ALTER TABLE announcements ADD COLUMN read_count INTEGER DEFAULT 0
@@ -5377,9 +5851,10 @@ try {
       session_date TEXT NOT NULL,
       created_by_user_id TEXT,
       created_at TEXT DEFAULT (datetime('now')),
-      locked_by TEXT DEFAULT '',
-      locked_at TEXT DEFAULT '',
-      UNIQUE(channel_id, session_date)
+      UNIQUE(channel_id, session_date),
+      FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+      FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE,
+      FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE RESTRICT
     );
 
     CREATE TABLE IF NOT EXISTS attendance_records (
@@ -5391,7 +5866,11 @@ try {
       status TEXT NOT NULL CHECK(status IN ('present','absent')),
       marked_by_user_id TEXT,
       marked_at TEXT DEFAULT (datetime('now')),
-      UNIQUE(session_id, student_user_id)
+      UNIQUE(session_id, student_user_id),
+      FOREIGN KEY (session_id) REFERENCES attendance_sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE,
+      FOREIGN KEY (student_user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (marked_by_user_id) REFERENCES users(id) ON DELETE SET NULL
     );
 
     CREATE TABLE IF NOT EXISTS attendance_notifications (
@@ -5402,11 +5881,11 @@ try {
       student_user_id TEXT NOT NULL,
       type TEXT NOT NULL,
       sent_at TEXT DEFAULT (datetime('now')),
-      UNIQUE(session_id, student_user_id, type)
+      UNIQUE(session_id, student_user_id, type),
+      FOREIGN KEY (session_id) REFERENCES attendance_sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE,
+      FOREIGN KEY (student_user_id) REFERENCES users(id) ON DELETE CASCADE
     );
-
-    CREATE INDEX IF NOT EXISTS idx_att_sess_channel_date
-      ON attendance_sessions(channel_id, session_date);
 
     CREATE INDEX IF NOT EXISTS idx_att_records_session
       ON attendance_records(session_id);
@@ -5444,6 +5923,7 @@ try {
     CREATE INDEX IF NOT EXISTS idx_email_templates_workspace
       ON workspace_email_templates(workspace_id);
 
+    /* ========== LEGACY CLASS ATTENDANCE (deprecated; do not extend) ========== */
     CREATE TABLE IF NOT EXISTS class_attendance (
       id TEXT PRIMARY KEY,
       channel_id TEXT NOT NULL,
@@ -7383,6 +7863,11 @@ function normalizeReservedTaskChannels(workspaceId, name, topic = '') {
         db.prepare('UPDATE messages SET channel_id = ? WHERE channel_id = ?').run(targetId, duplicateId);
         db.prepare('UPDATE tasks SET channel_id = ? WHERE channel_id = ?').run(targetId, duplicateId);
         db.prepare('UPDATE files_registry SET channel_id = ? WHERE channel_id = ?').run(targetId, duplicateId);
+        // Class attendance uses channel_id as part of its ownership model, so
+        // channel consolidation must remap those rows before the old channel is deleted.
+        db.prepare('UPDATE attendance_sessions SET channel_id = ? WHERE channel_id = ?').run(targetId, duplicateId);
+        db.prepare('UPDATE attendance_records SET channel_id = ? WHERE channel_id = ?').run(targetId, duplicateId);
+        db.prepare('UPDATE attendance_notifications SET channel_id = ? WHERE channel_id = ?').run(targetId, duplicateId);
         db.prepare(
           `INSERT OR IGNORE INTO channel_members (channel_id, user_id)
            SELECT ?, user_id
@@ -7573,6 +8058,11 @@ function normalizeHomeworkSubmissionStatus(value, { dueDate = null } = {}) {
   return 'draft';
 }
 
+function isHomeworkSubmissionDeadlinePassed(dueDate) {
+  const dueMs = Date.parse(String(dueDate || ''));
+  return Number.isFinite(dueMs) && Date.now() > dueMs;
+}
+
 function canManageHomeworkChannel(user, homeworkChannel) {
   if (!user || !homeworkChannel) return false;
   if (isWorkspaceAdmin(user)) {
@@ -7627,8 +8117,8 @@ function registerHomeworkLinkedFile({
 }) {
   const url = String(file?.url || '').trim();
   if (!url) return null;
-  const name = String(file?.originalName || file?.name || 'attachment').trim() || 'attachment';
-  const mime = String(file?.mimeType || file?.mime || 'application/octet-stream').trim() || 'application/octet-stream';
+  const name = String(file?.fileName || file?.originalName || file?.name || 'attachment').trim() || 'attachment';
+  const mime = String(file?.mime || file?.mimeType || 'application/octet-stream').trim() || 'application/octet-stream';
   const sizeBytes = Number(file?.size || file?.sizeBytes || 0) || 0;
   const fileId = computeFileIdFromMeta({ url, channelId, messageId, name });
   db.prepare(
@@ -7665,6 +8155,7 @@ function listHomeworkItemFiles(itemIds = []) {
   const rows = db
     .prepare(
       `SELECT id, item_id AS itemId, file_id AS fileId, file_name AS fileName, mime, size_bytes AS sizeBytes, url, created_at AS createdAt
+             , file_role AS fileRole
        FROM homework_item_files
        WHERE item_id IN (${normalized.map(() => '?').join(',')})
        ORDER BY created_at ASC`
@@ -7699,11 +8190,42 @@ function listHomeworkSubmissionFiles(submissionIds = []) {
   return map;
 }
 
+function listHomeworkSubmissionComments(submissionIds = []) {
+  const normalized = submissionIds.map((id) => String(id || '').trim()).filter(Boolean);
+  if (!normalized.length) return new Map();
+  const rows = db
+    .prepare(
+      `SELECT
+         hsc.id,
+         hsc.submission_id AS submissionId,
+         hsc.author_id AS authorId,
+         hsc.comment_text AS commentText,
+         hsc.created_at AS createdAt,
+         hsc.updated_at AS updatedAt,
+         COALESCE(u.name, u.email, u.username, hsc.author_id) AS authorName
+       FROM homework_submission_comments hsc
+       LEFT JOIN users u ON u.id = hsc.author_id
+       WHERE hsc.submission_id IN (${normalized.map(() => '?').join(',')})
+       ORDER BY datetime(hsc.created_at) ASC`
+    )
+    .all(...normalized);
+  const map = new Map();
+  rows.forEach((row) => {
+    const key = String(row.submissionId || '');
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(row);
+  });
+  return map;
+}
+
 function listHomeworkBoardForChannel(homeworkChannel, viewer) {
   const classId = getHomeworkClassIdFromChannel(homeworkChannel);
   if (!classId) return [];
   const viewerId = String(viewer?.id || viewer?.sub || '').trim();
   const viewerRole = getNormalizedUserRole(viewer);
+  const itemUpdatedAtSelect = hasColumn('homework_items', 'updated_at')
+    ? 'hi.updated_at AS updatedAt,'
+    : 'hi.created_at AS updatedAt,';
   const items = db
     .prepare(
       `
@@ -7715,9 +8237,11 @@ function listHomeworkBoardForChannel(homeworkChannel, viewer) {
         hi.description,
         hi.resource_url AS resourceUrl,
         hi.due_date AS dueDate,
+        hi.is_locked AS isLocked,
         hi.is_archived AS isArchived,
         hi.created_by AS createdBy,
         hi.created_at AS createdAt,
+        ${itemUpdatedAtSelect}
         COALESCE(u.name, u.email, u.username, hi.created_by) AS createdByName
       FROM homework_items hi
       LEFT JOIN users u ON u.id = hi.created_by
@@ -7732,9 +8256,7 @@ function listHomeworkBoardForChannel(homeworkChannel, viewer) {
 
   const itemIds = items.map((item) => String(item.id || ''));
   const itemFiles = listHomeworkItemFiles(itemIds);
-  const submissionRows = db
-    .prepare(
-      `
+  const submissionBaseSql = `
       SELECT
         hs.id,
         hs.homework_item_id AS homeworkItemId,
@@ -7758,18 +8280,31 @@ function listHomeworkBoardForChannel(homeworkChannel, viewer) {
       LEFT JOIN users u ON u.id = hs.student_id
       LEFT JOIN users r ON r.id = hs.reviewed_by
       WHERE hs.homework_item_id IN (${itemIds.map(() => '?').join(',')})
-      ORDER BY datetime(hs.updated_at) DESC, hs.created_at DESC
-    `
-    )
-    .all(...itemIds);
+  `;
+  const submissionRows = viewerRole === 'student'
+    ? db
+        .prepare(
+          `${submissionBaseSql}
+           AND hs.student_id = ?
+           ORDER BY datetime(hs.updated_at) DESC, hs.created_at DESC`
+        )
+        .all(...itemIds, viewerId)
+    : db
+        .prepare(
+          `${submissionBaseSql}
+           ORDER BY datetime(hs.updated_at) DESC, hs.created_at DESC`
+        )
+        .all(...itemIds);
   const submissionFiles = listHomeworkSubmissionFiles(submissionRows.map((row) => row.id));
+  const submissionComments = listHomeworkSubmissionComments(submissionRows.map((row) => row.id));
   const submissionsByItem = new Map();
   submissionRows.forEach((row) => {
     const key = String(row.homeworkItemId || '');
     if (!submissionsByItem.has(key)) submissionsByItem.set(key, []);
     submissionsByItem.get(key).push({
       ...row,
-      files: submissionFiles.get(String(row.id || '')) || []
+      files: submissionFiles.get(String(row.id || '')) || [],
+      comments: submissionComments.get(String(row.id || '')) || []
     });
   });
 
@@ -7829,6 +8364,12 @@ function ensureTeachersChannelForAllWorkspaces() {
 }
 
 ensureTeachersChannelForAllWorkspaces();
+if (ENV.DB_BACKUP_ON_START) {
+  backupDatabase('startup')
+    .then((backupPath) => console.log(`[Backup] Created ${backupPath}`))
+    .catch((err) => console.error('[Backup] Startup backup failed', err));
+}
+scheduleDatabaseBackups();
 
 function ensureDefaultMembershipsForAllWorkspaces() {
   const rows = db.prepare('SELECT id FROM workspaces').all();
@@ -8383,39 +8924,62 @@ async function convertIfWebm(filePath, originalName, mimeType) {
   }
 }
 
-app.post('/api/uploads', upload.array('files', 10), async (req, res) => {
-  try {
-    const files = req.files || [];
-    const out = [];
-
-    for (const f of files) {
-      const absIn = f.path;
-      const { outPath, outMime } = await convertIfWebm(absIn, f.originalname, f.mimetype);
-
-      if (outPath !== absIn) {
-        try {
-          fs.unlinkSync(absIn);
-        } catch (_e) {
-          /* ignore */
-        }
-      }
-
-      const filename = path.basename(outPath);
-      const stat = fs.statSync(outPath);
-
-      out.push({
-        url: `/uploads/${filename}`,
-        originalName: f.originalname,
-        size: stat.size,
-        mimeType: outMime
+app.post('/api/uploads', (req, res) => {
+  ensureDir(UPLOADS_DIR);
+  upload.array('files', 50)(req, res, async (uploadErr) => {
+    if (uploadErr) {
+      const isMulterErr = uploadErr instanceof multer.MulterError;
+      console.error('Upload middleware failed:', uploadErr);
+      return res.status(isMulterErr ? 400 : 500).json({
+        error: uploadErr?.message || 'Upload failed'
       });
     }
 
-    res.json({ files: out });
-  } catch (err) {
-    console.error('Upload/convert failed:', err);
-    res.status(500).json({ error: 'Upload failed' });
-  }
+    try {
+      const files = Array.isArray(req.files) ? req.files : [];
+      if (!files.length) {
+        return res.status(400).json({ error: 'No files received' });
+      }
+
+      const out = [];
+
+      for (const f of files) {
+        if (!f?.path || !fs.existsSync(f.path)) {
+          throw new Error(`Uploaded file missing on disk: ${f?.originalname || 'unknown file'}`);
+        }
+
+        const absIn = f.path;
+        const { outPath, outMime } = await convertIfWebm(absIn, f.originalname, f.mimetype);
+
+        if (!outPath || !fs.existsSync(outPath)) {
+          throw new Error(`Processed file missing on disk: ${f.originalname || path.basename(absIn)}`);
+        }
+
+        if (outPath !== absIn) {
+          try {
+            fs.unlinkSync(absIn);
+          } catch (_e) {
+            /* ignore */
+          }
+        }
+
+        const filename = path.basename(outPath);
+        const stat = fs.statSync(outPath);
+
+        out.push({
+          url: `/uploads/${filename}`,
+          originalName: f.originalname,
+          size: Number(stat.size) || Number(f.size) || 0,
+          mimeType: outMime || f.mimetype || 'application/octet-stream'
+        });
+      }
+
+      res.json({ files: out });
+    } catch (err) {
+      console.error('Upload/convert failed:', err);
+      res.status(500).json({ error: err?.message || 'Upload failed' });
+    }
+  });
 });
 
 /* ---------- File events (analytics) ---------- */
@@ -9999,7 +10563,8 @@ app.get('/api/workspaces/:workspaceId/email-settings', (req, res) => {
     .get(workspaceId);
 
   const adminEmail = getWorkspaceAdminEmail(workspaceId);
-  const replyToDefault = adminEmail || String(user?.email || '').trim();
+  const ownerEmail = String(getPlatformOwnerEmailSettings().owner_email || '').trim();
+  const replyToDefault = adminEmail || ownerEmail || String(user?.email || '').trim();
   const defaults = {
     workspace_id: workspaceId,
     enabled: 0,
@@ -10090,7 +10655,8 @@ app.post('/api/workspaces/:workspaceId/email-settings/test', async (req, res) =>
   const workspaceRow =
     db.prepare('SELECT name, admin_email FROM workspaces WHERE id = ?').get(workspaceId) || {};
   const profileRow = db.prepare('SELECT * FROM workspace_profile WHERE workspace_id = ?').get(workspaceId) || {};
-  const replyTo = String(s.reply_to_email || workspaceRow.admin_email || '').trim();
+  const ownerEmail = String(getPlatformOwnerEmailSettings().owner_email || '').trim();
+  const replyTo = String(s.reply_to_email || workspaceRow.admin_email || ownerEmail || '').trim();
   const requestBodyText = String(req.body?.manual_body_text || '').trim();
   const subjectText = String(req.body?.subject || '').trim();
 
@@ -10290,7 +10856,8 @@ app.post('/api/workspaces/:workspaceId/email-templates/:templateKey/test', async
     db.prepare('SELECT name, admin_email FROM workspaces WHERE id = ?').get(workspaceId) || {};
   const profileRow = db.prepare('SELECT * FROM workspace_profile WHERE workspace_id = ?').get(workspaceId) || {};
 
-  const replyTo = String(s.reply_to_email || workspaceRow.admin_email || '').trim();
+  const ownerEmail = String(getPlatformOwnerEmailSettings().owner_email || '').trim();
+  const replyTo = String(s.reply_to_email || workspaceRow.admin_email || ownerEmail || '').trim();
 
   const vars = {
     school_name: String(s.brand_school_name || workspaceRow.name || 'School'),
@@ -10482,6 +11049,107 @@ app.get('/api/admin/inbox', requireAccessToken, async (req, res) => {
 
   res.json(inboxRows);
 });
+
+app.post(
+  '/api/admin/inbox/contact-form',
+  requireAccessToken,
+  express.json(),
+  (req, res) => {
+    try {
+      const viewer = getMailboxViewer(req.auth);
+      if (!viewer.isStudent) {
+        return res.status(403).json({ error: 'Only students can use the contact form' });
+      }
+
+      const student = db
+        .prepare(
+          `
+          SELECT id, workspace_id AS workspaceId, name, first_name, last_name, email, role
+          FROM users
+          WHERE id = ?
+            AND workspace_id = ?
+          LIMIT 1
+        `
+        )
+        .get(viewer.userId, viewer.workspaceId);
+      if (!student) {
+        return res.status(404).json({ error: 'Student account not found' });
+      }
+
+      const subject = String(req.body?.subject || '').trim();
+      const message = String(req.body?.message || '').trim();
+      const messageWords = message ? message.split(/\s+/).filter(Boolean).length : 0;
+      if (!subject) {
+        return res.status(400).json({ error: 'Subject is required' });
+      }
+      if (subject.length > 120) {
+        return res.status(400).json({ error: 'Subject must be 120 characters or less' });
+      }
+      if (!message) {
+        return res.status(400).json({ error: 'Message is required' });
+      }
+      if (messageWords > 500) {
+        return res.status(400).json({ error: 'Message must be 500 words or less' });
+      }
+
+      const adminUser = getWorkspaceAdminMailboxUser(viewer.workspaceId);
+      if (!adminUser?.id) {
+        return res.status(404).json({ error: 'School admin mailbox was not found' });
+      }
+
+      const senderName =
+        String(
+          student.name ||
+            `${student.first_name || ''} ${student.last_name || ''}`.trim() ||
+            student.email ||
+            'Student'
+        ).trim() || 'Student';
+      const senderEmail = String(student.email || '').trim();
+      const senderLabel = senderEmail ? `${senderName} <${senderEmail}>` : senderName;
+
+      const adminName =
+        String(
+          adminUser.name ||
+            `${adminUser.first_name || ''} ${adminUser.last_name || ''}`.trim() ||
+            adminUser.email ||
+            'School Admin'
+        ).trim() || 'School Admin';
+      const adminEmail = String(adminUser.email || '').trim();
+      const recipientLabel = adminEmail ? `${adminName} <${adminEmail}>` : adminName;
+
+      db.prepare(
+        `
+        INSERT INTO inbound_emails (
+          workspace_id, message_id, sender, recipient, subject,
+          text_body, html_body, in_reply_to, references_header, related_email_log_id,
+          folder, attachments_json, received_at, is_read,
+          mailbox_type, mailbox_owner_user_id, sender_user_id, recipient_user_id,
+          direction, visibility_scope, sender_role
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, '', '', '', 'inbox', '', ?, 0, 'workspace', ?, ?, ?, 'inbound', 'workspace', ?)
+      `
+      ).run(
+        viewer.workspaceId,
+        uuid('cform'),
+        senderLabel,
+        recipientLabel,
+        subject,
+        message,
+        `<div style="white-space:pre-wrap;">${escapeHtml(message)}</div>`,
+        new Date().toISOString(),
+        adminUser.id,
+        student.id,
+        adminUser.id,
+        normalizeMailboxRole(student.role || 'student')
+      );
+
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('[InboundEmail] Contact form failed', err?.message || err);
+      res.status(500).json({ error: 'Failed to send contact form' });
+    }
+  }
+);
 
 function parseInboxBulkIds(body = {}) {
   return Array.isArray(body?.ids)
@@ -10780,11 +11448,13 @@ app.post(
       }
 
       const finalText = `${replyText}${buildQuotedText(row)}`;
+      const finalHtml = buildReplyHtml(replyText, row);
       const info = await transporter.sendMail({
         from: fromHeader,
         to,
         subject,
         text: finalText,
+        html: finalHtml,
         replyTo: getInboundMailboxEmail() || fromAddr,
         headers: {
           ...(inReplyTo ? { 'In-Reply-To': inReplyTo } : {}),
@@ -10806,10 +11476,12 @@ app.post(
         toName: String(row.sender || '').trim(),
         subject,
         bodyText: finalText,
-        bodyHtml: '',
+        bodyHtml: finalHtml,
         type: 'inbox_reply',
         status: 'sent',
-        messageId: normalizeEmailMessageId(info?.messageId || '')
+        messageId: normalizeEmailMessageId(info?.messageId || ''),
+        inReplyTo,
+        referencesHeader
       });
 
       return res.json({ ok: true, messageId: info.messageId || null });
@@ -11612,8 +12284,8 @@ app.post(
   const normalizedGender = String(gender || '').trim();
 
   db.prepare(
-    `INSERT INTO users (id, workspace_id, first_name, last_name, name, username, email, password_hash, avatar_url, role, status, course_start, course_end, course_level, gender, date_of_birth, phone_country, phone_number, teaching_languages, employment_type, available_days, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, native_language, learning_goal, native_language_confirmed)
-     VALUES (@id, @workspace_id, @first_name, @last_name, @name, @username, @email, @password_hash, @avatar_url, @role, @status, @course_start, @course_end, @course_level, @gender, @date_of_birth, @phone_country, @phone_number, @teaching_languages, @employment_type, @available_days, @emergency_contact_name, @emergency_contact_phone, @emergency_contact_relation, @native_language, @learning_goal, @native_language_confirmed)`
+    `INSERT INTO users (id, workspace_id, first_name, last_name, name, username, email, password_hash, avatar_url, role, status, course_start, course_end, course_level, gender, date_of_birth, phone, phone_country, phone_number, teaching_languages, employment_type, available_days, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, native_language, learning_goal, native_language_confirmed)
+     VALUES (@id, @workspace_id, @first_name, @last_name, @name, @username, @email, @password_hash, @avatar_url, @role, @status, @course_start, @course_end, @course_level, @gender, @date_of_birth, @phone, @phone_country, @phone_number, @teaching_languages, @employment_type, @available_days, @emergency_contact_name, @emergency_contact_phone, @emergency_contact_relation, @native_language, @learning_goal, @native_language_confirmed)`
   ).run({
     id,
     workspace_id: ws,
@@ -11631,6 +12303,7 @@ app.post(
     course_level: (courseLevel || "").trim() || null,
     gender: normalizedGender,
     date_of_birth: dateOfBirth || null,
+    phone: buildUserPhoneValue(phoneCountry, phoneNumber),
     phone_country: phoneCountry || null,
     phone_number: phoneNumber || null,
     teaching_languages: teachingLanguages || null,
@@ -11812,6 +12485,7 @@ app.post(
         course_level: (record.courseLevel || '').trim() || null,
         gender: String(record.gender || '').trim() || null,
         date_of_birth: (record.dateOfBirth || '').trim() || null,
+        phone: buildUserPhoneValue(record.phoneCountry, record.phoneNumber),
         phone_country: (record.phoneCountry || '').trim() || null,
         phone_number: (record.phoneNumber || '').trim() || null,
         teaching_languages: (record.teachingLanguages || '').trim() || null,
@@ -12908,6 +13582,259 @@ function resolveHomeworkRequestContext(req, res, channelId = null) {
   return { user, homeworkChannel, classChannel };
 }
 
+function resolveRealChannelId(channelId) {
+  const raw = String(channelId || '').trim();
+  if (!raw) return '';
+  if (raw.endsWith(':note')) {
+    return raw.slice(0, -5);
+  }
+  return raw;
+}
+
+function canManageChannelMembers(roleValue) {
+  const role = String(roleValue || "").trim().toLowerCase();
+  return ["teacher", "admin", "school_admin", "super_admin"].includes(role);
+}
+
+app.get('/api/user-class-memberships', authRequired, (req, res) => {
+  const authUser = req.auth || {};
+  const workspaceId = String(req.query.workspaceId || authUser.workspaceId || authUser.workspace_id || '').trim();
+  const userId = String(req.query.userId || req.headers['x-user-id'] || authUser.id || authUser.sub || '').trim();
+  if (!workspaceId || !userId) {
+    return res.json([]);
+  }
+  if (!isSuperAdminRole(authUser)) {
+    const authWorkspaceId = String(authUser.workspaceId || authUser.workspace_id || '').trim();
+    const authUserId = String(authUser.id || authUser.sub || '').trim();
+    if (workspaceId !== authWorkspaceId || userId !== authUserId) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+  }
+  const rows = db
+    .prepare(
+      `
+      SELECT c.id AS channelId, c.name, c.category
+      FROM channel_members cm
+      JOIN channels c ON c.id = cm.channel_id
+      WHERE cm.user_id = ?
+        AND c.workspace_id = ?
+        AND lower(COALESCE(c.category, '')) IN ('class', 'classes')
+      ORDER BY lower(COALESCE(c.name, c.id)) ASC
+    `
+    )
+    .all(userId, workspaceId);
+  res.json(rows);
+});
+
+app.get('/api/policy/acceptance', authRequired, (req, res) => {
+  const authUser = req.auth || {};
+  const workspaceId = String(req.query.workspaceId || authUser.workspaceId || authUser.workspace_id || '').trim();
+  const userId = String(req.headers['x-user-id'] || authUser.id || authUser.sub || '').trim();
+  if (!workspaceId || !userId) {
+    return res.json({ accepted: false });
+  }
+  if (!isSuperAdminRole(authUser)) {
+    const authWorkspaceId = String(authUser.workspaceId || authUser.workspace_id || '').trim();
+    const authUserId = String(authUser.id || authUser.sub || '').trim();
+    if (workspaceId !== authWorkspaceId || userId !== authUserId) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+  }
+  const row = db
+    .prepare(
+      `
+      SELECT version, accepted_at AS acceptedAt
+      FROM policy_acceptances
+      WHERE workspace_id = ? AND user_id = ?
+      ORDER BY datetime(accepted_at) DESC, rowid DESC
+      LIMIT 1
+    `
+    )
+    .get(workspaceId, userId);
+  res.json({
+    accepted: !!row,
+    version: row?.version || null,
+    acceptedAt: row?.acceptedAt || null
+  });
+});
+
+app.post('/api/policy/accept', authRequired, express.json(), (req, res) => {
+  const authUser = req.auth || {};
+  const workspaceId = String(req.body?.workspaceId || authUser.workspaceId || authUser.workspace_id || '').trim();
+  const userId = String(req.headers['x-user-id'] || authUser.id || authUser.sub || '').trim();
+  const version = String(req.body?.version || 'v1').trim() || 'v1';
+  if (!workspaceId || !userId) {
+    return res.status(400).json({ error: 'workspaceId and userId are required' });
+  }
+  if (!isSuperAdminRole(authUser)) {
+    const authWorkspaceId = String(authUser.workspaceId || authUser.workspace_id || '').trim();
+    const authUserId = String(authUser.id || authUser.sub || '').trim();
+    if (workspaceId !== authWorkspaceId || userId !== authUserId) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+  }
+  db.prepare(
+    `
+    INSERT INTO policy_acceptances (workspace_id, user_id, version, accepted_at)
+    VALUES (?, ?, ?, datetime('now'))
+    ON CONFLICT(workspace_id, user_id, version) DO UPDATE SET accepted_at = datetime('now')
+  `
+  ).run(workspaceId, userId, version);
+  res.json({ ok: true, workspaceId, userId, version });
+});
+
+app.get('/api/channels/:channelId/members', authRequired, (req, res) => {
+  const channelId = resolveRealChannelId(req.params.channelId);
+  const channel = db
+    .prepare('SELECT id, workspace_id AS workspaceId FROM channels WHERE id = ? LIMIT 1')
+    .get(String(channelId || '').trim());
+  if (!channel) {
+    return res.status(404).json({ error: 'Channel not found' });
+  }
+  const authUser = req.auth || {};
+  const authWorkspaceId = String(authUser.workspaceId || authUser.workspace_id || '').trim();
+  if (!isSuperAdminRole(authUser) && authWorkspaceId !== String(channel.workspaceId || '').trim()) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const members = db
+    .prepare(
+      `
+      SELECT user_id
+      FROM channel_members
+      WHERE channel_id = ?
+      ORDER BY user_id ASC
+    `
+    )
+    .all(channel.id)
+    .map((row) => String(row.user_id || ''))
+    .filter(Boolean);
+  res.json({ members });
+});
+
+app.post('/api/channels/:channelId/members', authRequired, express.json(), (req, res) => {
+  const channelId = resolveRealChannelId(req.params.channelId);
+  const userId = String(req.body?.userId || '').trim();
+  const requesterId = String(req.headers['x-user-id'] || req.auth?.id || req.auth?.sub || '').trim();
+  if (!requesterId) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (!userId) {
+    return res.status(400).json({ error: 'userId is required' });
+  }
+  const requester = db
+    .prepare('SELECT id, role, workspace_id AS workspaceId FROM users WHERE id = ?')
+    .get(requesterId);
+  if (!requester) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (!canManageChannelMembers(requester.role)) {
+    return res.status(403).json({ error: 'Only teachers or admins can manage members' });
+  }
+  const user = db
+    .prepare('SELECT id, role, workspace_id AS workspaceId FROM users WHERE id = ?')
+    .get(userId);
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+  const channel = db
+    .prepare('SELECT id, name, workspace_id AS workspaceId, category FROM channels WHERE id = ?')
+    .get(channelId);
+  if (!channel) {
+    return res.status(404).json({ error: 'Channel not found' });
+  }
+  if (
+    String(channel.workspaceId || '') !== String(requester.workspaceId || '') ||
+    String(channel.workspaceId || '') !== String(user.workspaceId || '')
+  ) {
+    return res.status(400).json({ error: 'Workspace mismatch' });
+  }
+
+  db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)').run(
+    channelId,
+    userId
+  );
+
+  if (normalizeChannelCategory(channel.category) === 'classes') {
+    const hwId = ensureHomeworkChannelForClass({
+      id: channel.id,
+      name: channel.name,
+      workspaceId: channel.workspaceId,
+      category: channel.category
+    });
+    if (hwId) {
+      db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)').run(
+        hwId,
+        userId
+      );
+    }
+  }
+
+  res.json({ ok: true, channelId, userId });
+});
+
+app.delete('/api/channels/:channelId/members', authRequired, express.json(), (req, res) => {
+  const channelId = resolveRealChannelId(req.params.channelId);
+  const userId = String(req.body?.userId || '').trim();
+  const requesterId = String(req.headers['x-user-id'] || req.auth?.id || req.auth?.sub || '').trim();
+  if (!requesterId) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (!userId) {
+    return res.status(400).json({ error: 'userId is required' });
+  }
+  const requester = db
+    .prepare('SELECT id, role, workspace_id AS workspaceId FROM users WHERE id = ?')
+    .get(requesterId);
+  if (!requester) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (!canManageChannelMembers(requester.role)) {
+    return res.status(403).json({ error: 'Only teachers or admins can manage members' });
+  }
+  const user = db
+    .prepare('SELECT id, role, workspace_id AS workspaceId FROM users WHERE id = ?')
+    .get(userId);
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+  const channel = db
+    .prepare('SELECT id, name, workspace_id AS workspaceId, category FROM channels WHERE id = ?')
+    .get(channelId);
+  if (!channel) {
+    return res.status(404).json({ error: 'Channel not found' });
+  }
+  if (
+    String(channel.workspaceId || '') !== String(requester.workspaceId || '') ||
+    String(channel.workspaceId || '') !== String(user.workspaceId || '')
+  ) {
+    return res.status(400).json({ error: 'Workspace mismatch' });
+  }
+
+  db.prepare('DELETE FROM channel_members WHERE channel_id = ? AND user_id = ?').run(
+    channelId,
+    userId
+  );
+
+  if (normalizeChannelCategory(channel.category) === 'classes') {
+    const hw = db
+      .prepare(
+        `SELECT id
+         FROM channels
+         WHERE lower(category) = 'homework'
+           AND topic = ?`
+      )
+      .get(`homework_for:${channelId}`);
+    if (hw?.id) {
+      db.prepare('DELETE FROM channel_members WHERE channel_id = ? AND user_id = ?').run(
+        hw.id,
+        userId
+      );
+    }
+  }
+
+  res.json({ ok: true, channelId, userId });
+});
+
 app.get('/api/homework/channels/:channelId/board', authRequired, (req, res) => {
   const ctx = resolveHomeworkRequestContext(req, res, req.params.channelId);
   if (!ctx) return;
@@ -12936,15 +13863,22 @@ app.post('/api/homework/channels/:channelId/items', authRequired, express.json()
   const description = String(req.body?.description || '').trim();
   const resourceUrl = String(req.body?.resourceUrl || '').trim() || null;
   const dueDate = String(req.body?.dueDate || '').trim() || null;
+  const isLocked = req.body?.isLocked ? 1 : 0;
   const files = Array.isArray(req.body?.files) ? req.body.files : [];
+  const solutionFiles = Array.isArray(req.body?.solutionFiles) ? req.body.solutionFiles : [];
   if (!title) return res.status(400).json({ error: 'title required' });
+  const itemHasUpdatedAt = hasColumn('homework_items', 'updated_at');
 
   const itemId = generateId('hwi');
   db.prepare(
     `
     INSERT INTO homework_items
-    (id, workspace_id, class_channel_id, title, description, resource_url, due_date, is_archived, created_by, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, datetime('now'))
+    ${itemHasUpdatedAt
+      ? `(id, workspace_id, class_channel_id, title, description, resource_url, due_date, is_locked, is_archived, created_by, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, datetime('now'), datetime('now'))`
+      : `(id, workspace_id, class_channel_id, title, description, resource_url, due_date, is_locked, is_archived, created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, datetime('now'))`
+    }
   `
   ).run(
     itemId,
@@ -12954,23 +13888,24 @@ app.post('/api/homework/channels/:channelId/items', authRequired, express.json()
     description,
     resourceUrl,
     dueDate,
+    isLocked,
     ctx.user.id || null
   );
 
   const fileStmt = db.prepare(
     `
     INSERT INTO homework_item_files
-    (id, item_id, workspace_id, channel_id, file_id, file_name, mime, size_bytes, url, created_by, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    (id, item_id, workspace_id, channel_id, file_id, file_name, mime, size_bytes, url, file_role, created_by, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
   `
   );
-  files.forEach((file) => {
+  [...files.map((file) => ({ file, fileRole: 'task' })), ...solutionFiles.map((file) => ({ file, fileRole: 'solution' }))].forEach(({ file, fileRole }) => {
     const linked = registerHomeworkLinkedFile({
       workspaceId: ctx.homeworkChannel.workspaceId,
       channelId: ctx.homeworkChannel.id,
       ownerId: ctx.user.id || null,
       file,
-      purpose: 'homework',
+      purpose: fileRole === 'solution' ? 'homework_solution' : 'homework',
       messageId: `homework-item:${itemId}`
     });
     if (!linked) return;
@@ -12984,6 +13919,7 @@ app.post('/api/homework/channels/:channelId/items', authRequired, express.json()
       linked.mime,
       linked.sizeBytes,
       linked.url,
+      fileRole,
       ctx.user.id || null
     );
   });
@@ -12994,9 +13930,10 @@ app.post('/api/homework/channels/:channelId/items', authRequired, express.json()
 
 app.patch('/api/homework/items/:itemId', authRequired, express.json(), (req, res) => {
   const itemId = String(req.params.itemId || '').trim();
+  const itemHasUpdatedAt = hasColumn('homework_items', 'updated_at');
   const item = db
     .prepare(
-      `SELECT id, workspace_id AS workspaceId, class_channel_id AS classChannelId, title, description, resource_url AS resourceUrl, due_date AS dueDate, is_archived AS isArchived, created_by AS createdBy
+      `SELECT id, workspace_id AS workspaceId, class_channel_id AS classChannelId, title, description, resource_url AS resourceUrl, due_date AS dueDate, is_locked AS isLocked, is_archived AS isArchived, created_by AS createdBy, created_at AS createdAt, ${itemHasUpdatedAt ? 'updated_at' : 'created_at'} AS updatedAt
        FROM homework_items
        WHERE id = ?
        LIMIT 1`
@@ -13017,19 +13954,57 @@ app.patch('/api/homework/items/:itemId', authRequired, express.json(), (req, res
   const description = req.body?.description != null ? String(req.body.description).trim() : item.description;
   const resourceUrl = req.body?.resourceUrl != null ? (String(req.body.resourceUrl).trim() || null) : item.resourceUrl;
   const dueDate = req.body?.dueDate != null ? (String(req.body.dueDate).trim() || null) : item.dueDate;
+  const isLocked = req.body?.isLocked != null ? (req.body.isLocked ? 1 : 0) : (item.isLocked ? 1 : 0);
   const isArchived = req.body?.isArchived != null ? (req.body.isArchived ? 1 : 0) : (item.isArchived ? 1 : 0);
+  const files = Array.isArray(req.body?.files) ? req.body.files : null;
+  const solutionFiles = Array.isArray(req.body?.solutionFiles) ? req.body.solutionFiles : null;
   if (!title) return res.status(400).json({ error: 'title required' });
 
   db.prepare(
     `
     UPDATE homework_items
-    SET title = ?, description = ?, resource_url = ?, due_date = ?, is_archived = ?
+    SET title = ?, description = ?, resource_url = ?, due_date = ?, is_locked = ?, is_archived = ?${itemHasUpdatedAt ? ", updated_at = datetime('now')" : ""}
     WHERE id = ?
   `
-  ).run(title, description, resourceUrl, dueDate, isArchived, itemId);
+  ).run(title, description, resourceUrl, dueDate, isLocked, isArchived, itemId);
+
+  if (files || solutionFiles) {
+    db.prepare(`DELETE FROM homework_item_files WHERE item_id = ?`).run(itemId);
+    const fileStmt = db.prepare(
+      `
+      INSERT INTO homework_item_files
+      (id, item_id, workspace_id, channel_id, file_id, file_name, mime, size_bytes, url, file_role, created_by, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `
+    );
+    [...(files || []).map((file) => ({ file, fileRole: 'task' })), ...(solutionFiles || []).map((file) => ({ file, fileRole: 'solution' }))].forEach(({ file, fileRole }) => {
+      const linked = registerHomeworkLinkedFile({
+        workspaceId: ctx.homeworkChannel.workspaceId,
+        channelId: ctx.homeworkChannel.id,
+        ownerId: ctx.user.id || null,
+        file,
+        purpose: fileRole === 'solution' ? 'homework_solution' : 'homework',
+        messageId: `homework-item:${itemId}`
+      });
+      if (!linked) return;
+      fileStmt.run(
+        generateId('hwif'),
+        itemId,
+        ctx.homeworkChannel.workspaceId,
+        ctx.homeworkChannel.id,
+        linked.fileId,
+        linked.fileName,
+        linked.mime,
+        linked.sizeBytes,
+        linked.url,
+        fileRole,
+        ctx.user.id || null
+      );
+    });
+  }
 
   const updated = listHomeworkBoardForChannel(ctx.homeworkChannel, ctx.user).find((row) => String(row.id) === itemId);
-  res.json({ item: updated || { ...item, title, description, resourceUrl, dueDate, isArchived } });
+  res.json({ item: updated || { ...item, title, description, resourceUrl, dueDate, isLocked, isArchived } });
 });
 
 app.delete('/api/homework/items/:itemId', authRequired, (req, res) => {
@@ -13058,6 +14033,7 @@ app.delete('/api/homework/items/:itemId', authRequired, (req, res) => {
     .all(itemId);
   submissionStudentRows.forEach((row) => syncHomeworkCompletion(itemId, row.studentId, 'draft'));
   db.prepare(`DELETE FROM homework_submission_files WHERE submission_id IN (SELECT id FROM homework_submissions WHERE homework_item_id = ?)`).run(itemId);
+  db.prepare(`DELETE FROM homework_submission_comments WHERE submission_id IN (SELECT id FROM homework_submissions WHERE homework_item_id = ?)`).run(itemId);
   db.prepare(`DELETE FROM homework_submissions WHERE homework_item_id = ?`).run(itemId);
   db.prepare(`DELETE FROM homework_item_files WHERE item_id = ?`).run(itemId);
   db.prepare(`DELETE FROM homework_items WHERE id = ?`).run(itemId);
@@ -13069,7 +14045,7 @@ app.post('/api/homework/items/:itemId/submissions', authRequired, express.json()
   const itemId = String(req.params.itemId || '').trim();
   const item = db
     .prepare(
-      `SELECT id, workspace_id AS workspaceId, class_channel_id AS classChannelId, due_date AS dueDate
+      `SELECT id, workspace_id AS workspaceId, class_channel_id AS classChannelId, due_date AS dueDate, is_locked AS isLocked
        FROM homework_items
        WHERE id = ?
        LIMIT 1`
@@ -13085,6 +14061,12 @@ app.post('/api/homework/items/:itemId/submissions', authRequired, express.json()
   if (!canSubmitHomework(ctx.user, ctx.homeworkChannel, ctx.user.id || ctx.user.sub)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
+  if (Number(item.isLocked || 0) > 0) {
+    return res.status(403).json({ error: 'This assignment is locked for submissions.' });
+  }
+  if (isHomeworkSubmissionDeadlinePassed(item.dueDate)) {
+    return res.status(403).json({ error: 'The submission deadline has passed.' });
+  }
   const requestedStatus = String(req.body?.status || 'draft').trim().toLowerCase();
   const status = normalizeHomeworkSubmissionStatus(requestedStatus, { dueDate: item.dueDate });
   if (!HOMEWORK_SUBMISSION_VISIBLE_TO_STUDENT.has(status)) {
@@ -13096,11 +14078,16 @@ app.post('/api/homework/items/:itemId/submissions', authRequired, express.json()
   const existing = db
     .prepare(
       `SELECT id
+            , status
        FROM homework_submissions
        WHERE homework_item_id = ? AND student_id = ?
        LIMIT 1`
     )
     .get(itemId, studentId);
+  const existingStatus = String(existing?.status || '').trim().toLowerCase();
+  if (existing && existingStatus && existingStatus !== 'draft') {
+    return res.status(403).json({ error: 'Submitted homework can no longer be modified.' });
+  }
   const submissionId = existing?.id || generateId('hws');
   const submittedAt = HOMEWORK_SUBMISSION_ACTIVE_STATUSES.has(status) ? nowISOString() : null;
   const isLate = status === 'late' ? 1 : 0;
@@ -13223,597 +14210,70 @@ app.post('/api/homework/submissions/:submissionId/review', authRequired, express
   });
 });
 
-app.post('/api/auth/logout', authRequired, (req, res) => {
-  const rt = req.cookies?.refresh_token;
-  const now = Date.now();
-
-  if (rt) {
-    const hash = sha256(rt);
-    db.prepare(`UPDATE refresh_tokens SET revoked_at = ? WHERE token_hash = ?`).run(now, hash);
-    try {
-      jwt.verify(rt, JWT_REFRESH_SECRET);
-    } catch (_err) {
-      /* ignore */
-    }
+app.post('/api/homework/submissions/:submissionId/comments', authRequired, express.json(), (req, res) => {
+  const submissionId = String(req.params.submissionId || '').trim();
+  const submission = db
+    .prepare(
+      `SELECT
+         hs.id,
+         hs.homework_item_id AS homeworkItemId,
+         hs.workspace_id AS workspaceId,
+         hs.channel_id AS channelId,
+         hs.student_id AS studentId,
+         hs.status,
+         hi.class_channel_id AS classChannelId
+       FROM homework_submissions hs
+       JOIN homework_items hi ON hi.id = hs.homework_item_id
+       WHERE hs.id = ?
+       LIMIT 1`
+    )
+    .get(submissionId);
+  if (!submission) return res.status(404).json({ error: 'Submission not found' });
+  const homeworkChannel = getHomeworkChannelForClass({
+    id: submission.classChannelId,
+    workspaceId: submission.workspaceId
+  });
+  const ctx = resolveHomeworkRequestContext(req, res, homeworkChannel?.id || '');
+  if (!ctx) return;
+  const requesterId = String(ctx.user.id || ctx.user.sub || '').trim();
+  if (!requesterId || requesterId !== String(submission.studentId || '').trim()) {
+    return res.status(403).json({ error: 'Forbidden' });
   }
+  const normalizedStatus = String(submission.status || '').trim().toLowerCase();
+  if (!normalizedStatus || normalizedStatus === 'draft') {
+    return res.status(400).json({ error: 'Comments are available only after submission.' });
+  }
+  const commentText = String(req.body?.commentText || '').trim();
+  if (!commentText) return res.status(400).json({ error: 'Comment is required.' });
 
-  const expMs = req.auth?.exp ? req.auth.exp * 1000 : now + 15 * 60 * 1000;
-  db.prepare(`
-    INSERT OR REPLACE INTO revoked_access_tokens (jti, user_id, revoked_at, expires_at)
-    VALUES (?, ?, ?, ?)
-  `).run(req.auth.jti, req.auth.sub, now, expMs);
+  db.prepare(
+    `INSERT INTO homework_submission_comments
+     (id, submission_id, workspace_id, channel_id, author_id, comment_text, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
+  ).run(
+    generateId('hwsc'),
+    submissionId,
+    ctx.homeworkChannel.workspaceId,
+    ctx.homeworkChannel.id,
+    requesterId,
+    commentText
+  );
 
-  clearAuthCookies(res);
-  res.json({ ok: true });
+  const boardItem = listHomeworkBoardForChannel(ctx.homeworkChannel, ctx.user).find((row) => String(row.id) === String(submission.homeworkItemId));
+  res.status(201).json({
+    submission: boardItem?.mySubmission || null,
+    item: boardItem || null
+  });
 });
 
-app.post('/api/auth/first-login/set-password', authRequired, (req, res) => {
-  const { password, confirmPassword } = req.body || {};
-  const p1 = String(password || '');
-  const p2 = String(confirmPassword || '');
-
-  if (!p1 || p1.length < 8) {
-    return res.status(400).json({ error: 'Password must be at least 8 characters.' });
-  }
-  if (p1 !== p2) {
-    return res.status(400).json({ error: 'Passwords do not match.' });
-  }
-
-  const hasUpper = /[A-Z]/.test(p1);
-  const hasLower = /[a-z]/.test(p1);
-  const hasNum = /[0-9]/.test(p1);
-  if (!(hasUpper && hasLower && hasNum)) {
-    return res.status(400).json({ error: 'Use uppercase, lowercase, and a number.' });
-  }
-
-  const userId = req.auth?.sub;
-  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-
-  const row = db
-    .prepare(`SELECT id, workspace_id AS workspaceId, must_change_password FROM users WHERE id = ? LIMIT 1`)
-    .get(userId);
-  if (!row) return res.status(401).json({ error: 'User not found.' });
-  if (!row.must_change_password) return res.status(400).json({ error: 'Password change not required.' });
-
-  const history = db
-    .prepare(`
-      SELECT password_hash FROM password_history
-      WHERE user_id = ?
-      ORDER BY created_at DESC
-      LIMIT 5
-    `)
-    .all(row.id);
-  for (const h of history) {
-    if (verifyPassword(p1, h.password_hash)) {
-      return res.status(400).json({
-        error: 'You cannot reuse a recent password.'
-      });
-    }
-  }
-
-  const newHash = hashPassword(p1);
-  db.prepare(`
-    UPDATE users
-    SET password_hash = ?, must_change_password = 0, password_changed_at = ?
-    WHERE id = ?
-  `).run(newHash, Date.now(), row.id);
-
-  db.prepare(`
-    INSERT INTO password_history (id, user_id, password_hash, created_at)
-    VALUES (?, ?, ?, ?)
-  `).run(makeId('ph'), row.id, newHash, Date.now());
-
-  legacyAuditLog({
-    workspaceId: row.workspaceId || null,
-    actor: row.id,
-    action: 'security.password_changed',
-    target: row.id,
-    payload: {
-      method: 'first_login',
-      ip: req.ip || ''
-    }
-  });
-
-  logSecurityEvent({
-    workspaceId: row.workspaceId || null,
-    actorUserId: row.id,
-    targetUserId: row.id,
-    type: 'security.password_changed',
-    severity: 'info',
-    ip: req.ip || null,
-    userAgent: req.headers['user-agent'] || null,
-    payload: { method: 'first_login' }
-  });
-
-  res.json({ ok: true });
-});
-
-app.post(
-  '/api/admin/users/:userId/revoke-sessions',
+app.delete(
+  '/api/channels/:channelId/members/:userId',
   authRequired,
-  requirePermission('admin:users:revoke_sessions'),
+  requirePermission('channels:write'),
   (req, res) => {
-    const { userId } = req.params;
-    const now = Date.now();
+    const { channelId, userId } = req.params;
+    const requesterId = String(req.auth?.sub || req.auth?.id || '').trim();
 
-    db.prepare(`UPDATE refresh_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`)
-      .run(now, userId);
-
-    res.json({ ok: true });
-  }
-);
-
-app.post('/api/auth/forgot-password', strictLimiter, async (req, res) => {
-  const { email } = req.body || {};
-  const user = findUserByEmail(email);
-  if (!user) {
-    return res.json({ ok: true }); // do not leak
-  }
-  const token = makeResetToken();
-  const createdAt = nowMs();
-  const expiresAt = createdAt + PASSWORD_RESET_EXPIRY_HOURS * 60 * 60 * 1000;
-  db.prepare(`
-    INSERT INTO password_resets (token, user_id, workspace_id, created_at, expires_at, used)
-    VALUES (?, ?, ?, ?, ?, 0)
-  `).run(token, user.id, user.workspaceId, createdAt, expiresAt);
-
-  try {
-    await sendPasswordResetEmail(user, token);
-  } catch (err) {
-    console.error('Forgot password email failed', err);
-    return res.status(500).json({ error: 'Could not send reset email' });
-  }
-  audit('auth.password_reset_requested', req, {
-    user,
-    target: user.id,
-    workspaceId: user.workspaceId || null,
-    meta: { email: user.email }
-  });
-  res.json({ ok: true });
-});
-
-app.get('/api/auth/reset-password/:token', (req, res) => {
-  const token = (req.params.token || '').trim();
-  const row = getResetToken(token);
-  if (!row || row.used || Number(row.expiresAt) < nowMs()) {
-    return res.status(404).json({ error: 'Invalid or expired token' });
-  }
-  res.json({ ok: true, workspaceId: row.workspaceId });
-});
-
-app.post('/api/auth/reset-password/complete', strictLimiter, async (req, res) => {
-  const { token, password } = req.body || {};
-  const row = getResetToken(token);
-  if (!row || row.used || Number(row.expiresAt) < nowMs()) {
-    return res.status(400).json({ error: 'Invalid or expired token' });
-  }
-  if (!password || !validatePassword(password)) {
-    return res.status(400).json({
-      error: 'Password must be at least 8 characters and include upper, lower, number, and symbol.'
-    });
-  }
-  const hash = hashPassword(password);
-  if (!hash) return res.status(500).json({ error: 'Could not hash password' });
-
-  const user = db
-    .prepare('SELECT id, email, workspace_id AS workspaceId, first_name, last_name, name FROM users WHERE id = ?')
-    .get(row.userId);
-  if (!user) return res.status(404).json({ error: 'User not found' });
-
-  const tx = db.transaction(() => {
-    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, user.id);
-    db.prepare('UPDATE password_resets SET used = 1, used_at = ? WHERE token = ?').run(new Date().toISOString(), token);
-  });
-  tx();
-
-  try {
-    await sendPasswordChangedEmail(user);
-  } catch (err) {
-    console.error('Password changed email failed', err);
-  }
-  audit('auth.password_reset', req, {
-    user,
-    target: user.id,
-    workspaceId: user.workspaceId || null,
-    meta: { method: 'forgot_password' }
-  });
-  res.json({ ok: true });
-});
-
-// Policy acceptance (per user + workspace)
-app.get('/api/policy/acceptance', (req, res) => {
-  const userId = getRequesterId(req);
-  const workspaceId = (req.query.workspaceId || '').trim();
-  if (!userId || !workspaceId) {
-    return res.json({ accepted: true, version: POLICY_VERSION });
-  }
-  const row = db
-    .prepare(
-      'SELECT accepted_at FROM policy_acceptances WHERE user_id = ? AND workspace_id = ? AND version = ?'
-    )
-    .get(userId, workspaceId, POLICY_VERSION);
-  res.json({
-    accepted: !!row,
-    acceptedAt: row?.accepted_at || null,
-    version: POLICY_VERSION
-  });
-});
-
-app.post('/api/policy/accept', (req, res) => {
-  const userId = getRequesterId(req);
-  const { workspaceId } = req.body || {};
-  if (!userId || !workspaceId) {
-    return res.status(400).json({ error: 'userId and workspaceId are required' });
-  }
-  const id = generateId('p');
-  db.prepare(
-    `INSERT OR REPLACE INTO policy_acceptances (id, user_id, workspace_id, version, accepted_at)
-     VALUES (?, ?, ?, ?, datetime('now'))`
-  ).run(id, userId, workspaceId, POLICY_VERSION);
-  const row = db
-    .prepare(
-      'SELECT accepted_at FROM policy_acceptances WHERE user_id = ? AND workspace_id = ? AND version = ?'
-    )
-    .get(userId, workspaceId, POLICY_VERSION);
-  res.json({
-    ok: true,
-    acceptedAt: row?.accepted_at || null,
-    version: POLICY_VERSION
-  });
-});
-
-app.post('/api/workspaces/:workspaceId/users/:userId', (req, res) => {
-  const { workspaceId, userId } = req.params;
-  const { role = 'member' } = req.body || {};
-
-  const ws = db.prepare('SELECT id FROM workspaces WHERE id = ?').get(workspaceId);
-  if (!ws) {
-    return res.status(404).json({ error: 'Workspace not found' });
-  }
-
-  const user = db.prepare('SELECT id FROM users WHERE id = ?').get(userId);
-  if (!user) {
-    return res.status(404).json({ error: 'User not found' });
-  }
-
-  db.prepare(
-    'INSERT OR REPLACE INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)'
-  ).run(workspaceId, userId, role);
-
-  res.json({ workspaceId, userId, role });
-});
-
-// Update user's avatar (data URL or external URL)
-app.post('/api/users/:userId/avatar', (req, res) => {
-  const { userId } = req.params;
-  const { avatarData, avatarUrl } = req.body || {};
-
-  let user = db.prepare('SELECT id FROM users WHERE id = ?').get(userId);
-
-  const val = (avatarData || avatarUrl || '').trim();
-  if (!val) {
-    return res.status(400).json({ error: 'avatarData or avatarUrl is required' });
-  }
-
-  if (avatarData && avatarData.length > 2_000_000) {
-    return res.status(400).json({ error: 'Avatar image too large' });
-  }
-
-  if (!user) {
-    // create a minimal user record so admin/special users can store an avatar
-    db.prepare(
-      `INSERT INTO users (id, workspace_id, first_name, last_name, name, username, avatar_url, role, status, native_language, native_language_confirmed)
-       VALUES (@id, @workspace_id, @first_name, @last_name, @name, @username, @avatar_url, @role, @status, @native_language, @native_language_confirmed)`
-    ).run({
-      id: userId,
-      workspace_id: 'default',
-      first_name: userId,
-      last_name: '',
-      name: userId,
-      username: userId,
-      avatar_url: val,
-      role: 'member',
-      status: 'active',
-      native_language: 'en',
-      native_language_confirmed: 0
-    });
-    user = { id: userId };
-  } else {
-    db.prepare('UPDATE users SET avatar_url = ? WHERE id = ?').run(val, userId);
-  }
-  const userRow = db
-    .prepare('SELECT name, username, email, first_name, last_name, avatar_url FROM users WHERE id = ?')
-    .get(userId);
-  cacheAvatarForUserRow(userRow);
-
-  res.json({ userId, avatarUrl: val });
-});
-
-// Typing indicator broadcast (simple, stateless)
-app.post('/api/typing', (req, res) => {
-  const { channelId, userId, name, initials, isTyping } = req.body || {};
-  if (!channelId || !userId) {
-    return res.status(400).json({ error: 'channelId and userId are required' });
-  }
-  broadcastEvent('user_typing', {
-    channelId,
-    userId,
-    name: name || 'Someone',
-    initials: initials || '',
-    isTyping: !!isTyping
-  });
-  res.json({ ok: true });
-});
-
-// Assign user to workspace (and optional channel) - admin only
-app.post('/api/admin/assign', (req, res) => {
-  if (req.get('x-admin') !== '1') {
-    return res.status(403).json({ error: 'Only admins can assign users' });
-  }
-
-  const { userId, workspaceId, channelId } = req.body || {};
-  if (!userId || !workspaceId) {
-    return res.status(400).json({ error: 'userId and workspaceId are required' });
-  }
-
-  const user = db
-    .prepare('SELECT id, workspace_id AS workspaceId, username FROM users WHERE id = ?')
-    .get(userId);
-  if (!user) {
-    return res.status(404).json({ error: 'User not found' });
-  }
-
-  const ws = db.prepare('SELECT id FROM workspaces WHERE id = ?').get(workspaceId);
-  if (!ws) {
-    return res.status(404).json({ error: 'Workspace not found' });
-  }
-
-  // allow multi-workspace membership via workspace_members even if user.workspaceId differs
-  db.prepare(
-    'INSERT OR IGNORE INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)'
-  ).run(workspaceId, userId, 'member');
-
-  let assignedChannel = null;
-  if (channelId) {
-    const channel = db
-      .prepare('SELECT id, workspace_id AS workspaceId, category FROM channels WHERE id = ?')
-      .get(channelId);
-    if (!channel) {
-      return res.status(404).json({ error: 'Channel not found' });
-    }
-    // allow cross-workspace assignment; "all" is global
-    db.prepare(
-      'INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)'
-    ).run(channelId, userId);
-    assignedChannel = channelId;
-  }
-
-  res.json({ ok: true, userId, workspaceId, channelId: assignedChannel });
-});
-
-app.get('/api/class-memberships', (req, res) => {
-  if (req.get('x-admin') !== '1' && req.get('x-super-admin') !== '1') {
-    return res.status(403).json({ error: 'Only admins can view class memberships' });
-  }
-  const workspaceId = (req.query.workspaceId || 'default').trim() || 'default';
-  const rows = db
-    .prepare(
-      `
-      SELECT
-        cm.user_id   AS userId,
-        cm.channel_id AS channelId,
-        c.name       AS channelName
-      FROM channel_members cm
-      JOIN channels c ON c.id = cm.channel_id
-      WHERE c.workspace_id = ?
-        AND lower(c.category) = 'classes'
-      ORDER BY c.name
-    `
-    )
-    .all(workspaceId);
-  res.json(rows);
-});
-
-app.get('/api/user-class-memberships', (req, res) => {
-  const workspaceId = (req.query.workspaceId || 'default').trim() || 'default';
-  const userId = String(req.query.userId || req.get('x-user-id') || '').trim();
-  if (!userId) return res.json([]);
-  const rows = db
-    .prepare(
-      `
-      SELECT
-        cm.channel_id AS channelId,
-        c.name       AS channelName
-      FROM channel_members cm
-      JOIN channels c ON c.id = cm.channel_id
-      WHERE cm.user_id = ?
-        AND c.workspace_id = ?
-        AND lower(c.category) = 'classes'
-      ORDER BY c.name
-    `
-    )
-    .all(userId, workspaceId);
-  res.json(rows);
-});
-
-app.post('/api/class-memberships', (req, res) => {
-  if (req.get('x-admin') !== '1' && req.get('x-super-admin') !== '1') {
-    return res.status(403).json({ error: 'Only admins can assign classes' });
-  }
-  const { userId, channelId, workspaceId } = req.body || {};
-  if (!userId || !channelId || !workspaceId) {
-    return res.status(400).json({ error: 'userId, channelId, and workspaceId are required' });
-  }
-  const user = db.prepare('SELECT id, workspace_id AS workspaceId FROM users WHERE id = ?').get(userId);
-  if (!user) {
-    return res.status(404).json({ error: 'User not found' });
-  }
-  if (String(user.workspaceId) !== String(workspaceId)) {
-    return res.status(400).json({ error: 'User is not in this workspace' });
-  }
-  const channel = db
-    .prepare('SELECT id, name, workspace_id AS workspaceId, category FROM channels WHERE id = ?')
-    .get(channelId);
-  if (!channel) {
-    return res.status(404).json({ error: 'Channel not found' });
-  }
-  if (String(channel.workspaceId) !== String(workspaceId)) {
-    return res.status(400).json({ error: 'Channel is not in this workspace' });
-  }
-  if (String(channel.category || '').toLowerCase() !== 'classes') {
-    return res.status(400).json({ error: 'Only class channels can be assigned' });
-  }
-
-  db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)').run(
-    channelId,
-    userId
-  );
-  const hwId = ensureHomeworkChannelForClass({
-    id: channel.id,
-    name: channel.name,
-    workspaceId: channel.workspaceId,
-    category: channel.category
-  });
-  if (hwId) {
-    db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)').run(
-      hwId,
-      userId
-    );
-  }
-  res.json({ ok: true, userId, channelId, channelName: channel.name });
-});
-
-// channel members listing + count
-app.get('/api/channels/:channelId/members', (req, res) => {
-  const { channelId } = req.params;
-  const channel = db
-    .prepare('SELECT id, name, workspace_id AS workspaceId, members, category FROM channels WHERE id = ?')
-    .get(channelId);
-  if (!channel) {
-    console.warn('Channel members requested for missing channel', channelId);
-    return res.json({ channelId, count: 0, members: [] });
-  }
-
-  let members = [];
-  let count = 0;
-
-  const memberRows = db
-    .prepare('SELECT user_id FROM channel_members WHERE channel_id = ?')
-    .all(channelId);
-  members = memberRows.map((r) => r.user_id);
-  count = members.length;
-
-  if (count === 0) {
-    const workspaceMembers = db
-      .prepare("SELECT user_id FROM workspace_members WHERE workspace_id IN (?, 'all')")
-      .all(channel.workspaceId);
-    members = workspaceMembers.map((r) => r.user_id);
-    count = members.length;
-  }
-
-  if (count === 0) {
-    const workspaceUsers = db
-      .prepare("SELECT id FROM users WHERE workspace_id IN (?, 'all')")
-      .all(channel.workspaceId);
-    members = workspaceUsers.map((r) => r.id);
-    count = members.length;
-  }
-
-  const channelMembersFallback = Number.isFinite(channel.members) ? channel.members : 0;
-  count = Math.max(count, channelMembersFallback);
-
-  res.json({ channelId, count, members });
-});
-
-function canManageChannelMembers(role) {
-  const value = String(role || '').toLowerCase();
-  return value === 'teacher' || value === 'admin' || value === 'super_admin' || value === 'school_admin';
-}
-
-app.post('/api/channels/:channelId/members', (req, res) => {
-  const { channelId } = req.params;
-  const { userId } = req.body || {};
-  const requesterId = getRequesterId(req);
-  if (!requesterId) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  if (!userId) {
-    return res.status(400).json({ error: 'userId is required' });
-  }
-
-  const requester = db
-    .prepare('SELECT id, role, workspace_id AS workspaceId FROM users WHERE id = ?')
-    .get(requesterId);
-  if (!requester) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  if (!canManageChannelMembers(requester.role)) {
-    return res.status(403).json({ error: 'Only teachers or admins can manage members' });
-  }
-
-  const user = db
-    .prepare('SELECT id, role, workspace_id AS workspaceId FROM users WHERE id = ?')
-    .get(userId);
-  if (!user) {
-    return res.status(404).json({ error: 'User not found' });
-  }
-  const userRole = String(user.role || '').toLowerCase();
-  if (userRole !== 'student' && userRole !== 'teacher') {
-    return res.status(400).json({ error: 'Only students or teachers can be assigned here' });
-  }
-
-  const channel = db
-    .prepare('SELECT id, name, workspace_id AS workspaceId, category FROM channels WHERE id = ?')
-    .get(channelId);
-  if (!channel) {
-    return res.status(404).json({ error: 'Channel not found' });
-  }
-  if (
-    String(channel.workspaceId) !== String(requester.workspaceId) ||
-    String(channel.workspaceId) !== String(user.workspaceId)
-  ) {
-    return res.status(400).json({ error: 'Workspace mismatch' });
-  }
-  const meta = normalizeChannelCategory(channel.category) === 'classes'
-    ? getClassMeta(channel.workspaceId, channel.id)
-    : null;
-  const counts = countChannelMembers(channel.id);
-  if (
-    meta &&
-    meta.capacity > 0 &&
-    userRole === 'student' &&
-    counts.totalStudents >= meta.capacity
-  ) {
-    return res.status(400).json({ error: 'Class capacity reached' });
-  }
-
-  db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)').run(
-    channelId,
-    userId
-  );
-
-  if (normalizeChannelCategory(channel.category) === 'classes') {
-    const hwId = ensureHomeworkChannelForClass({
-      id: channel.id,
-      name: channel.name,
-      workspaceId: channel.workspaceId,
-      category: channel.category
-    });
-    if (hwId) {
-      db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)').run(
-        hwId,
-        userId
-      );
-    }
-  }
-
-  res.json({ ok: true, channelId, userId });
-});
-
-app.delete('/api/channels/:channelId/members', (req, res) => {
-  const { channelId } = req.params;
-  const { userId } = req.body || {};
-  const requesterId = getRequesterId(req);
   if (!requesterId) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
@@ -14093,6 +14553,11 @@ app.delete(
       return res.status(403).json({ error: 'Workspace mismatch' });
     }
 
+    // Explicitly remove class-attendance rows before deleting the channel so
+    // channel deletion cannot leave stale attendance references behind.
+    db.prepare('DELETE FROM attendance_notifications WHERE channel_id = ?').run(channelId);
+    db.prepare('DELETE FROM attendance_records WHERE channel_id = ?').run(channelId);
+    db.prepare('DELETE FROM attendance_sessions WHERE channel_id = ?').run(channelId);
     db.prepare('DELETE FROM channels WHERE id = ?').run(channelId);
     audit('channel.delete', req, {
       target: channelId,
@@ -14155,6 +14620,16 @@ function getMessagesForChannel(channelId) {
        WHERE message_id IN (${msgPlaceholders})`
     )
     .all(...msgIds);
+  const attachmentRows = db
+    .prepare(
+      `SELECT message_id, file_name, mime, size_bytes, url
+       FROM files_registry
+       WHERE channel_id = ?
+         AND deleted = 0
+         AND message_id IN (${msgPlaceholders})
+       ORDER BY created_at ASC, rowid ASC`
+    )
+    .all(channelId, ...msgIds);
 
   const repliesByMsg = {};
   const replyById = {};
@@ -14206,6 +14681,17 @@ function getMessagesForChannel(channelId) {
     });
   }
 
+  const attachmentsByMsg = {};
+  for (const row of attachmentRows) {
+    if (!attachmentsByMsg[row.message_id]) attachmentsByMsg[row.message_id] = [];
+    attachmentsByMsg[row.message_id].push({
+      url: row.url,
+      originalName: row.file_name || 'attachment',
+      mimeType: row.mime || 'application/octet-stream',
+      size: Number(row.size_bytes || 0) || 0
+    });
+  }
+
   return msgs.map((m) => ({
     id: m.id,
     author: m.author,
@@ -14216,6 +14702,7 @@ function getMessagesForChannel(channelId) {
     text: m.text,
     originalLanguage: m.original_language || 'en',
     alt: !!m.alt,
+    attachments: attachmentsByMsg[m.id] || [],
     reactions: msgReactionsById[m.id] || [],
     replies: repliesByMsg[m.id] || []
   }));
@@ -14905,6 +15392,7 @@ app.post('/api/channels/:channelId/messages', async (req, res) => {
     originalLanguage: originalLanguage,
     alt: !!alt,
     createdAt,
+    attachments: Array.isArray(attachments) ? attachments : [],
     reactions: [],
     replies: []
   };
@@ -15248,14 +15736,148 @@ function getWorkspaceScopedUser(workspaceId, userId) {
     db
       .prepare(
         `
-        SELECT id, workspace_id AS workspaceId, name, email, username, role, status, course_level AS courseLevel
+        SELECT id, name, email, username, role, status, course_level AS courseLevel, workspace_id AS workspaceId
         FROM users
-        WHERE id = ? AND workspace_id = ?
+        WHERE workspace_id = ? AND id = ?
         LIMIT 1
       `
       )
-      .get(normalizedUserId, normalizedWorkspaceId) || null
+      .get(normalizedWorkspaceId, normalizedUserId) || null
   );
+}
+
+function buildTeacherAnalyticsOverview(workspaceId, teacherUserId) {
+  const normalizedWorkspaceId = String(workspaceId || "").trim();
+  const normalizedUserId = String(teacherUserId || "").trim();
+  const teacher = getWorkspaceScopedUser(normalizedWorkspaceId, normalizedUserId);
+  if (!teacher || getNormalizedUserRole(teacher) !== "teacher") return null;
+
+  const classChannels = db
+    .prepare(
+      `
+      SELECT c.id, c.name
+      FROM channel_members cm
+      JOIN channels c ON c.id = cm.channel_id
+      WHERE cm.user_id = ?
+        AND c.workspace_id = ?
+        AND lower(COALESCE(c.category, '')) IN ('class', 'classes')
+      ORDER BY lower(COALESCE(c.name, c.id)) ASC
+    `
+    )
+    .all(normalizedUserId, normalizedWorkspaceId);
+  const classIds = classChannels.map((channel) => String(channel.id || ""));
+
+  const students = [];
+  const seenStudentIds = new Set();
+  classChannels.forEach((channel) => {
+    listClassStudents(normalizedWorkspaceId, channel.id).forEach((student) => {
+      const studentId = String(student.user_id || "").trim();
+      if (!studentId || seenStudentIds.has(studentId)) return;
+      seenStudentIds.add(studentId);
+      const userRow = getWorkspaceScopedUser(normalizedWorkspaceId, studentId);
+      students.push({
+        id: studentId,
+        name: student.name || userRow?.name || userRow?.username || userRow?.email || "Student",
+        status: userRow?.status || "",
+        courseLevel: userRow?.courseLevel || ""
+      });
+    });
+  });
+
+  const validPerformanceRows = students
+    .map((student) => buildStudentPerformanceSummary(normalizedWorkspaceId, student.id, { classIds }))
+    .filter(Boolean);
+  const attendanceRate = validPerformanceRows.length
+    ? Math.round(
+        validPerformanceRows.reduce((sum, row) => sum + Number(row.attendance?.attendanceRate || 0), 0) /
+          validPerformanceRows.length
+      )
+    : 0;
+  const completionRate = validPerformanceRows.length
+    ? Math.round(
+        validPerformanceRows.reduce((sum, row) => sum + Number(row.homework?.completionRate || 0), 0) /
+          validPerformanceRows.length
+      )
+    : 0;
+  const courseCounts = students.reduce((acc, student) => {
+    const key = String(student.courseLevel || "").trim().toUpperCase() || "Unspecified";
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  const classRowsSorted = classChannels.map((channel) => {
+    const channelStudents = listClassStudents(normalizedWorkspaceId, channel.id);
+    const channelStudentIds = channelStudents.map((row) => String(row.user_id || ""));
+    const perStudentAttendance = channelStudentIds.map((studentId) =>
+      getStudentAttendanceSummary(normalizedWorkspaceId, studentId, [channel.id])
+    );
+    const perStudentHomework = channelStudentIds.map((studentId) =>
+      getStudentHomeworkSummary(normalizedWorkspaceId, studentId, [channel.id])
+    );
+    return {
+      id: channel.id,
+      name: channel.name || "Class",
+      students: channelStudentIds.length,
+      messages: perStudentAttendance.reduce((sum, row) => sum + Number(row.total || 0), 0),
+      homework: perStudentHomework.reduce((sum, row) => sum + Number(row.completedItems || 0), 0),
+      attendanceRate: perStudentAttendance.length
+        ? Math.round(
+            perStudentAttendance.reduce((sum, row) => sum + Number(row.attendanceRate || 0), 0) /
+              perStudentAttendance.length
+          )
+        : 0
+    };
+  });
+  const teacherName = teacher.name || teacher.username || teacher.email || "Teacher";
+  return {
+    scope: "teacher",
+    viewerRole: getNormalizedUserRole(teacher),
+    workspaceId: normalizedWorkspaceId,
+    workspaceName: getWorkspaceName(normalizedWorkspaceId),
+    teacher: {
+      id: teacher.id,
+      name: teacherName
+    },
+    students: students.length,
+    activeStudents: students.filter((row) => String(row.status || "").toLowerCase() === "active").length,
+    inactiveStudents: students.filter((row) => String(row.status || "").toLowerCase() !== "active").length,
+    teachers: 1,
+    admins: 0,
+    totalGroups: classChannels.length,
+    classRowsSorted,
+    teacherRows: [
+      {
+        name: teacherName,
+        messages: classRowsSorted.reduce((sum, row) => sum + Number(row.messages || 0), 0),
+        homeworkCount: classRowsSorted.reduce((sum, row) => sum + Number(row.homework || 0), 0),
+        last: "Assigned classes",
+        initials: analyticsInitialsForName(teacherName)
+      }
+    ],
+    homeworkCreated: classRowsSorted.reduce((sum, row) => sum + Number(row.homework || 0), 0),
+    avgSubmissions: students.length
+      ? Math.round(
+          validPerformanceRows.reduce((sum, row) => sum + Number(row.homework?.completedItems || 0), 0) /
+            students.length
+        )
+      : 0,
+    completionRate,
+    attendanceRate,
+    engagementCounts: {
+      high: validPerformanceRows.filter((row) => Number(row.homework?.completionRate || 0) >= 75).length,
+      medium: validPerformanceRows.filter((row) => {
+        const rate = Number(row.homework?.completionRate || 0);
+        return rate >= 40 && rate < 75;
+      }).length,
+      low: validPerformanceRows.filter((row) => Number(row.homework?.completionRate || 0) < 40).length
+    },
+    insights: [
+      `Assigned classes: ${classChannels.length}`,
+      `Average attendance across assigned students: ${attendanceRate}%`,
+      `Homework completion across assigned students: ${completionRate}%`
+    ],
+    courseCounts,
+    studentPerformance: validPerformanceRows
+  };
 }
 
 function getAssignedClassChannelsForTeacher(workspaceId, teacherUserId) {
@@ -15586,160 +16208,6 @@ function buildStudentPerformanceSummary(workspaceId, studentId, options = {}) {
   };
 }
 
-function buildPlatformAnalyticsOverview() {
-  const workspaceRows = db
-    .prepare(
-      `
-      SELECT id, name
-      FROM workspaces
-      ORDER BY lower(COALESCE(name, id)) ASC
-    `
-    )
-    .all();
-  const schools = workspaceRows.map((workspace) => {
-    const summary = buildWorkspaceDashboardSummary(workspace.id);
-    return {
-      workspaceId: workspace.id,
-      workspaceName: workspace.name || workspace.id,
-      students: Number(summary?.students || 0),
-      teachers: Number(summary?.teachers || 0),
-      admins: Number(summary?.admins || 0),
-      totalGroups: Number(summary?.totalGroups || 0)
-    };
-  });
-  return {
-    scope: "platform",
-    viewerRole: "super_admin",
-    workspaceId: "platform",
-    workspaceName: "Platform Overview",
-    students: schools.reduce((sum, row) => sum + Number(row.students || 0), 0),
-    teachers: schools.reduce((sum, row) => sum + Number(row.teachers || 0), 0),
-    admins: schools.reduce((sum, row) => sum + Number(row.admins || 0), 0),
-    totalGroups: schools.reduce((sum, row) => sum + Number(row.totalGroups || 0), 0),
-    schools
-  };
-}
-
-function buildSchoolAnalyticsOverview(workspaceId, user) {
-  const summary = buildWorkspaceDashboardSummary(workspaceId);
-  if (!summary) return null;
-  return {
-    ...summary,
-    scope: "school",
-    viewerRole: getNormalizedUserRole(user)
-  };
-}
-
-function buildTeacherAnalyticsOverview(workspaceId, teacherUserId) {
-  const normalizedWorkspaceId = String(workspaceId || "").trim();
-  const teacher = getWorkspaceScopedUser(normalizedWorkspaceId, teacherUserId);
-  if (!teacher) return null;
-  const classChannels = getAssignedClassChannelsForTeacher(normalizedWorkspaceId, teacherUserId);
-  const classIds = classChannels.map((row) => String(row.id || ""));
-  const students = getAssignedStudentRowsForTeacher(normalizedWorkspaceId, teacherUserId);
-  const performanceRows = students.map((student) =>
-    buildStudentPerformanceSummary(normalizedWorkspaceId, student.id, { classIds })
-  );
-  const validPerformanceRows = performanceRows.filter(Boolean);
-  const attendanceRate =
-    validPerformanceRows.length
-      ? Math.round(
-          validPerformanceRows.reduce(
-            (sum, row) => sum + Number(row.attendance?.attendanceRate || 0),
-            0
-          ) / validPerformanceRows.length
-        )
-      : 0;
-  const completionRate =
-    validPerformanceRows.length
-      ? Math.round(
-          validPerformanceRows.reduce(
-            (sum, row) => sum + Number(row.homework?.completionRate || 0),
-            0
-          ) / validPerformanceRows.length
-        )
-      : 0;
-  const courseCounts = students.reduce((acc, student) => {
-    const key = String(student.courseLevel || "").trim().toUpperCase() || "Unspecified";
-    acc[key] = (acc[key] || 0) + 1;
-    return acc;
-  }, {});
-  const classRowsSorted = classChannels.map((channel) => {
-    const channelStudents = listClassStudents(normalizedWorkspaceId, channel.id);
-    const channelStudentIds = channelStudents.map((row) => String(row.user_id || ""));
-    const perStudentAttendance = channelStudentIds.map((studentId) =>
-      getStudentAttendanceSummary(normalizedWorkspaceId, studentId, [channel.id])
-    );
-    const perStudentHomework = channelStudentIds.map((studentId) =>
-      getStudentHomeworkSummary(normalizedWorkspaceId, studentId, [channel.id])
-    );
-    return {
-      id: channel.id,
-      name: channel.name || "Class",
-      students: channelStudentIds.length,
-      messages: perStudentAttendance.reduce((sum, row) => sum + Number(row.total || 0), 0),
-      homework: perStudentHomework.reduce((sum, row) => sum + Number(row.completedItems || 0), 0),
-      attendanceRate: perStudentAttendance.length
-        ? Math.round(
-            perStudentAttendance.reduce((sum, row) => sum + Number(row.attendanceRate || 0), 0) /
-              perStudentAttendance.length
-          )
-        : 0
-    };
-  });
-  const teacherName = teacher.name || teacher.username || teacher.email || "Teacher";
-  return {
-    scope: "teacher",
-    viewerRole: getNormalizedUserRole(teacher),
-    workspaceId: normalizedWorkspaceId,
-    workspaceName: getWorkspaceName(normalizedWorkspaceId),
-    teacher: {
-      id: teacher.id,
-      name: teacherName
-    },
-    students: students.length,
-    activeStudents: students.filter((row) => String(row.status || "").toLowerCase() === "active").length,
-    inactiveStudents: students.filter((row) => String(row.status || "").toLowerCase() !== "active").length,
-    teachers: 1,
-    admins: 0,
-    totalGroups: classChannels.length,
-    classRowsSorted,
-    teacherRows: [
-      {
-        name: teacherName,
-        messages: classRowsSorted.reduce((sum, row) => sum + Number(row.messages || 0), 0),
-        homeworkCount: classRowsSorted.reduce((sum, row) => sum + Number(row.homework || 0), 0),
-        last: "Assigned classes",
-        initials: analyticsInitialsForName(teacherName)
-      }
-    ],
-    homeworkCreated: classRowsSorted.reduce((sum, row) => sum + Number(row.homework || 0), 0),
-    avgSubmissions: students.length
-      ? Math.round(
-          validPerformanceRows.reduce((sum, row) => sum + Number(row.homework?.completedItems || 0), 0) /
-            students.length
-        )
-      : 0,
-    completionRate,
-    attendanceRate,
-    engagementCounts: {
-      high: validPerformanceRows.filter((row) => Number(row.homework?.completionRate || 0) >= 75).length,
-      medium: validPerformanceRows.filter((row) => {
-        const rate = Number(row.homework?.completionRate || 0);
-        return rate >= 40 && rate < 75;
-      }).length,
-      low: validPerformanceRows.filter((row) => Number(row.homework?.completionRate || 0) < 40).length
-    },
-    insights: [
-      `Assigned classes: ${classChannels.length}`,
-      `Average attendance across assigned students: ${attendanceRate}%`,
-      `Homework completion across assigned students: ${completionRate}%`
-    ],
-    courseCounts,
-    studentPerformance: validPerformanceRows
-  };
-}
-
 function buildStudentAnalyticsOverview(workspaceId, studentUserId) {
   const normalizedWorkspaceId = String(workspaceId || "").trim();
   const student = getWorkspaceScopedUser(normalizedWorkspaceId, studentUserId);
@@ -15824,6 +16292,40 @@ function analyticsInitialsForName(name = "") {
     .map((part) => part[0] || "")
     .join("")
     .toUpperCase() || "T";
+}
+
+function buildPlatformAnalyticsOverview() {
+  const workspaceRows = db
+    .prepare(
+      `
+      SELECT id, name
+      FROM workspaces
+      ORDER BY lower(COALESCE(name, id)) ASC
+    `
+    )
+    .all();
+  const schools = workspaceRows.map((workspace) => {
+    const summary = buildWorkspaceDashboardSummary(workspace.id);
+    return {
+      workspaceId: workspace.id,
+      workspaceName: workspace.name || workspace.id,
+      students: Number(summary?.students || 0),
+      teachers: Number(summary?.teachers || 0),
+      admins: Number(summary?.admins || 0),
+      totalGroups: Number(summary?.totalGroups || 0)
+    };
+  });
+  return {
+    scope: "platform",
+    viewerRole: "super_admin",
+    workspaceId: "platform",
+    workspaceName: "Platform Overview",
+    students: schools.reduce((sum, row) => sum + Number(row.students || 0), 0),
+    teachers: schools.reduce((sum, row) => sum + Number(row.teachers || 0), 0),
+    admins: schools.reduce((sum, row) => sum + Number(row.admins || 0), 0),
+    totalGroups: schools.reduce((sum, row) => sum + Number(row.totalGroups || 0), 0),
+    schools
+  };
 }
 
 function buildWorkspaceDashboardSummary(workspaceId) {
@@ -16085,6 +16587,16 @@ function buildWorkspaceDashboardSummary(workspaceId) {
   };
 }
 
+function buildSchoolAnalyticsOverview(workspaceId, user) {
+  const summary = buildWorkspaceDashboardSummary(workspaceId);
+  if (!summary) return null;
+  return {
+    ...summary,
+    scope: "school",
+    viewerRole: getNormalizedUserRole(user)
+  };
+}
+
 function getWorkspaceAdminEmail(workspaceId) {
   const row = db
     .prepare(
@@ -16101,6 +16613,29 @@ function getWorkspaceAdminEmail(workspaceId) {
     )
     .get(workspaceId);
   return String(row?.email || "").trim();
+}
+
+function getWorkspaceAdminMailboxUser(workspaceId) {
+  return (
+    db
+      .prepare(
+        `
+        SELECT id, name, first_name, last_name, email, role
+        FROM users
+        WHERE workspace_id = ?
+          AND lower(role) IN ('school_admin', 'admin', 'super_admin')
+        ORDER BY
+          CASE lower(role)
+            WHEN 'school_admin' THEN 0
+            WHEN 'admin' THEN 1
+            ELSE 2
+          END ASC,
+          created_at ASC
+        LIMIT 1
+      `
+      )
+      .get(workspaceId) || null
+  );
 }
 
 function parseOpeningHoursJson(value) {
@@ -16289,11 +16824,12 @@ function buildEmailSignatureBlock({ profileRow = {}, workspaceRow = {}, settings
 
   const hoursLines = buildEmailOpeningHoursLines(profileRow);
   const phone = String(profileRow.phone || "").trim();
+  const ownerEmail = String(getPlatformOwnerEmailSettings().owner_email || "").trim();
   const replyEmail = resolveWorkspaceContactEmail({
     profileRow,
     workspaceRow: {
       ...workspaceRow,
-      admin_email: String(settings.reply_to_email || workspaceRow.admin_email || "").trim()
+      admin_email: String(settings.reply_to_email || workspaceRow.admin_email || ownerEmail || "").trim()
     }
   });
   const registrationDetails = String(profileRow.registration_details || "").trim();
@@ -16844,10 +17380,11 @@ async function sendLiveSessionEmails({ workspaceId, channelId, session }) {
     db.prepare('SELECT name, admin_email FROM workspaces WHERE id = ?').get(workspaceId) || {};
   const profileRow =
     db.prepare('SELECT * FROM workspace_profile WHERE workspace_id = ?').get(workspaceId) || {};
+  const ownerEmail = String(getPlatformOwnerEmailSettings().owner_email || '').trim();
   const normalizedSettings = {
     ...settings,
     brand_school_name: String(settings.brand_school_name || workspaceRow.name || '').trim(),
-    reply_to_email: String(settings.reply_to_email || workspaceRow.admin_email || '').trim(),
+    reply_to_email: String(settings.reply_to_email || workspaceRow.admin_email || ownerEmail || '').trim(),
     footer_text: String(settings.footer_text || '').trim()
   };
   const replyTo = normalizedSettings.reply_to_email;
@@ -20638,6 +21175,164 @@ app.get('/api/admin/me', (req, res) => {
   });
 });
 
+app.get('/api/admin/owner-email-settings', (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  res.json(getPlatformOwnerEmailSettings());
+});
+
+app.post('/api/admin/owner-email-settings', (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  const settings = savePlatformOwnerEmailSettings(req.body || {});
+  legacyAuditLog({
+    workspaceId: 'platform',
+    actor: user.id,
+    action: 'owner.email_settings.update',
+    target: 'platform',
+    payload: { ownerEmail: settings.owner_email, enabled: settings.enabled }
+  });
+  res.json({ ok: true, settings });
+});
+
+app.post('/api/admin/owner-email-settings/test', async (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+
+  const settings = getPlatformOwnerEmailSettings();
+  const to = String(req.body?.to || '').trim();
+  if (!to.includes('@')) return res.status(400).json({ error: "Valid 'to' email required" });
+
+  const subject = String(req.body?.subject || '').trim() || `${settings.subject_prefix || '[Owner]'} Email test`;
+  const bodyText = String(req.body?.body || '').trim() || 'This is a test email from the platform owner mailbox.';
+  const footerText = String(settings.footer_text || '').trim();
+  const text = [bodyText, footerText].filter(Boolean).join('\n\n');
+  const html = `<div>${escapeHtml(bodyText).replace(/\n/g, '<br>')}</div>${
+    footerText ? `<div style="margin-top:18px;color:#64748b;">${escapeHtml(footerText).replace(/\n/g, '<br>')}</div>` : ''
+  }`;
+
+  try {
+    await sendPlatformEmail({
+      to,
+      subject,
+      text,
+      html,
+      replyTo: settings.owner_email || undefined,
+      fromName: settings.display_name || 'Platform Owner'
+    });
+    res.json({ ok: true, provider: providerName });
+  } catch (err) {
+    res.status(400).json({ error: String(err?.message || err) });
+  }
+});
+
+function getAdminWorkspaceEmailSettings(workspaceId) {
+  const workspaceRow = db
+    .prepare('SELECT name, logo_url AS logoUrl, admin_email AS adminEmail FROM workspaces WHERE id = ?')
+    .get(workspaceId) || {};
+  const row = db
+    .prepare('SELECT * FROM workspace_email_settings WHERE workspace_id = ?')
+    .get(workspaceId);
+  const ownerEmail = String(getPlatformOwnerEmailSettings().owner_email || '').trim();
+  const replyToDefault = String(workspaceRow.adminEmail || ownerEmail || '').trim();
+  return {
+    workspace_id: workspaceId,
+    enabled: 0,
+    brand_school_name: workspaceRow.name || '',
+    reply_to_email: replyToDefault,
+    footer_text: '',
+    subject_prefix: '',
+    manual_body_text: '',
+    logo_url: workspaceRow.logoUrl || '',
+    signature_html: '',
+    ...(row || {})
+  };
+}
+
+app.get('/api/admin/workspace-email-settings/:workspaceId', (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  const workspaceId = String(req.params.workspaceId || '').trim();
+  if (!workspaceId || workspaceId === 'all') return res.status(400).json({ error: 'Select a specific workspace' });
+  res.json(getAdminWorkspaceEmailSettings(workspaceId));
+});
+
+app.post('/api/admin/workspace-email-settings/:workspaceId', (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  const workspaceId = String(req.params.workspaceId || '').trim();
+  if (!workspaceId || workspaceId === 'all') return res.status(400).json({ error: 'Select a specific workspace' });
+  const body = req.body || {};
+
+  db.prepare(`
+    INSERT INTO workspace_email_settings
+      (workspace_id, enabled, brand_school_name, reply_to_email, footer_text, subject_prefix, manual_body_text, logo_url, signature_html, updated_at)
+    VALUES
+      (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(workspace_id) DO UPDATE SET
+      enabled = excluded.enabled,
+      brand_school_name = excluded.brand_school_name,
+      reply_to_email = excluded.reply_to_email,
+      footer_text = excluded.footer_text,
+      subject_prefix = excluded.subject_prefix,
+      manual_body_text = excluded.manual_body_text,
+      logo_url = excluded.logo_url,
+      signature_html = excluded.signature_html,
+      updated_at = datetime('now')
+  `).run(
+    workspaceId,
+    body.enabled ? 1 : 0,
+    String(body.brand_school_name || '').trim(),
+    String(body.reply_to_email || '').trim(),
+    String(body.footer_text || '').trim(),
+    String(body.subject_prefix || '').trim(),
+    String(body.manual_body_text || '').trim(),
+    String(body.logo_url || '').trim(),
+    String(body.signature_html || '').trim()
+  );
+
+  legacyAuditLog({
+    workspaceId,
+    actor: user.id,
+    action: 'workspace.email_settings.update',
+    target: workspaceId,
+    payload: { replyTo: String(body.reply_to_email || '').trim(), enabled: body.enabled ? 1 : 0 }
+  });
+  res.json({ ok: true });
+});
+
+app.post('/api/admin/workspace-email-settings/:workspaceId/test', async (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  const workspaceId = String(req.params.workspaceId || '').trim();
+  if (!workspaceId || workspaceId === 'all') return res.status(400).json({ error: 'Select a specific workspace' });
+  const to = String(req.body?.to || '').trim();
+  if (!to.includes('@')) return res.status(400).json({ error: "Valid 'to' email required" });
+
+  const settings = getAdminWorkspaceEmailSettings(workspaceId);
+  const subject = String(req.body?.subject || '').trim() || `${settings.subject_prefix || settings.brand_school_name || 'Workspace'} email test`;
+  const bodyText = String(req.body?.body || '').trim() || settings.manual_body_text || 'This is a workspace email test.';
+  const footerText = String(settings.footer_text || '').trim();
+  const text = [bodyText, footerText].filter(Boolean).join('\n\n');
+  const html = `<div>${escapeHtml(bodyText).replace(/\n/g, '<br>')}</div>${
+    footerText ? `<div style="margin-top:18px;color:#64748b;">${escapeHtml(footerText).replace(/\n/g, '<br>')}</div>` : ''
+  }`;
+
+  try {
+    await sendPlatformEmail({
+      to,
+      subject,
+      text,
+      html,
+      replyTo: settings.reply_to_email || getPlatformOwnerEmailSettings().owner_email || undefined,
+      fromName: settings.brand_school_name || 'Workspace'
+    });
+    res.json({ ok: true, provider: providerName });
+  } catch (err) {
+    res.status(400).json({ error: String(err?.message || err) });
+  }
+});
+
 app.get('/api/admin/workspaces', (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
@@ -20992,6 +21687,7 @@ app.get('/api/admin/workspace-settings/:workspaceId', (req, res) => {
 
   const ws = String(req.params.workspaceId || '').trim();
   if (!ws) return res.status(400).json({ error: 'workspaceId required' });
+  if (ws === 'all') return res.status(400).json({ error: 'Select a specific workspace first' });
 
   const row = db.prepare(`
     SELECT settings_json AS settingsJson
@@ -20999,7 +21695,13 @@ app.get('/api/admin/workspace-settings/:workspaceId', (req, res) => {
     WHERE workspace_id = ?
   `).get(ws);
 
-  const settings = row?.settingsJson ? JSON.parse(row.settingsJson) : {};
+  let settings = {};
+  try {
+    settings = row?.settingsJson ? JSON.parse(row.settingsJson) : {};
+  } catch (err) {
+    console.error('[Admin] Invalid workspace settings JSON', { workspaceId: ws, error: err?.message || err });
+    return res.status(500).json({ error: 'Stored workspace settings JSON is invalid' });
+  }
   return res.json({ workspaceId: ws, settings });
 });
 
@@ -21008,6 +21710,8 @@ app.put('/api/admin/workspace-settings/:workspaceId', (req, res) => {
   if (!user) return;
 
   const ws = String(req.params.workspaceId || '').trim();
+  if (!ws) return res.status(400).json({ error: 'workspaceId required' });
+  if (ws === 'all') return res.status(400).json({ error: 'Select a specific workspace first' });
   const settings = req.body?.settings ?? {};
   const json = JSON.stringify(settings || {});
 
