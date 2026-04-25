@@ -2775,14 +2775,27 @@
       </div>
       <div class="modal-body">
         <div class="muted" id="liveAttendanceMeta"></div>
+        <div class="live-controls-status muted" id="liveAttendanceStatus">Loading live session controls...</div>
+        <section class="live-control-section" aria-label="Pending participants">
+          <div class="live-control-section-head">
+            <h4>Waiting room</h4>
+          </div>
+          <div class="live-control-list" id="livePendingList"></div>
+        </section>
+        <section class="live-control-section" aria-label="Raised hands">
+          <div class="live-control-section-head">
+            <h4>Raised hands</h4>
+          </div>
+          <div class="live-control-list" id="liveRaisedHandsList"></div>
+        </section>
         <div class="live-att-list" id="liveAttendanceList"></div>
       </div>
       <div class="modal-footer live-modal-footer">
         <div class="live-footer-end">
           <button type="button" class="live-cancel-btn" id="liveAttendanceCancel">Close</button>
           <button type="button" class="live-save-btn" id="liveAttendanceSave">
-            <i class="fa-solid fa-check"></i>
-            Save attendance
+            <i class="fa-solid fa-rotate-right"></i>
+            Refresh
           </button>
         </div>
       </div>

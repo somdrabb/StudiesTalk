@@ -181,8 +181,8 @@ function createSqliteMessageRepository(sqliteDb) {
       if (attachments.length) {
         const insertAttachment = sqliteDb.prepare(`
           INSERT OR IGNORE INTO files_registry
-          (file_id, workspace_id, channel_id, message_id, uploader_id, purpose, file_name, mime, size_bytes, url, pinned, deleted, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, datetime('now'), datetime('now'))
+          (file_id, workspace_id, channel_id, message_id, uploader_id, purpose, file_name, mime, size_bytes, url, storage_key, checksum, storage_provider, storage_mode, encryption_key_id, encryption_iv, encryption_tag, permissions, pinned, deleted, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, datetime('now'), datetime('now'))
         `);
         attachments.forEach((att) => {
           const url = att?.url ? String(att.url) : '';
@@ -190,6 +190,14 @@ function createSqliteMessageRepository(sqliteDb) {
           const name = att?.originalName ? String(att.originalName) : 'attachment';
           const mime = att?.mimeType ? String(att.mimeType) : 'application/octet-stream';
           const size = Number(att?.size || 0) || 0;
+          const storageKey = att?.storageKey ? String(att.storageKey) : '';
+          const checksum = att?.checksum ? String(att.checksum) : '';
+          const storageProvider = att?.storageProvider ? String(att.storageProvider) : 'local_disk';
+          const storageMode = att?.storageMode ? String(att.storageMode) : 'plain';
+          const encryptionKeyId = att?.encryptionKeyId ? String(att.encryptionKeyId) : '';
+          const encryptionIv = att?.encryptionIv ? String(att.encryptionIv) : '';
+          const encryptionTag = att?.encryptionTag ? String(att.encryptionTag) : '';
+          const permissions = att?.permissions ? String(att.permissions) : 'workspace_private';
           insertAttachment.run(
             computeFileId({ url, channelId, messageId: id, name }),
             workspaceId,
@@ -200,7 +208,15 @@ function createSqliteMessageRepository(sqliteDb) {
             name,
             mime,
             size,
-            url
+            url,
+            storageKey,
+            checksum,
+            storageProvider,
+            storageMode,
+            encryptionKeyId,
+            encryptionIv,
+            encryptionTag,
+            permissions
           );
         });
       }
@@ -529,8 +545,8 @@ function createPostgresMessageRepository() {
         const size = Number(att?.size || 0) || 0;
         await postgres.exec(`
           INSERT INTO files_registry
-          (file_id, workspace_id, channel_id, message_id, uploader_id, purpose, file_name, mime, size_bytes, url, pinned, deleted, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, CURRENT_TIMESTAMP::text, CURRENT_TIMESTAMP::text)
+          (file_id, workspace_id, channel_id, message_id, uploader_id, purpose, file_name, mime, size_bytes, url, storage_key, checksum, storage_provider, storage_mode, encryption_key_id, encryption_iv, encryption_tag, permissions, pinned, deleted, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, CURRENT_TIMESTAMP::text, CURRENT_TIMESTAMP::text)
           ON CONFLICT DO NOTHING
         `, [
           computeFileId({ url, channelId, messageId: id, name }),
@@ -542,7 +558,15 @@ function createPostgresMessageRepository() {
           name,
           mime,
           size,
-          url
+          url,
+          att?.storageKey ? String(att.storageKey) : '',
+          att?.checksum ? String(att.checksum) : '',
+          att?.storageProvider ? String(att.storageProvider) : 'local_disk',
+          att?.storageMode ? String(att.storageMode) : 'plain',
+          att?.encryptionKeyId ? String(att.encryptionKeyId) : '',
+          att?.encryptionIv ? String(att.encryptionIv) : '',
+          att?.encryptionTag ? String(att.encryptionTag) : '',
+          att?.permissions ? String(att.permissions) : 'workspace_private'
         ]);
       }
 

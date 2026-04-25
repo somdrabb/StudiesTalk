@@ -17139,6 +17139,52 @@ html[data-theme="dark"] .live-form-row input{
   background: #fff;
   font-weight: 800;
 }
+.live-controls-status{
+  margin: 10px 0 14px;
+}
+.live-control-section{
+  margin-bottom: 14px;
+}
+.live-control-section-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  margin-bottom: 8px;
+}
+.live-control-section-head h4{
+  margin: 0;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--text-main);
+}
+.live-control-list{
+  display:flex;
+  flex-direction:column;
+  gap: 8px;
+}
+.live-control-row{
+  display:grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 14px;
+  background: rgba(0,0,0,.02);
+}
+.live-control-row-meta{
+  min-width: 0;
+}
+.live-control-row-actions{
+  display:flex;
+  align-items:center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+@media (max-width: 640px){
+  .live-control-row{
+    grid-template-columns: 1fr;
+  }
+}
 
 .live-host-member-picker{
   max-height: 280px;

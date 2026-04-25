@@ -100,6 +100,14 @@ CREATE TABLE IF NOT EXISTS files_registry (
   mime TEXT NOT NULL DEFAULT 'application/octet-stream',
   size_bytes INTEGER NOT NULL DEFAULT 0,
   url TEXT NOT NULL,
+  storage_key TEXT NOT NULL DEFAULT '',
+  checksum TEXT NOT NULL DEFAULT '',
+  storage_provider TEXT NOT NULL DEFAULT 'local_disk',
+  storage_mode TEXT NOT NULL DEFAULT 'plain',
+  encryption_key_id TEXT NOT NULL DEFAULT '',
+  encryption_iv TEXT NOT NULL DEFAULT '',
+  encryption_tag TEXT NOT NULL DEFAULT '',
+  permissions TEXT NOT NULL DEFAULT 'workspace_private',
   pinned INTEGER NOT NULL DEFAULT 0,
   deleted INTEGER NOT NULL DEFAULT 0,
   replaced_from TEXT,
@@ -109,6 +117,8 @@ CREATE TABLE IF NOT EXISTS files_registry (
 
 CREATE INDEX IF NOT EXISTS idx_files_registry_ws_channel
   ON files_registry(workspace_id, channel_id);
+CREATE INDEX IF NOT EXISTS idx_files_registry_ws_checksum
+  ON files_registry(workspace_id, checksum);
 
 CREATE TABLE IF NOT EXISTS dms (
   id TEXT PRIMARY KEY,

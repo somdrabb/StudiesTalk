@@ -7760,6 +7760,86 @@ function formatLiveSessionScheduleLabel(session) {
   return [dateLabel, timeLabel].filter(Boolean).join(" · ");
 }
 
+function getLiveControlState(session = null) {
+  return session?.liveControls || session?.live_controls || null;
+}
+
+function getLiveSelfParticipant(session = null) {
+  return getLiveControlState(session)?.self || null;
+}
+
+function applyLiveControlsToSession(sessionId, liveControls) {
+  const targetId = String(sessionId || "").trim();
+  if (!targetId || !liveControls) return;
+  liveSessions = liveSessions.map((session) =>
+    String(session?.id || "").trim() === targetId
+      ? { ...session, liveControls }
+      : session
+  );
+}
+
+function getLiveJoinActionState(session = null) {
+  const controls = getLiveControlState(session);
+  const self = controls?.self || null;
+  const canManage = !!controls?.canManage;
+  if (canManage) {
+    return { kind: "join", label: "Join class", disabled: false, icon: "fa-video" };
+  }
+  const status = String(self?.status || "").trim().toLowerCase();
+  if (status === "approved" || status === "joined" || status === "left") {
+    return { kind: "join", label: "Join class", disabled: false, icon: "fa-video" };
+  }
+  if (status === "pending") {
+    return { kind: "pending", label: "Pending", disabled: true, icon: "fa-hourglass-half" };
+  }
+  if (status === "denied") {
+    return { kind: "denied", label: "Denied", disabled: true, icon: "fa-ban" };
+  }
+  return { kind: "request", label: "Request join", disabled: false, icon: "fa-user-clock" };
+}
+
+function canToggleLiveHand(session = null) {
+  const self = getLiveSelfParticipant(session);
+  return String(self?.status || "").trim().toLowerCase() === "joined";
+}
+
+function isLiveHandRaised(session = null) {
+  return String(getLiveSelfParticipant(session)?.handStatus || "").trim().toLowerCase() === "raised";
+}
+
+async function requestLiveSessionJoin(session) {
+  const sessionId = String(session?.id || "").trim();
+  if (!sessionId) return null;
+  const data = await fetchJSON(`/api/live-sessions/${encodeURIComponent(sessionId)}/request-join`, {
+    method: "POST"
+  });
+  if (data?.liveControls) {
+    applyLiveControlsToSession(sessionId, data.liveControls);
+    renderLiveSchedule();
+    renderLiveRecents();
+  }
+  return data;
+}
+
+async function toggleLiveHand(session) {
+  const sessionId = String(session?.id || "").trim();
+  if (!sessionId) return;
+  const isRaised = isLiveHandRaised(session);
+  const data = await fetchJSON(`/api/live-sessions/${encodeURIComponent(sessionId)}/hand/${isRaised ? "lower" : "raise"}`, {
+    method: "POST",
+    body: isRaised ? JSON.stringify({ userId: String(sessionUser?.id || "").trim() }) : undefined
+  });
+  if (data?.liveControls) {
+    applyLiveControlsToSession(sessionId, data.liveControls);
+    if (liveActiveSession && String(liveActiveSession.id || "") === sessionId) {
+      liveActiveSession = { ...liveActiveSession, liveControls: data.liveControls };
+    }
+    renderLiveSchedule();
+    renderLiveRecents();
+  }
+  showToast(isRaised ? "Hand lowered." : "Hand raised.");
+}
+
 function renderLiveRoomHeader(session = null, routeChannelId = null) {
   const fallbackTitle = "Live Class";
   const channel = session?.channel_id ? getChannelById(session.channel_id) : null;
@@ -7791,6 +7871,26 @@ async function openLiveSessionExternally(sessionOrId) {
   const sessionId = String(session?.id || sessionOrId || "").trim();
   let meetingUrl = String(session?.meeting_url || "").trim();
   let meetingJwt = "";
+  const joinState = getLiveJoinActionState(session);
+
+  if (joinState.kind === "request") {
+    try {
+      await requestLiveSessionJoin(session);
+      showToast("Join request sent. Waiting for approval.");
+    } catch (err) {
+      console.error("Failed to request live session join", err);
+      showToast(err?.message || "Could not request access to the live session.");
+    }
+    return;
+  }
+  if (joinState.kind === "pending") {
+    showToast("Waiting for teacher approval.");
+    return;
+  }
+  if (joinState.kind === "denied") {
+    showToast("Your join request was denied.");
+    return;
+  }
 
   if (sessionId) {
     try {
@@ -7798,8 +7898,18 @@ async function openLiveSessionExternally(sessionOrId) {
       const joinedSession = joinData?.session || session || null;
       meetingUrl = String(joinData?.jitsi?.meetingUrl || joinedSession?.meeting_url || meetingUrl || "").trim();
       meetingJwt = String(joinData?.jitsi?.jwt || "").trim();
+      if (joinData?.liveControls) {
+        applyLiveControlsToSession(sessionId, joinData.liveControls);
+      }
     } catch (err) {
       console.error("Failed to prepare external live session", err);
+      if (err?.payload?.code === "live_waiting_room_pending") {
+        try {
+          await requestLiveSessionJoin(session);
+        } catch (_requestErr) {
+          /* ignore */
+        }
+      }
       if (!meetingUrl) {
         showToast(err?.message || "Could not open live session.");
         return;
@@ -12614,6 +12724,8 @@ function renderLiveSchedule() {
   liveSessionsList.innerHTML = "";
   list.forEach((session) => {
     const state = getLiveSessionDisplayState(session);
+    const joinAction = getLiveJoinActionState(session);
+    const liveControls = getLiveControlState(session);
     const row = document.createElement("div");
     row.className = "live-row";
     const details = document.createElement("div");
@@ -12660,21 +12772,51 @@ function renderLiveSchedule() {
       statusValue.textContent = statusText;
       channelInfo.appendChild(statusValue);
     }
+    if (liveControls?.counts?.pending) {
+      const pendingValue = document.createElement("span");
+      pendingValue.className = "live-row-channel-status";
+      pendingValue.textContent = `${liveControls.counts.pending} waiting`;
+      channelInfo.appendChild(pendingValue);
+    }
+    if (liveControls?.counts?.raisedHands) {
+      const raisedValue = document.createElement("span");
+      raisedValue.className = "live-row-channel-status";
+      raisedValue.textContent = `${liveControls.counts.raisedHands} hands`;
+      channelInfo.appendChild(raisedValue);
+    }
+    if (liveControls?.self?.status && !liveControls?.canManage) {
+      const selfStatus = document.createElement("span");
+      selfStatus.className = "live-row-channel-status";
+      selfStatus.textContent = String(liveControls.self.status).replace(/^./, (ch) => ch.toUpperCase());
+      channelInfo.appendChild(selfStatus);
+    }
     if (channelInfo.childElementCount) {
       row.appendChild(channelInfo);
     }
     const actions = document.createElement("div");
     actions.className = "live-row-actions live-row-actions-bottom";
-    if (!state.ctaDisabled && session.meeting_url) {
+    if (session.meeting_url) {
       const joinBtn = document.createElement("button");
       joinBtn.type = "button";
       joinBtn.className = "live-btn primary live-btn-join";
-      joinBtn.innerHTML = '<i class="fa-solid fa-video"></i>';
-      joinBtn.title = state.ctaText;
+      joinBtn.innerHTML = `<i class="fa-solid ${joinAction.icon}"></i>`;
+      joinBtn.title = joinAction.label;
+      joinBtn.disabled = !!joinAction.disabled;
       joinBtn.addEventListener("click", () => {
         void openLiveSessionExternally(session);
       });
       actions.appendChild(joinBtn);
+    }
+    if (canToggleLiveHand(session)) {
+      const handBtn = document.createElement("button");
+      handBtn.type = "button";
+      handBtn.className = "live-btn ghost";
+      handBtn.innerHTML = `<i class="fa-solid ${isLiveHandRaised(session) ? "fa-hand" : "fa-hand-paper"}"></i>`;
+      handBtn.title = isLiveHandRaised(session) ? "Lower hand" : "Raise hand";
+      handBtn.addEventListener("click", () => {
+        void toggleLiveHand(session);
+      });
+      actions.appendChild(handBtn);
     }
     if (isAdminUser() || isTeacherUser()) {
       const presenterBtn = document.createElement("button");
@@ -12774,6 +12916,7 @@ function renderLiveRecents() {
   }
   recents.forEach((session) => {
     const state = getLiveSessionDisplayState(session);
+    const joinAction = getLiveJoinActionState(session);
     const row = document.createElement("div");
     row.className = "live-row";
     const title = document.createElement("div");
@@ -12791,11 +12934,12 @@ function renderLiveRecents() {
     `;
     const actions = document.createElement("div");
     actions.className = "live-row-actions";
-    if (!state.ctaDisabled && session.meeting_url) {
+    if (session.meeting_url) {
       const joinBtn = document.createElement("button");
       joinBtn.type = "button";
       joinBtn.className = "live-btn ghost";
-      joinBtn.textContent = state.ctaText;
+      joinBtn.textContent = joinAction.label;
+      joinBtn.disabled = !!joinAction.disabled;
       joinBtn.addEventListener("click", () => {
         void openLiveSessionExternally(session);
       });
@@ -12942,76 +13086,181 @@ async function openAttendanceModal(session) {
   liveActiveSession = session;
   liveAttendanceModal.classList.remove("hidden");
   liveAttendanceMeta.textContent = `Session: ${session.title} · ${session.date}`;
-  try {
-    const list = await fetchJSON(`/api/live-sessions/${session.id}/attendance`);
-    renderAttendanceList(Array.isArray(list) ? list : []);
-  } catch (err) {
-    console.error("Failed to load attendance", err);
-    showToast("Could not load attendance.");
-  }
+  await loadLiveAttendanceState();
 }
 
-function renderAttendanceList(records) {
-  if (!liveAttendanceList) return;
-  liveAttendanceList.innerHTML = "";
-  if (!records.length) {
-    liveAttendanceList.innerHTML = '<div class="muted">No attendance records yet.</div>';
+function renderLiveControlRows(container, rows, { emptyText, canManage = false, showApproveDeny = false, showLower = false } = {}) {
+  if (!container) return;
+  container.innerHTML = "";
+  if (!Array.isArray(rows) || !rows.length) {
+    container.innerHTML = `<div class="muted">${escapeHtml(emptyText || "Nothing here yet.")}</div>`;
     return;
   }
-  records.forEach((record) => {
+  rows.forEach((row) => {
+    const item = document.createElement("div");
+    item.className = "live-control-row";
+    const meta = document.createElement("div");
+    meta.className = "live-control-row-meta";
+    const statusBits = [];
+    if (row.role) statusBits.push(String(row.role).replace(/_/g, " "));
+    if (row.status) statusBits.push(row.status);
+    if (row.durationSeconds) statusBits.push(`${Math.max(0, Math.round(Number(row.durationSeconds || 0) / 60))} min`);
+    if (row.denialReason) statusBits.push(row.denialReason);
+    meta.innerHTML = `
+      <div class="live-att-name">${escapeHtml(row.name || row.userId || "Participant")}</div>
+      <div class="live-att-sub">${escapeHtml(statusBits.join(" • ") || "No status")}</div>
+    `;
+    item.appendChild(meta);
+    const actions = document.createElement("div");
+    actions.className = "live-control-row-actions";
+    if (showApproveDeny && canManage) {
+      const approveBtn = document.createElement("button");
+      approveBtn.type = "button";
+      approveBtn.className = "live-btn primary";
+      approveBtn.textContent = "Approve";
+      approveBtn.addEventListener("click", async () => {
+        try {
+          const data = await fetchJSON(`/api/live-sessions/${encodeURIComponent(liveActiveSession?.id || "")}/participants/${encodeURIComponent(row.userId)}/approve`, {
+            method: "POST"
+          });
+          if (data?.liveControls) {
+            liveAttendanceData = data.liveControls;
+            applyLiveControlsToSession(liveActiveSession?.id, data.liveControls);
+          }
+          await loadLiveAttendanceState();
+        } catch (error) {
+          console.error("Failed to approve live join", error);
+          showToast(error?.message || "Could not approve participant.");
+        }
+      });
+      const denyBtn = document.createElement("button");
+      denyBtn.type = "button";
+      denyBtn.className = "live-btn ghost";
+      denyBtn.textContent = "Deny";
+      denyBtn.addEventListener("click", async () => {
+        try {
+          const data = await fetchJSON(`/api/live-sessions/${encodeURIComponent(liveActiveSession?.id || "")}/participants/${encodeURIComponent(row.userId)}/deny`, {
+            method: "POST"
+          });
+          if (data?.liveControls) {
+            liveAttendanceData = data.liveControls;
+            applyLiveControlsToSession(liveActiveSession?.id, data.liveControls);
+          }
+          await loadLiveAttendanceState();
+        } catch (error) {
+          console.error("Failed to deny live join", error);
+          showToast(error?.message || "Could not deny participant.");
+        }
+      });
+      actions.appendChild(approveBtn);
+      actions.appendChild(denyBtn);
+    }
+    if (showLower && canManage) {
+      const lowerBtn = document.createElement("button");
+      lowerBtn.type = "button";
+      lowerBtn.className = "live-btn ghost";
+      lowerBtn.textContent = "Lower hand";
+      lowerBtn.addEventListener("click", async () => {
+        try {
+          const data = await fetchJSON(`/api/live-sessions/${encodeURIComponent(liveActiveSession?.id || "")}/hand/lower`, {
+            method: "POST",
+            body: JSON.stringify({ userId: row.userId })
+          });
+          if (data?.liveControls) {
+            liveAttendanceData = data.liveControls;
+            applyLiveControlsToSession(liveActiveSession?.id, data.liveControls);
+          }
+          await loadLiveAttendanceState();
+        } catch (error) {
+          console.error("Failed to lower hand", error);
+          showToast(error?.message || "Could not lower hand.");
+        }
+      });
+      actions.appendChild(lowerBtn);
+    }
+    if (actions.childElementCount) item.appendChild(actions);
+    container.appendChild(item);
+  });
+}
+
+function renderAttendanceList(controls) {
+  if (!liveAttendanceList) return;
+  const rows = Array.isArray(controls?.participants) ? controls.participants : [];
+  liveAttendanceList.innerHTML = "";
+  if (!rows.length) {
+    liveAttendanceList.innerHTML = '<div class="muted">No live session activity yet.</div>';
+    return;
+  }
+  rows.forEach((record) => {
     const row = document.createElement("div");
     row.className = "live-att-row";
-    row.dataset.studentId = record.student_id || "";
     const details = document.createElement("div");
+    const statusParts = [
+      record.status || "pending",
+      record.role ? String(record.role).replace(/_/g, " ") : "",
+      record.joinedAt ? "joined" : "",
+      record.leftAt ? "left" : "",
+      record.handStatus === "raised" ? "hand raised" : "",
+      record.durationSeconds ? `${Math.max(0, Math.round(Number(record.durationSeconds || 0) / 60))} min` : ""
+    ].filter(Boolean);
     details.innerHTML = `
-      <div class="live-att-name">${escapeHtml(record.name || record.student_id || "Student")}</div>
-      <div class="live-att-sub">${escapeHtml(record.status || "unmarked")}</div>
+      <div class="live-att-name">${escapeHtml(record.name || record.userId || "Participant")}</div>
+      <div class="live-att-sub">${escapeHtml(statusParts.join(" • "))}</div>
     `;
-    const select = document.createElement("select");
-    select.className = "live-att-select";
-    ["present", "late", "absent", "unmarked"].forEach((status) => {
-      const option = document.createElement("option");
-      option.value = status;
-      option.textContent = status.charAt(0).toUpperCase() + status.slice(1);
-      if (record.status === status) option.selected = true;
-      select.appendChild(option);
-    });
     row.appendChild(details);
-    row.appendChild(select);
     liveAttendanceList.appendChild(row);
   });
 }
 
-async function saveLiveAttendance() {
-  if (!liveActiveSession) return;
-  const payload = [];
-  liveAttendanceList?.querySelectorAll(".live-att-row").forEach((row) => {
-    const studentId = row.dataset.studentId;
-    const select = row.querySelector("select");
-    if (studentId && select) {
-      payload.push({ studentId, status: select.value });
-    }
+function renderLiveAttendanceState() {
+  const controls = liveAttendanceData || {};
+  if (liveAttendanceStatus) {
+    const counts = controls?.counts || {};
+    liveAttendanceStatus.textContent = `Pending ${counts.pending || 0} • Raised hands ${counts.raisedHands || 0} • Joined ${counts.joined || 0}`;
+  }
+  renderLiveControlRows(livePendingList, controls?.pendingParticipants || [], {
+    emptyText: "No one is waiting to join.",
+    canManage: !!controls?.canManage,
+    showApproveDeny: true
   });
-  if (!payload.length) {
-    showToast("Nothing to save.");
-    return;
+  renderLiveControlRows(liveRaisedHandsList, controls?.raisedHands || [], {
+    emptyText: "No raised hands right now.",
+    canManage: !!controls?.canManage,
+    showLower: true
+  });
+  renderAttendanceList(controls);
+}
+
+async function loadLiveAttendanceState() {
+  if (!liveActiveSession?.id) return;
+  if (liveAttendanceStatus) {
+    liveAttendanceStatus.textContent = "Loading live session controls...";
   }
   try {
-    await fetchJSON(`/api/live-sessions/${liveActiveSession.id}/attendance`, {
-      method: "POST",
-      body: JSON.stringify({ records: payload })
-    });
-    showToast("Attendance saved.");
-    closeAttendanceModal();
+    const data = await fetchJSON(`/api/live-sessions/${encodeURIComponent(liveActiveSession.id)}/state`);
+    liveAttendanceData = data?.liveControls || null;
+    if (data?.session) {
+      liveActiveSession = { ...liveActiveSession, ...data.session, liveControls: data.liveControls || null };
+      applyLiveControlsToSession(liveActiveSession.id, data.liveControls || null);
+    }
+    renderLiveAttendanceState();
   } catch (err) {
-    console.error("Failed to save attendance", err);
-    showToast("Could not save attendance.");
+    console.error("Failed to load live controls", err);
+    if (liveAttendanceStatus) {
+      liveAttendanceStatus.textContent = "Could not load live session controls.";
+    }
+    showToast("Could not load live session controls.");
   }
+}
+
+async function saveLiveAttendance() {
+  await loadLiveAttendanceState();
 }
 
 function closeAttendanceModal() {
   if (!liveAttendanceModal) return;
   liveAttendanceModal.classList.add("hidden");
+  liveAttendanceData = null;
 }
 
 function populateLiveClassOptions() {
@@ -16704,6 +16953,9 @@ const liveDeleteConfirmClose = document.getElementById("liveDeleteConfirmClose")
 const liveHostTitle = document.getElementById("liveHostTitle");
 const liveAttendanceModal = document.getElementById("liveAttendanceModal");
 const liveAttendanceMeta = document.getElementById("liveAttendanceMeta");
+const liveAttendanceStatus = document.getElementById("liveAttendanceStatus");
+const livePendingList = document.getElementById("livePendingList");
+const liveRaisedHandsList = document.getElementById("liveRaisedHandsList");
 const liveAttendanceList = document.getElementById("liveAttendanceList");
 const liveAttendanceClose = document.getElementById("liveAttendanceClose");
 const liveAttendanceCancel = document.getElementById("liveAttendanceCancel");
@@ -16815,7 +17067,7 @@ const sesRegistrationDetails = document.getElementById("sesRegistrationDetails")
 const sesPreviewBtn = document.getElementById("sesPreviewBtn");
 let liveScope = "all";
 let liveSessions = [];
-let liveAttendanceData = [];
+let liveAttendanceData = null;
 let liveActiveSession = null;
 let liveHostMemberIds = new Set();
 let liveSessionSurfaceRefreshTimer = null;
@@ -34426,10 +34678,23 @@ document.addEventListener("DOMContentLoaded", () => {
   updateSesBodyChrome().catch(() => {});
   const liveMeetLeaveBtn = document.getElementById("liveMeetLeaveBtn");
   if (liveMeetLeaveBtn) {
-    liveMeetLeaveBtn.addEventListener("click", () => {
+    liveMeetLeaveBtn.addEventListener("click", async () => {
       setLiveRoomFocusMode(false);
       setLiveSessionActivity(false);
       if (typeof leaveLiveMeetingEmbed === "function") leaveLiveMeetingEmbed();
+      if (liveActiveSession?.id) {
+        try {
+          const data = await fetchJSON(`/api/live-sessions/${encodeURIComponent(liveActiveSession.id)}/leave`, {
+            method: "POST"
+          });
+          if (data?.liveControls) {
+            applyLiveControlsToSession(liveActiveSession.id, data.liveControls);
+            liveActiveSession = { ...liveActiveSession, liveControls: data.liveControls };
+          }
+        } catch (err) {
+          console.error("Failed to leave live session", err);
+        }
+      }
       showToast("You left the session.");
     });
   }

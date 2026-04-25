@@ -770,14 +770,14 @@ function createPostgresTasksRepository() {
   return {
     engine: 'postgres',
 
-    async ensureLinkedFileRegistered({ fileId, workspaceId, channelId, messageId, uploaderId, purpose, fileName, mime, sizeBytes, url }) {
+    async ensureLinkedFileRegistered({ fileId, workspaceId, channelId, messageId, uploaderId, purpose, fileName, mime, sizeBytes, url, storageKey = '', checksum = '', storageProvider = 'local_disk', storageMode = 'plain', encryptionKeyId = '', encryptionIv = '', encryptionTag = '', permissions = 'workspace_private' }) {
       const now = nowSqliteStyleTimestamp();
       await postgres.execute(`
         INSERT INTO files_registry
-        (file_id, workspace_id, channel_id, message_id, uploader_id, purpose, file_name, mime, size_bytes, url, pinned, deleted, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
+        (file_id, workspace_id, channel_id, message_id, uploader_id, purpose, file_name, mime, size_bytes, url, storage_key, checksum, storage_provider, storage_mode, encryption_key_id, encryption_iv, encryption_tag, permissions, pinned, deleted, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
         ON CONFLICT (file_id) DO NOTHING
-      `, [fileId, workspaceId, channelId || null, messageId, uploaderId || null, purpose, fileName, mime, Number(sizeBytes || 0), url, now, now]);
+      `, [fileId, workspaceId, channelId || null, messageId, uploaderId || null, purpose, fileName, mime, Number(sizeBytes || 0), url, storageKey, checksum, storageProvider, storageMode, encryptionKeyId, encryptionIv, encryptionTag, permissions, now, now]);
     },
 
     async listTasks({ workspaceId, channelId, status = '', includeDone = true, limit = 50, userId }) {

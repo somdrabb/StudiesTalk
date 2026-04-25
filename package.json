@@ -17,6 +17,8 @@
     "test:security:smoke": "node scripts/security-smoke.js",
     "test:account-security:smoke": "node scripts/account-security-smoke.js",
     "test:tenant-isolation:smoke": "node scripts/tenant-isolation-smoke.js",
+    "test:file-storage:smoke": "node scripts/file-storage-smoke.js",
+    "test:live-controls:smoke": "node scripts/live-class-controls-smoke.js",
     "test:all:smoke": "npm run test:security:smoke && npm run test:onboarding:smoke && npm run test:policy:smoke",
     "test:runtime:smoke:pg": "node scripts/runtime-domain-smoke.js postgres",
     "test:tasks:smoke": "node scripts/tasks-rehearsal-smoke.js sqlite",

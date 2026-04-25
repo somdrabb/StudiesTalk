@@ -32,6 +32,9 @@ const { getFfmpegCommand, isStrict } = require('./server/ffmpeg');
 const inboundEmailService = require('./server/services/inboundEmail.service');
 const jitsiConfig = require('./server/config/jitsi');
 const { generateJitsiToken } = require('./server/services/jitsiTokenService');
+const { createFileStorageService, getTypeMaxBytes } = require('./server/services/fileStorage.service');
+const { createLocalDiskStorageAdapter } = require('./server/services/storage/localDiskStorage.adapter');
+const { createS3CompatibleStorageAdapter } = require('./server/services/storage/s3CompatibleStorage.adapter');
 const aiSpeakingScenarioConfig = require('./public/AIvoicepractice/scenarioConfig.js');
 const { createBillingRepository } = require('./server/repositories/billingRepository');
 const { createTasksRepository } = require('./server/repositories/tasksRepository');
@@ -491,6 +494,15 @@ const PORT = ENV.PORT;
 const WS_UPLOADS_DIR = path.join(UPLOADS_DIR, 'workspaces');
 const UPLOAD_DIR = UPLOADS_DIR;
 const UPLOAD_MAX_FILE_BYTES = Math.max(1_000_000, Number(ENV.UPLOAD_MAX_FILE_BYTES || 25 * 1024 * 1024));
+const FILE_STORAGE_ADAPTER = String(ENV.FILE_STORAGE_ADAPTER || 'local').trim().toLowerCase();
+const FILE_STORAGE_LOCAL_ROOT = String(ENV.FILE_STORAGE_LOCAL_ROOT || path.join(UPLOADS_DIR, 'managed')).trim();
+const FILE_STORAGE_ENCRYPTION_ENABLED = !!ENV.FILE_STORAGE_ENCRYPTION_ENABLED;
+const FILE_STORAGE_ENCRYPTION_KEY = String(ENV.FILE_STORAGE_ENCRYPTION_KEY || '').trim();
+const FILE_STORAGE_ENCRYPTION_KEY_ID = String(ENV.FILE_STORAGE_ENCRYPTION_KEY_ID || 'file-key-v1').trim() || 'file-key-v1';
+const FILE_UPLOAD_IMAGE_MAX_BYTES = Math.max(1_000_000, Number(ENV.FILE_UPLOAD_IMAGE_MAX_BYTES || 10 * 1024 * 1024));
+const FILE_UPLOAD_DOCUMENT_MAX_BYTES = Math.max(1_000_000, Number(ENV.FILE_UPLOAD_DOCUMENT_MAX_BYTES || 25 * 1024 * 1024));
+const FILE_UPLOAD_AUDIO_MAX_BYTES = Math.max(1_000_000, Number(ENV.FILE_UPLOAD_AUDIO_MAX_BYTES || 50 * 1024 * 1024));
+const FILE_UPLOAD_VIDEO_MAX_BYTES = Math.max(1_000_000, Number(ENV.FILE_UPLOAD_VIDEO_MAX_BYTES || 200 * 1024 * 1024));
 const BLOCKED_UPLOAD_EXTENSIONS = new Set([
   '.app', '.bat', '.cmd', '.com', '.cpl', '.css', '.dll', '.exe', '.hta', '.html', '.htm',
   '.jar', '.js', '.jsp', '.jspx', '.mjs', '.msi', '.php', '.phar', '.ps1', '.py', '.rb',
@@ -641,7 +653,20 @@ function isUploadFileSafe(file = {}) {
       reason: 'Unsupported file type.'
     };
   }
-  return { ok: true, ext, mimeType, safeName };
+  const baseLimit = getTypeMaxBytes({
+    mimeType,
+    fileName: safeName,
+    globalMaxBytes: UPLOAD_MAX_FILE_BYTES
+  });
+  const configuredTypeMaxBytes = {
+    image: FILE_UPLOAD_IMAGE_MAX_BYTES,
+    document: FILE_UPLOAD_DOCUMENT_MAX_BYTES,
+    audio: FILE_UPLOAD_AUDIO_MAX_BYTES,
+    video: FILE_UPLOAD_VIDEO_MAX_BYTES
+  };
+  const kind = baseLimit.kind;
+  const maxBytes = Math.min(baseLimit.maxBytes, configuredTypeMaxBytes[kind] || baseLimit.maxBytes);
+  return { ok: true, ext, mimeType, safeName, kind, maxBytes };
 }
 
 function normalizePhoneCountryCode(value = '') {
@@ -793,6 +818,27 @@ function isPromiseLike(value) {
 
   ensureDir(UPLOADS_DIR);
   ensureDir(WS_UPLOADS_DIR);
+  ensureDir(FILE_STORAGE_LOCAL_ROOT);
+
+  const fileStorageAdapter = (() => {
+    if (FILE_STORAGE_ADAPTER === 'local') {
+      return createLocalDiskStorageAdapter({ rootDir: FILE_STORAGE_LOCAL_ROOT });
+    }
+    return createS3CompatibleStorageAdapter({ rootDir: FILE_STORAGE_LOCAL_ROOT });
+  })();
+  const fileStorageService = createFileStorageService({
+    adapter: fileStorageAdapter,
+    globalMaxBytes: UPLOAD_MAX_FILE_BYTES,
+    perTypeMaxBytes: {
+      image: FILE_UPLOAD_IMAGE_MAX_BYTES,
+      document: FILE_UPLOAD_DOCUMENT_MAX_BYTES,
+      audio: FILE_UPLOAD_AUDIO_MAX_BYTES,
+      video: FILE_UPLOAD_VIDEO_MAX_BYTES
+    },
+    encryptionEnabled: FILE_STORAGE_ENCRYPTION_ENABLED,
+    encryptionKeyHex: FILE_STORAGE_ENCRYPTION_KEY,
+    encryptionKeyId: FILE_STORAGE_ENCRYPTION_KEY_ID
+  });
 
   // open / create SQLite DB
   const db = new Database(DB_PATH);
@@ -4219,6 +4265,22 @@ app.get('/uploads/*', async (req, res) => {
     return tenantForbidden(res);
   }
 
+  if (fileRecord.storageKey) {
+    try {
+      const stream = fileStorageService.createReadStream(fileRecord);
+      if (!stream) {
+        return res.status(404).json({ error: 'File not found' });
+      }
+      return sendManagedUploadStream(res, stream, {
+        fileName: fileRecord.name || 'file',
+        mimeType: fileRecord.mime || 'application/octet-stream'
+      });
+    } catch (err) {
+      console.error('Managed storage download failed', err);
+      return res.status(500).json({ error: 'Failed to read file' });
+    }
+  }
+
   if (!fs.existsSync(requestedPath)) {
     return res.status(404).json({ error: 'File not found' });
   }
@@ -6402,6 +6464,14 @@ CREATE TABLE IF NOT EXISTS announcements (
     mime          TEXT DEFAULT 'application/octet-stream',
     size_bytes    INTEGER DEFAULT 0,
     url           TEXT NOT NULL,
+    storage_key   TEXT DEFAULT '',
+    checksum      TEXT DEFAULT '',
+    storage_provider TEXT DEFAULT 'local_disk',
+    storage_mode  TEXT DEFAULT 'plain',
+    encryption_key_id TEXT DEFAULT '',
+    encryption_iv TEXT DEFAULT '',
+    encryption_tag TEXT DEFAULT '',
+    permissions   TEXT DEFAULT 'workspace_private',
     pinned        INTEGER DEFAULT 0,
     deleted       INTEGER DEFAULT 0,
     replaced_from TEXT,
@@ -6423,6 +6493,9 @@ CREATE TABLE IF NOT EXISTS announcements (
 
   CREATE INDEX IF NOT EXISTS idx_files_registry_ws_pinned
     ON files_registry(workspace_id, pinned);
+
+  CREATE INDEX IF NOT EXISTS idx_files_registry_ws_checksum
+    ON files_registry(workspace_id, checksum);
 
   /* ========== FILE EVENTS (ANALYTICS) ========== */
   CREATE TABLE IF NOT EXISTS file_events (
@@ -6898,6 +6971,38 @@ try {
 
     CREATE INDEX IF NOT EXISTS idx_live_attendance_student ON live_attendance(student_id);
 
+    CREATE TABLE IF NOT EXISTS live_session_participants (
+      live_session_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending',
+      requested_at TEXT,
+      approved_at TEXT,
+      denied_at TEXT,
+      approved_by TEXT,
+      denied_by TEXT,
+      denial_reason TEXT,
+      joined_at TEXT,
+      left_at TEXT,
+      duration_seconds INTEGER NOT NULL DEFAULT 0,
+      hand_status TEXT NOT NULL DEFAULT 'lowered',
+      hand_raised_at TEXT,
+      hand_lowered_at TEXT,
+      updated_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (live_session_id, user_id),
+      FOREIGN KEY (live_session_id) REFERENCES live_sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL,
+      FOREIGN KEY (denied_by) REFERENCES users(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_live_session_participants_workspace
+      ON live_session_participants(workspace_id, live_session_id, status);
+    CREATE INDEX IF NOT EXISTS idx_live_session_participants_user
+      ON live_session_participants(user_id, live_session_id);
+
     CREATE TABLE IF NOT EXISTS attendance_sessions (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL,
@@ -7246,6 +7351,59 @@ function ensureLiveAttendanceForeignKey() {
   }
 }
 
+function ensureLiveSessionParticipantSchema() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS live_session_participants (
+      live_session_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending',
+      requested_at TEXT,
+      approved_at TEXT,
+      denied_at TEXT,
+      approved_by TEXT,
+      denied_by TEXT,
+      denial_reason TEXT,
+      joined_at TEXT,
+      left_at TEXT,
+      duration_seconds INTEGER NOT NULL DEFAULT 0,
+      hand_status TEXT NOT NULL DEFAULT 'lowered',
+      hand_raised_at TEXT,
+      hand_lowered_at TEXT,
+      updated_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (live_session_id, user_id),
+      FOREIGN KEY (live_session_id) REFERENCES live_sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL,
+      FOREIGN KEY (denied_by) REFERENCES users(id) ON DELETE SET NULL
+    );
+  `);
+  safeAlter("ALTER TABLE live_session_participants ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'");
+  safeAlter("ALTER TABLE live_session_participants ADD COLUMN role TEXT NOT NULL DEFAULT ''");
+  safeAlter("ALTER TABLE live_session_participants ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'");
+  safeAlter("ALTER TABLE live_session_participants ADD COLUMN requested_at TEXT");
+  safeAlter("ALTER TABLE live_session_participants ADD COLUMN approved_at TEXT");
+  safeAlter("ALTER TABLE live_session_participants ADD COLUMN denied_at TEXT");
+  safeAlter("ALTER TABLE live_session_participants ADD COLUMN approved_by TEXT");
+  safeAlter("ALTER TABLE live_session_participants ADD COLUMN denied_by TEXT");
+  safeAlter("ALTER TABLE live_session_participants ADD COLUMN denial_reason TEXT");
+  safeAlter("ALTER TABLE live_session_participants ADD COLUMN joined_at TEXT");
+  safeAlter("ALTER TABLE live_session_participants ADD COLUMN left_at TEXT");
+  safeAlter("ALTER TABLE live_session_participants ADD COLUMN duration_seconds INTEGER NOT NULL DEFAULT 0");
+  safeAlter("ALTER TABLE live_session_participants ADD COLUMN hand_status TEXT NOT NULL DEFAULT 'lowered'");
+  safeAlter("ALTER TABLE live_session_participants ADD COLUMN hand_raised_at TEXT");
+  safeAlter("ALTER TABLE live_session_participants ADD COLUMN hand_lowered_at TEXT");
+  safeAlter("ALTER TABLE live_session_participants ADD COLUMN updated_at TEXT DEFAULT (datetime('now'))");
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_live_session_participants_workspace
+      ON live_session_participants(workspace_id, live_session_id, status);
+    CREATE INDEX IF NOT EXISTS idx_live_session_participants_user
+      ON live_session_participants(user_id, live_session_id);
+  `);
+}
+
 function rebuildLiveSessionsAllowingNullChannel() {
   if (hasColumn("live_sessions", "audience")) return;
   const cols = db.prepare("PRAGMA table_info(live_sessions)").all();
@@ -7317,6 +7475,7 @@ db.exec(`
 `);
 
 ensureLiveAttendanceForeignKey();
+ensureLiveSessionParticipantSchema();
 
 try {
   db.exec("ALTER TABLE live_sessions ADD COLUMN audience TEXT");
@@ -7895,6 +8054,25 @@ function ensureFileEventsSchema() {
   }
 }
 
+function ensureFilesRegistryStorageSchema() {
+  try {
+    const cols = db.prepare('PRAGMA table_info(files_registry)').all();
+    if (!cols.length) return;
+    const names = cols.map((c) => c.name);
+    if (!names.includes('storage_key')) db.exec("ALTER TABLE files_registry ADD COLUMN storage_key TEXT DEFAULT ''");
+    if (!names.includes('checksum')) db.exec("ALTER TABLE files_registry ADD COLUMN checksum TEXT DEFAULT ''");
+    if (!names.includes('storage_provider')) db.exec("ALTER TABLE files_registry ADD COLUMN storage_provider TEXT DEFAULT 'local_disk'");
+    if (!names.includes('storage_mode')) db.exec("ALTER TABLE files_registry ADD COLUMN storage_mode TEXT DEFAULT 'plain'");
+    if (!names.includes('encryption_key_id')) db.exec("ALTER TABLE files_registry ADD COLUMN encryption_key_id TEXT DEFAULT ''");
+    if (!names.includes('encryption_iv')) db.exec("ALTER TABLE files_registry ADD COLUMN encryption_iv TEXT DEFAULT ''");
+    if (!names.includes('encryption_tag')) db.exec("ALTER TABLE files_registry ADD COLUMN encryption_tag TEXT DEFAULT ''");
+    if (!names.includes('permissions')) db.exec("ALTER TABLE files_registry ADD COLUMN permissions TEXT DEFAULT 'workspace_private'");
+    db.exec('CREATE INDEX IF NOT EXISTS idx_files_registry_ws_checksum ON files_registry(workspace_id, checksum)');
+  } catch (err) {
+    console.error('Failed to ensure file storage schema', err);
+  }
+}
+
   ensureMessageSchema();
   ensureReplySchema();
   ensureDmSchema();
@@ -7902,6 +8080,7 @@ function ensureFileEventsSchema() {
   ensureCalendarTargetsSchema();
   ensureKnowledgeSchema();
   ensureFileEventsSchema();
+  ensureFilesRegistryStorageSchema();
 
 function nowIso() {
   return new Date().toISOString();
@@ -9181,13 +9360,33 @@ async function registerHomeworkLinkedFile({
   const mime = String(file?.mime || file?.mimeType || 'application/octet-stream').trim() || 'application/octet-stream';
   const sizeBytes = Number(file?.size || file?.sizeBytes || 0) || 0;
   const fileId = computeFileIdFromMeta({ url, channelId, messageId, name });
+  const storageMeta = normalizeStoredAttachmentMetadata(file);
   db.prepare(
     `
     INSERT OR IGNORE INTO files_registry
-    (file_id, workspace_id, channel_id, message_id, uploader_id, purpose, file_name, mime, size_bytes, url, pinned, deleted, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, datetime('now'), datetime('now'))
+    (file_id, workspace_id, channel_id, message_id, uploader_id, purpose, file_name, mime, size_bytes, url, storage_key, checksum, storage_provider, storage_mode, encryption_key_id, encryption_iv, encryption_tag, permissions, pinned, deleted, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, datetime('now'), datetime('now'))
   `
-  ).run(fileId, workspaceId, channelId, messageId, ownerId || null, purpose, name, mime, sizeBytes, url);
+  ).run(
+    fileId,
+    workspaceId,
+    channelId,
+    messageId,
+    ownerId || null,
+    purpose,
+    name,
+    mime,
+    sizeBytes,
+    url,
+    storageMeta.storageKey,
+    storageMeta.checksum,
+    storageMeta.storageProvider,
+    storageMeta.storageMode,
+    storageMeta.encryptionKeyId,
+    storageMeta.encryptionIv,
+    storageMeta.encryptionTag,
+    storageMeta.permissions
+  );
   await tasksRepository.ensureLinkedFileRegistered({
     fileId,
     workspaceId,
@@ -9198,7 +9397,8 @@ async function registerHomeworkLinkedFile({
     fileName: name,
     mime,
     sizeBytes,
-    url
+    url,
+    ...storageMeta
   });
   return {
     fileId,
@@ -9354,6 +9554,19 @@ function computeFileIdFromMeta({ url = '', channelId = '', messageId = '', name 
   return stableIdFromString(base);
 }
 
+function normalizeStoredAttachmentMetadata(file = {}, fallbackPermissions = 'workspace_private') {
+  return {
+    storageKey: String(file?.storageKey || '').trim(),
+    checksum: String(file?.checksum || '').trim(),
+    storageProvider: String(file?.storageProvider || 'local_disk').trim() || 'local_disk',
+    storageMode: String(file?.storageMode || 'plain').trim() || 'plain',
+    encryptionKeyId: String(file?.encryptionKeyId || '').trim(),
+    encryptionIv: String(file?.encryptionIv || '').trim(),
+    encryptionTag: String(file?.encryptionTag || '').trim(),
+    permissions: fileStorageService.normalizePermissions(file?.permissions || fallbackPermissions)
+  };
+}
+
 function timeHHMM() {
   const now = new Date();
   const hh = String(now.getHours()).padStart(2, '0');
@@ -9457,6 +9670,14 @@ function findManagedUploadRecordByUrl(fileUrl = '') {
            file_name AS name,
            mime,
            size_bytes AS sizeBytes,
+           storage_key AS storageKey,
+           checksum,
+           storage_provider AS storageProvider,
+           storage_mode AS storageMode,
+           encryption_key_id AS encryptionKeyId,
+           encryption_iv AS encryptionIv,
+           encryption_tag AS encryptionTag,
+           permissions,
            url,
            pinned,
            deleted
@@ -9479,6 +9700,14 @@ function findManagedUploadRecordById(fileId = '') {
            file_name AS name,
            mime,
            size_bytes AS sizeBytes,
+           storage_key AS storageKey,
+           checksum,
+           storage_provider AS storageProvider,
+           storage_mode AS storageMode,
+           encryption_key_id AS encryptionKeyId,
+           encryption_iv AS encryptionIv,
+           encryption_tag AS encryptionTag,
+           permissions,
            url,
            pinned,
            deleted
@@ -9572,6 +9801,24 @@ function sendManagedUploadResponse(res, filePath, { fileName = 'file', mimeType 
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Cache-Control', 'private, max-age=60');
   res.sendFile(filePath);
+}
+
+function sendManagedUploadStream(res, stream, { fileName = 'file', mimeType = 'application/octet-stream' } = {}) {
+  const normalizedMime = normalizeMimeType(mimeType || 'application/octet-stream') || 'application/octet-stream';
+  const safeInline = isSafeInlineUploadMime(normalizedMime);
+  res.setHeader('Content-Type', normalizedMime);
+  res.setHeader('Content-Disposition', `${safeInline ? 'inline' : 'attachment'}; ${contentDispositionFilename(fileName)}`);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'private, max-age=60');
+  stream.on('error', (err) => {
+    console.error('Managed upload stream failed', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to read file' });
+      return;
+    }
+    res.destroy(err);
+  });
+  stream.pipe(res);
 }
 
 function generateInitials(name) {
@@ -10095,6 +10342,7 @@ app.post('/api/uploads', (req, res) => {
       if (!files.length) {
         return res.status(400).json({ error: 'No files received' });
       }
+      const storageRequester = req.auth || getAuthedUser(req) || null;
 
       const out = [];
 
@@ -10118,21 +10366,35 @@ app.post('/api/uploads', (req, res) => {
           }
         }
 
-        const filename = path.basename(outPath);
-        const stat = fs.statSync(outPath);
+        const stored = await fileStorageService.storeFromFile({
+          inputPath: outPath,
+          workspaceId: storageRequester?.workspaceId || storageRequester?.workspace_id || 'default',
+          originalName: f.originalname,
+          mimeType: outMime || f.mimetype || 'application/octet-stream',
+          permissions: 'workspace_private'
+        });
+        await fs.promises.unlink(outPath).catch(() => null);
 
         out.push({
-          url: `/uploads/${filename}`,
-          originalName: normalizeUploadOriginalName(f.originalname, path.parse(filename).name || 'upload'),
-          size: Number(stat.size) || Number(f.size) || 0,
-          mimeType: outMime || f.mimetype || 'application/octet-stream'
+          url: stored.url,
+          originalName: stored.originalName,
+          size: stored.sizeBytes,
+          mimeType: stored.mimeType,
+          storageKey: stored.storageKey,
+          checksum: stored.checksum,
+          storageProvider: stored.storageProvider,
+          storageMode: stored.storageMode,
+          encryptionKeyId: stored.encryptionKeyId || '',
+          encryptionIv: stored.encryptionIv || '',
+          encryptionTag: stored.encryptionTag || '',
+          permissions: stored.permissions
         });
       }
 
       res.json({ files: out });
     } catch (err) {
       console.error('Upload/convert failed:', err);
-      res.status(500).json({ error: err?.message || 'Upload failed' });
+      res.status(Number(err?.statusCode || 500)).json({ error: err?.message || 'Upload failed' });
     }
   });
 });
@@ -10452,6 +10714,12 @@ app.get('/api/files/registry', (req, res) => {
              file_name AS name,
              mime,
              size_bytes AS sizeBytes,
+             storage_key AS storageKey,
+             checksum,
+             storage_provider AS storageProvider,
+             storage_mode AS storageMode,
+             encryption_key_id AS encryptionKeyId,
+             permissions,
              url,
              pinned,
              deleted,
@@ -10520,7 +10788,7 @@ app.post('/api/files/:fileId/delete', (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/files/:fileId/replace', (req, res) => {
+app.post('/api/files/:fileId/replace', async (req, res) => {
   if (!requireTeacher(req, res)) return;
 
   const fileId = String(req.params.fileId || '');
@@ -10556,14 +10824,8 @@ app.post('/api/files/:fileId/replace', (req, res) => {
     return res.status(400).json({ error: replacementSafety.reason });
   }
 
-  let replacementRelativePath = String(newFile.url || '').replace(/^\/uploads\//, '');
-  try {
-    replacementRelativePath = decodeURIComponent(replacementRelativePath);
-  } catch (_err) {
-    return res.status(400).json({ error: 'Replacement file path is invalid' });
-  }
-  const replacementPath = resolveSafePath(UPLOADS_DIR, replacementRelativePath);
-  if (!replacementPath || !fs.existsSync(replacementPath)) {
+  const replacementExists = await fileStorageService.hasManagedUpload(String(newFile.url || ''));
+  if (!replacementExists) {
     return res.status(400).json({ error: 'Replacement file not found' });
   }
 
@@ -10571,6 +10833,7 @@ app.post('/api/files/:fileId/replace', (req, res) => {
   const mime = String(newFile.mimeType || newFile.mime || 'application/octet-stream');
   const sizeBytes = Number(newFile.size || newFile.sizeBytes || 0) || 0;
   const url = String(newFile.url);
+  const storageMeta = normalizeStoredAttachmentMetadata(newFile, old.permissions || 'workspace_private');
 
   const newId = computeFileIdFromMeta({ url, channelId, messageId, name });
 
@@ -10581,8 +10844,8 @@ app.post('/api/files/:fileId/replace', (req, res) => {
   db.prepare(
     `
     INSERT OR REPLACE INTO files_registry
-    (file_id, workspace_id, channel_id, message_id, uploader_id, purpose, file_name, mime, size_bytes, url, pinned, deleted, replaced_from, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, datetime('now'), datetime('now'))
+    (file_id, workspace_id, channel_id, message_id, uploader_id, purpose, file_name, mime, size_bytes, url, storage_key, checksum, storage_provider, storage_mode, encryption_key_id, encryption_iv, encryption_tag, permissions, pinned, deleted, replaced_from, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, datetime('now'), datetime('now'))
   `
   ).run(
     newId,
@@ -10595,6 +10858,14 @@ app.post('/api/files/:fileId/replace', (req, res) => {
     mime,
     sizeBytes,
     url,
+    storageMeta.storageKey,
+    storageMeta.checksum,
+    storageMeta.storageProvider,
+    storageMeta.storageMode,
+    storageMeta.encryptionKeyId,
+    storageMeta.encryptionIv,
+    storageMeta.encryptionTag,
+    storageMeta.permissions,
     fileId
   );
 
@@ -17112,7 +17383,13 @@ app.post('/api/channels/:channelId/messages', async (req, res) => {
 
   const workspaceId = channel.workspaceId || 'default';
   const purpose = inferPurposeFromChannel(channel.name, channel.topic);
-  const uploaderId = getRequesterId(req) || author || 'anon';
+  const uploaderId = String(
+    getRequesterId(req) ||
+    req.auth?.sub ||
+    req.auth?.id ||
+    getAuthedUser(req)?.id ||
+    ''
+  ).trim() || null;
   const message = await messageRepository.createChannelMessage({
     id,
     channelId,
@@ -18735,6 +19012,287 @@ function canUserManageLiveSlides(user, session) {
   return canUserManageSpecificLiveSession(user, session);
 }
 
+function getLiveSessionParticipant(sessionId, userId) {
+  const normalizedSessionId = String(sessionId || '').trim();
+  const normalizedUserId = String(userId || '').trim();
+  if (!normalizedSessionId || !normalizedUserId) return null;
+  return db.prepare(`
+    SELECT *
+    FROM live_session_participants
+    WHERE live_session_id = ? AND user_id = ?
+    LIMIT 1
+  `).get(normalizedSessionId, normalizedUserId) || null;
+}
+
+function listLiveSessionParticipants(sessionId) {
+  return db.prepare(`
+    SELECT p.*,
+           COALESCE(u.name, u.username, u.email, p.user_id) AS user_name
+    FROM live_session_participants p
+    LEFT JOIN users u ON u.id = p.user_id
+    WHERE p.live_session_id = ?
+    ORDER BY
+      CASE p.status
+        WHEN 'pending' THEN 0
+        WHEN 'approved' THEN 1
+        WHEN 'joined' THEN 2
+        WHEN 'left' THEN 3
+        WHEN 'denied' THEN 4
+        ELSE 5
+      END,
+      lower(COALESCE(u.name, u.username, u.email, p.user_id)) ASC
+  `).all(String(sessionId || '').trim());
+}
+
+function normalizeLiveParticipantStatus(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (['pending', 'approved', 'denied', 'joined', 'left'].includes(normalized)) {
+    return normalized;
+  }
+  return 'pending';
+}
+
+function normalizeLiveHandStatus(value = '') {
+  return String(value || '').trim().toLowerCase() === 'raised' ? 'raised' : 'lowered';
+}
+
+function syncLegacyLiveAttendanceRecord({
+  sessionId,
+  userId,
+  joinedAt = null,
+  status = 'unmarked',
+  note = null,
+  updatedAt = nowIso()
+}) {
+  db.prepare(`
+    INSERT INTO live_attendance (session_id, student_id, joined_at, status, note, updated_at)
+    VALUES (@sessionId, @userId, @joinedAt, @status, @note, @updatedAt)
+    ON CONFLICT(session_id, student_id)
+      DO UPDATE SET joined_at = excluded.joined_at,
+                    status = excluded.status,
+                    note = excluded.note,
+                    updated_at = excluded.updated_at
+  `).run({
+    sessionId,
+    userId,
+    joinedAt,
+    status,
+    note,
+    updatedAt
+  });
+}
+
+function upsertLiveSessionParticipant({
+  session,
+  user,
+  status,
+  requestedAt,
+  approvedAt,
+  deniedAt,
+  approvedBy,
+  deniedBy,
+  denialReason,
+  joinedAt,
+  leftAt,
+  durationSeconds,
+  handStatus,
+  handRaisedAt,
+  handLoweredAt
+}) {
+  if (!session?.id || !user?.id) return null;
+  const existing = getLiveSessionParticipant(session.id, user.id);
+  const payload = {
+    live_session_id: String(session.id).trim(),
+    workspace_id: String(session.workspace_id || session.workspaceId || '').trim() || 'default',
+    user_id: String(user.id).trim(),
+    role: getNormalizedUserRole(user),
+    status: normalizeLiveParticipantStatus(status || existing?.status || 'pending'),
+    requested_at: requestedAt !== undefined ? requestedAt : (existing?.requested_at || null),
+    approved_at: approvedAt !== undefined ? approvedAt : (existing?.approved_at || null),
+    denied_at: deniedAt !== undefined ? deniedAt : (existing?.denied_at || null),
+    approved_by: approvedBy !== undefined ? approvedBy : (existing?.approved_by || null),
+    denied_by: deniedBy !== undefined ? deniedBy : (existing?.denied_by || null),
+    denial_reason: denialReason !== undefined ? denialReason : (existing?.denial_reason || null),
+    joined_at: joinedAt !== undefined ? joinedAt : (existing?.joined_at || null),
+    left_at: leftAt !== undefined ? leftAt : (existing?.left_at || null),
+    duration_seconds: Number.isFinite(Number(durationSeconds))
+      ? Math.max(0, Math.floor(Number(durationSeconds)))
+      : Number(existing?.duration_seconds || 0),
+    hand_status: normalizeLiveHandStatus(handStatus !== undefined ? handStatus : (existing?.hand_status || 'lowered')),
+    hand_raised_at: handRaisedAt !== undefined ? handRaisedAt : (existing?.hand_raised_at || null),
+    hand_lowered_at: handLoweredAt !== undefined ? handLoweredAt : (existing?.hand_lowered_at || null),
+    updated_at: nowIso()
+  };
+  db.prepare(`
+    INSERT INTO live_session_participants (
+      live_session_id, workspace_id, user_id, role, status, requested_at, approved_at, denied_at,
+      approved_by, denied_by, denial_reason, joined_at, left_at, duration_seconds, hand_status,
+      hand_raised_at, hand_lowered_at, updated_at
+    ) VALUES (
+      @live_session_id, @workspace_id, @user_id, @role, @status, @requested_at, @approved_at, @denied_at,
+      @approved_by, @denied_by, @denial_reason, @joined_at, @left_at, @duration_seconds, @hand_status,
+      @hand_raised_at, @hand_lowered_at, @updated_at
+    )
+    ON CONFLICT(live_session_id, user_id) DO UPDATE SET
+      workspace_id = excluded.workspace_id,
+      role = excluded.role,
+      status = excluded.status,
+      requested_at = excluded.requested_at,
+      approved_at = excluded.approved_at,
+      denied_at = excluded.denied_at,
+      approved_by = excluded.approved_by,
+      denied_by = excluded.denied_by,
+      denial_reason = excluded.denial_reason,
+      joined_at = excluded.joined_at,
+      left_at = excluded.left_at,
+      duration_seconds = excluded.duration_seconds,
+      hand_status = excluded.hand_status,
+      hand_raised_at = excluded.hand_raised_at,
+      hand_lowered_at = excluded.hand_lowered_at,
+      updated_at = excluded.updated_at
+  `).run(payload);
+  return getLiveSessionParticipant(session.id, user.id);
+}
+
+function formatLiveParticipantForClient(row = {}) {
+  const status = normalizeLiveParticipantStatus(row.status || 'pending');
+  const handStatus = normalizeLiveHandStatus(row.hand_status || 'lowered');
+  return {
+    liveSessionId: row.live_session_id,
+    workspaceId: row.workspace_id,
+    userId: row.user_id,
+    role: row.role,
+    status,
+    requestedAt: row.requested_at || null,
+    approvedAt: row.approved_at || null,
+    deniedAt: row.denied_at || null,
+    approvedBy: row.approved_by || null,
+    deniedBy: row.denied_by || null,
+    denialReason: row.denial_reason || null,
+    joinedAt: row.joined_at || null,
+    leftAt: row.left_at || null,
+    durationSeconds: Number(row.duration_seconds || 0) || 0,
+    handStatus,
+    handRaisedAt: row.hand_raised_at || null,
+    handLoweredAt: row.hand_lowered_at || null,
+    name: row.user_name || row.name || row.user_id || 'Participant',
+    canJoin: status === 'approved' || status === 'joined' || status === 'left',
+    isPending: status === 'pending',
+    isDenied: status === 'denied',
+    isRaised: handStatus === 'raised'
+  };
+}
+
+async function logLiveClassAuditEvent(type, { session = null, actor = null, targetUserId = null, payload = null, severity = 'info' } = {}) {
+  await logSecurityEvent({
+    workspaceId: session?.workspace_id || session?.workspaceId || actor?.workspaceId || actor?.workspace_id || null,
+    actorUserId: actor?.id || actor?.sub || null,
+    targetUserId: targetUserId || null,
+    type,
+    severity,
+    ip: null,
+    userAgent: null,
+    payload
+  });
+}
+
+async function resolveLiveSessionAccess(req, sessionId, { requireManage = false } = {}) {
+  const session = db.prepare('SELECT * FROM live_sessions WHERE id = ?').get(String(sessionId || '').trim());
+  if (!session) return { ok: false, status: 404 };
+  const user = await attachAccessTokenIfPresent(req);
+  if (!user) return { ok: false, status: 401, session };
+  const workspaceId = String(session.workspace_id || session.workspaceId || '').trim();
+  if (isSuperAdminRole(user)) {
+    await logTenantIsolationEvent(req, {
+      workspaceId,
+      targetType: 'live_session',
+      targetId: session.id,
+      reason: 'super_admin_private_content_denied',
+      type: 'security.super_admin_private_content_denied'
+    });
+    return { ok: false, status: 403, session, user, tenantForbidden: true };
+  }
+  const sameWorkspace = await assertSameWorkspace(user, workspaceId, req, {
+    targetType: 'live_session',
+    targetId: session.id,
+    privateContent: true
+  });
+  if (!sameWorkspace.ok) {
+    return { ok: false, status: sameWorkspace.status, session, user, tenantForbidden: sameWorkspace.status === 403 };
+  }
+  if (requireManage) {
+    if (!canUserManageSpecificLiveSession(user, session)) {
+      await logLiveClassAuditEvent('security.forbidden_live_access_attempt', {
+        session,
+        actor: user,
+        payload: { sessionId: session.id, reason: 'manager_required' },
+        severity: 'warn'
+      });
+      return { ok: false, status: 403, session, user };
+    }
+    return { ok: true, session, user };
+  }
+  if (!canUserViewLiveSession(user, session)) {
+    await logLiveClassAuditEvent('security.forbidden_live_access_attempt', {
+      session,
+      actor: user,
+      payload: { sessionId: session.id, reason: 'viewer_denied' },
+      severity: 'warn'
+    });
+    return { ok: false, status: 403, session, user, tenantForbidden: true };
+  }
+  return { ok: true, session, user };
+}
+
+function buildLiveSessionControlState(session, viewer) {
+  const participants = listLiveSessionParticipants(session.id);
+  const selfParticipant = viewer?.id ? getLiveSessionParticipant(session.id, viewer.id) : null;
+  const canManage = canUserManageSpecificLiveSession(viewer, session);
+  const pending = participants
+    .filter((row) => normalizeLiveParticipantStatus(row.status) === 'pending')
+    .map(formatLiveParticipantForClient);
+  const raisedHands = participants
+    .filter((row) => normalizeLiveHandStatus(row.hand_status) === 'raised')
+    .map(formatLiveParticipantForClient);
+  const joined = participants
+    .filter((row) => normalizeLiveParticipantStatus(row.status) === 'joined')
+    .map(formatLiveParticipantForClient);
+  const self = selfParticipant ? formatLiveParticipantForClient(selfParticipant) : null;
+  if (!canManage) {
+    return {
+      self,
+      counts: {
+        pending: 0,
+        raisedHands: 0,
+        joined: self?.status === 'joined' ? 1 : 0
+      },
+      pendingParticipants: [],
+      raisedHands: [],
+      participants: self ? [self] : [],
+      canManage: false
+    };
+  }
+  return {
+    self,
+    counts: {
+      pending: pending.length,
+      raisedHands: raisedHands.length,
+      joined: joined.length
+    },
+    pendingParticipants: pending,
+    raisedHands,
+    participants: participants.map(formatLiveParticipantForClient),
+    canManage: true
+  };
+}
+
+function canUserConsumeLiveSessionContent(user, session) {
+  if (canUserManageSpecificLiveSession(user, session)) return true;
+  const participant = getLiveSessionParticipant(session?.id, user?.id || user?.sub);
+  const status = normalizeLiveParticipantStatus(participant?.status || '');
+  return ['approved', 'joined', 'left'].includes(status);
+}
+
 function validateLiveSessionTarget(user, { channelId, audience, existingSession = null, allowInvitedOnly = false } = {}) {
   const normalizedAudience = normalizeAudience(audience);
   if (isWorkspaceAdmin(user)) {
@@ -19361,7 +19919,7 @@ app.get('/api/live-sessions', authRequired, (req, res) => {
   const scopeParam = String(req.query.scope || 'today');
   const { start, end } = determineLiveScopeRange(scopeParam);
   const user = req.auth || getAuthedUser(req);
-  const workspaceId = resolveRequestedWorkspaceId(req);
+  const workspaceId = userWorkspaceId(user);
   const conditions = ['ls.workspace_id = ?'];
   const params = [workspaceId];
   if (start) {
@@ -19402,7 +19960,10 @@ app.get('/api/live-sessions', authRequired, (req, res) => {
   const visibleRows = isWorkspaceAdmin(user)
     ? rows
     : rows.filter((row) => canUserViewLiveSession(user, row));
-  res.json(visibleRows.map((row) => hydrateLiveSession(row)));
+  res.json(visibleRows.map((row) => ({
+    ...hydrateLiveSession(row),
+    liveControls: buildLiveSessionControlState(row, user)
+  })));
 });
 
 app.post('/api/live-sessions', authRequired, express.json(), async (req, res) => {
@@ -19429,9 +19990,9 @@ app.post('/api/live-sessions', authRequired, express.json(), async (req, res) =>
   } = payload;
   const notifyEmail = !!payload.notify_email;
   const normalizedAudience = normalizeAudience(audience);
-  const workspaceId = resolveRequestedWorkspaceId(req);
-  if (!isSuperAdminRole(user) && String(workspaceId || '').trim() !== String(user.workspaceId || user.workspace_id || '').trim()) {
-    return res.status(403).json({ error: 'Workspace isolation: denied' });
+  const workspaceId = userWorkspaceId(user);
+  if (!workspaceId || isSuperAdminRole(user)) {
+    return tenantForbidden(res);
   }
   const studentHostedMeeting = !canManage && canStudentHost;
   const normalizedInvitedUserIds = normalizeLiveInvitedUserIds(invitedUserIdsRaw);
@@ -19673,39 +20234,286 @@ app.delete('/api/live-sessions/:sessionId', (req, res) => {
   res.json({ ok: true, sessionId });
 });
 
-app.post('/api/live-sessions/:sessionId/join', (req, res) => {
+app.get('/api/live-sessions/:sessionId/state', authRequired, async (req, res) => {
   const { sessionId } = req.params;
-  const session = db.prepare('SELECT * FROM live_sessions WHERE id = ?').get(sessionId);
-  if (!session) {
-    return res.status(404).json({ error: 'Session not found' });
+  const access = await resolveLiveSessionAccess(req, sessionId);
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Session not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    return res.status(403).json({ error: 'Forbidden' });
   }
-  const sessionStatus = deriveLiveSessionStatus(session);
+  res.json({
+    ok: true,
+    session: hydrateLiveSession(access.session),
+    liveControls: buildLiveSessionControlState(access.session, access.user)
+  });
+});
+
+app.post('/api/live-sessions/:sessionId/request-join', authRequired, async (req, res) => {
+  const { sessionId } = req.params;
+  const access = await resolveLiveSessionAccess(req, sessionId);
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Session not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const sessionStatus = deriveLiveSessionStatus(access.session);
   if (sessionStatus === 'canceled') {
     return res.status(410).json({ error: 'This live session was canceled.' });
   }
   if (sessionStatus === 'ended') {
     return res.status(410).json({ error: 'This live session link has expired.' });
   }
-  const user = getAuthedUser(req);
-  if (!user) {
-    return res.status(401).json({ error: 'Unauthorized' });
+  const now = nowIso();
+  if (canUserManageSpecificLiveSession(access.user, access.session)) {
+    const participant = upsertLiveSessionParticipant({
+      session: access.session,
+      user: access.user,
+      status: 'approved',
+      requestedAt: now,
+      approvedAt: now,
+      approvedBy: access.user.id,
+      deniedAt: null,
+      deniedBy: null,
+      denialReason: null
+    });
+    syncLegacyLiveAttendanceRecord({
+      sessionId,
+      userId: access.user.id,
+      joinedAt: participant?.joined_at || null,
+      status: 'approved',
+      updatedAt: now
+    });
+    return res.json({
+      ok: true,
+      bypassed: true,
+      liveControls: buildLiveSessionControlState(access.session, access.user)
+    });
   }
-  if (!canUserViewLiveSession(user, session)) {
+  const existing = getLiveSessionParticipant(sessionId, access.user.id);
+  if (existing && normalizeLiveParticipantStatus(existing.status) === 'denied') {
+    return res.status(403).json({
+      error: 'Your join request was denied.',
+      code: 'live_join_denied',
+      liveControls: buildLiveSessionControlState(access.session, access.user)
+    });
+  }
+  if (!existing || normalizeLiveParticipantStatus(existing.status) === 'left') {
+    upsertLiveSessionParticipant({
+      session: access.session,
+      user: access.user,
+      status: 'pending',
+      requestedAt: now,
+      approvedAt: null,
+      deniedAt: null,
+      approvedBy: null,
+      deniedBy: null,
+      denialReason: null
+    });
+    syncLegacyLiveAttendanceRecord({
+      sessionId,
+      userId: access.user.id,
+      joinedAt: existing?.joined_at || null,
+      status: 'pending',
+      updatedAt: now
+    });
+    await logLiveClassAuditEvent('live_join_requested', {
+      session: access.session,
+      actor: access.user,
+      payload: { sessionId, role: getNormalizedUserRole(access.user) }
+    });
+  }
+  return res.status(202).json({
+    ok: true,
+    status: 'pending',
+    message: 'Join request pending approval.',
+    liveControls: buildLiveSessionControlState(access.session, access.user)
+  });
+});
+
+app.post('/api/live-sessions/:sessionId/participants/:userId/approve', authRequired, async (req, res) => {
+  const { sessionId, userId } = req.params;
+  const access = await resolveLiveSessionAccess(req, sessionId, { requireManage: true });
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Session not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const targetUser = getWorkspaceScopedUser(access.session.workspace_id, userId);
+  if (!targetUser) {
     return tenantForbidden(res);
   }
-  const hydratedSession = hydrateLiveSession(session);
   const now = nowIso();
-  db.prepare(
-    `INSERT INTO live_attendance (session_id, student_id, joined_at, status, updated_at)
-     VALUES (?, ?, ?, 'present', ?)
-     ON CONFLICT(session_id, student_id)
-       DO UPDATE SET joined_at = excluded.joined_at, updated_at = excluded.updated_at`
-  ).run(sessionId, user.id, now, now);
-  const canModerate = canUserManageSpecificLiveSession(user, session);
+  upsertLiveSessionParticipant({
+    session: access.session,
+    user: targetUser,
+    status: 'approved',
+    requestedAt: getLiveSessionParticipant(sessionId, userId)?.requested_at || now,
+    approvedAt: now,
+    approvedBy: access.user.id,
+    deniedAt: null,
+    deniedBy: null,
+    denialReason: null,
+    handStatus: 'lowered',
+    handLoweredAt: now
+  });
+  syncLegacyLiveAttendanceRecord({
+    sessionId,
+    userId,
+    joinedAt: getLiveSessionParticipant(sessionId, userId)?.joined_at || null,
+    status: 'approved',
+    updatedAt: now
+  });
+  await logLiveClassAuditEvent('live_join_approved', {
+    session: access.session,
+    actor: access.user,
+    targetUserId: userId,
+    payload: { sessionId }
+  });
+  res.json({
+    ok: true,
+    liveControls: buildLiveSessionControlState(access.session, access.user)
+  });
+});
+
+app.post('/api/live-sessions/:sessionId/participants/:userId/deny', authRequired, async (req, res) => {
+  const { sessionId, userId } = req.params;
+  const access = await resolveLiveSessionAccess(req, sessionId, { requireManage: true });
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Session not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const targetUser = getWorkspaceScopedUser(access.session.workspace_id, userId);
+  if (!targetUser) {
+    return tenantForbidden(res);
+  }
+  const denialReason = String(req.body?.denialReason || req.body?.reason || '').trim() || null;
+  const now = nowIso();
+  upsertLiveSessionParticipant({
+    session: access.session,
+    user: targetUser,
+    status: 'denied',
+    requestedAt: getLiveSessionParticipant(sessionId, userId)?.requested_at || now,
+    approvedAt: null,
+    approvedBy: null,
+    deniedAt: now,
+    deniedBy: access.user.id,
+    denialReason,
+    handStatus: 'lowered',
+    handLoweredAt: now
+  });
+  syncLegacyLiveAttendanceRecord({
+    sessionId,
+    userId,
+    joinedAt: getLiveSessionParticipant(sessionId, userId)?.joined_at || null,
+    status: 'denied',
+    note: denialReason,
+    updatedAt: now
+  });
+  await logLiveClassAuditEvent('live_join_denied', {
+    session: access.session,
+    actor: access.user,
+    targetUserId: userId,
+    payload: { sessionId, denialReason }
+  });
+  res.json({
+    ok: true,
+    liveControls: buildLiveSessionControlState(access.session, access.user)
+  });
+});
+
+app.post('/api/live-sessions/:sessionId/join', authRequired, async (req, res) => {
+  const { sessionId } = req.params;
+  const access = await resolveLiveSessionAccess(req, sessionId);
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Session not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const sessionStatus = deriveLiveSessionStatus(access.session);
+  if (sessionStatus === 'canceled') {
+    return res.status(410).json({ error: 'This live session was canceled.' });
+  }
+  if (sessionStatus === 'ended') {
+    return res.status(410).json({ error: 'This live session link has expired.' });
+  }
+  const now = nowIso();
+  let participant = getLiveSessionParticipant(sessionId, access.user.id);
+  const canModerate = canUserManageSpecificLiveSession(access.user, access.session);
+  if (!canModerate) {
+    const currentStatus = normalizeLiveParticipantStatus(participant?.status || '');
+    if (!participant) {
+      upsertLiveSessionParticipant({
+        session: access.session,
+        user: access.user,
+        status: 'pending',
+        requestedAt: now
+      });
+      syncLegacyLiveAttendanceRecord({
+        sessionId,
+        userId: access.user.id,
+        status: 'pending',
+        updatedAt: now
+      });
+      await logLiveClassAuditEvent('live_join_requested', {
+        session: access.session,
+        actor: access.user,
+        payload: { sessionId, requestedFromJoin: true }
+      });
+      return res.status(403).json({
+        error: 'Waiting for teacher approval.',
+        code: 'live_waiting_room_pending'
+      });
+    }
+    if (currentStatus === 'denied') {
+      return res.status(403).json({
+        error: 'Your join request was denied.',
+        code: 'live_join_denied'
+      });
+    }
+    if (!['approved', 'joined', 'left'].includes(currentStatus)) {
+      return res.status(403).json({
+        error: 'Waiting for teacher approval.',
+        code: 'live_waiting_room_pending'
+      });
+    }
+  }
+  participant = upsertLiveSessionParticipant({
+    session: access.session,
+    user: access.user,
+    status: 'joined',
+    requestedAt: participant?.requested_at || now,
+    approvedAt: canModerate ? (participant?.approved_at || now) : participant?.approved_at,
+    approvedBy: canModerate ? (participant?.approved_by || access.user.id) : participant?.approved_by,
+    deniedAt: null,
+    deniedBy: null,
+    denialReason: null,
+    joinedAt: now,
+    leftAt: null
+  });
+  syncLegacyLiveAttendanceRecord({
+    sessionId,
+    userId: access.user.id,
+    joinedAt: now,
+    status: 'joined',
+    updatedAt: now
+  });
+  await logLiveClassAuditEvent('live_joined', {
+    session: access.session,
+    actor: access.user,
+    payload: { sessionId, role: getNormalizedUserRole(access.user) }
+  });
+  const hydratedSession = hydrateLiveSession(access.session);
   let token = null;
   if (jitsiConfig.canGenerateTokens) {
     token = generateJitsiToken({
-      user,
+      user: access.user,
       room: hydratedSession.room_name,
       moderator: canModerate,
     });
@@ -19713,9 +20521,10 @@ app.post('/api/live-sessions/:sessionId/join', (req, res) => {
   res.json({
     ok: true,
     sessionId,
-    studentId: user.id,
+    studentId: access.user.id,
     joinedAt: now,
     session: hydratedSession,
+    liveControls: buildLiveSessionControlState(access.session, access.user),
     jitsi: {
       domain: jitsiConfig.domain,
       roomName: hydratedSession.room_name,
@@ -19723,6 +20532,147 @@ app.post('/api/live-sessions/:sessionId/join', (req, res) => {
       jwt: token,
       moderator: canModerate,
     },
+  });
+});
+
+app.post('/api/live-sessions/:sessionId/leave', authRequired, async (req, res) => {
+  const { sessionId } = req.params;
+  const access = await resolveLiveSessionAccess(req, sessionId);
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Session not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const existing = getLiveSessionParticipant(sessionId, access.user.id);
+  if (!existing) {
+    return res.json({ ok: true, sessionId });
+  }
+  const now = nowIso();
+  const joinedAtMs = existing.joined_at ? new Date(existing.joined_at).getTime() : null;
+  const durationSeconds = joinedAtMs
+    ? Number(existing.duration_seconds || 0) + Math.max(0, Math.floor((Date.now() - joinedAtMs) / 1000))
+    : Number(existing.duration_seconds || 0);
+  upsertLiveSessionParticipant({
+    session: access.session,
+    user: access.user,
+    status: 'left',
+    requestedAt: existing.requested_at,
+    approvedAt: existing.approved_at,
+    approvedBy: existing.approved_by,
+    deniedAt: null,
+    deniedBy: null,
+    denialReason: null,
+    joinedAt: existing.joined_at,
+    leftAt: now,
+    durationSeconds,
+    handStatus: 'lowered',
+    handLoweredAt: now
+  });
+  syncLegacyLiveAttendanceRecord({
+    sessionId,
+    userId: access.user.id,
+    joinedAt: existing.joined_at || null,
+    status: 'left',
+    updatedAt: now
+  });
+  await logLiveClassAuditEvent('live_left', {
+    session: access.session,
+    actor: access.user,
+    payload: { sessionId, durationSeconds }
+  });
+  res.json({
+    ok: true,
+    sessionId,
+    liveControls: buildLiveSessionControlState(access.session, access.user)
+  });
+});
+
+app.post('/api/live-sessions/:sessionId/hand/raise', authRequired, async (req, res) => {
+  const { sessionId } = req.params;
+  const access = await resolveLiveSessionAccess(req, sessionId);
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Session not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const existing = getLiveSessionParticipant(sessionId, access.user.id);
+  if (!existing || normalizeLiveParticipantStatus(existing.status) !== 'joined') {
+    return res.status(409).json({ error: 'Join the live session before raising your hand.' });
+  }
+  const now = nowIso();
+  upsertLiveSessionParticipant({
+    session: access.session,
+    user: access.user,
+    status: existing.status,
+    requestedAt: existing.requested_at,
+    approvedAt: existing.approved_at,
+    approvedBy: existing.approved_by,
+    joinedAt: existing.joined_at,
+    leftAt: existing.left_at,
+    durationSeconds: existing.duration_seconds,
+    handStatus: 'raised',
+    handRaisedAt: now,
+    handLoweredAt: null
+  });
+  await logLiveClassAuditEvent('live_hand_raised', {
+    session: access.session,
+    actor: access.user,
+    payload: { sessionId }
+  });
+  res.json({
+    ok: true,
+    liveControls: buildLiveSessionControlState(access.session, access.user)
+  });
+});
+
+app.post('/api/live-sessions/:sessionId/hand/lower', authRequired, async (req, res) => {
+  const { sessionId } = req.params;
+  const targetUserId = String(req.body?.userId || req.body?.targetUserId || '').trim() || String(req.auth?.sub || req.auth?.id || getAuthedUser(req)?.id || '').trim();
+  const access = await resolveLiveSessionAccess(req, sessionId);
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Session not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  if (targetUserId !== String(access.user.id || '').trim() && !canUserManageSpecificLiveSession(access.user, access.session)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const targetUser = getWorkspaceScopedUser(access.session.workspace_id, targetUserId);
+  if (!targetUser) return tenantForbidden(res);
+  const existing = getLiveSessionParticipant(sessionId, targetUserId);
+  if (!existing) {
+    return res.json({ ok: true, liveControls: buildLiveSessionControlState(access.session, access.user) });
+  }
+  const now = nowIso();
+  upsertLiveSessionParticipant({
+    session: access.session,
+    user: targetUser,
+    status: existing.status,
+    requestedAt: existing.requested_at,
+    approvedAt: existing.approved_at,
+    approvedBy: existing.approved_by,
+    deniedAt: existing.denied_at,
+    deniedBy: existing.denied_by,
+    denialReason: existing.denial_reason,
+    joinedAt: existing.joined_at,
+    leftAt: existing.left_at,
+    durationSeconds: existing.duration_seconds,
+    handStatus: 'lowered',
+    handRaisedAt: existing.hand_raised_at,
+    handLoweredAt: now
+  });
+  await logLiveClassAuditEvent('live_hand_lowered', {
+    session: access.session,
+    actor: access.user,
+    targetUserId,
+    payload: { sessionId }
+  });
+  res.json({
+    ok: true,
+    liveControls: buildLiveSessionControlState(access.session, access.user)
   });
 });
 
@@ -19739,16 +20689,8 @@ app.get('/api/live-sessions/:sessionId/attendance', (req, res) => {
   if (!canUserManageSpecificLiveSession(user, session)) {
     return tenantForbidden(res);
   }
-  const rows = db
-    .prepare(
-      `SELECT la.*, u.name AS student_name
-       FROM live_attendance la
-       LEFT JOIN users u ON u.id = la.student_id
-       WHERE la.session_id = ?
-       ORDER BY u.name COLLATE NOCASE ASC`
-    )
-    .all(sessionId);
-  res.json(rows);
+  const state = buildLiveSessionControlState(session, user);
+  res.json(state.participants);
 });
 
 app.post('/api/live-sessions/:sessionId/attendance', (req, res) => {
@@ -19802,7 +20744,7 @@ app.get("/api/live-sessions/:sessionId/slides/stream", (req, res) => {
   const sessionId = String(req.params.sessionId);
   const session = db.prepare("SELECT * FROM live_sessions WHERE id = ?").get(sessionId);
   if (!session) return res.status(404).json({ error: "Session not found" });
-  if (!canUserViewLiveSession(user, session)) {
+  if (!canUserViewLiveSession(user, session) || !canUserConsumeLiveSessionContent(user, session)) {
     return tenantForbidden(res);
   }
 
@@ -19834,7 +20776,7 @@ app.get("/api/live-sessions/:sessionId/slides/state", (req, res) => {
   const sessionId = String(req.params.sessionId);
   const session = db.prepare("SELECT * FROM live_sessions WHERE id = ?").get(sessionId);
   if (!session) return res.status(404).json({ error: "Session not found" });
-  if (!canUserViewLiveSession(user, session)) {
+  if (!canUserViewLiveSession(user, session) || !canUserConsumeLiveSessionContent(user, session)) {
     return tenantForbidden(res);
   }
   const row = db.prepare("SELECT * FROM slide_state WHERE live_session_id=?").get(sessionId);

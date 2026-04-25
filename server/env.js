@@ -131,6 +131,15 @@ const DB_BACKUP_ON_START = bool('DB_BACKUP_ON_START', false);
 
 const UPLOADS_DIR = optional('UPLOADS_DIR', 'uploads');
 const UPLOAD_MAX_FILE_BYTES = int('UPLOAD_MAX_FILE_BYTES', 25 * 1024 * 1024);
+const FILE_STORAGE_ADAPTER = optional('FILE_STORAGE_ADAPTER', 'local').trim().toLowerCase();
+const FILE_STORAGE_LOCAL_ROOT = optional('FILE_STORAGE_LOCAL_ROOT', '');
+const FILE_STORAGE_ENCRYPTION_ENABLED = bool('FILE_STORAGE_ENCRYPTION_ENABLED', false);
+const FILE_STORAGE_ENCRYPTION_KEY = optional('FILE_STORAGE_ENCRYPTION_KEY', '');
+const FILE_STORAGE_ENCRYPTION_KEY_ID = optional('FILE_STORAGE_ENCRYPTION_KEY_ID', 'file-key-v1');
+const FILE_UPLOAD_IMAGE_MAX_BYTES = int('FILE_UPLOAD_IMAGE_MAX_BYTES', 10 * 1024 * 1024);
+const FILE_UPLOAD_DOCUMENT_MAX_BYTES = int('FILE_UPLOAD_DOCUMENT_MAX_BYTES', 25 * 1024 * 1024);
+const FILE_UPLOAD_AUDIO_MAX_BYTES = int('FILE_UPLOAD_AUDIO_MAX_BYTES', 50 * 1024 * 1024);
+const FILE_UPLOAD_VIDEO_MAX_BYTES = int('FILE_UPLOAD_VIDEO_MAX_BYTES', 200 * 1024 * 1024);
 
 const FFMPEG_MODE = optional('FFMPEG_MODE', 'auto').trim().toLowerCase();
 const FFMPEG_PATH = optional('FFMPEG_PATH', '');
@@ -229,6 +238,25 @@ if (!hasNonEmpty(DB_BACKUP_DIR)) {
 if (!Number.isFinite(UPLOAD_MAX_FILE_BYTES) || UPLOAD_MAX_FILE_BYTES < 1_000_000) {
   addWarning('UPLOAD_MAX_FILE_BYTES is invalid or very low. A safe minimum is 1 MB; current default is 25 MB.');
 }
+if (!['local', 's3', 's3_compatible', 'r2'].includes(FILE_STORAGE_ADAPTER)) {
+  addWarning('FILE_STORAGE_ADAPTER is not recognized. Expected local or s3-compatible placeholder.');
+}
+if (FILE_STORAGE_ENCRYPTION_ENABLED) {
+  if (!/^[a-fA-F0-9]{64}$/.test(FILE_STORAGE_ENCRYPTION_KEY)) {
+    if (IS_PROD) addError('FILE_STORAGE_ENCRYPTION_KEY must be a 64-character hex key when file encryption is enabled.');
+    else addWarning('FILE_STORAGE_ENCRYPTION_KEY should be a 64-character hex key when file encryption is enabled.');
+  }
+}
+for (const [name, value] of Object.entries({
+  FILE_UPLOAD_IMAGE_MAX_BYTES,
+  FILE_UPLOAD_DOCUMENT_MAX_BYTES,
+  FILE_UPLOAD_AUDIO_MAX_BYTES,
+  FILE_UPLOAD_VIDEO_MAX_BYTES
+})) {
+  if (!Number.isFinite(value) || value < 1_000_000) {
+    addWarning(`${name} should be set to at least 1 MB.`);
+  }
+}
 
 const normalizedEmailProvider = EMAIL_PROVIDER.trim().toLowerCase();
 if (normalizedEmailProvider && normalizedEmailProvider !== 'disabled') {
@@ -286,6 +314,8 @@ const ENV_VALIDATION = {
         hasNonEmpty(IONOS_SMTP_USER) &&
         hasNonEmpty(IONOS_SMTP_PASS)),
     uploadsConfigured: hasNonEmpty(UPLOADS_DIR) && Number.isFinite(UPLOAD_MAX_FILE_BYTES) && UPLOAD_MAX_FILE_BYTES > 0,
+    fileStorageAdapter: FILE_STORAGE_ADAPTER,
+    fileStorageEncryptionEnabled: FILE_STORAGE_ENCRYPTION_ENABLED,
     openAiConfigured: hasNonEmpty(OPENAI_API_KEY),
     twilioConfigured: hasNonEmpty(TWILIO_ACCOUNT_SID) && hasNonEmpty(TWILIO_AUTH_TOKEN) && hasNonEmpty(TWILIO_PHONE_NUMBER)
   }
@@ -350,6 +380,15 @@ module.exports = {
   DB_BACKUP_ON_START,
   UPLOADS_DIR,
   UPLOAD_MAX_FILE_BYTES,
+  FILE_STORAGE_ADAPTER,
+  FILE_STORAGE_LOCAL_ROOT,
+  FILE_STORAGE_ENCRYPTION_ENABLED,
+  FILE_STORAGE_ENCRYPTION_KEY,
+  FILE_STORAGE_ENCRYPTION_KEY_ID,
+  FILE_UPLOAD_IMAGE_MAX_BYTES,
+  FILE_UPLOAD_DOCUMENT_MAX_BYTES,
+  FILE_UPLOAD_AUDIO_MAX_BYTES,
+  FILE_UPLOAD_VIDEO_MAX_BYTES,
   FFMPEG_MODE,
   FFMPEG_PATH,
   FFMPEG_STRICT,
