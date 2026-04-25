@@ -1,0 +1,32 @@
+[
+  {
+    "id": "task_f7fc3d9fb6b0a0bf5bf9fb5ee5e114df",
+    "workspace_id": "sprachschule-duisburg",
+    "channel_id": "school-task-3",
+    "title": "Priority: Normal Due: 04 March 2026 – 15:00  Check all classroom projectors, speakers, and Wi-Fi access points. Report malfunctioning equipment to IT support.",
+    "description": null,
+    "status": "open",
+    "priority": "normal",
+    "due_at": null,
+    "completed_at": null,
+    "created_by": "uyshv0srx",
+    "assigned_to": null,
+    "created_at": 1771972862295,
+    "updated_at": 1771972862295
+  },
+  {
+    "id": "task_817b9eb1ea23d0d169513685ac961909",
+    "workspace_id": "sprachschule-duisburg",
+    "channel_id": "school-task-3",
+    "title": "NONE",
+    "description": null,
+    "status": "open",
+    "priority": "high",
+    "due_at": null,
+    "completed_at": null,
+    "created_by": "uyshv0srx",
+    "assigned_to": null,
+    "created_at": 1771972891562,
+    "updated_at": 1771972891562
+  }
+]

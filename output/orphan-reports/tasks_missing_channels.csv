@@ -1,0 +1,3 @@
+id,workspace_id,channel_id,title,description,status,priority,due_at,completed_at,created_by,assigned_to,created_at,updated_at
+task_f7fc3d9fb6b0a0bf5bf9fb5ee5e114df,sprachschule-duisburg,school-task,"Priority: Normal Due: 04 March 2026 – 15:00  Check all classroom projectors, speakers, and Wi-Fi access points. Report malfunctioning equipment to IT support.",,open,normal,,,uyshv0srx,,1771972862295,1771972862295
+task_817b9eb1ea23d0d169513685ac961909,sprachschule-duisburg,school-task,NONE,,open,high,,,uyshv0srx,,1771972891562,1771972891562

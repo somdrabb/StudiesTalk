@@ -1,0 +1,32 @@
+[
+  {
+    "workspace_id": "sprachschule-duisburg",
+    "street": "Mercatorstr.",
+    "house_number": "166",
+    "postal_code": "47051",
+    "city": "Duisburg",
+    "state": "NRW",
+    "country": "Germany",
+    "phone": "+4917664069892",
+    "opening_hours_json": "{\"text\":\"Monday: Open 10:00 - 20:00 · Tuesday: Open 12:00 - 20:00 · Wednesday: Open 10:00 - 20:00 · Thursday: Open 10:00 - 20:00 · Friday: Open 10:00 - 20:00 · Saturday: Closed · Sunday: Closed\",\"details\":{\"days\":[{\"day\":\"monday\",\"status\":\"open\",\"openTime\":\"10:00\",\"closeTime\":\"20:00\",\"breakStart\":\"\",\"breakEnd\":\"\"},{\"day\":\"tuesday\",\"status\":\"open\",\"openTime\":\"12:00\",\"closeTime\":\"20:00\",\"breakStart\":\"\",\"breakEnd\":\"\"},{\"day\":\"wednesday\",\"status\":\"open\",\"openTime\":\"10:00\",\"closeTime\":\"20:00\",\"breakStart\":\"\",\"breakEnd\":\"\"},{\"day\":\"thursday\",\"status\":\"open\",\"openTime\":\"10:00\",\"closeTime\":\"20:00\",\"breakStart\":\"\",\"breakEnd\":\"\"},{\"day\":\"friday\",\"status\":\"open\",\"openTime\":\"10:00\",\"closeTime\":\"20:00\",\"breakStart\":\"\",\"breakEnd\":\"\"},{\"day\":\"saturday\",\"status\":\"closed\",\"openTime\":\"\",\"closeTime\":\"\",\"breakStart\":\"\",\"breakEnd\":\"\"},{\"day\":\"sunday\",\"status\":\"closed\",\"openTime\":\"10:00\",\"closeTime\":\"17:00\",\"breakStart\":\"\",\"breakEnd\":\"\"}]}}",
+    "website": "http://localhost:3000/",
+    "updated_at": "2026-03-13 12:55:39",
+    "registration_details": "Musterfirma – Musterstraße 1, 2, 3 / Beispielweg 10\n12345 Musterstadt, Germany\nMusterfirma GmbH & Co. KG | Sitz der Gesellschaft: Musterstraße 1, 2, 3 / Beispielweg 10\n12345 Musterstadt, Germany\nHandelsregister: HRA 00000 M, Amtsgericht Musterstadt\nPersönlich haftende Gesellschafterin der Musterfirma GmbH & Co.KG\nMusterfirma Verwaltungs GmbH\nGeschäftsführer der Musterfirma Verwaltungs GmbH\nMax Mustermann",
+    "use_platform_contact_email": 1
+  },
+  {
+    "workspace_id": "lens",
+    "street": "Limburgstrasse",
+    "house_number": "166",
+    "postal_code": "47051",
+    "city": "Duisburg",
+    "state": "",
+    "country": "Germany",
+    "phone": "+4917664069892",
+    "opening_hours_json": "{\"text\":\"Monday: Half open 09:00 - 17:00 · Tuesday: Open 10:00 - 20:00 · Wednesday: Open 14:00 - 16:00 · Thursday: Open 10:00 - 20:00 · Friday: Open 10:00 - 20:00 · Saturday: Closed · Sunday: Closed\",\"details\":{\"days\":[{\"day\":\"monday\",\"status\":\"half-open\",\"openTime\":\"09:00\",\"closeTime\":\"17:00\",\"breakStart\":\"\",\"breakEnd\":\"\"},{\"day\":\"tuesday\",\"status\":\"open\",\"openTime\":\"10:00\",\"closeTime\":\"20:00\",\"breakStart\":\"\",\"breakEnd\":\"\"},{\"day\":\"wednesday\",\"status\":\"open\",\"openTime\":\"14:00\",\"closeTime\":\"16:00\",\"breakStart\":\"\",\"breakEnd\":\"\"},{\"day\":\"thursday\",\"status\":\"open\",\"openTime\":\"10:00\",\"closeTime\":\"20:00\",\"breakStart\":\"\",\"breakEnd\":\"\"},{\"day\":\"friday\",\"status\":\"open\",\"openTime\":\"10:00\",\"closeTime\":\"20:00\",\"breakStart\":\"\",\"breakEnd\":\"\"},{\"day\":\"saturday\",\"status\":\"closed\",\"openTime\":\"\",\"closeTime\":\"\",\"breakStart\":\"\",\"breakEnd\":\"\"},{\"day\":\"sunday\",\"status\":\"closed\",\"openTime\":\"\",\"closeTime\":\"\",\"breakStart\":\"\",\"breakEnd\":\"\"}]}}",
+    "website": "",
+    "updated_at": "2026-02-19 20:03:14",
+    "registration_details": "",
+    "use_platform_contact_email": 0
+  }
+]

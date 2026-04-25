@@ -1,0 +1,531 @@
+{
+  "source": "/Users/jannatuladny/cat-6.1/storage/studiestalk.db",
+  "exportedAt": "2026-04-22T17:44:35.641Z",
+  "tables": [
+    {
+      "table": "ai_budget_settings",
+      "rows": 0,
+      "file": "ai_budget_settings.json"
+    },
+    {
+      "table": "ai_conversation_messages",
+      "rows": 339,
+      "file": "ai_conversation_messages.json"
+    },
+    {
+      "table": "ai_conversations",
+      "rows": 101,
+      "file": "ai_conversations.json"
+    },
+    {
+      "table": "ai_runtime_sessions",
+      "rows": 27,
+      "file": "ai_runtime_sessions.json"
+    },
+    {
+      "table": "ai_usage_ledger",
+      "rows": 27,
+      "file": "ai_usage_ledger.json"
+    },
+    {
+      "table": "announcement_reads",
+      "rows": 10,
+      "file": "announcement_reads.json"
+    },
+    {
+      "table": "announcements",
+      "rows": 10,
+      "file": "announcements.json"
+    },
+    {
+      "table": "attendance_notifications",
+      "rows": 0,
+      "file": "attendance_notifications.json"
+    },
+    {
+      "table": "attendance_records",
+      "rows": 0,
+      "file": "attendance_records.json"
+    },
+    {
+      "table": "attendance_sessions",
+      "rows": 0,
+      "file": "attendance_sessions.json"
+    },
+    {
+      "table": "audit_log",
+      "rows": 29,
+      "file": "audit_log.json"
+    },
+    {
+      "table": "audit_logs",
+      "rows": 259,
+      "file": "audit_logs.json"
+    },
+    {
+      "table": "calendar_event_targets",
+      "rows": 35,
+      "file": "calendar_event_targets.json"
+    },
+    {
+      "table": "calendar_events",
+      "rows": 39,
+      "file": "calendar_events.json"
+    },
+    {
+      "table": "certificates",
+      "rows": 0,
+      "file": "certificates.json"
+    },
+    {
+      "table": "channel_members",
+      "rows": 80,
+      "file": "channel_members.json"
+    },
+    {
+      "table": "channels",
+      "rows": 89,
+      "file": "channels.json"
+    },
+    {
+      "table": "class_attendance",
+      "rows": 0,
+      "file": "class_attendance.json"
+    },
+    {
+      "table": "class_attendance_records",
+      "rows": 0,
+      "file": "class_attendance_records.json"
+    },
+    {
+      "table": "deleted_inbound_emails",
+      "rows": 7,
+      "file": "deleted_inbound_emails.json"
+    },
+    {
+      "table": "dm_members",
+      "rows": 2,
+      "file": "dm_members.json"
+    },
+    {
+      "table": "dm_message_reaction_users",
+      "rows": 0,
+      "file": "dm_message_reaction_users.json"
+    },
+    {
+      "table": "dm_message_reactions",
+      "rows": 0,
+      "file": "dm_message_reactions.json"
+    },
+    {
+      "table": "dm_messages",
+      "rows": 0,
+      "file": "dm_messages.json"
+    },
+    {
+      "table": "dm_replies",
+      "rows": 0,
+      "file": "dm_replies.json"
+    },
+    {
+      "table": "dm_reply_reaction_users",
+      "rows": 0,
+      "file": "dm_reply_reaction_users.json"
+    },
+    {
+      "table": "dm_reply_reactions",
+      "rows": 0,
+      "file": "dm_reply_reactions.json"
+    },
+    {
+      "table": "dms",
+      "rows": 1,
+      "file": "dms.json"
+    },
+    {
+      "table": "email_events",
+      "rows": 80,
+      "file": "email_events.json"
+    },
+    {
+      "table": "email_replies",
+      "rows": 5,
+      "file": "email_replies.json"
+    },
+    {
+      "table": "file_events",
+      "rows": 0,
+      "file": "file_events.json"
+    },
+    {
+      "table": "file_stats",
+      "rows": 11,
+      "file": "file_stats.json"
+    },
+    {
+      "table": "files_registry",
+      "rows": 232,
+      "file": "files_registry.json"
+    },
+    {
+      "table": "homework_completions",
+      "rows": 1,
+      "file": "homework_completions.json"
+    },
+    {
+      "table": "homework_item_files",
+      "rows": 0,
+      "file": "homework_item_files.json"
+    },
+    {
+      "table": "homework_items",
+      "rows": 5,
+      "file": "homework_items.json"
+    },
+    {
+      "table": "homework_submission_comments",
+      "rows": 0,
+      "file": "homework_submission_comments.json"
+    },
+    {
+      "table": "homework_submission_files",
+      "rows": 0,
+      "file": "homework_submission_files.json"
+    },
+    {
+      "table": "homework_submissions",
+      "rows": 0,
+      "file": "homework_submissions.json"
+    },
+    {
+      "table": "inbound_emails",
+      "rows": 21,
+      "file": "inbound_emails.json"
+    },
+    {
+      "table": "invoices",
+      "rows": 2,
+      "file": "invoices.json"
+    },
+    {
+      "table": "ip_blocklist",
+      "rows": 0,
+      "file": "ip_blocklist.json"
+    },
+    {
+      "table": "knowledge_items",
+      "rows": 0,
+      "file": "knowledge_items.json"
+    },
+    {
+      "table": "live_attendance",
+      "rows": 11,
+      "file": "live_attendance.json"
+    },
+    {
+      "table": "live_sessions",
+      "rows": 17,
+      "file": "live_sessions.json"
+    },
+    {
+      "table": "login_attempts",
+      "rows": 149,
+      "file": "login_attempts.json"
+    },
+    {
+      "table": "message_reaction_users",
+      "rows": 21,
+      "file": "message_reaction_users.json"
+    },
+    {
+      "table": "message_reactions",
+      "rows": 21,
+      "file": "message_reactions.json"
+    },
+    {
+      "table": "message_translations",
+      "rows": 4,
+      "file": "message_translations.json"
+    },
+    {
+      "table": "messages",
+      "rows": 77,
+      "file": "messages.json"
+    },
+    {
+      "table": "orphaned_attendance_notifications_archive",
+      "rows": 2,
+      "file": "orphaned_attendance_notifications_archive.json"
+    },
+    {
+      "table": "orphaned_attendance_records_archive",
+      "rows": 5,
+      "file": "orphaned_attendance_records_archive.json"
+    },
+    {
+      "table": "orphaned_attendance_sessions_archive",
+      "rows": 3,
+      "file": "orphaned_attendance_sessions_archive.json"
+    },
+    {
+      "table": "orphaned_file_events_archive",
+      "rows": 1,
+      "file": "orphaned_file_events_archive.json"
+    },
+    {
+      "table": "orphaned_files_registry_archive",
+      "rows": 354,
+      "file": "orphaned_files_registry_archive.json"
+    },
+    {
+      "table": "orphaned_homework_item_files_archive",
+      "rows": 9,
+      "file": "orphaned_homework_item_files_archive.json"
+    },
+    {
+      "table": "orphaned_homework_items_archive",
+      "rows": 2,
+      "file": "orphaned_homework_items_archive.json"
+    },
+    {
+      "table": "orphaned_homework_submission_comments_archive",
+      "rows": 1,
+      "file": "orphaned_homework_submission_comments_archive.json"
+    },
+    {
+      "table": "orphaned_homework_submission_files_archive",
+      "rows": 2,
+      "file": "orphaned_homework_submission_files_archive.json"
+    },
+    {
+      "table": "orphaned_homework_submissions_archive",
+      "rows": 1,
+      "file": "orphaned_homework_submissions_archive.json"
+    },
+    {
+      "table": "orphaned_registration_links_archive",
+      "rows": 15,
+      "file": "orphaned_registration_links_archive.json"
+    },
+    {
+      "table": "orphaned_workspace_class_meta_archive",
+      "rows": 6,
+      "file": "orphaned_workspace_class_meta_archive.json"
+    },
+    {
+      "table": "password_history",
+      "rows": 0,
+      "file": "password_history.json"
+    },
+    {
+      "table": "password_resets",
+      "rows": 6,
+      "file": "password_resets.json"
+    },
+    {
+      "table": "payments",
+      "rows": 2,
+      "file": "payments.json"
+    },
+    {
+      "table": "platform_settings",
+      "rows": 1,
+      "file": "platform_settings.json"
+    },
+    {
+      "table": "policy_acceptances",
+      "rows": 4,
+      "file": "policy_acceptances.json"
+    },
+    {
+      "table": "refresh_tokens",
+      "rows": 4932,
+      "file": "refresh_tokens.json"
+    },
+    {
+      "table": "register_otps",
+      "rows": 0,
+      "file": "register_otps.json"
+    },
+    {
+      "table": "registration_links",
+      "rows": 14,
+      "file": "registration_links.json"
+    },
+    {
+      "table": "registration_review_requests",
+      "rows": 7,
+      "file": "registration_review_requests.json"
+    },
+    {
+      "table": "registration_sessions",
+      "rows": 0,
+      "file": "registration_sessions.json"
+    },
+    {
+      "table": "replies",
+      "rows": 4,
+      "file": "replies.json"
+    },
+    {
+      "table": "reply_reaction_users",
+      "rows": 0,
+      "file": "reply_reaction_users.json"
+    },
+    {
+      "table": "reply_reactions",
+      "rows": 0,
+      "file": "reply_reactions.json"
+    },
+    {
+      "table": "revoked_access_tokens",
+      "rows": 96,
+      "file": "revoked_access_tokens.json"
+    },
+    {
+      "table": "school_requests",
+      "rows": 1,
+      "file": "school_requests.json"
+    },
+    {
+      "table": "security_events",
+      "rows": 4865,
+      "file": "security_events.json"
+    },
+    {
+      "table": "slide_state",
+      "rows": 0,
+      "file": "slide_state.json"
+    },
+    {
+      "table": "speaking_reviews",
+      "rows": 1,
+      "file": "speaking_reviews.json"
+    },
+    {
+      "table": "student_notes",
+      "rows": 0,
+      "file": "student_notes.json"
+    },
+    {
+      "table": "student_progress",
+      "rows": 0,
+      "file": "student_progress.json"
+    },
+    {
+      "table": "task_comments",
+      "rows": 0,
+      "file": "task_comments.json"
+    },
+    {
+      "table": "task_reactions",
+      "rows": 0,
+      "file": "task_reactions.json"
+    },
+    {
+      "table": "tasks",
+      "rows": 2,
+      "file": "tasks.json"
+    },
+    {
+      "table": "test_answers",
+      "rows": 31,
+      "file": "test_answers.json"
+    },
+    {
+      "table": "test_attempts",
+      "rows": 3,
+      "file": "test_attempts.json"
+    },
+    {
+      "table": "test_channels",
+      "rows": 1,
+      "file": "test_channels.json"
+    },
+    {
+      "table": "test_options",
+      "rows": 32,
+      "file": "test_options.json"
+    },
+    {
+      "table": "test_sections",
+      "rows": 4,
+      "file": "test_sections.json"
+    },
+    {
+      "table": "test_tasks",
+      "rows": 19,
+      "file": "test_tasks.json"
+    },
+    {
+      "table": "transcript_items",
+      "rows": 6,
+      "file": "transcript_items.json"
+    },
+    {
+      "table": "user_channel_prefs",
+      "rows": 2,
+      "file": "user_channel_prefs.json"
+    },
+    {
+      "table": "user_preferences",
+      "rows": 0,
+      "file": "user_preferences.json"
+    },
+    {
+      "table": "users",
+      "rows": 5,
+      "file": "users.json"
+    },
+    {
+      "table": "workspace_billing",
+      "rows": 0,
+      "file": "workspace_billing.json"
+    },
+    {
+      "table": "workspace_class_meta",
+      "rows": 1,
+      "file": "workspace_class_meta.json"
+    },
+    {
+      "table": "workspace_email_logs",
+      "rows": 47,
+      "file": "workspace_email_logs.json"
+    },
+    {
+      "table": "workspace_email_settings",
+      "rows": 2,
+      "file": "workspace_email_settings.json"
+    },
+    {
+      "table": "workspace_email_templates",
+      "rows": 1,
+      "file": "workspace_email_templates.json"
+    },
+    {
+      "table": "workspace_members",
+      "rows": 4,
+      "file": "workspace_members.json"
+    },
+    {
+      "table": "workspace_profile",
+      "rows": 2,
+      "file": "workspace_profile.json"
+    },
+    {
+      "table": "workspace_settings_admin",
+      "rows": 0,
+      "file": "workspace_settings_admin.json"
+    },
+    {
+      "table": "workspaces",
+      "rows": 4,
+      "file": "workspaces.json"
+    },
+    {
+      "table": "writing_reviews",
+      "rows": 1,
+      "file": "writing_reviews.json"
+    }
+  ]
+}

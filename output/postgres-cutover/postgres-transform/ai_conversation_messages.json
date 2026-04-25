@@ -1,0 +1,2375 @@
+[
+  {
+    "id": "aicm_986ff6e66bee692fe33d6f07dbc7f279",
+    "conversation_id": "aic_22cdee5966f7ee27d6766a3c68420e79",
+    "role": "system",
+    "content": "Session started: scenario=job, mode=vad",
+    "created_at": 1772301964472
+  },
+  {
+    "id": "aicm_7446df1077518449dc053dc5fa696ac0",
+    "conversation_id": "aic_3a1bfe4c3c113102e8af5dccac8c0172",
+    "role": "system",
+    "content": "Session started: scenario=travel, mode=vad",
+    "created_at": 1772302036686
+  },
+  {
+    "id": "aicm_7d8609c6b6465b33980be9ff5e071af9",
+    "conversation_id": "aic_b026449f1821ce3297db5f5ec5bc921a",
+    "role": "system",
+    "content": "Session started: scenario=exam, mode=vad",
+    "created_at": 1772302177253
+  },
+  {
+    "id": "aicm_729a58692e1aec68568fe1ddf6b58723",
+    "conversation_id": "aic_98309313964b0bc033452a4164195878",
+    "role": "system",
+    "content": "Session started: scenario=job, mode=vad",
+    "created_at": 1772303221645
+  },
+  {
+    "id": "aicm_e24f9f9b79d5aba6f97e75385653c11b",
+    "conversation_id": "aic_5597b74f6e7583a5fcd2cb5d9208e323",
+    "role": "system",
+    "content": "Session started: scenario=free, mode=vad",
+    "created_at": 1772310362960
+  },
+  {
+    "id": "aicm_119a20ad3d3eaf1c10a4c944f5c7d948",
+    "conversation_id": "aic_5597b74f6e7583a5fcd2cb5d9208e323",
+    "role": "system",
+    "content": "Session started: scenario=free, mode=vad",
+    "created_at": 1772310362960
+  },
+  {
+    "id": "aicm_537dd7d5633fd9e6d13d8beecfc01f9b",
+    "conversation_id": "aic_5597b74f6e7583a5fcd2cb5d9208e323",
+    "role": "system",
+    "content": "Session started: scenario=free, mode=vad",
+    "created_at": 1772310362960
+  },
+  {
+    "id": "aicm_018028b7be8b52a389f1da0067ea271a",
+    "conversation_id": "aic_5597b74f6e7583a5fcd2cb5d9208e323",
+    "role": "system",
+    "content": "Session started: scenario=free, mode=vad",
+    "created_at": 1772310362960
+  },
+  {
+    "id": "aicm_df792a122674ed0ae1145743a87dab84",
+    "conversation_id": "aic_5597b74f6e7583a5fcd2cb5d9208e323",
+    "role": "system",
+    "content": "Session started: scenario=free, mode=vad",
+    "created_at": 1772310362960
+  },
+  {
+    "id": "aicm_3b84de55902144d973b0083a0997e176",
+    "conversation_id": "aic_5597b74f6e7583a5fcd2cb5d9208e323",
+    "role": "system",
+    "content": "Session started: scenario=free, mode=vad",
+    "created_at": 1772310362960
+  },
+  {
+    "id": "aicm_c9fda02bd4826bf576c888bfdd60677a",
+    "conversation_id": "aic_5597b74f6e7583a5fcd2cb5d9208e323",
+    "role": "system",
+    "content": "Session started: scenario=free, mode=vad",
+    "created_at": 1772310362960
+  },
+  {
+    "id": "aicm_2ed39a070db9d05aecab8a8cce8512a5",
+    "conversation_id": "aic_47fe81c8c713e05572cbf1d6095beb77",
+    "role": "system",
+    "content": "Session started: scenario=job, mode=vad",
+    "created_at": 1772310367954
+  },
+  {
+    "id": "aicm_e9dfda1e05b41846a6b70e1b9d93b7f2",
+    "conversation_id": "aic_47fe81c8c713e05572cbf1d6095beb77",
+    "role": "system",
+    "content": "Session started: scenario=job, mode=vad",
+    "created_at": 1772310367954
+  },
+  {
+    "id": "aicm_dd6ff70f93fae8aeec932452edc12330",
+    "conversation_id": "aic_47fe81c8c713e05572cbf1d6095beb77",
+    "role": "system",
+    "content": "Session started: scenario=job, mode=vad",
+    "created_at": 1772310367954
+  },
+  {
+    "id": "aicm_0bb88728b890f8a4bc148946a2721ad3",
+    "conversation_id": "aic_47fe81c8c713e05572cbf1d6095beb77",
+    "role": "system",
+    "content": "Session started: scenario=job, mode=vad",
+    "created_at": 1772310367954
+  },
+  {
+    "id": "aicm_6374ecd1c23f0fd0e5a8daa0dcf85250",
+    "conversation_id": "aic_76d7be7e282ee5f0f0ce2c6d531180e7",
+    "role": "system",
+    "content": "Session started: scenario=free, mode=vad",
+    "created_at": 1772310378411
+  },
+  {
+    "id": "aicm_2d3f1d2c3e1b788d115096914a8ba348",
+    "conversation_id": "aic_5638e28fb7f57c8db5a2ee995eefdef8",
+    "role": "system",
+    "content": "Session started: scenario=free, mode=ptt",
+    "created_at": 1772310426221
+  },
+  {
+    "id": "aicm_d7662f8d41bf1bd1d2f76c8c0bcbc2fb",
+    "conversation_id": "aic_5638e28fb7f57c8db5a2ee995eefdef8",
+    "role": "system",
+    "content": "Session started: scenario=free, mode=ptt",
+    "created_at": 1772310426221
+  },
+  {
+    "id": "aicm_5828b9d4afd55aba5ffe867501548f03",
+    "conversation_id": "aic_4e8d76364cd3d026661dec86a4b2a132",
+    "role": "system",
+    "content": "Session started: scenario=free, mode=ptt",
+    "created_at": 1772310428906
+  },
+  {
+    "id": "aicm_d14fc257ab4fdd97fd74cbe533bc5cc2",
+    "conversation_id": "aic_4e8d76364cd3d026661dec86a4b2a132",
+    "role": "system",
+    "content": "Session started: scenario=free, mode=ptt",
+    "created_at": 1772310428906
+  },
+  {
+    "id": "aicm_9ba526250abac185257e4a8a5f5e5be5",
+    "conversation_id": "aic_4e8d76364cd3d026661dec86a4b2a132",
+    "role": "system",
+    "content": "Session started: scenario=free, mode=ptt",
+    "created_at": 1772310428906
+  },
+  {
+    "id": "aicm_3e8d52ebd05d1c40fb03ae4fee18c682",
+    "conversation_id": "aic_4e8d76364cd3d026661dec86a4b2a132",
+    "role": "system",
+    "content": "Session started: scenario=free, mode=ptt",
+    "created_at": 1772310428906
+  },
+  {
+    "id": "aicm_190323651e8a202fe3bd962b8fc7cb2f",
+    "conversation_id": "aic_4e8d76364cd3d026661dec86a4b2a132",
+    "role": "system",
+    "content": "Session started: scenario=free, mode=ptt",
+    "created_at": 1772310428906
+  },
+  {
+    "id": "aicm_da5ef5036f4b4816c50bc0493fa56f4d",
+    "conversation_id": "aic_4e8d76364cd3d026661dec86a4b2a132",
+    "role": "system",
+    "content": "Session started: scenario=free, mode=ptt",
+    "created_at": 1772310428906
+  },
+  {
+    "id": "aicm_5a86836dd2c9a2f046100ee0a8756120",
+    "conversation_id": "aic_4e8d76364cd3d026661dec86a4b2a132",
+    "role": "system",
+    "content": "Session started: scenario=free, mode=ptt",
+    "created_at": 1772310428906
+  },
+  {
+    "id": "aicm_30338d6db3d9e932257c1bfb4a612871",
+    "conversation_id": "aic_4e8d76364cd3d026661dec86a4b2a132",
+    "role": "system",
+    "content": "Session started: scenario=free, mode=ptt",
+    "created_at": 1772310428906
+  },
+  {
+    "id": "aicm_271e2c7e38464b004c14866c8982170d",
+    "conversation_id": "aic_4e8d76364cd3d026661dec86a4b2a132",
+    "role": "system",
+    "content": "Session started: scenario=free, mode=ptt",
+    "created_at": 1772310428906
+  },
+  {
+    "id": "aicm_711c576be04085868b101398922bbe79",
+    "conversation_id": "aic_f99a478d196bbe1e1d8fd0ca44f1a215",
+    "role": "system",
+    "content": "Session started: scenario=free, mode=ptt",
+    "created_at": 1772311179166
+  },
+  {
+    "id": "aicm_06b4c8726a27f630569e5ddf72d47b74",
+    "conversation_id": "aic_14b635b0beb0c74b701658f379a4ae88",
+    "role": "system",
+    "content": "Session started: scenario=free, mode=ptt",
+    "created_at": 1772311181770
+  },
+  {
+    "id": "aicm_82b21f40ab32de88f0df8745f3e4f27f",
+    "conversation_id": "aic_14b635b0beb0c74b701658f379a4ae88",
+    "role": "system",
+    "content": "Session started: scenario=free, mode=ptt",
+    "created_at": 1772311181770
+  },
+  {
+    "id": "aicm_4f207de82a9223293fa3722d4b3ea1e8",
+    "conversation_id": "aic_14b635b0beb0c74b701658f379a4ae88",
+    "role": "system",
+    "content": "Session started: scenario=free, mode=ptt",
+    "created_at": 1772311181770
+  },
+  {
+    "id": "aicm_2c21311ee5d4c119b74c712fe9ac1ebf",
+    "conversation_id": "aic_14b635b0beb0c74b701658f379a4ae88",
+    "role": "system",
+    "content": "Session started: scenario=free, mode=ptt",
+    "created_at": 1772311181770
+  },
+  {
+    "id": "aicm_d68268ec150302430602fc778fba2837",
+    "conversation_id": "aic_cfe9ebb87ee4f9a74642eafe84ffc30a",
+    "role": "system",
+    "content": "Session started: scenario=free, mode=ptt",
+    "created_at": 1772324169395
+  },
+  {
+    "id": "aicm_a83e516e3aedb0a8e7ec4c28c72b403f",
+    "conversation_id": "aic_37656d0b6a37ae98cf92aad6bf9d3c2f",
+    "role": "system",
+    "content": "Session started: scenario=restaurant, mode=ptt",
+    "created_at": 1773184065577
+  },
+  {
+    "id": "aicm_e644a0c0b23cd9660cb7238fac56a3bc",
+    "conversation_id": "aic_f2c090bfd0a2646930370f9107b83ba5",
+    "role": "system",
+    "content": "Session started: scenario=restaurant, mode=ptt",
+    "created_at": 1773184068760
+  },
+  {
+    "id": "aicm_43dff2e5a9be0974b33b36c9f5de3ea1",
+    "conversation_id": "aic_f2c090bfd0a2646930370f9107b83ba5",
+    "role": "system",
+    "content": "Session started: scenario=restaurant, mode=ptt",
+    "created_at": 1773184068760
+  },
+  {
+    "id": "aicm_b17fd8d93b676d47f3e1afe88a1c5bfc",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "system",
+    "content": "Session started: scenario=restaurant, mode=ptt",
+    "created_at": 1773184072519
+  },
+  {
+    "id": "aicm_1b9ad182f2a7f608161391109c73b8a5",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "system",
+    "content": "Session started: scenario=restaurant, mode=ptt",
+    "created_at": 1773184072519
+  },
+  {
+    "id": "aicm_c5fa3fde6917c3a03d7e5b631f737b81",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "system",
+    "content": "Session started: scenario=restaurant, mode=ptt",
+    "created_at": 1773184072519
+  },
+  {
+    "id": "aicm_38e0ddde508c3f86990cbfe9b3a39b1a",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "system",
+    "content": "Session started: scenario=restaurant, mode=ptt",
+    "created_at": 1773184072519
+  },
+  {
+    "id": "aicm_9aa6a1237d41229d498fbddfb72abffb",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "system",
+    "content": "Session started: scenario=restaurant, mode=ptt",
+    "created_at": 1773184072519
+  },
+  {
+    "id": "aicm_b3dbd8b8886539fb697b46a4e6d6f374",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "system",
+    "content": "Session started: scenario=restaurant, mode=ptt",
+    "created_at": 1773184072519
+  },
+  {
+    "id": "aicm_6af25bf18af6b98e39b73f65f46588f7",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "Summarize payment status",
+    "created_at": 1773620495782
+  },
+  {
+    "id": "aicm_6ab5797e3a8292dc03a88a857796f87d",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "**No outstanding payments**\n• No payment-related information is available in the context.\n• The analytics snapshot does not mention any payment status or issues.",
+    "created_at": 1773620505668
+  },
+  {
+    "id": "aicm_9fec707fc99a84e0e5727093a929b9c8",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "can you please tell me my role",
+    "created_at": 1773620523126
+  },
+  {
+    "id": "aicm_4a5c87750b601b91818e18bfafc9a831",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "Your role is school_admin.\n• Your user ID is uyshv0srx.\n• You are currently logged in to the workspace \"Sprachschule Duisburg\".\n• The selected date is 2026-03-16.",
+    "created_at": 1773620527737
+  },
+  {
+    "id": "aicm_539267d6570e7d5814d88d89ff98d953",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "how many teachers and students insid ethis school and how many classes are there",
+    "created_at": 1773620565379
+  },
+  {
+    "id": "aicm_b9a6feba96f054939edca315d869d070",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "**Answer:** \nThere is 1 admin, 0 teachers, and 1 student in the school.\n• There are 26 groups (classes, clubs, exams) in total.\n• The number of classes is 11.",
+    "created_at": 1773620576208
+  },
+  {
+    "id": "aicm_f4da3ed302b2c46dbe2616ebf251f2ce",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "provide me the data samaries of the school analystics",
+    "created_at": 1773620604988
+  },
+  {
+    "id": "aicm_3b63271a13d28941e0e09dce2d0b989b",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "**Analytics Snapshot Summary:**\n• **Students:** 1 active, 0 inactive\n• **Teachers:** 0\n• **Admins:** 1 (you)\n• **Groups:** 26 (11 classes, 3 clubs, 3 exams)\n• **Homework:** 7 submissions with an average completion rate of 0%\n• **Top Tool:** Learning Materials\n• **Insights:** Some classes show low message activity and may need teacher intervention.\n• **Engagement:** High: 0, Medium: 1, Low: 0\n\nWould you like me to provide a plan based on these analytics or is there something specific you'd like to discuss?",
+    "created_at": 1773620620169
+  },
+  {
+    "id": "aicm_08fb3422b5f770a3f06e5ada736be9a2",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "can you tell me the upcomming events of the calanders saved events and which also passed",
+    "created_at": 1773620655016
+  },
+  {
+    "id": "aicm_90ede4761045e004d1e19def52d9cddc",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "Upcoming calendar items:\n• Reminder – on 2026-03-29 from 09:00-\n\nThere are no past events mentioned in the context.",
+    "created_at": 1773620658556
+  },
+  {
+    "id": "aicm_301d57601d815018d58f16042e2176e3",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "now chcek again",
+    "created_at": 1773620715777
+  },
+  {
+    "id": "aicm_545721cbccebbba197b1f6d5bd96b095",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "There are no upcoming events on the selected date, 2026-03-16.\n\n• The next event is scheduled for 2026-03-18.\n• A reminder is set for 2026-03-29.",
+    "created_at": 1773620723964
+  },
+  {
+    "id": "aicm_92a0cb7d1519791ed443df0585b332e6",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "for which is currently setet in calander",
+    "created_at": 1773620745718
+  },
+  {
+    "id": "aicm_102fccb7c807a5c9cd51490a16531b98",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "Classes.\n\n• The event \"Classes\" is scheduled for 2026-03-18 from 08:00 to 10:00.\n• There are no other upcoming events on the selected date, 2026-03-16.",
+    "created_at": 1773620749991
+  },
+  {
+    "id": "aicm_5385ebd31741f909158fe1c4438ead65",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "can you create a event in my calander ?",
+    "created_at": 1773621137724
+  },
+  {
+    "id": "aicm_847e05bd2fc19016276948b88bf2cb9c",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "To create an event in your calendar, follow these steps:\n\n1. Click on the \"Calendar\" tab.\n2. Select the date and time for the new event.\n3. Enter the title and description of the event.\n4. Choose any relevant attendees or reminders.\n5. Save the changes.\n\nPlease confirm you want to proceed with creating an event.",
+    "created_at": 1773621151644
+  },
+  {
+    "id": "aicm_64412fa1837b05b347bd2c3c9573044c",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "can you create aevent for school homework in 19.03.2026 in my calander ?",
+    "created_at": 1773621192005
+  },
+  {
+    "id": "aicm_477e207a517b514abcc3a0448bfa84a6",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "You cannot create an event on behalf of the user, but I can guide you through the steps to create one yourself.\n\nTo create an event for school homework on March 19th, 2026, follow these steps:\n\n1. Go to your calendar view.\n2. Click on the date \"2026-03-19\".\n3. Click on the \"+\" or \"Create Event\" button.\n4. Fill in the event details: title (e.g., School Homework), start and end time (if applicable).\n5. Save the event.\n\nIf you need help with anything else, feel free to ask!",
+    "created_at": 1773621201806
+  },
+  {
+    "id": "aicm_cae2764a995b6b9d4b38eff0f1867dc4",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "no can you create in my school calander inside the event",
+    "created_at": 1773621236673
+  },
+  {
+    "id": "aicm_6765047f462174a70ef8047748ff2ac4",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "To create an event in your school calendar, follow these steps:\n\n1. Click on the \"Calendar\" tab.\n2. Select the date and time for the new event.\n3. Fill in the event details, including a title and description.\n4. Choose the relevant group or course associated with the event.\n5. Set any necessary reminders or notifications.\n\nWould you like me to guide you through creating an event specifically?",
+    "created_at": 1773621243519
+  },
+  {
+    "id": "aicm_77f1259b96f6c59c9ed64959466388a6",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "or provide me the link where i can create the calander",
+    "created_at": 1773621264744
+  },
+  {
+    "id": "aicm_475ed851d006e422c2177f00ffbfdbd2",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "You cannot create a calendar from this interface. To view or manage calendars, you need to access the Calendar section within the workspace settings. Would you like me to guide you on how to access it?",
+    "created_at": 1773621268515
+  },
+  {
+    "id": "aicm_ae5c5fcd154af6c4eb7ce687290d4996",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "yes please",
+    "created_at": 1773621363765
+  },
+  {
+    "id": "aicm_b6566336a040295bb10f8c1fbf8e0dc5",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "You are currently logged in as a school admin for Sprachschule Duisburg. What would you like to know or accomplish today?",
+    "created_at": 1773621367162
+  },
+  {
+    "id": "aicm_117a709d3de2b4a50f9bfdecd4b4b881",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "tell me is there any exam regestration is open ?",
+    "created_at": 1773621429695
+  },
+  {
+    "id": "aicm_74c390460d7e802b11a03934b2efe6c1",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "No, there are no exams with open registration in the current context.\n\nThere are 3 groups labeled as \"exams\" but without further details on their status or deadlines.",
+    "created_at": 1773621434738
+  },
+  {
+    "id": "aicm_07872ea3934bc7c2b05d1bfa9a6ebd25",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "is there any gramatic inside the classes",
+    "created_at": 1773621457710
+  },
+  {
+    "id": "aicm_1e5847625dd618f57c35b05d96de2e67",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "No grammatical corrections are visible in the \"Classes\" calendar item on March 18.",
+    "created_at": 1773621461060
+  },
+  {
+    "id": "aicm_233f6212178685ce08a7944d094401f2",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "no i mean is there any chanle for grammar ?",
+    "created_at": 1773621483159
+  },
+  {
+    "id": "aicm_d8a87f33daca6cd0365be81e4b809c5a",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "Grammar channel not found in context. Is the question about a specific tool or feature related to grammar within the current workspace, Sprachschule Duisburg?",
+    "created_at": 1773621488759
+  },
+  {
+    "id": "aicm_f94da5b28c567645a02cdd64b16b7d4a",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "yes",
+    "created_at": 1773621497032
+  },
+  {
+    "id": "aicm_c7e6405cb007c4d4085921e1bde15e31",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "There are no upcoming events on March 16, 2026.",
+    "created_at": 1773621500471
+  },
+  {
+    "id": "aicm_4b68cec48f54105dbc377229f3f8f40c",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "can you please provide me a1 exampractice plan ?",
+    "created_at": 1773621536025
+  },
+  {
+    "id": "aicm_01f6ec2c7e07b77a6cc2d690428f50ee",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "To create an A1 Exam Practice Plan, follow these steps:\n\n1. Review the course material for A1-Noon class.\n2. Identify areas where students need improvement based on recent assessments or quizzes.\n3. Create a schedule with specific dates and times for practice sessions.\n4. Assign relevant homework or exercises to reinforce learning.\n5. Monitor student progress and adjust the plan as needed.\n\nYou can also consider the following:\n• Review the upcoming calendar events, such as the classes scheduled for 2026-03-18.\n• Check the analytics snapshot for insights on student engagement and performance in A1-Noon class.\n• Consider setting reminders or notifications to ensure teachers stay on track with the plan.",
+    "created_at": 1773621547633
+  },
+  {
+    "id": "aicm_cae58b5d6a4064270d3bb2b84c7385a8",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "Can you please tell me about the course",
+    "created_at": 1773622185443
+  },
+  {
+    "id": "aicm_af6115e1bf49d0d99f6db90642e690af",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "The courses currently available in your workspace, Sprachschule Duisburg, are:\n• A1-Noon (classes)\n• A2-Evening (classes)\n• A2-Morning (classes)\n• B1-Morning (classes)\n• B2-Morning (classes)\n• C1-Evening (classes)",
+    "created_at": 1773622202523
+  },
+  {
+    "id": "aicm_c8a94dbdea6ae43c478ba80315524f81",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "can tell me is there any teachers seted for class A1-Noon ?",
+    "created_at": 1773622895765
+  },
+  {
+    "id": "aicm_0671de894f72a031370cef926c7f5712",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "There are no teachers assigned to Class A1 - Noon.",
+    "created_at": 1773622902430
+  },
+  {
+    "id": "aicm_aa329506d5a5215daffbdd31b61d27bf",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "as well for class A2?",
+    "created_at": 1773622912828
+  },
+  {
+    "id": "aicm_84ac989a4bf54a708511db030c88b03d",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "Attendance rate for class A2 is not available in the context. Can you please clarify which specific date or time frame you would like to know the attendance rate for class A2?",
+    "created_at": 1773622921316
+  },
+  {
+    "id": "aicm_dbd295685a7414d919cccf47aea298a0",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "i wanted to know about the class teacher of A2",
+    "created_at": 1773622953035
+  },
+  {
+    "id": "aicm_3bce6d1a0420d6ce1f44673bedfb084c",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "The class teacher for A2 is not specified in the provided context. Can you please clarify which class or group A2 refers to?",
+    "created_at": 1773622959887
+  },
+  {
+    "id": "aicm_a993e2677808aee2bf873eb89607c715",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "A2-Evening",
+    "created_at": 1773622977796
+  },
+  {
+    "id": "aicm_1661f18defa2aeb83f6d278e8fe2ba86",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "No events scheduled for A2-Evening on 2026-03-16.",
+    "created_at": 1773622984154
+  },
+  {
+    "id": "aicm_35f875803a80596701fa30508469c51f",
+    "conversation_id": "aic_0175dd431d3e9250e4af372aa502559c",
+    "role": "user",
+    "content": "Generate weekly admin report",
+    "created_at": 1773623049113
+  },
+  {
+    "id": "aicm_6b433a8f8c9cb60a8845920534d09d66",
+    "conversation_id": "aic_0175dd431d3e9250e4af372aa502559c",
+    "role": "assistant",
+    "content": "[AI error] fetch failed",
+    "created_at": 1773623049203
+  },
+  {
+    "id": "aicm_dcf1c4f327af0fbbc16b04bbe3a0434e",
+    "conversation_id": "aic_0175dd431d3e9250e4af372aa502559c",
+    "role": "user",
+    "content": "Tell me my school whole casses list",
+    "created_at": 1773623227152
+  },
+  {
+    "id": "aicm_d56903799c998d760039fc692f3e54ae",
+    "conversation_id": "aic_0175dd431d3e9250e4af372aa502559c",
+    "role": "assistant",
+    "content": "I'm not able to find any information about the whole classes list for your school. Can you please clarify what you mean by \"whole classes list\"? Are you referring to a specific class or group within the Lens workspace?",
+    "created_at": 1773623236940
+  },
+  {
+    "id": "aicm_a21bf8ca8fee5cf8700f2ccf405653f8",
+    "conversation_id": "aic_0175dd431d3e9250e4af372aa502559c",
+    "role": "user",
+    "content": "inside the school which classes are there",
+    "created_at": 1773623257376
+  },
+  {
+    "id": "aicm_35a2ee9f972cd94084d193587e7964cd",
+    "conversation_id": "aic_0175dd431d3e9250e4af372aa502559c",
+    "role": "assistant",
+    "content": "There are no classes listed in the context.\n\nCan you please clarify what you mean by \"classes\" - are you referring to specific courses or groups within the workspace?",
+    "created_at": 1773623261141
+  },
+  {
+    "id": "aicm_40028445d9f0c561b085710c0a6445c8",
+    "conversation_id": "aic_0175dd431d3e9250e4af372aa502559c",
+    "role": "user",
+    "content": "under classes is there any class chanel ?",
+    "created_at": 1773623285559
+  },
+  {
+    "id": "aicm_4461d1062b4bb08ab2abc45f18ae44b1",
+    "conversation_id": "aic_0175dd431d3e9250e4af372aa502559c",
+    "role": "assistant",
+    "content": "Yes, under Classes, you can find Class Channels. They are a way to communicate with specific classes or groups of students within the workspace.",
+    "created_at": 1773623288733
+  },
+  {
+    "id": "aicm_3667fe2515ea9df559bf5c10484184b6",
+    "conversation_id": "aic_0175dd431d3e9250e4af372aa502559c",
+    "role": "user",
+    "content": "provide me the list of class chanel inside this school",
+    "created_at": 1773623305090
+  },
+  {
+    "id": "aicm_40c96da81a864db6138a79852fe0c975",
+    "conversation_id": "aic_0175dd431d3e9250e4af372aa502559c",
+    "role": "assistant",
+    "content": "There are no classes or channels listed in the context. Can you please clarify what you mean by \"class channel\" so I can provide a more accurate answer?",
+    "created_at": 1773623308538
+  },
+  {
+    "id": "aicm_8348718235fe1fe24599b0fb5e22b41a",
+    "conversation_id": "aic_0175dd431d3e9250e4af372aa502559c",
+    "role": "user",
+    "content": "tell me which school admin i am",
+    "created_at": 1773623325896
+  },
+  {
+    "id": "aicm_0876945714f6dee31522834de679fa4a",
+    "conversation_id": "aic_0175dd431d3e9250e4af372aa502559c",
+    "role": "assistant",
+    "content": "You are the school admin with ID utm5n61xv.",
+    "created_at": 1773623327879
+  },
+  {
+    "id": "aicm_4ea04649c058d9b04ab832b972b8cf55",
+    "conversation_id": "aic_0175dd431d3e9250e4af372aa502559c",
+    "role": "user",
+    "content": "whtas my school name ?",
+    "created_at": 1773623339556
+  },
+  {
+    "id": "aicm_45a137fe25ed3abbe09cc45b6382b555",
+    "conversation_id": "aic_0175dd431d3e9250e4af372aa502559c",
+    "role": "assistant",
+    "content": "Your school name is Lens.\n\nThe workspace you are currently managing is also named \"Lens\", which matches the school's identity.",
+    "created_at": 1773623342315
+  },
+  {
+    "id": "aicm_3efed4a58e1711272b1f042e66e14d2d",
+    "conversation_id": "aic_0175dd431d3e9250e4af372aa502559c",
+    "role": "user",
+    "content": "so tell me the analystics of my school sammeries",
+    "created_at": 1773623360751
+  },
+  {
+    "id": "aicm_9b83e793d6668cb5e551a7e7a44f7ccd",
+    "conversation_id": "aic_0175dd431d3e9250e4af372aa502559c",
+    "role": "assistant",
+    "content": "Attendance rate is 0% and there are no attendance records for any students.\n\nHomework completion is also at 0%.",
+    "created_at": 1773623363587
+  },
+  {
+    "id": "aicm_4eaa824573410284d39e6bc607cd4209",
+    "conversation_id": "aic_0175dd431d3e9250e4af372aa502559c",
+    "role": "user",
+    "content": "is there any other history inside my school?",
+    "created_at": 1773623380400
+  },
+  {
+    "id": "aicm_150dbb5c21c03f5bd2e5c4760851d9c9",
+    "conversation_id": "aic_0175dd431d3e9250e4af372aa502559c",
+    "role": "assistant",
+    "content": "There is no historical data available for the selected date or previous dates within the current workspace \"Lens\". The attendance and payment summaries only show zero records, indicating that there are no existing data points to display.",
+    "created_at": 1773623384356
+  },
+  {
+    "id": "aicm_7aaf533a30e0c71fa4c4022596601aad",
+    "conversation_id": "aic_0175dd431d3e9250e4af372aa502559c",
+    "role": "user",
+    "content": "how many students and teacher are insid ethis school",
+    "created_at": 1773623413603
+  },
+  {
+    "id": "aicm_2ee46e8f0008b81ab35c16180118cac6",
+    "conversation_id": "aic_0175dd431d3e9250e4af372aa502559c",
+    "role": "assistant",
+    "content": "According to the workspace overview, there is:\n\n1 student\n0 teachers",
+    "created_at": 1773623419599
+  },
+  {
+    "id": "aicm_888daa01d78a1c35e97c8ec219f9da81",
+    "conversation_id": "aic_0175dd431d3e9250e4af372aa502559c",
+    "role": "user",
+    "content": "whats the students name",
+    "created_at": 1773623429137
+  },
+  {
+    "id": "aicm_e8a79d84dcb6bad7345359eb21bf1cba",
+    "conversation_id": "aic_0175dd431d3e9250e4af372aa502559c",
+    "role": "assistant",
+    "content": "There is no student information available in the context.\n\nCan you please clarify which student you are referring to?",
+    "created_at": 1773623435031
+  },
+  {
+    "id": "aicm_c436f53bd8a938b13f256d4c38f2e04e",
+    "conversation_id": "aic_0175dd431d3e9250e4af372aa502559c",
+    "role": "user",
+    "content": "can you provide me the list of the students",
+    "created_at": 1773623446946
+  },
+  {
+    "id": "aicm_5c964dfbb564b0edbdab9e5e7c3c2cd9",
+    "conversation_id": "aic_0175dd431d3e9250e4af372aa502559c",
+    "role": "assistant",
+    "content": "There are currently 1 student enrolled in the Lens workspace.",
+    "created_at": 1773623449173
+  },
+  {
+    "id": "aicm_43af22442b0c1fec8b4bd7757f5a304c",
+    "conversation_id": "aic_0175dd431d3e9250e4af372aa502559c",
+    "role": "user",
+    "content": "i need the name of the students",
+    "created_at": 1773623461321
+  },
+  {
+    "id": "aicm_0e1b0bbf355ff8b55cbf9b9182e65e61",
+    "conversation_id": "aic_0175dd431d3e9250e4af372aa502559c",
+    "role": "assistant",
+    "content": "There are no student names available in the context. Can you please clarify if you want to see a list of all students or if there's something specific you're looking for?",
+    "created_at": 1773623465293
+  },
+  {
+    "id": "aicm_52d9b3ab4fcef2999901422c95d5ff46",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "Can you please tell me about the course",
+    "created_at": 1773624725696
+  },
+  {
+    "id": "aicm_a644cbf887533f144fcb9dfb62238528",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "Can you please tell me about the course",
+    "created_at": 1773625066520
+  },
+  {
+    "id": "aicm_655ea3193f81c56688949e7421fddcc0",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "Can you please tell me about the course",
+    "created_at": 1773625465705
+  },
+  {
+    "id": "aicm_2446654603a6923d4a5b283408eaae1c",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "No matching records found for \"course\" in the current context. Could you clarify which specific course or group you are referring to?",
+    "created_at": 1773625477242
+  },
+  {
+    "id": "aicm_e009544e6488c404a903bce40c816183",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "how many classes inside this school?",
+    "created_at": 1773625500474
+  },
+  {
+    "id": "aicm_514b3fa28cdfbae28d69e0594306da8c",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "There are 26 groups inside the school, but it's unclear how many of these are classes. Can you clarify if you're looking for a specific type of group (e.g., class, club, exam)?",
+    "created_at": 1773625506147
+  },
+  {
+    "id": "aicm_2d883974f0536334d2c97aa21812182b",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "tell me the class list",
+    "created_at": 1773625515982
+  },
+  {
+    "id": "aicm_dbe99a737bb984f9fbb2860518fef265",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "The class groups in this workspace are:\nA1-Noon\nA2-Evening\nA2-Morning\nB1-Morning\nB2-Morning\nC1-Evening\nC2-Morning",
+    "created_at": 1773625516362
+  },
+  {
+    "id": "aicm_d3708751c58e39d800fe3218bd146277",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "so how many students are there inside the classes",
+    "created_at": 1773625528929
+  },
+  {
+    "id": "aicm_025e5ff28b6785415af4e21c901f0399",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "Students: 1",
+    "created_at": 1773625529047
+  },
+  {
+    "id": "aicm_1d8e1705ab5f55b2b9555ebeef3cd653",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "is there any teachers ?",
+    "created_at": 1773625538923
+  },
+  {
+    "id": "aicm_919e42e049422a022d731c827df2378e",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "No matching records found for teachers in the context.\n• Groups: 26\n• Students: 1\n• Admins: 1",
+    "created_at": 1773625546298
+  },
+  {
+    "id": "aicm_c37dc4b39d5c156809fd4202b735a127",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "tell me how many tasks seted inside the calander",
+    "created_at": 1773625566977
+  },
+  {
+    "id": "aicm_cc0b49c1dcd4f81d2560a74f0d4cf682",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "No matching records found for calendar events on 2026-03-16.\n\nHowever, I can suggest checking the Workspace overview or Calendar view for more information.",
+    "created_at": 1773625574969
+  },
+  {
+    "id": "aicm_c5a3a409e7b4d95b5dcd1b3933757698",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "inside the classes there are calander insid ethe schol",
+    "created_at": 1773625589471
+  },
+  {
+    "id": "aicm_fa598f62cf60402af2b74bce540fcf38",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "You're referring to calendar events within specific classes. To view or manage class calendars, you'll need to navigate to the relevant class channel.\n\nTo access a class channel:\n1. Go to the \"Classes\" tab in your workspace.\n2. Select the desired class from the list.\n3. Click on the class name to enter its channel.\n4. Look for the calendar icon or section within the class channel.\n\nPlease note that you may need to have permission to view or manage specific classes, depending on your role and access level.\n\nWould you like more information on managing class calendars or accessing a specific class?",
+    "created_at": 1773625600940
+  },
+  {
+    "id": "aicm_4e8edf2b428b2c52db30c8807ad540bd",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "how can i created the classes",
+    "created_at": 1773625629864
+  },
+  {
+    "id": "aicm_e313953741f32db15a26c972c376bb28",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "To create a class, follow these steps:\n1. Go to the \"Groups\" tab.\n2. Click on the \"+\" button to add a new group.\n3. Fill in the required details for the new class, such as name and description.\n4. Set the type of group to \"Class\".\n5. Save the changes.\n\nPlease note that you need to have the necessary permissions to create groups in your workspace. If you're unsure about any step or require further assistance, feel free to ask!",
+    "created_at": 1773625639667
+  },
+  {
+    "id": "aicm_01cbd677b0fc7b23dd3428e51d976f22",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "can you create for me the classes ?",
+    "created_at": 1773625665941
+  },
+  {
+    "id": "aicm_e09e3dd010489559525ca6a68e55ef9c",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "To create new classes, follow these steps:\n1. Go to the \"Groups\" tab in your workspace.\n2. Click on the \"+\" button to add a new group.\n3. Select \"Class\" as the group type and fill in the required details (name, description, etc.).\n4. Set up the class schedule and assign teachers or administrators as needed.\n\nIf you need more detailed instructions or have specific questions about creating classes, feel free to ask!",
+    "created_at": 1773625674520
+  },
+  {
+    "id": "aicm_8651e7d7c6bc18975b0bbdb02df46f0c",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "can you create the calander event for me in 19.03.2026 for exam",
+    "created_at": 1773625694690
+  },
+  {
+    "id": "aicm_5b8a5df2a855783b6b59c2a2b8282676",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "You need to provide more information about the calendar event, such as the topic or grade.\n\nWhat is the topic/grade of the exam on 19.03.2026?",
+    "created_at": 1773625702478
+  },
+  {
+    "id": "aicm_73f2845d6525e61543ab0a85a167f400",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "A1",
+    "created_at": 1773625722272
+  },
+  {
+    "id": "aicm_6d60c215866bb977ca610df5a1f6a5fa",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "To create a short quiz with answers, I need to know the topic or grade you'd like to focus on. Can you please specify that for me?",
+    "created_at": 1773625726011
+  },
+  {
+    "id": "aicm_2ff22bdf7cff8b51c8f8e9c129572005",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "A1 grammatic",
+    "created_at": 1773625737884
+  },
+  {
+    "id": "aicm_aaa559446ffdf88c0931b8e177c63203",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "No matching records found for \"A1-Nood\" or \"A1 grammatic\". Please clarify which class or group you are referring to.\n\n(Note: I'll wait for your response before proceeding with the task of creating a short quiz.)",
+    "created_at": 1773625742695
+  },
+  {
+    "id": "aicm_28a131afffa809fb86bd68a74ecdd60d",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "preperation for A1 writing exam",
+    "created_at": 1773625762033
+  },
+  {
+    "id": "aicm_a1e08bdf428f0e9bcf2e97ebce58734f",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "I found data related to the A1 Writing Exam.\n\nTo create a short quiz with answers, I need more information about the topic or grade you'd like to focus on within the A1 Writing Exam. Can you please specify which aspect of the A1 Writing Exam you'd like to prepare for?",
+    "created_at": 1773625768464
+  },
+  {
+    "id": "aicm_ae882a438ef8bb21bb758880d2735121",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "can you provide me the exam plan for A1?",
+    "created_at": 1773625785259
+  },
+  {
+    "id": "aicm_4cfd9d34fa9c51ae5a14968949a73daf",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "I could not find upcoming exam items in your visible scope.\nI can still create a general exam study plan if you tell me the subject or exam name.",
+    "created_at": 1773625785687
+  },
+  {
+    "id": "aicm_f57246dc33fe891cbfeaeacf83141803",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "can you provide me the wordmeaning of german",
+    "created_at": 1773625808504
+  },
+  {
+    "id": "aicm_047ca4f5a42cca3bc4d50d971f0f3e5d",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "The word \"Wortbedeutung\" is German for \"word meaning\".",
+    "created_at": 1773625814648
+  },
+  {
+    "id": "aicm_de1cd3eb2f335655546c745fcf971695",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "tell me bangla of the word , schreiben",
+    "created_at": 1773625831261
+  },
+  {
+    "id": "aicm_24f4a6abaf3bf7acecd37baadd55ac9b",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "You can find homework assignments for A1-Noon class by going to the \"Homework\" tab in the workspace menu, then selecting the specific date and class.\n\nTo translate the word \"schreiben\" into Bangla, I need more context or information about which translation service you would like to use.",
+    "created_at": 1773625837895
+  },
+  {
+    "id": "aicm_53383f8c5987bde2084e9f81222db2cd",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "user",
+    "content": "whats meaning of schreiben",
+    "created_at": 1773625851341
+  },
+  {
+    "id": "aicm_681428cb9c87ac2cdb62b03f14078dfd",
+    "conversation_id": "aic_6f86605385de37feee40c3d18bf548de",
+    "role": "assistant",
+    "content": "You can find homework assignments for class A1-Noon by checking the \"Homework\" section in the school platform.\n\nTo view homework, follow these steps:\n1. Go to the \"Classes\" tab.\n2. Select class A1-Noon.\n3. Click on the \"Homework\" button.\n\nThe meaning of \"schreiben\" is a German verb that translates to \"to write\".",
+    "created_at": 1773625858784
+  },
+  {
+    "id": "aicm_6d49266dcff4abf194cd8520a02c40a9",
+    "conversation_id": "aic_ff6eba892f5cbf4913df8a40c6d0d39a",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774303772096
+  },
+  {
+    "id": "aicm_098ace97b7d676a362c981432f874ab9",
+    "conversation_id": "aic_347103502fd847a4a5e6d0ecc39f2502",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774303775809
+  },
+  {
+    "id": "aicm_5ef5c07d71d374073edecb93a898c62f",
+    "conversation_id": "aic_347103502fd847a4a5e6d0ecc39f2502",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774303775809
+  },
+  {
+    "id": "aicm_852c10d97dfa8afb2dc1205584ce47f2",
+    "conversation_id": "aic_347103502fd847a4a5e6d0ecc39f2502",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774303775809
+  },
+  {
+    "id": "aicm_c2f00600669b5907a7acd11aa83c8ea6",
+    "conversation_id": "aic_8dac91bcaa4504206f63e14a340ad9ae",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774303778456
+  },
+  {
+    "id": "aicm_bc985d4e30c47e34a3ba640da0441233",
+    "conversation_id": "aic_8dac91bcaa4504206f63e14a340ad9ae",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774303778456
+  },
+  {
+    "id": "aicm_5b30e9034c25d56d1558d7f19f453467",
+    "conversation_id": "aic_8dac91bcaa4504206f63e14a340ad9ae",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774303778456
+  },
+  {
+    "id": "aicm_fdd2205a0464b0c5138978b8e0b00458",
+    "conversation_id": "aic_8dac91bcaa4504206f63e14a340ad9ae",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774303778456
+  },
+  {
+    "id": "aicm_73a56e756092b29203f9308a4121f4c5",
+    "conversation_id": "aic_8dac91bcaa4504206f63e14a340ad9ae",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774303778456
+  },
+  {
+    "id": "aicm_d31080e5cdb7a461d05cc7962a757453",
+    "conversation_id": "aic_8dac91bcaa4504206f63e14a340ad9ae",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774303778456
+  },
+  {
+    "id": "aicm_9148b5cfbd270a0d667cb3615fe5d4fe",
+    "conversation_id": "aic_8dac91bcaa4504206f63e14a340ad9ae",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774303778456
+  },
+  {
+    "id": "aicm_1b86a983589173c20dc7238232547d80",
+    "conversation_id": "aic_e2ebfc7e2b4071e1b7b0451a75ef7a10",
+    "role": "system",
+    "content": "Session started: scenario=networking, mode=ptt",
+    "created_at": 1774304041061
+  },
+  {
+    "id": "aicm_1aa057dd960a7db0571d58064acd653e",
+    "conversation_id": "aic_fb49a43d576e2326c4a5064c519d8190",
+    "role": "system",
+    "content": "Session started: scenario=emergency, mode=ptt",
+    "created_at": 1774304055072
+  },
+  {
+    "id": "aicm_2a060bab394eb0b7bdef352497856492",
+    "conversation_id": "aic_50f08b6dc23280216a2913a05268b39d",
+    "role": "system",
+    "content": "Session started: scenario=wellness, mode=ptt",
+    "created_at": 1774304548449
+  },
+  {
+    "id": "aicm_c076d139a49a7c352c47d96475813755",
+    "conversation_id": "aic_50f08b6dc23280216a2913a05268b39d",
+    "role": "system",
+    "content": "Session started: scenario=wellness, mode=ptt",
+    "created_at": 1774304548449
+  },
+  {
+    "id": "aicm_c13c35ee30b862f7183415cd7305548a",
+    "conversation_id": "aic_d77f087c0d8b0722431c9b188a5ecee7",
+    "role": "system",
+    "content": "Session started: scenario=wellness, mode=ptt",
+    "created_at": 1774304551059
+  },
+  {
+    "id": "aicm_16ffc4af6bddda6b144ef5adddf3e0f5",
+    "conversation_id": "aic_d77f087c0d8b0722431c9b188a5ecee7",
+    "role": "system",
+    "content": "Session started: scenario=wellness, mode=ptt",
+    "created_at": 1774304551059
+  },
+  {
+    "id": "aicm_48d6b22c9ad054950eadf3189404d5c2",
+    "conversation_id": "aic_d77f087c0d8b0722431c9b188a5ecee7",
+    "role": "system",
+    "content": "Session started: scenario=wellness, mode=ptt",
+    "created_at": 1774304551059
+  },
+  {
+    "id": "aicm_4ecb963fed6b98dde574542707ab84d6",
+    "conversation_id": "aic_d77f087c0d8b0722431c9b188a5ecee7",
+    "role": "system",
+    "content": "Session started: scenario=wellness, mode=ptt",
+    "created_at": 1774304551059
+  },
+  {
+    "id": "aicm_c6f41b4b5704a5c3eace08e005d54cfb",
+    "conversation_id": "aic_d77f087c0d8b0722431c9b188a5ecee7",
+    "role": "system",
+    "content": "Session started: scenario=wellness, mode=ptt",
+    "created_at": 1774304551059
+  },
+  {
+    "id": "aicm_d0be044a862506b6f814333981c2f90c",
+    "conversation_id": "aic_d6ccca1454d896b4c3832424dc051067",
+    "role": "system",
+    "content": "Session started: scenario=exam, mode=ptt",
+    "created_at": 1774304751159
+  },
+  {
+    "id": "aicm_4a58749f9d4cea171d7376f6a4a7d60f",
+    "conversation_id": "aic_5ff267c14a85239e6205fd4d0ca94b18",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774306387348
+  },
+  {
+    "id": "aicm_915f87d2d7637f2f5b06fcd79a3958ee",
+    "conversation_id": "aic_187dcb11137445b598e1bb00bcc38dba",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774306391317
+  },
+  {
+    "id": "aicm_b8bc258c7da7682ce388c02491eacf04",
+    "conversation_id": "aic_187dcb11137445b598e1bb00bcc38dba",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774306391317
+  },
+  {
+    "id": "aicm_23d2979647b131e103245deaceebd614",
+    "conversation_id": "aic_e50ce6b73302807bb4753522d88dbea5",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774306834835
+  },
+  {
+    "id": "aicm_8fc3a5d2f365ca95f1fa0221417d4c4b",
+    "conversation_id": "aic_2cb6e407e66fc0ea52afb2677fd251ad",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774306837728
+  },
+  {
+    "id": "aicm_2e7043496d3c53967c49c85462a4eeb2",
+    "conversation_id": "aic_f6ce64edb141ebde8d5e480c78994e61",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774306921188
+  },
+  {
+    "id": "aicm_bed4a9ed1c49c198faef422da00feaa9",
+    "conversation_id": "aic_2a5035c4faa75ba5992b93f9edd612de",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774306938530
+  },
+  {
+    "id": "aicm_2aaadd7abf45ca0e7182cc8612744e41",
+    "conversation_id": "aic_7d8bd042d380f04dbb22f1f58acee825",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774306947219
+  },
+  {
+    "id": "aicm_0c6552616a2ae4947d3f42b2ab154b2c",
+    "conversation_id": "aic_54a063a8b2bee46314b236684be878b1",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774306955630
+  },
+  {
+    "id": "aicm_f522c3f24601c763b687be087dfe33d1",
+    "conversation_id": "aic_e7b82798d4ab034ffdf4f98348a9de1b",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774306985340
+  },
+  {
+    "id": "aicm_eec4ea70e15a99eb751f6717c6b6f0ec",
+    "conversation_id": "aic_4c3132a8df28a9a58a640ea33dce684e",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774306990180
+  },
+  {
+    "id": "aicm_cf72820947caf9a96fcfd2cc38523010",
+    "conversation_id": "aic_97fdde4bf7325e66b4a9b223e9e6a969",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774307496140
+  },
+  {
+    "id": "aicm_252c066c4ea48b9afb4ae5d5beffe3e5",
+    "conversation_id": "aic_81d80f8ff8cf8968ab94c512cc990d43",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774307510820
+  },
+  {
+    "id": "aicm_9f1ead5a6631815a6dad4c8affd99d33",
+    "conversation_id": "aic_d505bb5996474e7ebf030699fcc38739",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774307620333
+  },
+  {
+    "id": "aicm_42b5cf8a165ced7d1e3dc33e397fcc18",
+    "conversation_id": "aic_4917614dab2152c0bdebe319d62d1006",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774307854650
+  },
+  {
+    "id": "aicm_fa3337b49aeb1d8bfc5055e251070211",
+    "conversation_id": "aic_21ce61c4a1f4835b9c4584e46c0a8afc",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774308165949
+  },
+  {
+    "id": "aicm_da176e7d1ce32f911ca094b37aef658c",
+    "conversation_id": "aic_c6db06a881faf7e1bc49713216d14b35",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774308197716
+  },
+  {
+    "id": "aicm_14dda2787caea06185997a251f6a59d9",
+    "conversation_id": "aic_3dfd05c65edfe3e5422cd7ccb5b8578f",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774309188622
+  },
+  {
+    "id": "aicm_c2f19bcd2227db6a8e75911e06a4189f",
+    "conversation_id": "aic_3dfd05c65edfe3e5422cd7ccb5b8578f",
+    "role": "assistant",
+    "content": "Hello! How can I",
+    "created_at": 1774309194293
+  },
+  {
+    "id": "aicm_a2a3f26a9c1f9dbb027f06211a046880",
+    "conversation_id": "aic_3dfd05c65edfe3e5422cd7ccb5b8578f",
+    "role": "assistant",
+    "content": "Guten Morgen! Wie kann ich Ihnen heute helfen?",
+    "created_at": 1774309196925
+  },
+  {
+    "id": "aicm_a7b730143daf9f9262ad5278ca8b7358",
+    "conversation_id": "aic_7f1d25e2ec65af525da8c1096a23d658",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774309390638
+  },
+  {
+    "id": "aicm_bc6a361aa53097a8104ce10d1be45c18",
+    "conversation_id": "aic_7f1d25e2ec65af525da8c1096a23d658",
+    "role": "user",
+    "content": "Guten Morgen.",
+    "created_at": 1774309401472
+  },
+  {
+    "id": "aicm_7a877be23949746189ae263972fb4f8b",
+    "conversation_id": "aic_7f1d25e2ec65af525da8c1096a23d658",
+    "role": "assistant",
+    "content": "Guten Morgen! Wie kann ich dir heute helfen?",
+    "created_at": 1774309401472
+  },
+  {
+    "id": "aicm_ffbbac5436a77e32f71a496532419da1",
+    "conversation_id": "aic_8ab349ecd29df12f2fdebaac6c6b759d",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1774309822913
+  },
+  {
+    "id": "aicm_df52e2ea80d30feab0c83ed3eee16bb8",
+    "conversation_id": "aic_8ab349ecd29df12f2fdebaac6c6b759d",
+    "role": "user",
+    "content": "Hallo schönen guten Tag.",
+    "created_at": 1774309831751
+  },
+  {
+    "id": "aicm_405212bf9f83f6ba551a7516c4fa6c9e",
+    "conversation_id": "aic_8ab349ecd29df12f2fdebaac6c6b759d",
+    "role": "assistant",
+    "content": "Guten Tag! Wie kann ich Ihnen heute helfen?",
+    "created_at": 1774309831751
+  },
+  {
+    "id": "aicm_128701dd95847899d84efdabd75fc1cb",
+    "conversation_id": "aic_8ab349ecd29df12f2fdebaac6c6b759d",
+    "role": "user",
+    "content": "Wiekanisch an interminferen waren.",
+    "created_at": 1774309844733
+  },
+  {
+    "id": "aicm_ec3fbe8ceabbfe5dbd265aec9e4f5528",
+    "conversation_id": "aic_8ab349ecd29df12f2fdebaac6c6b759d",
+    "role": "assistant",
+    "content": "Ja, klar! Ein Inferent ist ein Gerät, das elektromagnetische Wellen aussendet, um Bewegungen zu erkennen. Es wird häufig in automatischen Türen, Sicherheitssystemen oder in der Hausautomation eingesetzt. Der Infrarotsensor erkennt die Wärmestrahlung von Körpern und registriert so jede Bewegung. Haben Sie vor, solch ein Gerät einzusetzen, oder möchten Sie mehr darüber erfahren?",
+    "created_at": 1774309845418
+  },
+  {
+    "id": "aicm_c496fe3129b0be176258756f6dc2f3e9",
+    "conversation_id": "aic_b0369c871995768e7ad9e38e25fd7f5b",
+    "role": "system",
+    "content": "Session started: scenario=restaurant, mode=ptt",
+    "created_at": 1774309887766
+  },
+  {
+    "id": "aicm_c84d53d0ab80dcc38364533c2894afc9",
+    "conversation_id": "aic_b0369c871995768e7ad9e38e25fd7f5b",
+    "role": "user",
+    "content": "Hallo, schönen guten Tag. Ich hätte gerne ein Pizza bestellen.",
+    "created_at": 1774309899067
+  },
+  {
+    "id": "aicm_7f52b459219d1f27385634df7af5405b",
+    "conversation_id": "aic_b0369c871995768e7ad9e38e25fd7f5b",
+    "role": "assistant",
+    "content": "Hallo! Natürlich, ich helfe Ihnen gerne dabei, eine Pizza zu bestellen. Mögen Sie eine spezielle Sorte oder Zutaten? Zum Beispiel Margherita, Salami oder Vegetarisch? Und möchten Sie noch etwas dazu trinken?",
+    "created_at": 1774309899067
+  },
+  {
+    "id": "aicm_76593da550119a679bd6af04e3aa611e",
+    "conversation_id": "aic_b0369c871995768e7ad9e38e25fd7f5b",
+    "role": "user",
+    "content": "Ja, ich hätte gerne einmal Cola, bitte.",
+    "created_at": 1774309919722
+  },
+  {
+    "id": "aicm_96f8f93030d0bf751ac0d2dab3f4d88a",
+    "conversation_id": "aic_b0369c871995768e7ad9e38e25fd7f5b",
+    "role": "assistant",
+    "content": "Alles klar! Eine Pizza und eine Cola. Möchten Sie noch etwas dazu? Zum Beispiel einen Salat oder vielleicht ein Dessert? Und möchten Sie die Pizza mit dünnem oder dickem Teig haben?",
+    "created_at": 1774309919722
+  },
+  {
+    "id": "aicm_06b67e0f9e609fefd3e861f898705cbc",
+    "conversation_id": "aic_b0369c871995768e7ad9e38e25fd7f5b",
+    "role": "user",
+    "content": "همزیفلیش عربیشونما؟",
+    "created_at": 1774309935535
+  },
+  {
+    "id": "aicm_e431dabb52f2f2145aeecae28ad4cfed",
+    "conversation_id": "aic_b0369c871995768e7ad9e38e25fd7f5b",
+    "role": "assistant",
+    "content": "Leider bieten wir keine arabische Schawarma an. Aber vielleicht möchten Sie etwas anderes probieren? Wir haben viele verschiedene Pizzasorten, Pasta oder Salate. Was denken Sie?",
+    "created_at": 1774309935535
+  },
+  {
+    "id": "aicm_9a095620f6559dc43389a7c5fe3f5bfc",
+    "conversation_id": "aic_b0369c871995768e7ad9e38e25fd7f5b",
+    "role": "user",
+    "content": "dann nehme ich lieber Salat.",
+    "created_at": 1774309950776
+  },
+  {
+    "id": "aicm_92d66ca0e09b27d8df1ec284e5f072b8",
+    "conversation_id": "aic_b0369c871995768e7ad9e38e25fd7f5b",
+    "role": "assistant",
+    "content": "Ein Salat ist eine ausgezeichnete Wahl! Möchten Sie einen gemischten Salat, einen Caesar-Salat oder vielleicht einen griechischen Salat? Und möchten Sie ein spezielles Dressing dazu?",
+    "created_at": 1774309950776
+  },
+  {
+    "id": "aicm_5aa94fdd26680676c42f9881d4be00ae",
+    "conversation_id": "aic_b0369c871995768e7ad9e38e25fd7f5b",
+    "role": "user",
+    "content": "Nein, danke. Das was.",
+    "created_at": 1774309966654
+  },
+  {
+    "id": "aicm_1f17c4e821f11509bb7ba9d44d6070ff",
+    "conversation_id": "aic_b0369c871995768e7ad9e38e25fd7f5b",
+    "role": "assistant",
+    "content": "Gern geschehen! Ihre Bestellung besteht also aus einer Pizza, einer Cola und einem Salat. Ich hoffe, es schmeckt Ihnen gut! Wenn Sie noch Fragen haben oder eine weitere Bestellung aufgeben möchten, lassen Sie es mich wissen. Guten Appetit!",
+    "created_at": 1774309966654
+  },
+  {
+    "id": "aicm_2e9e81196f6d918ab3c1ab03b8ea4967",
+    "conversation_id": "aic_b0369c871995768e7ad9e38e25fd7f5b",
+    "role": "user",
+    "content": "Em bi fildan",
+    "created_at": 1774309985370
+  },
+  {
+    "id": "aicm_7249a56a64fff8570cbd69f02feb7d32",
+    "conversation_id": "aic_b0369c871995768e7ad9e38e25fd7f5b",
+    "role": "assistant",
+    "content": "Lassen Sie mich die Gesamtsumme für Ihre Bestellung berechnen. Die Kosten für eine Pizza variieren je nach Sorte, aber nehmen wir an, sie kostet etwa 10 Euro. Eine Cola kostet ungefähr 2 Euro und der Salat etwa 5 Euro. Insgesamt wären das also rund 17 Euro.",
+    "created_at": 1774309985370
+  },
+  {
+    "id": "aicm_61e78eced774c1b1958accd3cc47ba99",
+    "conversation_id": "aic_b0369c871995768e7ad9e38e25fd7f5b",
+    "role": "user",
+    "content": "Kann man mit Karte bezahlen oder muss man bar bezahlen?",
+    "created_at": 1774310009837
+  },
+  {
+    "id": "aicm_757a4d6965509ad7820d0a7982d3edf2",
+    "conversation_id": "aic_b0369c871995768e7ad9e38e25fd7f5b",
+    "role": "assistant",
+    "content": "In der Regel können Sie sowohl mit Karte als auch bar bezahlen. Die meisten Restaurants und Lieferdienste bieten die Möglichkeit, mit Kredit- oder Debitkarte zu zahlen. Am besten erkundigen Sie sich direkt bei dem Restaurant oder Lieferdienst, bei dem Sie bestellen, um sicherzugehen, welche Zahlungsmethoden akzeptiert werden.",
+    "created_at": 1774310009837
+  },
+  {
+    "id": "aicm_bda0fb4dcd426ff14b59e79ec06c9c0a",
+    "conversation_id": "aic_b0369c871995768e7ad9e38e25fd7f5b",
+    "role": "user",
+    "content": "Ich danke Ihnen, einen schönen Tag noch.",
+    "created_at": 1774310035194
+  },
+  {
+    "id": "aicm_de41efe4d8ebd89e963bc5416e3b4942",
+    "conversation_id": "aic_b0369c871995768e7ad9e38e25fd7f5b",
+    "role": "assistant",
+    "content": "Gern geschehen! Ich wünsche Ihnen auch einen schönen Tag! Wenn Sie noch Fragen haben oder Hilfe benötigen, lassen Sie es mich wissen. Alles Gute!",
+    "created_at": 1774310039534
+  },
+  {
+    "id": "aicm_a4a12f5c33e908a7dab58d60e345a049",
+    "conversation_id": "aic_7fdc26094e18092df194219a399107df",
+    "role": "system",
+    "content": "Session started: scenario=restaurant, mode=ptt",
+    "created_at": 1774311236740
+  },
+  {
+    "id": "aicm_252e32b6869465fee6d8f3396a4e828d",
+    "conversation_id": "aic_7fdc26094e18092df194219a399107df",
+    "role": "assistant",
+    "content": "Guten Tag! Willkommen im Restaurant. Möchten Sie hier essen oder zum Mitnehmen bestellen?",
+    "created_at": 1774311244178
+  },
+  {
+    "id": "aicm_8d907c86aae2f32ad733d5f52317577a",
+    "conversation_id": "aic_7fdc26094e18092df194219a399107df",
+    "role": "user",
+    "content": "Hello, how are you?",
+    "created_at": 1774311246843
+  },
+  {
+    "id": "aicm_cc44a98e843c535a18a23f98312f4fa2",
+    "conversation_id": "aic_7fdc26094e18092df194219a399107df",
+    "role": "user",
+    "content": "Is hetegene summitneim.",
+    "created_at": 1774311255719
+  },
+  {
+    "id": "aicm_8a5ff70ef74d25d89aec5503247c4269",
+    "conversation_id": "aic_7fdc26094e18092df194219a399107df",
+    "role": "assistant",
+    "content": "Natürlich, kein Problem. Haben Sie schon eine Idee, was Sie bestellen möchten? Unsere Speisekarte hat eine Auswahl an Vorspeisen, Hauptgerichten und Desserts.",
+    "created_at": 1774311255719
+  },
+  {
+    "id": "aicm_b6f09db0f39c155a2e753d5aae2e92ac",
+    "conversation_id": "aic_7fdc26094e18092df194219a399107df",
+    "role": "assistant",
+    "content": "Sehr gerne. Wir haben heute eine Auswahl an leckeren Gerichten. Zum Beispiel unsere berühmte Tomatensuppe als Vorspeise für 4 Euro. Als Hauptgericht empfehlen wir unseren klassischen Wiener Schnitzel mit Kartoffelsalat für 12 Euro. Und als Dessert hätten wir einen Apfelstrudel mit Vanilleeis für 5 Euro. Was darf es denn für Sie sein?",
+    "created_at": 1774311267386
+  },
+  {
+    "id": "aicm_4fe7355608f4ed92bcfd4e97d1d0c0bd",
+    "conversation_id": "aic_7fdc26094e18092df194219a399107df",
+    "role": "user",
+    "content": "Ich hätte gerne aber einen Pizza bestellen.",
+    "created_at": 1774311295273
+  },
+  {
+    "id": "aicm_50abad8ad3b4564fd088ea1624774a43",
+    "conversation_id": "aic_7fdc26094e18092df194219a399107df",
+    "role": "assistant",
+    "content": "Natürlich, wir haben auch eine feine Auswahl an Pizzen. Unsere Margherita kostet 8 Euro, und die Pizza Salami kostet 10 Euro. Welche Pizza möchten Sie denn gerne?",
+    "created_at": 1774311295273
+  },
+  {
+    "id": "aicm_470ecc19936ba999f82e99c048f78b8e",
+    "conversation_id": "aic_7fdc26094e18092df194219a399107df",
+    "role": "user",
+    "content": "Is hetegena pizza Margherita abavit broccoli.",
+    "created_at": 1774311312702
+  },
+  {
+    "id": "aicm_50a597e6f38fe3374524346cffbc472d",
+    "conversation_id": "aic_7fdc26094e18092df194219a399107df",
+    "role": "assistant",
+    "content": "Eine Pizza Margherita mit Brokkoli – das klingt lecker! Ich notiere das für Sie. Möchten Sie noch etwas dazu, vielleicht ein Getränk?",
+    "created_at": 1774311312702
+  },
+  {
+    "id": "aicm_6c4c865d0f1d3a495004a48bbd53916a",
+    "conversation_id": "aic_7fdc26094e18092df194219a399107df",
+    "role": "user",
+    "content": "Ist hätte gerne ein Streit haben.",
+    "created_at": 1774311326556
+  },
+  {
+    "id": "aicm_9020ec45f2e3d019614b0a544a5ef34a",
+    "conversation_id": "aic_7fdc26094e18092df194219a399107df",
+    "role": "assistant",
+    "content": "Ja, wir haben verschiedene Getränke. Zum Beispiel Mineralwasser für 2 Euro, Apfelschorle für 3 Euro oder eine Cola für 2,50 Euro. Was darf es sein?",
+    "created_at": 1774311326556
+  },
+  {
+    "id": "aicm_896efb7ea9b98ecf495bb99b4fe6391b",
+    "conversation_id": "aic_7fdc26094e18092df194219a399107df",
+    "role": "user",
+    "content": "Dann lieber nehme ich Quilbasa.",
+    "created_at": 1774311341837
+  },
+  {
+    "id": "aicm_51aca8826a206dde4d9ae4276dbe2c88",
+    "conversation_id": "aic_7fdc26094e18092df194219a399107df",
+    "role": "assistant",
+    "content": "Alles klar, eine Flasche Mineralwasser. Ich fasse Ihre Bestellung zusammen: eine Pizza Margherita mit Brokkoli und eine Flasche Mineralwasser. Möchten Sie noch etwas hinzufügen oder ist das alles?",
+    "created_at": 1774311341837
+  },
+  {
+    "id": "aicm_26bb476ded4ee2bafa2d2e7a911a2c85",
+    "conversation_id": "aic_7fdc26094e18092df194219a399107df",
+    "role": "user",
+    "content": "Yeah, that was Alice.",
+    "created_at": 1774311358601
+  },
+  {
+    "id": "aicm_783660f906d74f6c08ac3075c9d8232b",
+    "conversation_id": "aic_7fdc26094e18092df194219a399107df",
+    "role": "assistant",
+    "content": "Perfekt, dann ist Ihre Bestellung jetzt komplett. Sie bekommen Ihre Pizza Margherita mit Brokkoli und das Mineralwasser zum Mitnehmen. Die Gesamtsumme beträgt 18 Euro. Möchten Sie bar bezahlen oder mit Karte?",
+    "created_at": 1774311358842
+  },
+  {
+    "id": "aicm_6eefb4418bf9acae6d272e2eb6480120",
+    "conversation_id": "aic_7fdc26094e18092df194219a399107df",
+    "role": "user",
+    "content": "Wie ist er denn mit Karte bezahlen?",
+    "created_at": 1774311376354
+  },
+  {
+    "id": "aicm_a19efc2abc1b054719434f849e7fd8a1",
+    "conversation_id": "aic_7fdc26094e18092df194219a399107df",
+    "role": "assistant",
+    "content": "Alles klar, dann bezahlen Sie bitte an der Kasse mit Karte. Ich wünsche Ihnen einen guten Appetit und einen schönen Tag!",
+    "created_at": 1774311376354
+  },
+  {
+    "id": "aicm_1236dddc7d8a2890f274f3d4aadd15c2",
+    "conversation_id": "aic_7fdc26094e18092df194219a399107df",
+    "role": "user",
+    "content": "Wünsche Ihnen auch tschüss.",
+    "created_at": 1774311388921
+  },
+  {
+    "id": "aicm_daf73048a6c6ddee5a091cae3b04a5ec",
+    "conversation_id": "aic_7fdc26094e18092df194219a399107df",
+    "role": "assistant",
+    "content": "Vielen Dank! Wenn Sie noch etwas brauchen, lassen Sie es mich wissen. Einen schönen Tag noch!",
+    "created_at": 1774311388921
+  },
+  {
+    "id": "aicm_bf55e882c3e225bfcd89840481f0a7a6",
+    "conversation_id": "aic_13389a8add131c0a5f6f7d3f0b8620ec",
+    "role": "system",
+    "content": "Session started: scenario=travel, mode=ptt",
+    "created_at": 1774311414401
+  },
+  {
+    "id": "aicm_ded94f67ddc9b1e804655a25217ebff8",
+    "conversation_id": "aic_13389a8add131c0a5f6f7d3f0b8620ec",
+    "role": "user",
+    "content": "Hallo, schönen guten Tag.",
+    "created_at": 1774311443969
+  },
+  {
+    "id": "aicm_ec436baa6a9afc4b0002f174b1159fbf",
+    "conversation_id": "aic_13389a8add131c0a5f6f7d3f0b8620ec",
+    "role": "assistant",
+    "content": "Guten Abend! Willkommen im Hotel. Haben Sie eine Reservierung auf Ihren Namen?",
+    "created_at": 1774311443969
+  },
+  {
+    "id": "aicm_b901fc6f5514381ca8568ed1be3d0c84",
+    "conversation_id": "aic_13389a8add131c0a5f6f7d3f0b8620ec",
+    "role": "user",
+    "content": "Nein, herdischend ist ein",
+    "created_at": 1774311454539
+  },
+  {
+    "id": "aicm_011902dadc5e559cd727b4de3344f599",
+    "conversation_id": "aic_13389a8add131c0a5f6f7d3f0b8620ec",
+    "role": "assistant",
+    "content": "Kein Problem. Darf ich bitte Ihren Ausweis oder Ihren Reisepass sehen, um Ihre Buchung zu finden?",
+    "created_at": 1774311454539
+  },
+  {
+    "id": "aicm_6716416ed93bb1c86c177dc8bcac577e",
+    "conversation_id": "aic_13389a8add131c0a5f6f7d3f0b8620ec",
+    "role": "user",
+    "content": "Yaqla, yaizas.",
+    "created_at": 1774311465784
+  },
+  {
+    "id": "aicm_a1a1f2b2d4bb602b37ab2a14b8ada68a",
+    "conversation_id": "aic_13389a8add131c0a5f6f7d3f0b8620ec",
+    "role": "assistant",
+    "content": "Vielen Dank. Einen Moment bitte, ich suche Ihre Reservierung. ... Hier habe ich sie gefunden. Sie haben ein Einzelzimmer mit Frühstück gebucht. Möchten Sie noch etwas über das Hotel oder das Zimmer wissen?",
+    "created_at": 1774311465784
+  },
+  {
+    "id": "aicm_dd48e01aae01bd0e6bae8687e11bd6d3",
+    "conversation_id": "aic_13389a8add131c0a5f6f7d3f0b8620ec",
+    "role": "user",
+    "content": "Yep.",
+    "created_at": 1774311484874
+  },
+  {
+    "id": "aicm_a62c9d38bff4a37c9b3d06281f61e817",
+    "conversation_id": "aic_13389a8add131c0a5f6f7d3f0b8620ec",
+    "role": "assistant",
+    "content": "Unser Hotel bietet einen Wellnessbereich und ein Fitnessstudio, das Sie kostenlos nutzen können. Außerdem haben wir ein Restaurant, das regionale und internationale Gerichte anbietet. Gibt es sonst noch etwas, bei dem ich Ihnen behilflich sein kann?",
+    "created_at": 1774311484874
+  },
+  {
+    "id": "aicm_93204e61152846c3a00c368075405ab7",
+    "conversation_id": "aic_3692409e4093b998cba12256627b0f3f",
+    "role": "system",
+    "content": "Session started: scenario=coldcall, mode=ptt",
+    "created_at": 1774311826806
+  },
+  {
+    "id": "aicm_475d7a28e4e9c516ed48d8aede0435ff",
+    "conversation_id": "aic_3692409e4093b998cba12256627b0f3f",
+    "role": "user",
+    "content": "Hallo, schönen guten Tag.",
+    "created_at": 1774311831013
+  },
+  {
+    "id": "aicm_20066074291e053f4db34fb2a09ab720",
+    "conversation_id": "aic_3692409e4093b998cba12256627b0f3f",
+    "role": "assistant",
+    "content": "Guten Tag, hier spricht [Ihr Name] von [Ihrer Firma]. Wie kann ich Ihnen helfen?",
+    "created_at": 1774311831013
+  },
+  {
+    "id": "aicm_6c1af0af29899d3da162e2d8f8915029",
+    "conversation_id": "aic_3b64b1767d50c548ba2f0f50c578bd91",
+    "role": "system",
+    "content": "Session started: scenario=emergency, mode=ptt",
+    "created_at": 1774311852456
+  },
+  {
+    "id": "aicm_6298863536ee928b23e16a299357ae2f",
+    "conversation_id": "aic_3b64b1767d50c548ba2f0f50c578bd91",
+    "role": "user",
+    "content": "I would like to get.",
+    "created_at": 1774311856052
+  },
+  {
+    "id": "aicm_a4cbccf5e0bd36b7b28dd37eaee8c28f",
+    "conversation_id": "aic_3b64b1767d50c548ba2f0f50c578bd91",
+    "role": "assistant",
+    "content": "Notrufzentrale. Wo genau befinden Sie sich und was ist passiert?",
+    "created_at": 1774311856052
+  },
+  {
+    "id": "aicm_a07c7ba59fd06362b079be4515f2878c",
+    "conversation_id": "aic_3b64b1767d50c548ba2f0f50c578bd91",
+    "role": "assistant",
+    "content": "Könnten Sie mir bitte die genaue Adresse oder den Ort nennen, an dem Sie sich befinden? Es ist wichtig, dass die Rettungskräfte schnell zu Ihnen kommen können.",
+    "created_at": 1774311859690
+  },
+  {
+    "id": "aicm_a9baed3efe1aac135cac535390605d30",
+    "conversation_id": "aic_3b64b1767d50c548ba2f0f50c578bd91",
+    "role": "user",
+    "content": "Is bone in Duisburg?",
+    "created_at": 1774311872953
+  },
+  {
+    "id": "aicm_aa12e61e8e1698e360f9d0a19d711bf8",
+    "conversation_id": "aic_3b64b1767d50c548ba2f0f50c578bd91",
+    "role": "assistant",
+    "content": "Können Sie mir bitte genau sagen, ob es sich um einen Unfall oder eine andere Art von Notlage handelt? Gibt es Verletzte oder benötigen Sie spezielle Hilfe?",
+    "created_at": 1774311872953
+  },
+  {
+    "id": "aicm_8f56d1daba5328e7566ebedcc5f88186",
+    "conversation_id": "aic_3b64b1767d50c548ba2f0f50c578bd91",
+    "role": "user",
+    "content": "Yeah, this is an fake as Unfall.",
+    "created_at": 1774311887317
+  },
+  {
+    "id": "aicm_3f8664d3937d7d8cc80e8c737fb96fc7",
+    "conversation_id": "aic_3b64b1767d50c548ba2f0f50c578bd91",
+    "role": "assistant",
+    "content": "Verstanden. Bitte beruhigen Sie sich. Es ist wichtig, dass Sie in Sicherheit sind. Können Sie mir sagen, ob jemand verletzt ist und ob Erste Hilfe benötigt wird?",
+    "created_at": 1774311887317
+  },
+  {
+    "id": "aicm_f1983034fbf1dadbe11fdaefedf0a441",
+    "conversation_id": "aic_3b64b1767d50c548ba2f0f50c578bd91",
+    "role": "user",
+    "content": "Ja, wir brauchen erste Hilfe.",
+    "created_at": 1774311900671
+  },
+  {
+    "id": "aicm_3cde07e78e069f17ae57a04f42553d21",
+    "conversation_id": "aic_3b64b1767d50c548ba2f0f50c578bd91",
+    "role": "assistant",
+    "content": "Ich schicke sofort einen Krankenwagen zu Ihnen. Bleiben Sie bitte ruhig und versuchen Sie, die verletzte Person so gut es geht zu stabilisieren. Haben Sie ein Erste-Hilfe-Set in der Nähe?",
+    "created_at": 1774311900671
+  },
+  {
+    "id": "aicm_9f59da99563b09eabc528adb3cbaf802",
+    "conversation_id": "aic_3b64b1767d50c548ba2f0f50c578bd91",
+    "role": "user",
+    "content": "Nein, nein, nein!",
+    "created_at": 1774311915905
+  },
+  {
+    "id": "aicm_de581d28297cdd442b1955f2b820bc10",
+    "conversation_id": "aic_3b64b1767d50c548ba2f0f50c578bd91",
+    "role": "assistant",
+    "content": "Kein Problem. Versuchen Sie, die verletzte Person ruhig zu halten und sie nicht zu bewegen, wenn es nicht unbedingt nötig ist. Die Rettungskräfte sollten bald eintreffen. Wenn sich der Zustand verschlechtert, rufen Sie bitte erneut an. Bleiben Sie bitte am Telefon, bis Hilfe eintrifft.",
+    "created_at": 1774311915905
+  },
+  {
+    "id": "aicm_a87e363f60f672eb1559a0e61e3a49cb",
+    "conversation_id": "aic_3b64b1767d50c548ba2f0f50c578bd91",
+    "role": "user",
+    "content": "Alles klar.",
+    "created_at": 1774311936356
+  },
+  {
+    "id": "aicm_ec6bc4178a46d228ea7e01b52e74c314",
+    "conversation_id": "aic_3b64b1767d50c548ba2f0f50c578bd91",
+    "role": "assistant",
+    "content": "Bleiben Sie stark und ruhig. Die Rettungskräfte sind auf dem Weg. Alles Gute und halten Sie durch!",
+    "created_at": 1774311936356
+  },
+  {
+    "id": "aicm_5e9964fde29ba4db4484f46baa7169b7",
+    "conversation_id": "aic_3b64b1767d50c548ba2f0f50c578bd91",
+    "role": "user",
+    "content": "Dankeschön. Wie lange dauert das?",
+    "created_at": 1774311948152
+  },
+  {
+    "id": "aicm_b2520102ce041820ad04417cefce9490",
+    "conversation_id": "aic_3b64b1767d50c548ba2f0f50c578bd91",
+    "role": "assistant",
+    "content": "Die Rettungskräfte sollten in etwa 10 bis 15 Minuten bei Ihnen sein, je nach Verkehrslage. Bleiben Sie bitte ruhig und achten Sie darauf, dass die verletzte Person stabil bleibt. Ich wünsche Ihnen alles Gute.",
+    "created_at": 1774311948152
+  },
+  {
+    "id": "aicm_bad2e87b7d5d2d93e398754822891538",
+    "conversation_id": "aic_3b64b1767d50c548ba2f0f50c578bd91",
+    "role": "user",
+    "content": "两个",
+    "created_at": 1774311962907
+  },
+  {
+    "id": "aicm_f922627d010e38117003c7a287f68f2e",
+    "conversation_id": "aic_3b64b1767d50c548ba2f0f50c578bd91",
+    "role": "assistant",
+    "content": "Gern geschehen. Passen Sie auf sich auf und bleiben Sie sicher. Die Hilfe ist unterwegs.",
+    "created_at": 1774311962907
+  },
+  {
+    "id": "aicm_23d626f8bd23a911bdb230a43f97a111",
+    "conversation_id": "aic_86a2ebb75bd305cd113acb3fcaf39221",
+    "role": "system",
+    "content": "Session started: scenario=sales, mode=ptt",
+    "created_at": 1774312006205
+  },
+  {
+    "id": "aicm_76894c426d8f4e5f415e5ee8f443256b",
+    "conversation_id": "aic_86a2ebb75bd305cd113acb3fcaf39221",
+    "role": "user",
+    "content": "Hallo, guten Tag.",
+    "created_at": 1774312015039
+  },
+  {
+    "id": "aicm_6532f5f051334c9f133ec1580565f639",
+    "conversation_id": "aic_86a2ebb75bd305cd113acb3fcaf39221",
+    "role": "assistant",
+    "content": "Guten Tag! Wie kann ich Ihnen heute weiterhelfen?",
+    "created_at": 1774312015039
+  },
+  {
+    "id": "aicm_ddcdd14f3ed898337a5f28717be108bf",
+    "conversation_id": "aic_86a2ebb75bd305cd113acb3fcaf39221",
+    "role": "user",
+    "content": "Ich musste was einkaufen. Was einkaufen?",
+    "created_at": 1774312027887
+  },
+  {
+    "id": "aicm_3b19ad1b70a925cd5f063e2c26aaa2ea",
+    "conversation_id": "aic_86a2ebb75bd305cd113acb3fcaf39221",
+    "role": "assistant",
+    "content": "Natürlich! Wir haben hier eine große Auswahl an Produkten. Was suchen Sie denn genau? Ein Haushaltsgerät, ein Elektronikartikel oder etwas anderes?",
+    "created_at": 1774312027887
+  },
+  {
+    "id": "aicm_b55da9be0a9b9fd97ee6617ceafb816a",
+    "conversation_id": "aic_86a2ebb75bd305cd113acb3fcaf39221",
+    "role": "user",
+    "content": "Eine Geschenk für meinen Freunden.",
+    "created_at": 1774312044289
+  },
+  {
+    "id": "aicm_bdbb0a572480e509fddbfb673663856e",
+    "conversation_id": "aic_86a2ebb75bd305cd113acb3fcaf39221",
+    "role": "assistant",
+    "content": "Ein Geschenk für Ihren Freund? Das ist eine schöne Idee! Was sind denn seine Hobbys oder Interessen? So kann ich Ihnen besser passende Vorschläge machen.",
+    "created_at": 1774312044289
+  },
+  {
+    "id": "aicm_5868b2ea2833535210b4eb2e4fefa605",
+    "conversation_id": "aic_86a2ebb75bd305cd113acb3fcaf39221",
+    "role": "assistant",
+    "content": "Er ist ein großer Technikfan und interessiert sich für Gadgets. Gibt es etwas Besonderes, das Sie ihm empfehlen würden?",
+    "created_at": 1774312052096
+  },
+  {
+    "id": "aicm_434bdfe1b64978a4df6fcee0d9cc511a",
+    "conversation_id": "aic_86a2ebb75bd305cd113acb3fcaf39221",
+    "role": "user",
+    "content": "Essential key. The mindfulness and music or",
+    "created_at": 1774312078576
+  },
+  {
+    "id": "aicm_b70b8c372b48f6edaca9f1fa34d46cfb",
+    "conversation_id": "aic_86a2ebb75bd305cd113acb3fcaf39221",
+    "role": "assistant",
+    "content": "Wenn Ihr Freund Musik liebt, könnte ein hochwertiger Bluetooth-Lautsprecher oder Kopfhörer eine tolle Geschenkidee sein. Diese Geräte bieten hervorragende Klangqualität und sind ideal für Musikliebhaber. Was halten Sie davon?",
+    "created_at": 1774312078576
+  },
+  {
+    "id": "aicm_15d7a3913368a67725bd7f554fcf3ce3",
+    "conversation_id": "aic_86a2ebb75bd305cd113acb3fcaf39221",
+    "role": "assistant",
+    "content": "Das klingt gut, aber ich frage mich, ob es auch eine günstigere Option gibt. Gibt es vielleicht eine gute Alternative, die ebenfalls eine gute Klangqualität bietet, aber preiswerter ist?",
+    "created_at": 1774312102836
+  },
+  {
+    "id": "aicm_dd4968c75fb560d0b22617516d4845f0",
+    "conversation_id": "aic_86a2ebb75bd305cd113acb3fcaf39221",
+    "role": "user",
+    "content": "Das war kein Problem.",
+    "created_at": 1774312122718
+  },
+  {
+    "id": "aicm_9ffb4318a54624e613be89acf1f39ccf",
+    "conversation_id": "aic_86a2ebb75bd305cd113acb3fcaf39221",
+    "role": "assistant",
+    "content": "Eine preiswertere Option wäre ein tragbarer Bluetooth-Lautsprecher von einer bekannten Marke, der dennoch gute Klangqualität bietet. Solche Lautsprecher sind oft kompakt und einfach zu transportieren, ideal für Musikgenuss unterwegs. Wie klingt das für Sie?",
+    "created_at": 1774312122718
+  },
+  {
+    "id": "aicm_6d13c162f45974e240c0a91944dfa259",
+    "conversation_id": "aic_8247e6cf4a27765f68675fb1dcb187e2",
+    "role": "system",
+    "content": "Session started: scenario=restaurant, mode=ptt",
+    "created_at": 1774312200570
+  },
+  {
+    "id": "aicm_61f956c3f35b7ee6a9b273885aa0a4db",
+    "conversation_id": "aic_8247e6cf4a27765f68675fb1dcb187e2",
+    "role": "user",
+    "content": "Hello, shunghuntaagic, sitahan and pizza",
+    "created_at": 1774312212989
+  },
+  {
+    "id": "aicm_b3c57d6e22b3cc7f2a6f2d58f8074357",
+    "conversation_id": "aic_8247e6cf4a27765f68675fb1dcb187e2",
+    "role": "assistant",
+    "content": "Natürlich, gerne. Auf unserer Speisekarte finden Sie verschiedene Pizzen. Möchten Sie eine kleine oder eine große Pizza? Und haben Sie schon eine bestimmte Sorte im Kopf?",
+    "created_at": 1774312212989
+  },
+  {
+    "id": "aicm_103d49f3f229f1fedc336958086ef26d",
+    "conversation_id": "aic_f3aae5a6994f8a7ba7f8c15806ed309e",
+    "role": "system",
+    "content": "Session started: scenario=restaurant, mode=ptt",
+    "created_at": 1774312627585
+  },
+  {
+    "id": "aicm_3e81a480c9d3eebcdba2faba76a69505",
+    "conversation_id": "aic_f3aae5a6994f8a7ba7f8c15806ed309e",
+    "role": "user",
+    "content": "Hallo, schönen guten Tag.",
+    "created_at": 1774312649654
+  },
+  {
+    "id": "aicm_8886efe9460170794130dc7b4b7ba2b7",
+    "conversation_id": "aic_f3aae5a6994f8a7ba7f8c15806ed309e",
+    "role": "assistant",
+    "content": "Guten Tag, willkommen im Restaurant. Möchten Sie hier essen oder zum Mitnehmen bestellen?",
+    "created_at": 1774312649654
+  },
+  {
+    "id": "aicm_f121735f417187f02ae003fb95fdc5f2",
+    "conversation_id": "aic_f3aae5a6994f8a7ba7f8c15806ed309e",
+    "role": "user",
+    "content": "Isetegenén mitném.",
+    "created_at": 1774312660121
+  },
+  {
+    "id": "aicm_b3d9410c3b017e07c977f23199f54856",
+    "conversation_id": "aic_f3aae5a6994f8a7ba7f8c15806ed309e",
+    "role": "assistant",
+    "content": "Alles klar! Was möchten Sie denn bestellen? Haben Sie schon eine Auswahl aus unserer Speisekarte getroffen?",
+    "created_at": 1774312660121
+  },
+  {
+    "id": "aicm_da39877d3fd4cb8d219b07277d742cd4",
+    "conversation_id": "aic_f3aae5a6994f8a7ba7f8c15806ed309e",
+    "role": "user",
+    "content": "Nein.",
+    "created_at": 1774312672217
+  },
+  {
+    "id": "aicm_174dabbf27dfdd5003939e172db0ebb5",
+    "conversation_id": "aic_f3aae5a6994f8a7ba7f8c15806ed309e",
+    "role": "assistant",
+    "content": "Kein Problem, ich helfe Ihnen gerne. Unsere Speisekarte bietet zum Beispiel Pizza, Pasta und Salate an. Die Pizza kostet zwischen 8 und 12 Euro, die Pasta etwa 9 bis 15 Euro und die Salate starten bei 7 Euro. Haben Sie eine Idee, was Sie gerne versuchen möchten?",
+    "created_at": 1774312672217
+  },
+  {
+    "id": "aicm_d113411861fd22171c99f842981aefd8",
+    "conversation_id": "aic_f3aae5a6994f8a7ba7f8c15806ed309e",
+    "role": "user",
+    "content": "Nein.",
+    "created_at": 1774312694411
+  },
+  {
+    "id": "aicm_3f55347df37693479b4d1ff4121ac46d",
+    "conversation_id": "aic_f3aae5a6994f8a7ba7f8c15806ed309e",
+    "role": "assistant",
+    "content": "Kein Problem! Lassen Sie uns etwas Einfaches wählen. Wie wäre es mit einer Margherita-Pizza? Die kostet 8 Euro. Oder haben Sie doch Lust auf einen gemischten Salat? Der kostet 7 Euro. Was darf's sein?",
+    "created_at": 1774312694411
+  },
+  {
+    "id": "aicm_a66d988ab193a3293325b029dbc1762b",
+    "conversation_id": "aic_f3aae5a6994f8a7ba7f8c15806ed309e",
+    "role": "user",
+    "content": "Siete una pizza margherita.",
+    "created_at": 1774312716012
+  },
+  {
+    "id": "aicm_0197e47ee9854d8153d7f1d003199160",
+    "conversation_id": "aic_f3aae5a6994f8a7ba7f8c15806ed309e",
+    "role": "assistant",
+    "content": "Sehr gut, eine Margherita-Pizza. Möchten Sie dazu vielleicht noch ein Getränk? Wir haben Wasser, Limonade, und verschiedene Säfte. Was dürfen wir Ihnen bringen?",
+    "created_at": 1774312716012
+  },
+  {
+    "id": "aicm_2b220577ca3b9fc6068cc49e2064756a",
+    "conversation_id": "aic_f3aae5a6994f8a7ba7f8c15806ed309e",
+    "role": "user",
+    "content": "I love my",
+    "created_at": 1774312733418
+  },
+  {
+    "id": "aicm_ef8e17cbfd42af5ec3892e561a806c0c",
+    "conversation_id": "aic_f3aae5a6994f8a7ba7f8c15806ed309e",
+    "role": "assistant",
+    "content": "Gerne! Eine Limonade mit der Pizza Margherita. Darf es sonst noch etwas sein, oder ist das alles für Sie?",
+    "created_at": 1774312733418
+  },
+  {
+    "id": "aicm_8184d24cf70463a2db544b795bfffb73",
+    "conversation_id": "aic_f3aae5a6994f8a7ba7f8c15806ed309e",
+    "role": "user",
+    "content": "Ja, danke, das war's.",
+    "created_at": 1774312745771
+  },
+  {
+    "id": "aicm_be873ac1580f42c97909c3413a1b7ba4",
+    "conversation_id": "aic_f3aae5a6994f8a7ba7f8c15806ed309e",
+    "role": "assistant",
+    "content": "Alles klar, dann bringe ich Ihnen die Margherita-Pizza und die Limonade. Die Bestellung dauert nur ein paar Minuten. Setzen Sie sich gerne, und ich bringe es gleich zu Ihnen.",
+    "created_at": 1774312745771
+  },
+  {
+    "id": "aicm_4f24b54d9d8a3b339fbc7989c46a75c2",
+    "conversation_id": "aic_f3aae5a6994f8a7ba7f8c15806ed309e",
+    "role": "user",
+    "content": "Nein, ich kann nichtest.",
+    "created_at": 1774312761556
+  },
+  {
+    "id": "aicm_5a62df6d9aed363461a4d9a173ea0941",
+    "conversation_id": "aic_f3aae5a6994f8a7ba7f8c15806ed309e",
+    "role": "assistant",
+    "content": "Das macht nichts, ich nehme die Bestellung gerne sofort auf. Die Margherita-Pizza und die Limonade kommen zu insgesamt 9 Euro. Möchten Sie bar oder mit Karte bezahlen?",
+    "created_at": 1774312761556
+  },
+  {
+    "id": "aicm_e7d062be447974287f5ae07905dc889e",
+    "conversation_id": "aic_f3aae5a6994f8a7ba7f8c15806ed309e",
+    "role": "user",
+    "content": "Mit Karte, bitte.",
+    "created_at": 1774312774439
+  },
+  {
+    "id": "aicm_138795e6020f2aa30045bb57e3658e9a",
+    "conversation_id": "aic_f3aae5a6994f8a7ba7f8c15806ed309e",
+    "role": "assistant",
+    "content": "Alles klar, mit Karte bezahlen. Ich bringe Ihnen das Kartenlesegerät gleich. Vielen Dank und einen schönen Aufenthalt hier!",
+    "created_at": 1774312774439
+  },
+  {
+    "id": "aicm_2e1f32b6c1aed873c77ee7c8dec35c39",
+    "conversation_id": "aic_f3aae5a6994f8a7ba7f8c15806ed309e",
+    "role": "user",
+    "content": "Danke, in Auch.",
+    "created_at": 1774312785569
+  },
+  {
+    "id": "aicm_ba2ab2be9f80f900eb0e5a0d7530463f",
+    "conversation_id": "aic_f3aae5a6994f8a7ba7f8c15806ed309e",
+    "role": "assistant",
+    "content": "Gern geschehen! Einen schönen Tag noch und guten Appetit!",
+    "created_at": 1774312785569
+  },
+  {
+    "id": "aicm_26f8e3444b0683c73813745e3f6b2d7c",
+    "conversation_id": "aic_b7bef0b27e9fdbe45a04ef0e908075f5",
+    "role": "system",
+    "content": "Session started: scenario=restaurant, mode=vad",
+    "created_at": 1774312847811
+  },
+  {
+    "id": "aicm_4c25218388fb9ad1ee3166d2a2e66b4d",
+    "conversation_id": "aic_b7bef0b27e9fdbe45a04ef0e908075f5",
+    "role": "user",
+    "content": "and I stood for some radio training.",
+    "created_at": 1774312853623
+  },
+  {
+    "id": "aicm_cc6386e7edad486b11a15c0349d9780b",
+    "conversation_id": "aic_b7bef0b27e9fdbe45a04ef0e908075f5",
+    "role": "assistant",
+    "content": "Ja, natürlich. Unser Restaurant hat eine Speisekarte mit verschiedenen Gerichten. Sie können zum Beispiel Pizza, Pasta oder Salate wählen. Die Preise stehen direkt neben den Gerichten. Was möchten Sie gerne essen?",
+    "created_at": 1774312853623
+  },
+  {
+    "id": "aicm_b1961d4bb3f2e7763ff8853d8094aac2",
+    "conversation_id": "aic_b7bef0b27e9fdbe45a04ef0e908075f5",
+    "role": "user",
+    "content": "Are you still in love with him?",
+    "created_at": 1774312857776
+  },
+  {
+    "id": "aicm_f12ba0d3c86d90b6b0f77fb201d900a9",
+    "conversation_id": "aic_b7bef0b27e9fdbe45a04ef0e908075f5",
+    "role": "assistant",
+    "content": "Entschuldigung, ich kann Ihnen bei Ihrer Bestellung im Restaurant helfen. Was möchten Sie gerne essen oder trinken?",
+    "created_at": 1774312857776
+  },
+  {
+    "id": "aicm_ec22676e7d7f9fe539f572b1c559c0dc",
+    "conversation_id": "aic_b7bef0b27e9fdbe45a04ef0e908075f5",
+    "role": "user",
+    "content": "It really feels like you are. No. I always have. Not really.",
+    "created_at": 1774312871048
+  },
+  {
+    "id": "aicm_4fc71e7003dbdc65cf2794fabb51a162",
+    "conversation_id": "aic_b7bef0b27e9fdbe45a04ef0e908075f5",
+    "role": "assistant",
+    "content": "Entschuldigung, aber das scheint ein Missverständnis zu sein. Falls Sie Hilfe oder Informationen zu einer Bestellung benötigen, lassen Sie es mich bitte wissen! Ich helfe Ihnen gerne weiter.",
+    "created_at": 1774312871048
+  },
+  {
+    "id": "aicm_972021e353421a1bfce27c6609b4862e",
+    "conversation_id": "aic_b7bef0b27e9fdbe45a04ef0e908075f5",
+    "role": "user",
+    "content": "Anymore.",
+    "created_at": 1774312873160
+  },
+  {
+    "id": "aicm_ec0f6324b6c39b18f9588f01455caac3",
+    "conversation_id": "aic_b7bef0b27e9fdbe45a04ef0e908075f5",
+    "role": "user",
+    "content": "Ai.",
+    "created_at": 1774312874854
+  },
+  {
+    "id": "aicm_c4db830f352b9e06bb56a93107de3aa9",
+    "conversation_id": "aic_b7bef0b27e9fdbe45a04ef0e908075f5",
+    "role": "assistant",
+    "content": "Es scheint, dass es da ein Missverständnis gegeben hat. Wenn Sie Hilfe benötigen oder Fragen zu Ihrer Bestellung haben, lassen Sie es mich bitte wissen. Ich bin hier, um zu helfen!",
+    "created_at": 1774312877705
+  },
+  {
+    "id": "aicm_2a0f7a9f927e4e9be4f858bf5cc00336",
+    "conversation_id": "aic_b7bef0b27e9fdbe45a04ef0e908075f5",
+    "role": "user",
+    "content": "Ja, ich brauche eine Hilfe, was ich doch vergessen kann. Ich habe keine Ahnung.",
+    "created_at": 1774312896143
+  },
+  {
+    "id": "aicm_ca9142280315342f2b4460837793968e",
+    "conversation_id": "aic_b7bef0b27e9fdbe45a04ef0e908075f5",
+    "role": "assistant",
+    "content": "Kein Problem! Lassen Sie uns einen Blick auf die Speisekarte werfen. Wir haben eine Auswahl an Vorspeisen, Hauptgerichten und Desserts. Was mögen Sie denn gerne? Haben Sie vielleicht Lust auf eine Suppe oder eine der Spezialitäten des Hauses? Die Preise stehen auch auf der Karte. Und möchten Sie hier essen oder zum Mitnehmen?",
+    "created_at": 1774312896143
+  },
+  {
+    "id": "aicm_004a7c190f2ae42e5540324eea160a7c",
+    "conversation_id": "aic_b7bef0b27e9fdbe45a04ef0e908075f5",
+    "role": "assistant",
+    "content": "Natürlich, unser Restaurant bietet eine breite Auswahl an Gerichten. Sie können zum Beispiel aus verschiedenen Salaten, Pastagerichten, Fleisch- und Fischgerichten sowie vegetarischen Speisen auswählen. Haben Sie schon eine Vorstellung, was Sie gerne hätten, oder möchten Sie Empfehlungen?",
+    "created_at": 1774312913466
+  },
+  {
+    "id": "aicm_f65b59c8cdbf24dee938c5bd24537006",
+    "conversation_id": "aic_b7bef0b27e9fdbe45a04ef0e908075f5",
+    "role": "assistant",
+    "content": "Natürlich, ich empfehle Ihnen unsere Spezialgerichte. Zum Beispiel das \"Currywurst mit Pommes\" oder die \"Spaghetti Bolognese\". Beide Gerichte sind sehr beliebt und kosten jeweils etwa 8 Euro. Möchten Sie eins dieser Gerichte probieren?",
+    "created_at": 1774312919152
+  },
+  {
+    "id": "aicm_a001293948c78378c17f7e66b369afb7",
+    "conversation_id": "aic_b7bef0b27e9fdbe45a04ef0e908075f5",
+    "role": "assistant",
+    "content": "Entschuldigung, ich bin hier, um bei der Bestellung zu helfen. Wenn Sie Fragen zur Speisekarte haben oder Hilfe bei der Auswahl benötigen, lassen Sie es mich wissen. Ich helfe Ihnen gerne weiter.",
+    "created_at": 1774312924113
+  },
+  {
+    "id": "aicm_25acc514fedd63dddffedcb5cb61fce1",
+    "conversation_id": "aic_c608377305a20011f706c8762f5fae57",
+    "role": "system",
+    "content": "Session started: scenario=travel, mode=ptt",
+    "created_at": 1774313575319
+  },
+  {
+    "id": "aicm_d59e46741e11f9e34496662ee0a045bd",
+    "conversation_id": "aic_c608377305a20011f706c8762f5fae57",
+    "role": "user",
+    "content": "Hello, Chat.",
+    "created_at": 1774313604471
+  },
+  {
+    "id": "aicm_a2fc468f3eb171842b295cd15e001bb6",
+    "conversation_id": "aic_c608377305a20011f706c8762f5fae57",
+    "role": "user",
+    "content": "Hello,",
+    "created_at": 1774313613489
+  },
+  {
+    "id": "aicm_9a3b6c725ac4e68f9fa4e8e566e6d666",
+    "conversation_id": "aic_c608377305a20011f706c8762f5fae57",
+    "role": "assistant",
+    "content": "Guten Abend! Haben Sie eine Reservierung auf Ihren Namen?",
+    "created_at": 1774313613489
+  },
+  {
+    "id": "aicm_d83b19c4254ef3e26b153a06d37ffdf9",
+    "conversation_id": "aic_c608377305a20011f706c8762f5fae57",
+    "role": "user",
+    "content": "This is my husband.",
+    "created_at": 1774313621985
+  },
+  {
+    "id": "aicm_cedb49d7586ca77e42f8b781d10cb418",
+    "conversation_id": "aic_c608377305a20011f706c8762f5fae57",
+    "role": "assistant",
+    "content": "Kein Problem. Könnten Sie mir bitte Ihren Namen und die Reservierungsnummer nennen, damit ich Ihre Buchung finden kann?",
+    "created_at": 1774313621985
+  },
+  {
+    "id": "aicm_924bda28ddaa20bfe1018b90633aa756",
+    "conversation_id": "aic_c608377305a20011f706c8762f5fae57",
+    "role": "assistant",
+    "content": "Danke. Einen Moment bitte, ich prüfe das für Sie.",
+    "created_at": 1774313631918
+  },
+  {
+    "id": "aicm_c2ac9e679841539800ac66ca8887c56e",
+    "conversation_id": "aic_c608377305a20011f706c8762f5fae57",
+    "role": "user",
+    "content": "Yeah, it's super easy. We were on my...",
+    "created_at": 1774313647883
+  },
+  {
+    "id": "aicm_2ea177623674a43d7e7aba5b8315325c",
+    "conversation_id": "aic_c608377305a20011f706c8762f5fae57",
+    "role": "assistant",
+    "content": "Ihre Reservierung ist gefunden. Sie haben ein Doppelzimmer für drei Nächte. Möchten Sie noch etwas über das Zimmer oder den Hotelservice wissen?",
+    "created_at": 1774313647883
+  },
+  {
+    "id": "aicm_641f7d97f51a20fe8ca895c64bf8e4a8",
+    "conversation_id": "aic_c608377305a20011f706c8762f5fae57",
+    "role": "user",
+    "content": "Jā, sima.",
+    "created_at": 1774313663970
+  },
+  {
+    "id": "aicm_4c7e8b39307e39e12ff61661fa35fea4",
+    "conversation_id": "aic_c608377305a20011f706c8762f5fae57",
+    "role": "assistant",
+    "content": "Ja, unser Hotel bietet ein Frühstücksbuffet von 7 bis 10 Uhr an, und Sie haben Zugang zum Fitnessraum und zur Sauna. Benötigen Sie Hilfe mit Ihrem Gepäck oder haben Sie noch weitere Fragen?",
+    "created_at": 1774313663970
+  },
+  {
+    "id": "aicm_703876ec7451f258f30f2d88da3fd4f2",
+    "conversation_id": "aic_17a8fa8a8783768fe433a0ce421399e2",
+    "role": "system",
+    "content": "Session started: scenario=restaurant, mode=ptt",
+    "created_at": 1774313970751
+  },
+  {
+    "id": "aicm_166673391867d136cabe94c655c9a29a",
+    "conversation_id": "aic_17a8fa8a8783768fe433a0ce421399e2",
+    "role": "user",
+    "content": "Heyşinter",
+    "created_at": 1774313978604
+  },
+  {
+    "id": "aicm_980a787b4d217e89aa73c10fb372ab0d",
+    "conversation_id": "aic_17a8fa8a8783768fe433a0ce421399e2",
+    "role": "user",
+    "content": "Hey, schönen guten Tag.",
+    "created_at": 1774313985095
+  },
+  {
+    "id": "aicm_52b3fb126ffa92c96d47a068f3e41206",
+    "conversation_id": "aic_17a8fa8a8783768fe433a0ce421399e2",
+    "role": "assistant",
+    "content": "Guten Tag! Möchten Sie hier essen oder zum Mitnehmen bestellen?",
+    "created_at": 1774313985095
+  },
+  {
+    "id": "aicm_4cb5282193c1dde4adf1dd02e8823dc0",
+    "conversation_id": "aic_17a8fa8a8783768fe433a0ce421399e2",
+    "role": "user",
+    "content": "Ich möchte mit ihm...",
+    "created_at": 1774313993919
+  },
+  {
+    "id": "aicm_d808ac4799cd00f1bd8c53e5bc524ee7",
+    "conversation_id": "aic_17a8fa8a8783768fe433a0ce421399e2",
+    "role": "assistant",
+    "content": "Alles klar! Was darf es denn für Sie sein? Haben Sie schon unsere Speisekarte gesehen oder wünschen Sie eine Empfehlung?",
+    "created_at": 1774313993919
+  },
+  {
+    "id": "aicm_d917bc4cba5f3b895a50b116a1ba1bf4",
+    "conversation_id": "aic_17a8fa8a8783768fe433a0ce421399e2",
+    "role": "user",
+    "content": "işə qaynaşmacaqatədir.",
+    "created_at": 1774314007280
+  },
+  {
+    "id": "aicm_6630f3cf405d80452b3b91e497576703",
+    "conversation_id": "aic_17a8fa8a8783768fe433a0ce421399e2",
+    "role": "assistant",
+    "content": "Kein Problem! Unsere Hauptgerichte sind zum Beispiel Schnitzel, Spaghetti Bolognese und vegetarische Lasagne. Die Preise liegen zwischen 10 und 15 Euro. Möchten Sie etwas davon ausprobieren?",
+    "created_at": 1774314007280
+  },
+  {
+    "id": "aicm_29353c758b598d969444b58e5553771a",
+    "conversation_id": "aic_17a8fa8a8783768fe433a0ce421399e2",
+    "role": "user",
+    "content": "Nein, danke.",
+    "created_at": 1774314024245
+  },
+  {
+    "id": "aicm_e3488bc4b59e7a1b9016f97737087670",
+    "conversation_id": "aic_17a8fa8a8783768fe433a0ce421399e2",
+    "role": "assistant",
+    "content": "Gerne! Ein Schnitzel kostet 12 Euro und die Spaghetti Bolognese 10 Euro. Haben Sie eine bevorzugte Soße oder möchten Sie noch etwas trinken?",
+    "created_at": 1774314024245
+  },
+  {
+    "id": "aicm_5340d7b273a67d5b35fa2cb1e8a843fe",
+    "conversation_id": "aic_f88aebef8ce979616fe59817914a21a5",
+    "role": "system",
+    "content": "Session started: scenario=smalltalk, mode=ptt",
+    "created_at": 1775317417067
+  },
+  {
+    "id": "aicm_9c3328a8b00489a223644bde90ce5b21",
+    "conversation_id": "aic_f88aebef8ce979616fe59817914a21a5",
+    "role": "assistant",
+    "content": "Hallo, schön dich kennenzulernen. Wie heißt du und was machst du gern in deiner Freizeit?",
+    "created_at": 1775317422709
+  }
+]

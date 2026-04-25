@@ -1,0 +1,13 @@
+[
+  {
+    "id": "reqygsazqs3",
+    "school_name": "Sprachschule Duisburg",
+    "admin_email": "mdgolamrabbani057@gmail.com",
+    "password_hash": "4943760b8cb40468b5b7081ac1f1e701:def55f64e42a807300950aea9b686d0b044899333dd0cfec8106cb06722680313e400f4ccdcc1e18b11731775dcd258ca4f9ec704bdd4704d1beb5ec6a3b2b7e",
+    "status": "APPROVED",
+    "reviewed_by": "19972002-super",
+    "reviewed_at": "2026-01-07 13:01:56",
+    "reject_reason": null,
+    "created_at": "2026-01-07 13:01:12"
+  }
+]

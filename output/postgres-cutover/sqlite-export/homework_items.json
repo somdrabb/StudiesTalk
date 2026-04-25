@@ -1,0 +1,67 @@
+[
+  {
+    "id": "hwisstfxuue",
+    "workspace_id": "sprachschule-duisburg",
+    "class_channel_id": "a1-morning",
+    "title": "Assignment-1",
+    "description": "",
+    "resource_url": "https://dashboard.wikiedu.org/training/instructors/designing-a-writing-assignment/a-sample-writing-assignment",
+    "due_date": "2026-04-30T08:46:00.000Z",
+    "is_archived": 0,
+    "created_by": "uyshv0srx",
+    "created_at": "2026-04-14 08:48:02",
+    "is_locked": 0
+  },
+  {
+    "id": "hwiw2axcn3p",
+    "workspace_id": "sprachschule-duisburg",
+    "class_channel_id": "a1-morning",
+    "title": "Assignment-2",
+    "description": "",
+    "resource_url": "https://dashboard.wikiedu.org/training/instructors/designing-a-writing-assignment/a-sample-writing-assignment",
+    "due_date": "2026-04-30T08:48:00.000Z",
+    "is_archived": 0,
+    "created_by": "uyshv0srx",
+    "created_at": "2026-04-14 08:48:53",
+    "is_locked": 0
+  },
+  {
+    "id": "hwiqfjyzwqs",
+    "workspace_id": "sprachschule-duisburg",
+    "class_channel_id": "a1-morning",
+    "title": "Assignment-3",
+    "description": "",
+    "resource_url": "https://dashboard.wikiedu.org/training/instructors/designing-a-writing-assignment/a-sample-writing-assignment",
+    "due_date": "2026-04-30T08:49:00.000Z",
+    "is_archived": 0,
+    "created_by": "uyshv0srx",
+    "created_at": "2026-04-14 08:49:31",
+    "is_locked": 0
+  },
+  {
+    "id": "hwip2ayj8wd",
+    "workspace_id": "sprachschule-duisburg",
+    "class_channel_id": "a1-morning",
+    "title": "Assignment-7",
+    "description": "Instructions\n\n1. Explain the task clearly for students.\n2. Attach any worksheet, PDF, audio, or reading file.\n3. Add the deadline and what good work should include.\n\nSubmission checklist\n- Complete the task\n- Upload files if needed\n- Add a short note for the teacher",
+    "resource_url": "https://dashboard.wikiedu.org/training/instructors/designing-a-writing-assignment/a-sample-writing-assignment",
+    "due_date": "2026-04-14T10:27:00.000Z",
+    "is_archived": 0,
+    "created_by": "uyshv0srx",
+    "created_at": "2026-04-14 10:20:37",
+    "is_locked": 0
+  },
+  {
+    "id": "hwiynyi22i2",
+    "workspace_id": "sprachschule-duisburg",
+    "class_channel_id": "private",
+    "title": "Assignment-1",
+    "description": "",
+    "resource_url": null,
+    "due_date": "2026-04-30T14:17:00.000Z",
+    "is_archived": 0,
+    "created_by": "uyshv0srx",
+    "created_at": "2026-04-14 14:17:58",
+    "is_locked": 0
+  }
+]

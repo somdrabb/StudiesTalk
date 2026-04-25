@@ -1,0 +1,44 @@
+[
+  {
+    "id": "placement-test-9:placement-test-9:hoeren-p1-q1:transcript:1",
+    "task_id": "placement-test-9:hoeren-p1-q1",
+    "transcript_text": "Ansage: Der Zug nach München fährt heute von Gleis vier.",
+    "sort_order": 1,
+    "created_at": "2026-04-15 19:58:07"
+  },
+  {
+    "id": "placement-test-9:placement-test-9:hoeren-p1-q2:transcript:1",
+    "task_id": "placement-test-9:hoeren-p1-q2",
+    "transcript_text": "Hallo Mira, dein Termin ist morgen um halb elf, bitte sei pünktlich.",
+    "sort_order": 1,
+    "created_at": "2026-04-15 19:58:07"
+  },
+  {
+    "id": "placement-test-9:placement-test-9:hoeren-p2-q1:transcript:1",
+    "task_id": "placement-test-9:hoeren-p2-q1",
+    "transcript_text": "Paul kann am Dienstag nicht, deshalb besucht er den Kurs jetzt am Mittwochabend.",
+    "sort_order": 1,
+    "created_at": "2026-04-15 19:58:07"
+  },
+  {
+    "id": "placement-test-9:placement-test-9:hoeren-p2-q2:transcript:1",
+    "task_id": "placement-test-9:hoeren-p2-q2",
+    "transcript_text": "Heute ist die Bibliothek bis 18 Uhr geöffnet.",
+    "sort_order": 1,
+    "created_at": "2026-04-15 19:58:07"
+  },
+  {
+    "id": "placement-test-9:placement-test-9:hoeren-p3-q1:transcript:1",
+    "task_id": "placement-test-9:hoeren-p3-q1",
+    "transcript_text": "Ich nehme bitte einen Kaffee mit Milch.",
+    "sort_order": 1,
+    "created_at": "2026-04-15 19:58:07"
+  },
+  {
+    "id": "placement-test-9:placement-test-9:hoeren-p3-q2:transcript:1",
+    "task_id": "placement-test-9:hoeren-p3-q2",
+    "transcript_text": "Treffen wir uns direkt vor dem Museum, am Eingang.",
+    "sort_order": 1,
+    "created_at": "2026-04-15 19:58:07"
+  }
+]

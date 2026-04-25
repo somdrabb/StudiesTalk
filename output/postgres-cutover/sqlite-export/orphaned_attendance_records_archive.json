@@ -1,0 +1,62 @@
+[
+  {
+    "id": "arec_03e9776a-8146-4620-bb83-17130bb54a2c",
+    "workspace_id": "sprachschule-duisburg",
+    "session_id": "asess_fc6f9482-3c59-4336-a762-779fc97aba52",
+    "channel_id": "b1-morning-1",
+    "student_user_id": "ubdnnsrqy",
+    "status": "absent",
+    "marked_by_user_id": "uyshv0srx",
+    "marked_at": "2026-02-11 14:01:25",
+    "archive_reason": "missing_channel;missing_student;session_parent_invalid",
+    "archived_at": "2026-04-20 18:50:16"
+  },
+  {
+    "id": "arec_1ca25998-94a4-4ebb-8f1b-a82a1e7da339",
+    "workspace_id": "sprachschule-duisburg",
+    "session_id": "asess_fc6f9482-3c59-4336-a762-779fc97aba52",
+    "channel_id": "b1-morning-1",
+    "student_user_id": "uyshv0srx",
+    "status": "present",
+    "marked_by_user_id": "uyshv0srx",
+    "marked_at": "2026-02-11 14:01:25",
+    "archive_reason": "missing_channel;session_parent_invalid",
+    "archived_at": "2026-04-20 18:50:16"
+  },
+  {
+    "id": "arec_e4e00e97-df37-4178-aafd-0152e45fb34b",
+    "workspace_id": "sprachschule-duisburg",
+    "session_id": "asess_629027a5-5bc7-4b78-af65-17a4252b9500",
+    "channel_id": "a1-nood",
+    "student_user_id": "umhz965dy",
+    "status": "present",
+    "marked_by_user_id": "umhz965dy",
+    "marked_at": "2026-02-11 15:30:35",
+    "archive_reason": "missing_channel;missing_student;missing_marked_by;session_parent_invalid",
+    "archived_at": "2026-04-20 18:50:16"
+  },
+  {
+    "id": "arec_04f8f541-73fa-47be-bb60-0ebc688a7674",
+    "workspace_id": "sprachschule-duisburg",
+    "session_id": "asess_629027a5-5bc7-4b78-af65-17a4252b9500",
+    "channel_id": "a1-nood",
+    "student_user_id": "uyshv0srx",
+    "status": "present",
+    "marked_by_user_id": "umhz965dy",
+    "marked_at": "2026-02-11 15:30:35",
+    "archive_reason": "missing_channel;missing_marked_by;session_parent_invalid",
+    "archived_at": "2026-04-20 18:50:16"
+  },
+  {
+    "id": "arec_86ff909a-ae77-4ce6-8a1a-bdd7e3fffdc4",
+    "workspace_id": "sprachschule-duisburg",
+    "session_id": "asess_629027a5-5bc7-4b78-af65-17a4252b9500",
+    "channel_id": "a1-nood",
+    "student_user_id": "ubdnnsrqy",
+    "status": "absent",
+    "marked_by_user_id": "umhz965dy",
+    "marked_at": "2026-02-11 16:29:28",
+    "archive_reason": "missing_channel;missing_student;missing_marked_by;session_parent_invalid",
+    "archived_at": "2026-04-20 18:50:16"
+  }
+]

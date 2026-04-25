@@ -1,0 +1,22 @@
+[
+  {
+    "id": "hws98o7j3qu",
+    "homework_item_id": "hwi5y1jzho2",
+    "workspace_id": "sprachschule-duisburg",
+    "channel_id": "a1-nood-homework",
+    "student_id": "ubmz6ih1e",
+    "status": "reviewed",
+    "submission_text": "",
+    "is_late": 1,
+    "submitted_at": "2026-03-26T12:55:46.381Z",
+    "reviewed_at": "2026-03-31 22:26:20",
+    "reviewed_by": "uyshv0srx",
+    "returned_at": null,
+    "feedback_text": "Need to improve",
+    "grade_value": "26",
+    "created_at": "2026-03-26 12:54:54",
+    "updated_at": "2026-03-31 22:26:20",
+    "archive_reason": "missing_homework_item",
+    "archived_at": "2026-04-19 23:39:33"
+  }
+]

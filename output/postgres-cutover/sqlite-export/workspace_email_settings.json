@@ -1,0 +1,26 @@
+[
+  {
+    "workspace_id": "sprachschule-duisburg",
+    "enabled": 1,
+    "brand_school_name": "Sprachschule Duisburg",
+    "reply_to_email": "mdgolamrabbani057@gmail.com",
+    "footer_text": "Office hours: Monday 10:00 - 20:00, Tuesday 10:00 - 20:00, Wednesday 10:00 - 20:00, Thursday 10:00 - 20:00, Friday 10:00 - 20:00, Saturday CLOSED, Sunday CLOSED\nAddress: Mercatorstr. 168, 47051 Duisburg, Germany\nPhone: +4917664069892\nEmail: mdgolamrabbani057@gmail.com",
+    "subject_prefix": "Test-123",
+    "updated_at": "2026-03-13 23:49:11",
+    "logo_url": "/uploads/workspaces/sprachschule-duisburg/logo.png",
+    "signature_html": "",
+    "manual_body_text": "Test-123"
+  },
+  {
+    "workspace_id": "lens",
+    "enabled": 0,
+    "brand_school_name": "mgrms98@gmail.com",
+    "reply_to_email": "mgrms98@gmail.com",
+    "footer_text": "",
+    "subject_prefix": "mgrms98@gmail.com",
+    "updated_at": "2026-04-21 17:26:03",
+    "logo_url": "",
+    "signature_html": "",
+    "manual_body_text": ""
+  }
+]

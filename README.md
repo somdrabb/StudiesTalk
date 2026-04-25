@@ -1,6 +1,6 @@
-# 🎓 WorkNest – AI-Powered Language School SaaS Platform
+# 🎓 StudiesTalk – AI-Powered Language School SaaS Platform
 
-WorkNest is a multi-tenant SaaS platform designed for language schools.  
+StudiesTalk is a multi-tenant SaaS platform designed for language schools.  
 It provides live classes, AI voice practice, task management, announcements, billing control, and a full admin moderation system.
 
 Built as a full-stack application using Node.js, Express, and modern frontend architecture.
@@ -229,7 +229,36 @@ Language schools can manage email directly inside the platform:
 ## 📦 Installation
 
 ```bash
-git clone https://github.com/yourusername/worknest.git
-cd worknest
+git clone https://github.com/yourusername/studiestalk.git
+cd studiestalk
 npm install
 npm run dev
+```
+
+## 🧪 Preflight And Smoke
+
+```bash
+npm run preflight
+npm run test:all:smoke
+```
+
+SQLite backup helpers:
+
+```bash
+npm run backup:sqlite
+npm run verify:backup
+node scripts/restore-sqlite-backup.js --from backup/<file>.db --confirm-restore
+```
+
+## 🚚 Production Notes
+
+- SQLite remains the default runtime.
+- PostgreSQL staging remains opt-in and documented separately.
+- Prefer `APP_BASE_URL` for deployed environments.
+- Set strong `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET` in production.
+- Set `COOKIE_SECURE=true` behind HTTPS.
+- Review:
+  - [docs/production-readiness-inventory.md](/Users/jannatuladny/cat-6.1/docs/production-readiness-inventory.md)
+  - [docs/production-deployment-runbook.md](/Users/jannatuladny/cat-6.1/docs/production-deployment-runbook.md)
+  - [docs/production-rollback-runbook.md](/Users/jannatuladny/cat-6.1/docs/production-rollback-runbook.md)
+  - [docs/postgres-staging-rehearsal.md](/Users/jannatuladny/cat-6.1/docs/postgres-staging-rehearsal.md)

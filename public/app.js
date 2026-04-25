@@ -22,6 +22,14 @@ let messagesByChannel = {}; // { [channelId]: Message[] }
 let savedMessagesById = {};
 let workspaces = [];
 let currentWorkspaceId = "default";
+let workspaceOnboarding = null;
+let workspaceOnboardingLoadedFor = "";
+let onboardingCurrentStepId = "welcome";
+let onboardingActionBypassDepth = 0;
+let onboardingUiMode = "";
+let workspaceAppHydrated = false;
+let onboardingRedirectMessage = "";
+let onboardingStepUiError = "";
 let employees = [];
 let adminWorkspaces = [];
 let adminUsers = [];
@@ -79,6 +87,9 @@ let policyAccepted = true;
 let policyRequired = false;
 let policyCheckInFlight = false;
 let policyRedirecting = false;
+let policyGateState = null;
+let policyDocument = null;
+let policyPanelLoading = false;
 // default channel id still used by UI
 let currentChannelId = "general";
 let currentThreadMessage = null;
@@ -116,7 +127,6 @@ let voiceRecordStatusTimer = null;
 const channelSearchTerms = {};
 const nicknamesByChannel = {}; // channelId -> { authorKey: nickname }
 const dmMembersCache = {};
-const POLICY_VERSION = "v1";
 const API_BASE = ""; // same origin
 const workspaceProfileCache = new Map();
 const OPENING_HOURS_DAYS = [
@@ -143,8 +153,69 @@ const DENSITY_STORAGE_KEY = "worknest_density";
 const SAVED_MESSAGES_STORAGE_KEY = "worknest_saved_messages";
 const SUPER_ADMIN_WORKSPACE_PREF_KEY = "currentWorkspaceId";
 const CURRENT_WORKSPACE_STORAGE_KEY = "currentWorkspaceId";
+function resolveActiveWorkspaceId(preferredWorkspaceId = "") {
+  const candidate = String(
+    preferredWorkspaceId ||
+    sessionUser?.workspaceId ||
+    sessionUser?.workspace_id ||
+    window.selectedWorkspaceId ||
+    currentWorkspaceId ||
+    ""
+  ).trim();
+  if (candidate && candidate !== "default") return candidate;
+  const firstWorkspaceId = Array.isArray(workspaces) ? String(workspaces[0]?.id || "").trim() : "";
+  if (firstWorkspaceId) return firstWorkspaceId;
+  return candidate || "default";
+}
 function getCurrentWorkspaceId() {
-  return currentWorkspaceId || "default";
+  return resolveActiveWorkspaceId();
+}
+function createUiStateNode({
+  variant = "empty",
+  title = "",
+  message = "",
+  compact = false
+} = {}) {
+  const normalizedVariant = ["empty", "error", "loading"].includes(String(variant))
+    ? String(variant)
+    : "empty";
+  const node = document.createElement("div");
+  node.className = `ui-${normalizedVariant}-state${compact ? " is-compact" : ""}`;
+  node.setAttribute("role", normalizedVariant === "error" ? "alert" : "status");
+
+  const icon = document.createElement("div");
+  icon.className = "ui-state-icon";
+  const iconName =
+    normalizedVariant === "error"
+      ? "fa-circle-exclamation"
+      : normalizedVariant === "loading"
+        ? "fa-spinner"
+        : "fa-circle-info";
+  icon.innerHTML = `<i class="fa-solid ${iconName}" aria-hidden="true"></i>`;
+  node.appendChild(icon);
+
+  const copy = document.createElement("div");
+  copy.className = "ui-state-copy";
+  if (title) {
+    const heading = document.createElement("h3");
+    heading.textContent = title;
+    copy.appendChild(heading);
+  }
+  if (message) {
+    const text = document.createElement("p");
+    text.textContent = message;
+    copy.appendChild(text);
+  }
+  node.appendChild(copy);
+  return node;
+}
+
+function renderUiState(container, options = {}) {
+  if (!container) return null;
+  container.innerHTML = "";
+  const node = createUiStateNode(options);
+  container.appendChild(node);
+  return node;
 }
 const CURRENT_CHANNEL_STORAGE_KEY = "worknest_current_channel";
 const LAST_VIEW_STORAGE_KEY = "worknest_last_view";
@@ -339,9 +410,18 @@ async function bootstrapAfterAuth(user, options = {}) {
   }
 
   await loadWorkspaces?.();
-  await loadUsers?.(authWorkspaceId);
-  await loadChannels?.();
-  await refreshAll?.();
+  await checkPolicyAcceptance();
+  const onboardingRequired = await shouldShowWorkspaceOnboarding();
+  const policyBlocked = shouldBlockForPolicyGate();
+  if (!onboardingRequired && !policyBlocked) {
+    await loadUsers?.(authWorkspaceId);
+    await loadChannels?.();
+    await refreshAll?.();
+  } else if (onboardingRequired) {
+    await openOnboardingPanel({ autoOpen: true });
+  } else {
+    await openPolicyGatePanel({ refresh: true, force: true });
+  }
 
   if (typeof window !== "undefined") {
     window.dispatchEvent(
@@ -363,6 +443,13 @@ async function bootstrapAfterAuth(user, options = {}) {
   }
 
   if (options.hydrateApp) {
+    if (onboardingRequired) {
+      return;
+    }
+    if (shouldBlockForPolicyGate()) {
+      await openPolicyGatePanel({ refresh: true, force: true });
+      return;
+    }
     didRestoreView = false;
     isRestoringView = false;
     await loadServerData();
@@ -374,7 +461,9 @@ async function bootstrapAfterAuth(user, options = {}) {
     renderPinnedSidebar();
     setupRealtimeEvents();
 
-    if (deepLinkTarget) {
+    if (await shouldShowWorkspaceOnboarding()) {
+      openOnboardingPanel({ autoOpen: true });
+    } else if (deepLinkTarget) {
       applyDeepLinkSelection();
     } else {
       const defaultLandingChannelId = getDefaultLandingChannelId(authWorkspaceId);
@@ -403,7 +492,7 @@ async function loadUsers(_workspaceId) {
 
 async function loadChannels() {
   if (typeof loadChannelsForWorkspace === "function") {
-    return loadChannelsForWorkspace(currentWorkspaceId);
+    return loadChannelsForWorkspace(getCurrentWorkspaceId());
   }
 }
 
@@ -757,6 +846,45 @@ async function fetchJSON(path, options = {}) {
     const err = new Error(message || "Request failed");
     err.status = res.status;
     err.payload = payload;
+    err.details = payload?.details || null;
+    if (
+      res.status === 403 &&
+      payload?.code === "onboarding_required" &&
+      typeof openOnboardingPanel === "function" &&
+      !shouldBypassOnboardingNavigation()
+    ) {
+      if (payload?.onboarding) {
+        workspaceOnboarding = payload.onboarding;
+      }
+      onboardingRedirectMessage = "Finish the school setup before using the full workspace.";
+      queueMicrotask(() => {
+        openOnboardingPanel({
+          autoOpen: true,
+          stepId: payload?.onboarding?.currentStep || "welcome"
+        }).catch((openErr) => {
+          console.warn("Could not reopen onboarding after gated API response", openErr);
+        });
+      });
+    }
+    if (
+      res.status === 403 &&
+      payload?.code === "policy_acceptance_required" &&
+      typeof openPolicyGatePanel === "function"
+    ) {
+      if (payload?.policyGate) {
+        policyGateState = payload.policyGate;
+        policyRequired = !!(policyGateState.required && !policyGateState.exempt);
+        policyAccepted = !!(policyGateState.accepted || policyGateState.exempt || !policyRequired);
+      } else {
+        policyAccepted = false;
+        policyRequired = true;
+      }
+      queueMicrotask(() => {
+        openPolicyGatePanel({ refresh: true, force: true }).catch((openErr) => {
+          console.warn("Could not open policy gate after gated API response", openErr);
+        });
+      });
+    }
     throw err;
   }
   return res.json();
@@ -1141,10 +1269,16 @@ async function loadServerData() {
   try {
     // 1) load workspaces first
     await loadWorkspacesFromServer();
+    const workspaceId = resolveActiveWorkspaceId();
+    currentWorkspaceId = workspaceId;
+    if (typeof window !== "undefined") {
+      window.currentWorkspaceId = workspaceId;
+      window.selectedWorkspaceId = workspaceId;
+    }
 
     // 2) then channels for the selected workspace
-    await loadChannelsForWorkspace(currentWorkspaceId);
-    await loadCurrentUserClasses(currentWorkspaceId);
+    await loadChannelsForWorkspace(workspaceId);
+    await loadCurrentUserClasses(workspaceId);
     loadCurrentChannelId();
     scrollState = loadScrollState();
     scrollAnchors = loadScrollAnchors();
@@ -1175,7 +1309,9 @@ async function loadServerData() {
     }
 
     await restoreLastView(lastView);
+    workspaceAppHydrated = true;
   } catch (err) {
+    workspaceAppHydrated = false;
     console.error("Failed to load data from server", err);
     showToast("Could not load data from server");
   }
@@ -1276,6 +1412,15 @@ function persistSessionUser(user) {
     window.selectedWorkspaceId = normalizedWorkspaceId;
     currentWorkspaceId = normalizedWorkspaceId;
     sessionUser.nativeLanguage = normalizeCultureLanguageCode(sessionUser.nativeLanguage || "en");
+    policyGateState = sessionUser.policyGate || policyGateState || null;
+    policyRequired = !!(policyGateState && policyGateState.required && !policyGateState.exempt);
+    policyAccepted = !!(!policyRequired || policyGateState?.accepted || policyGateState?.exempt);
+  } else {
+    workspaceAppHydrated = false;
+    policyGateState = null;
+    policyDocument = null;
+    policyRequired = false;
+    policyAccepted = true;
   }
   syncAdminStatus(sessionUser);
   updateAdminButtonState();
@@ -2422,7 +2567,8 @@ function isPolicyAcceptanceRequired() {
   if (!sessionUser) return false;
   if (!sessionUser.workspaceId) return false;
   if (isSuperAdmin()) return false;
-  return true;
+  if (policyGateState?.exempt) return false;
+  return !!(policyRequired || policyGateState?.required);
 }
 
 async function checkPolicyAcceptance() {
@@ -2437,9 +2583,19 @@ async function checkPolicyAcceptance() {
     const workspaceId = sessionUser?.workspaceId || currentWorkspaceId;
     const res = await fetchJSON(
       `/api/policy/acceptance?workspaceId=${encodeURIComponent(workspaceId || "")}`,
-      { headers: { "x-user-id": getCurrentUserId() } }
+      {}
     );
-    policyAccepted = !!res?.accepted;
+    policyGateState = {
+      ...(policyGateState || {}),
+      workspaceId,
+      required: !!res?.required,
+      exempt: !!res?.exempt,
+      accepted: !!res?.accepted,
+      acceptedAt: res?.acceptedAt || null,
+      version: res?.version || policyGateState?.version || null
+    };
+    policyRequired = !!(policyGateState.required && !policyGateState.exempt);
+    policyAccepted = !!(policyGateState.accepted || policyGateState.exempt || !policyRequired);
   } catch (err) {
     console.warn("Could not verify policy acceptance", err);
     policyAccepted = false;
@@ -2450,75 +2606,240 @@ async function checkPolicyAcceptance() {
 }
 
 async function openPrivacyRulesChannel() {
-  if (policyRedirecting) return;
-  policyRedirecting = true;
+  return openPolicyGatePanel();
+}
+
+function shouldBlockForPolicyGate() {
+  return isPolicyAcceptanceRequired() && !policyAccepted;
+}
+
+async function loadWorkspacePolicyDocument(force = false) {
+  const workspaceId = sessionUser?.workspaceId || currentWorkspaceId || "";
+  if (!workspaceId) return null;
+  if (!force && policyDocument && policyDocument.workspaceId === workspaceId) return policyDocument;
+  const payload = await fetchJSON(`/api/workspaces/${encodeURIComponent(workspaceId)}/policy`);
+  policyDocument = payload?.document || null;
+  if (payload?.policyGate) {
+    policyGateState = payload.policyGate;
+    policyRequired = !!(policyGateState.required && !policyGateState.exempt);
+    policyAccepted = !!(policyGateState.accepted || policyGateState.exempt || !policyRequired);
+  }
+  return policyDocument;
+}
+
+function formatPrivacyDate(value) {
+  if (!value) return "";
   try {
-    await openStaticChannel({
-      dataset: { channelName: "Privacy & Rules", channelCategory: "tools" }
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return "";
+    return parsed.toLocaleDateString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric"
     });
-  } finally {
-    policyRedirecting = false;
+  } catch (_err) {
+    return "";
   }
 }
 
-function renderPolicyAcceptanceCard(container) {
-  if (!container || policyAccepted) return;
-  const existing = container.querySelector(".policy-accept-card");
-  if (existing) existing.remove();
-
-  const card = document.createElement("div");
-  card.className = "policy-accept-card";
-  card.innerHTML = `
-    <div class="policy-accept-title">Please review and accept the rules</div>
-    <div class="policy-accept-text">
-      You must accept the Privacy &amp; Rules before using the platform.
+function renderPolicyGatePanelState(state = {}) {
+  if (!policyGateRoot) return;
+  const normalized = typeof state === "string"
+    ? { title: state }
+    : (state || {});
+  const variant = normalized.variant === "error" ? "error" : "loading";
+  const title = normalized.title || "Loading workspace policy…";
+  const detail = normalized.detail || (
+    variant === "error"
+      ? "We could not load the current privacy, terms, and communication rules."
+      : "Preparing the current privacy, terms, and communication rules for review."
+  );
+  policyGateRoot.innerHTML = `
+    <div class="policy-gate-loading policy-gate-state policy-gate-state--${escapeHtmlText(variant)}">
+      <div class="policy-gate-loading-badge">Workspace entry checkpoint</div>
+      <h1>${escapeHtmlText(title)}</h1>
+      <p>${escapeHtmlText(detail)}</p>
+      ${variant === "loading" ? `
+        <div class="policy-gate-skeleton" aria-hidden="true">
+          <div class="policy-gate-skeleton-line policy-gate-skeleton-line-lg"></div>
+          <div class="policy-gate-skeleton-line policy-gate-skeleton-line-md"></div>
+          <div class="policy-gate-skeleton-line policy-gate-skeleton-line-sm"></div>
+        </div>
+      ` : ""}
+      ${variant === "error" ? `
+        <div class="policy-gate-state-actions">
+          <button type="button" class="policy-gate-btn policy-gate-btn-primary" data-policy-gate-action="retry">Retry</button>
+          <button type="button" class="policy-gate-btn policy-gate-btn-secondary" data-policy-gate-action="logout">Logout</button>
+        </div>
+      ` : ""}
     </div>
-    <label class="policy-accept-check">
-      <input type="checkbox" />
-      <span>I have read carefully, understand, and accept all rules.</span>
-    </label>
-    <label class="policy-accept-check">
-      <input type="checkbox" />
-      <span>
-        I will not discuss harmful content, hate, or violence; I will not share political or illegal
-        content; I will respect German law and will not commit any crime using this platform.
-      </span>
-    </label>
-    <button type="button" class="policy-accept-btn" disabled>Accept &amp; Continue</button>
   `;
+}
 
-  const [check1, check2] = Array.from(card.querySelectorAll("input[type='checkbox']"));
-  const btn = card.querySelector(".policy-accept-btn");
-  const update = () => {
-    const ready = !!check1?.checked && !!check2?.checked;
-    btn.disabled = !ready;
-  };
-  if (check1) check1.addEventListener("change", update);
-  if (check2) check2.addEventListener("change", update);
-  update();
+function renderPolicyGatePanel() {
+  if (!policyGateRoot) return;
+  if (!policyDocument) {
+    renderPolicyGatePanelState("Could not load the current workspace policy.");
+    return;
+  }
+  const cards = (policyDocument.summaryCards || [])
+    .map((card) => `
+      <article class="policy-gate-summary-card">
+        <div class="policy-gate-summary-icon"><i class="fa-solid fa-shield-check" aria-hidden="true"></i></div>
+        <div>
+          <h3>${escapeHtmlText(card.title || "")}</h3>
+          <p>${escapeHtmlText(card.body || "")}</p>
+        </div>
+      </article>
+    `)
+    .join("");
+  const sections = (policyDocument.sections || [])
+    .map((section) => `
+      <section class="policy-gate-section" id="policy-gate-${escapeHtmlText(section.id || "")}">
+        <div class="policy-gate-section-head">
+          <h2>${escapeHtmlText(section.title || "")}</h2>
+          <p>${escapeHtmlText(section.summary || "")}</p>
+        </div>
+        ${(section.paragraphs || []).map((paragraph) => `<p>${escapeHtmlText(paragraph)}</p>`).join("")}
+        ${(section.bullets || []).length ? `<ul>${(section.bullets || []).map((item) => `<li>${escapeHtmlText(item)}</li>`).join("")}</ul>` : ""}
+      </section>
+    `)
+    .join("");
+  const acceptedAt = policyGateState?.acceptedAt
+    ? `Previously accepted: ${escapeHtmlText(formatPrivacyDate(policyGateState.acceptedAt) || policyGateState.acceptedAt)}`
+    : "Review required before workspace entry";
+  policyGateRoot.innerHTML = `
+    <div class="policy-gate-shell-inner">
+      <header class="policy-gate-hero">
+        <div class="policy-gate-hero-copy">
+          <div class="policy-gate-eyebrow">Mandatory workspace policy checkpoint</div>
+          <h1>${escapeHtmlText(policyDocument.schoolName || "School workspace")}</h1>
+          <p class="policy-gate-title">${escapeHtmlText(policyDocument.title || "Privacy, Terms & Rules")}</p>
+          <div class="policy-gate-meta">
+            <span>Version ${escapeHtmlText(policyDocument.version || "—")}</span>
+            <span>Last updated ${escapeHtmlText(policyDocument.lastUpdated || "—")}</span>
+            <span>${escapeHtmlText(acceptedAt)}</span>
+          </div>
+        </div>
+        <aside class="policy-gate-contact-card">
+          <div class="policy-gate-contact-label">School contact</div>
+          <strong>${escapeHtmlText(policyDocument.contact?.supportEmail || "Not yet configured")}</strong>
+          <span>${escapeHtmlText(policyDocument.contact?.phone || "Not yet configured")}</span>
+          <span>${escapeHtmlText(policyDocument.contact?.website || "Not yet configured")}</span>
+          <pre>${escapeHtmlText(policyDocument.contact?.address || "Not yet configured")}</pre>
+        </aside>
+      </header>
+      <section class="policy-gate-summary-grid">${cards}</section>
+      <div class="policy-gate-body">
+        <div class="policy-gate-checkpoint-note">
+          <div class="policy-gate-note-badge">Required before entry</div>
+          <p>You must accept the current workspace privacy, terms, and rules before accessing channels, direct messages, or the main workspace.</p>
+        </div>
+        <div class="policy-gate-sections">${sections}</div>
+      </div>
+      <footer class="policy-gate-footer">
+        <div class="policy-gate-footer-copy">
+          <label class="policy-gate-ack">
+            <input type="checkbox" id="policyGateReadCheckbox" />
+            <span>I have read and understood this workspace policy version.</span>
+          </label>
+        </div>
+        <div class="policy-gate-footer-actions">
+          <button type="button" class="policy-gate-btn policy-gate-btn-secondary" data-policy-gate-action="logout">Logout</button>
+          <button type="button" class="policy-gate-btn policy-gate-btn-primary" id="policyGateAcceptBtn" data-policy-gate-action="accept" disabled>Accept and continue</button>
+        </div>
+      </footer>
+    </div>
+  `;
+  const readCheckbox = document.getElementById("policyGateReadCheckbox");
+  const acceptBtn = document.getElementById("policyGateAcceptBtn");
+  if (readCheckbox && acceptBtn) {
+    readCheckbox.addEventListener("change", () => {
+      acceptBtn.disabled = !readCheckbox.checked || policyPanelLoading;
+    });
+  }
+}
 
-  btn.addEventListener("click", async () => {
-    if (btn.disabled) return;
-    const workspaceId = sessionUser?.workspaceId || currentWorkspaceId;
-    try {
-      btn.disabled = true;
-      await fetchJSON("/api/policy/accept", {
-        method: "POST",
-        headers: { "x-user-id": getCurrentUserId() },
-        body: JSON.stringify({ workspaceId, version: POLICY_VERSION })
-      });
-      policyAccepted = true;
-      showToast("Thank you for accepting the rules.");
-      renderMessages(currentChannelId);
-      updateComposerForChannel(currentChannelId);
-    } catch (err) {
-      console.error("Failed to accept policy", err);
-      showToast("Could not save acceptance. Please try again.");
-      btn.disabled = false;
+async function hydrateWorkspaceAfterPolicyAcceptance() {
+  didRestoreView = false;
+  isRestoringView = false;
+  await loadServerData();
+  renderChannels();
+  renderDMs();
+  renderWorkspaces();
+  renderCommandLists();
+  renderPinnedSidebar();
+  setupRealtimeEvents();
+  if (typeof initCalendarIfNeeded === "function") {
+    initCalendarIfNeeded();
+  }
+  if (deepLinkTarget) {
+    applyDeepLinkSelection();
+    return;
+  }
+  const defaultLandingChannelId = getDefaultLandingChannelId();
+  if (defaultLandingChannelId) {
+    await selectChannel(defaultLandingChannelId);
+  } else {
+    showHomeView();
+  }
+}
+
+async function acceptWorkspacePolicy() {
+  const workspaceId = sessionUser?.workspaceId || currentWorkspaceId || "";
+  const version = policyGateState?.version || policyDocument?.version || "";
+  if (!workspaceId || !version) {
+    showToast("Could not resolve the current workspace policy.", "error");
+    return;
+  }
+  policyPanelLoading = true;
+  const acceptBtn = document.getElementById("policyGateAcceptBtn");
+  try {
+    const payload = await runButtonBusyState(acceptBtn, "Accepting…", () => fetchJSON(`/api/workspaces/${encodeURIComponent(workspaceId)}/policy/accept`, {
+      method: "POST",
+      body: JSON.stringify({ version })
+    }));
+    policyGateState = payload?.policyGate || {
+      ...(policyGateState || {}),
+      accepted: true,
+      required: false,
+      acceptedAt: payload?.acceptedAt || new Date().toISOString(),
+      version: payload?.version || version
+    };
+    policyRequired = !!(policyGateState.required && !policyGateState.exempt);
+    policyAccepted = true;
+    if (sessionUser) {
+      sessionUser.policyGate = policyGateState;
     }
-  });
+    showToast("Policy accepted.");
+    await hydrateWorkspaceAfterPolicyAcceptance();
+  } catch (err) {
+    console.error("Failed to accept policy", err);
+    showToast(err?.message || "Could not save policy acceptance.", "error");
+  } finally {
+    policyPanelLoading = false;
+  }
+}
 
-  container.appendChild(card);
+async function openPolicyGatePanel(options = {}) {
+  if (!shouldBlockForPolicyGate() && !options.force) return;
+  const refresh = !!options.refresh;
+  showPanel("policyGatePanel");
+  renderPolicyGatePanelState({
+    title: refresh ? "Refreshing workspace policy…" : "Loading workspace policy…",
+    variant: "loading"
+  });
+  try {
+    await loadWorkspacePolicyDocument(refresh);
+    renderPolicyGatePanel();
+  } catch (err) {
+    console.error("Failed to load workspace policy", err);
+    renderPolicyGatePanelState({
+      title: "Could not load the current workspace policy.",
+      detail: formatOnboardingUiError(err, "Retry to load the latest workspace policy and continue."),
+      variant: "error"
+    });
+  }
 }
 
 function loadCurrentChannelId() {
@@ -3694,6 +4015,7 @@ async function submitHomeworkAssignmentModal() {
     const channelId = homeworkAssignmentModalState.channelId;
     closeHomeworkAssignmentModal();
     await refreshHomeworkBoardChannel(channelId);
+    await refreshOnboardingAfterWorkspaceMutation();
   } catch (err) {
     setHomeworkFormStatus(homeworkAssignmentFormStatus, err?.message || "Could not save assignment.", "error");
     setHomeworkButtonLoading(homeworkAssignmentSaveBtn, false, homeworkAssignmentModalState.itemId ? "Save changes" : "Save assignment");
@@ -7138,7 +7460,7 @@ function getAiSystemContext() {
         .map((ev) => `${ev.title} (${ev.startsAt || ev.date})`)
     : [];
   return `
-You are an AI assistant for WorkNest.
+You are an AI assistant for StudiesTalk.
 User role: ${role}
 Current channel: ${channel?.name || channel?.title || "N/A"}
 Upcoming events: ${upcoming.join("; ") || "none"}
@@ -7689,6 +8011,11 @@ async function openEmailPanel() {
 }
 
 async function openAdminProfilePanel() {
+  if (await shouldShowWorkspaceOnboarding()) {
+    onboardingRedirectMessage = "Finish the onboarding steps before leaving the setup flow.";
+    openOnboardingPanel({ autoOpen: true });
+    return;
+  }
   showPanel("adminPanel");
   closeAdminDock();
   setSuperAdminLanding(false);
@@ -7717,6 +8044,1430 @@ function currentSchoolLogoFallback() {
     return img.src;
   }
   return "";
+}
+
+const ONBOARDING_STEP_SEQUENCE = [
+  "welcome",
+  "school_profile",
+  "staff_setup",
+  "academic_structure",
+  "student_setup",
+  "communication_setup",
+  "live_class_setup",
+  "homework_setup",
+  "ai_setup",
+  "billing_setup",
+  "launch_checklist"
+];
+
+function withOnboardingNavigationBypass(fn) {
+  onboardingActionBypassDepth += 1;
+  const cleanup = () => {
+    onboardingActionBypassDepth = Math.max(0, onboardingActionBypassDepth - 1);
+  };
+  try {
+    const result = fn?.();
+    if (result && typeof result.then === "function") {
+      return result.finally(cleanup);
+    }
+    cleanup();
+    return result;
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
+}
+
+function shouldBypassOnboardingNavigation() {
+  return onboardingActionBypassDepth > 0;
+}
+
+function formatOnboardingUiError(error, fallback = "Onboarding action failed") {
+  const base = String(error?.message || fallback).trim() || fallback;
+  const details = error?.details;
+  if (!details || typeof details !== "object") return base;
+  const detailLines = Object.entries(details)
+    .map(([key, value]) => `${key}: ${String(value ?? "").trim()}`)
+    .filter((line) => !line.endsWith(":"))
+    .slice(0, 3);
+  return detailLines.length ? `${base} ${detailLines.join(" · ")}` : base;
+}
+
+async function runButtonBusyState(button, busyText, task) {
+  if (typeof task !== "function") return undefined;
+  if (!button) return task();
+  const originalText = button.dataset.originalText || button.textContent.trim();
+  button.dataset.originalText = originalText;
+  button.disabled = true;
+  button.dataset.busy = "true";
+  button.setAttribute("aria-busy", "true");
+  if (busyText) button.textContent = busyText;
+  try {
+    return await task();
+  } finally {
+    if (button.isConnected) {
+      button.disabled = false;
+      button.dataset.busy = "false";
+      button.removeAttribute("aria-busy");
+      button.textContent = button.dataset.originalText || originalText;
+    }
+  }
+}
+
+function getOnboardingVisibilityState(onboarding = workspaceOnboarding) {
+  return onboarding?.visibility && typeof onboarding.visibility === "object"
+    ? onboarding.visibility
+    : {};
+}
+
+function canResumeWorkspaceOnboarding(onboarding = workspaceOnboarding) {
+  if (!onboarding) return false;
+  const visibility = getOnboardingVisibilityState(onboarding);
+  if (typeof visibility.canResume === "boolean") return visibility.canResume;
+  return onboarding.status !== "completed";
+}
+
+function isOnboardingPartiallyCompleted(onboarding = workspaceOnboarding) {
+  const progress = onboarding?.progress || {};
+  return Number(progress.completed || 0) > 0;
+}
+
+function getDefaultOnboardingUiMode(onboarding = workspaceOnboarding, options = {}) {
+  if (!onboarding || onboarding.status === "completed") return "dashboard";
+  if (options.preferredMode === "guided" || options.autoOpen) return "guided";
+  if (options.preferredMode === "dashboard") return "dashboard";
+  if (onboarding.status === "skipped") return "dashboard";
+  if (isOnboardingPartiallyCompleted(onboarding)) return "dashboard";
+  const visibility = getOnboardingVisibilityState(onboarding);
+  if (visibility.shouldEnforce || visibility.shouldAutoOpen) return "guided";
+  return "dashboard";
+}
+
+function setOnboardingUiMode(mode, onboarding = workspaceOnboarding) {
+  const next = mode === "guided" ? "guided" : "dashboard";
+  onboardingUiMode = next;
+  if (onboardingShell) {
+    onboardingShell.dataset.onboardingMode = next;
+    onboardingShell.classList.toggle("onboarding-shell-guided", next === "guided");
+    onboardingShell.classList.toggle("onboarding-shell-dashboard", next === "dashboard");
+  }
+  if (onboardingModeToggleBtn) {
+    onboardingModeToggleBtn.textContent =
+      next === "guided" ? "View setup checklist" : "Resume setup";
+  }
+  if (onboardingResumeBtn) {
+    onboardingResumeBtn.textContent = "Resume setup";
+    onboardingResumeBtn.hidden = next === "guided";
+  }
+  if (onboardingModeLabel) {
+    onboardingModeLabel.textContent = next === "guided" ? "Guided setup" : "Full setup checklist";
+  }
+  return onboardingUiMode;
+}
+
+function getOnboardingContinueLabel(item) {
+  const id = String(item?.id || "").trim();
+  if (id === "welcome") return "Start setup";
+  if (id === "launch_checklist") return "Review launch";
+  return "Continue";
+}
+
+function renderOnboardingLoadingState(options = {}) {
+  if (!onboardingShell) return;
+  const pendingMode = options.preferredMode === "dashboard" ? "dashboard" : "guided";
+  setOnboardingUiMode(pendingMode);
+  onboardingShell.setAttribute("aria-busy", "true");
+  onboardingStepUiError = "";
+  if (onboardingWorkspaceContext) onboardingWorkspaceContext.textContent = "Preparing workspace";
+  if (onboardingStatusLabel) onboardingStatusLabel.textContent = "Loading";
+  if (onboardingProgressValue) onboardingProgressValue.textContent = "…";
+  if (onboardingProgressBar) onboardingProgressBar.style.width = "18%";
+  if (onboardingModeStepCounter) onboardingModeStepCounter.textContent = "Preparing setup";
+  if (onboardingModeProgressBar) onboardingModeProgressBar.style.width = "18%";
+  if (onboardingGuardNotice) {
+    onboardingGuardNotice.classList.add("hidden");
+    onboardingGuardNotice.textContent = "";
+  }
+  if (onboardingStepAlert) {
+    onboardingStepAlert.classList.add("hidden");
+    onboardingStepAlert.innerHTML = "";
+  }
+  if (onboardingSummarySection) {
+    onboardingSummarySection.classList.remove("hidden");
+    onboardingSummarySection.innerHTML = `
+      <div class="onboarding-summary-head">
+        <div>
+          <p class="onboarding-kicker">Workspace snapshot</p>
+          <h2>Loading setup details</h2>
+        </div>
+        <p class="onboarding-copy">Gathering launch readiness, school profile, and next-step guidance.</p>
+      </div>
+      <div class="onboarding-summary-grid onboarding-summary-grid-skeleton">
+        ${Array.from({ length: pendingMode === "guided" ? 2 : 3 }).map(() => `
+          <article class="onboarding-info-card onboarding-skeleton-card" aria-hidden="true">
+            <div class="onboarding-skeleton-line onboarding-skeleton-line-sm"></div>
+            <div class="onboarding-skeleton-line onboarding-skeleton-line-lg"></div>
+            <div class="onboarding-skeleton-stack">
+              <div class="onboarding-skeleton-line onboarding-skeleton-line-md"></div>
+              <div class="onboarding-skeleton-line onboarding-skeleton-line-md"></div>
+              <div class="onboarding-skeleton-line onboarding-skeleton-line-sm"></div>
+            </div>
+          </article>
+        `).join("")}
+      </div>
+    `;
+  }
+  if (onboardingStepList) {
+    onboardingStepList.innerHTML = pendingMode === "dashboard"
+      ? Array.from({ length: 4 }).map((_, index) => `
+          <article class="onboarding-step onboarding-step-skeleton" aria-hidden="true">
+            <div class="onboarding-step-index">${index + 1}</div>
+            <div class="onboarding-step-body">
+              <div class="onboarding-skeleton-line onboarding-skeleton-line-sm"></div>
+              <div class="onboarding-skeleton-line onboarding-skeleton-line-md"></div>
+            </div>
+          </article>
+        `).join("")
+      : "";
+  }
+  if (onboardingChecklistSummary) onboardingChecklistSummary.textContent = "Checking launch readiness…";
+  if (onboardingChecklist) {
+    onboardingChecklist.innerHTML = pendingMode === "dashboard"
+      ? Array.from({ length: 4 }).map(() => `
+          <div class="onboarding-check onboarding-check-skeleton" aria-hidden="true">
+            <span class="onboarding-skeleton-dot"></span>
+            <span class="onboarding-skeleton-line onboarding-skeleton-line-md"></span>
+          </div>
+        `).join("")
+      : "";
+  }
+  if (onboardingStepEyebrow) onboardingStepEyebrow.textContent = "Preparing setup";
+  if (onboardingStepTitle) onboardingStepTitle.textContent = "Loading onboarding…";
+  if (onboardingStepHelp) onboardingStepHelp.textContent = "Preparing the current setup steps, workspace status, and launch blockers.";
+  if (onboardingStepBadge) onboardingStepBadge.textContent = "Loading";
+  if (onboardingStepBody) {
+    onboardingStepBody.innerHTML = `
+      <div class="onboarding-step-content onboarding-step-content-enter">
+        <section class="onboarding-step-panel onboarding-loading-panel">
+          <div class="onboarding-metric-grid">
+            <div class="onboarding-metric-card onboarding-skeleton-card" aria-hidden="true">
+              <div class="onboarding-skeleton-line onboarding-skeleton-line-sm"></div>
+              <div class="onboarding-skeleton-line onboarding-skeleton-line-lg"></div>
+            </div>
+            <div class="onboarding-metric-card onboarding-skeleton-card" aria-hidden="true">
+              <div class="onboarding-skeleton-line onboarding-skeleton-line-sm"></div>
+              <div class="onboarding-skeleton-line onboarding-skeleton-line-lg"></div>
+            </div>
+          </div>
+          <section class="onboarding-detail-card onboarding-skeleton-card" aria-hidden="true">
+            <div class="onboarding-skeleton-line onboarding-skeleton-line-md"></div>
+            <div class="onboarding-skeleton-line onboarding-skeleton-line-xl"></div>
+            <div class="onboarding-skeleton-line onboarding-skeleton-line-lg"></div>
+            <div class="onboarding-skeleton-line onboarding-skeleton-line-md"></div>
+          </section>
+        </section>
+      </div>
+    `;
+  }
+  if (onboardingActivateBtn) {
+    onboardingActivateBtn.disabled = true;
+    onboardingActivateBtn.textContent = "Loading…";
+  }
+  if (onboardingBackBtn) onboardingBackBtn.disabled = true;
+  if (onboardingSkipBtn) {
+    onboardingSkipBtn.hidden = pendingMode !== "guided";
+    onboardingSkipBtn.disabled = true;
+    onboardingSkipBtn.textContent = "Skip for now";
+  }
+  if (onboardingSaveBtn) {
+    onboardingSaveBtn.disabled = true;
+    onboardingSaveBtn.textContent = "Continue";
+  }
+}
+
+function renderOnboardingLoadError(error) {
+  if (!onboardingShell) return;
+  onboardingShell.setAttribute("aria-busy", "false");
+  setOnboardingUiMode("guided");
+  const message = formatOnboardingUiError(error, "Could not load onboarding.");
+  if (onboardingStatusLabel) onboardingStatusLabel.textContent = "Unavailable";
+  if (onboardingProgressValue) onboardingProgressValue.textContent = "—";
+  if (onboardingProgressBar) onboardingProgressBar.style.width = "0%";
+  if (onboardingModeStepCounter) onboardingModeStepCounter.textContent = "Setup unavailable";
+  if (onboardingModeProgressBar) onboardingModeProgressBar.style.width = "0%";
+  if (onboardingSummarySection) {
+    onboardingSummarySection.classList.add("hidden");
+    onboardingSummarySection.innerHTML = "";
+  }
+  if (onboardingStepList) onboardingStepList.innerHTML = "";
+  if (onboardingChecklistSummary) onboardingChecklistSummary.textContent = "Onboarding could not be loaded.";
+  if (onboardingChecklist) onboardingChecklist.innerHTML = "";
+  if (onboardingStepEyebrow) onboardingStepEyebrow.textContent = "Onboarding unavailable";
+  if (onboardingStepTitle) onboardingStepTitle.textContent = "Could not load onboarding";
+  if (onboardingStepHelp) onboardingStepHelp.textContent = "Stay in this panel and retry. The workspace shell remains unchanged until onboarding data is available.";
+  if (onboardingStepBadge) onboardingStepBadge.textContent = "Error";
+  if (onboardingStepAlert) {
+    onboardingStepAlert.classList.remove("hidden");
+    onboardingStepAlert.innerHTML = `<p>${escapeHtmlText(message)}</p>`;
+  }
+  if (onboardingStepBody) {
+    onboardingStepBody.innerHTML = `
+      <div class="onboarding-step-content onboarding-step-content-enter">
+        <section class="onboarding-empty-state onboarding-error-card">
+          <h3>Retry onboarding setup</h3>
+          <p>${escapeHtmlText(message)}</p>
+          <div class="onboarding-step-actions">
+            <button type="button" class="onboarding-primary-btn" data-onboarding-panel-action="retry-load">Retry</button>
+          </div>
+        </section>
+      </div>
+    `;
+  }
+  if (onboardingBackBtn) onboardingBackBtn.disabled = true;
+  if (onboardingSkipBtn) {
+    onboardingSkipBtn.hidden = true;
+    onboardingSkipBtn.disabled = true;
+  }
+  if (onboardingSaveBtn) {
+    onboardingSaveBtn.disabled = true;
+    onboardingSaveBtn.textContent = "Continue";
+  }
+  if (onboardingActivateBtn) {
+    onboardingActivateBtn.disabled = true;
+    onboardingActivateBtn.textContent = "Activate workspace";
+  }
+}
+
+function getOnboardingItems(onboarding = workspaceOnboarding) {
+  return Array.isArray(onboarding?.items) ? onboarding.items : [];
+}
+
+function getOnboardingItem(stepId, onboarding = workspaceOnboarding) {
+  return getOnboardingItems(onboarding).find((item) => String(item.id) === String(stepId)) || null;
+}
+
+function getOnboardingCurrentStepId(onboarding = workspaceOnboarding) {
+  const items = getOnboardingItems(onboarding);
+  const currentFromState = String(onboardingCurrentStepId || "").trim();
+  if (items.some((item) => item.id === currentFromState)) return currentFromState;
+  const currentFromServer = String(onboarding?.currentStep || "").trim();
+  if (items.some((item) => item.id === currentFromServer)) return currentFromServer;
+  const nextPending = items.find((item) => item.status !== "completed" && item.status !== "skipped");
+  return nextPending?.id || items[0]?.id || "welcome";
+}
+
+function setOnboardingCurrentStep(stepId, onboarding = workspaceOnboarding) {
+  const next = getOnboardingItem(stepId, onboarding)?.id || getOnboardingCurrentStepId(onboarding);
+  onboardingCurrentStepId = next;
+  onboardingStepUiError = "";
+}
+
+function getOnboardingStepIndex(stepId) {
+  return ONBOARDING_STEP_SEQUENCE.indexOf(String(stepId || "").trim());
+}
+
+function getPreviousOnboardingStep(stepId) {
+  const index = getOnboardingStepIndex(stepId);
+  if (index <= 0) return null;
+  return getOnboardingItem(ONBOARDING_STEP_SEQUENCE[index - 1]) || null;
+}
+
+function getNextOnboardingStep(stepId) {
+  const index = getOnboardingStepIndex(stepId);
+  if (index < 0 || index >= ONBOARDING_STEP_SEQUENCE.length - 1) return null;
+  return getOnboardingItem(ONBOARDING_STEP_SEQUENCE[index + 1]) || null;
+}
+
+function getOutstandingOnboardingItems(onboarding = workspaceOnboarding) {
+  return getOnboardingItems(onboarding).filter((item) => item.required && item.status !== "completed");
+}
+
+function getOnboardingActivationScore(onboarding = workspaceOnboarding) {
+  const raw = Number(onboarding?.metrics?.activationScore ?? 0);
+  return Number.isFinite(raw) ? Math.max(0, Math.min(100, Math.round(raw))) : 0;
+}
+
+function getOnboardingStatusLabel(status) {
+  const normalized = String(status || "pending").trim().toLowerCase();
+  if (normalized === "completed") return "Completed";
+  if (normalized === "skipped") return "Deferred";
+  if (normalized === "in_progress") return "In progress";
+  return "Pending";
+}
+
+function hasOnboardingValue(value) {
+  return String(value ?? "").trim().length > 0;
+}
+
+function formatOnboardingDate(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "Not yet available";
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return raw;
+  return new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric"
+  }).format(date);
+}
+
+function formatOnboardingLocalTime(timezone) {
+  const zone = String(timezone || "").trim();
+  if (!zone) return "Timezone not set";
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+      timeZone: zone,
+      timeZoneName: "short"
+    }).format(new Date());
+  } catch (_err) {
+    return zone;
+  }
+}
+
+function renderOnboardingInfoRows(rows = []) {
+  if (!rows.length) {
+    return `<div class="onboarding-info-empty">Not yet configured</div>`;
+  }
+  return `
+    <div class="onboarding-info-rows">
+      ${rows.map((row) => {
+        const value = hasOnboardingValue(row.value) ? String(row.value).trim() : (row.emptyText || "Not yet configured");
+        return `
+          <div class="onboarding-info-row">
+            <span>${escapeHtmlText(row.label || "")}</span>
+            <strong class="${hasOnboardingValue(row.value) ? "" : "is-empty"}">${escapeHtmlText(value)}</strong>
+          </div>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function renderOnboardingInfoCard({ eyebrow = "", title = "", badge = "", rows = [], note = "", extraClass = "" }) {
+  return `
+    <article class="onboarding-info-card ${extraClass}">
+      <div class="onboarding-info-card-head">
+        <div>
+          ${eyebrow ? `<p class="onboarding-info-kicker">${escapeHtmlText(eyebrow)}</p>` : ""}
+          <h3>${escapeHtmlText(title)}</h3>
+        </div>
+        ${badge ? `<span class="onboarding-info-badge">${escapeHtmlText(badge)}</span>` : ""}
+      </div>
+      ${renderOnboardingInfoRows(rows)}
+      ${note ? `<p class="onboarding-info-note">${escapeHtmlText(note)}</p>` : ""}
+    </article>
+  `;
+}
+
+function buildOnboardingSummaryCards(onboarding, mode = "dashboard") {
+  const summary = onboarding?.summary || {};
+  const metrics = onboarding?.metrics || {};
+  const workspace = summary.workspace || {};
+  const profile = summary.profile || {};
+  const communication = summary.communication || {};
+  const billing = summary.billing || {};
+  const admin = summary.admin || {};
+  const requiredDone = Number(onboarding?.progress?.requiredCompleted || 0);
+  const requiredTotal = Number(onboarding?.progress?.requiredTotal || 0);
+  const schoolAdminName =
+    (sessionUser && (sessionUser.name || sessionUser.username || sessionUser.email)) ||
+    admin.displayName ||
+    "School admin";
+  const schoolAdminEmail = (sessionUser && sessionUser.email) || admin.email || workspace.adminEmail || "";
+  const localTime = formatOnboardingLocalTime(workspace.timezone || metrics.schoolTimezone);
+  const readinessBadge = onboarding?.activationReady ? "Ready" : (workspace.readinessStatus || "In progress");
+  const openingHoursRows = Array.isArray(profile.openingHoursDays) && profile.openingHoursDays.length
+    ? profile.openingHoursDays.map((entry) => ({
+        label: entry.label || entry.day || "Hours",
+        value: entry.closed
+          ? "Closed"
+          : entry.text || [entry.open, entry.close].filter(Boolean).join(" - ")
+      }))
+    : [{ label: "Schedule", value: profile.openingHoursText || "", emptyText: "Not yet configured" }];
+
+  const cards = [
+    renderOnboardingInfoCard({
+      eyebrow: "School admin",
+      title: schoolAdminName,
+      badge: getRoleText((sessionUser && (sessionUser.role || sessionUser.userRole)) || admin.role || "school_admin", "School admin"),
+      rows: [
+        { label: "Signature email", value: communication.replyToEmail || metrics.contactEmail },
+        { label: "StudiesTalk email", value: communication.usesStudiesTalkEmail ? "Using StudiesTalk sender" : "Custom school sender" },
+        { label: "Registered school email", value: workspace.adminEmail || schoolAdminEmail },
+        { label: "Joined", value: formatOnboardingDate(admin.joinedAt || (sessionUser && (sessionUser.createdAt || sessionUser.created_at))) },
+        { label: "Local time", value: localTime }
+      ],
+      note: "Identity is pulled from the current workspace admin and school email settings."
+    }),
+    renderOnboardingInfoCard({
+      eyebrow: "School identity",
+      title: workspace.name || metrics.schoolName || currentSchoolNameFallback() || "School workspace",
+      badge: readinessBadge,
+      rows: [
+        { label: "Workspace slug", value: workspace.slug || currentWorkspaceId },
+        { label: "School code", value: workspace.schoolCode || "", emptyText: "Using workspace slug" },
+        { label: "Timezone", value: workspace.timezone || metrics.schoolTimezone },
+        { label: "Created", value: formatOnboardingDate(workspace.createdAt) }
+      ]
+    }),
+    renderOnboardingInfoCard({
+      eyebrow: "Launch readiness",
+      title: "Operational setup",
+      badge: `${getOnboardingActivationScore(onboarding)}%`,
+      rows: [
+        { label: "Teachers", value: String(metrics.teachersCount || 0) },
+        { label: "Students", value: String(metrics.studentsCount || 0) },
+        { label: "Classes", value: String(metrics.classesCount || 0) },
+        { label: "Live classes", value: Number(metrics.liveSessionsCount || 0) > 0 ? "Ready" : "Not yet configured" },
+        { label: "Homework", value: Number(metrics.homeworkCount || 0) > 0 ? "Ready" : "Not yet configured" },
+        { label: "Communication", value: communication.schoolEmailConfigured || communication.announcementReady ? "Ready" : "Not yet configured" },
+        { label: "Billing", value: billing.ready ? "Ready" : "Not yet configured" },
+        { label: "Required steps", value: `${requiredDone}/${requiredTotal}` }
+      ],
+      note: onboarding?.activationReady
+        ? "The required launch criteria are complete."
+        : (onboarding?.activationBlockedBy?.length
+          ? `Still blocking launch: ${onboarding.activationBlockedBy.join(", ")}`
+          : "Continue the checklist to unblock launch.")
+    }),
+    renderOnboardingInfoCard({
+      eyebrow: "School details",
+      title: "Contact and address",
+      rows: [
+        { label: "Street", value: profile.street },
+        { label: "House number", value: profile.houseNumber },
+        { label: "Postal code", value: profile.postalCode },
+        { label: "City", value: profile.city },
+        { label: "State", value: profile.state },
+        { label: "Country", value: profile.country },
+        { label: "Phone", value: profile.phone },
+        { label: "Website", value: profile.website }
+      ]
+    }),
+    renderOnboardingInfoCard({
+      eyebrow: "Opening hours",
+      title: "Front-desk schedule",
+      rows: openingHoursRows,
+      note: profile.openingHoursText ? profile.openingHoursText : "Daily hours appear here once the school profile is configured."
+    }),
+    renderOnboardingInfoCard({
+      eyebrow: "Company and legal",
+      title: "Registration details",
+      rows: [
+        { label: "Legal details", value: profile.registrationDetails, emptyText: "Not yet configured" }
+      ],
+      note: "Use the workspace profile to add legal registration, company notes, or invoicing references."
+    }),
+    renderOnboardingInfoCard({
+      eyebrow: "Communication",
+      title: "School sender readiness",
+      rows: [
+        { label: "School email", value: communication.schoolEmailConfigured ? "Configured" : "" },
+        { label: "Sender identity", value: communication.senderIdentityConfigured ? "Configured" : "" },
+        { label: "Reply-to email", value: communication.replyToEmail || metrics.contactEmail },
+        { label: "Announcements", value: communication.announcementReady ? `${communication.announcementsCount || 0} published` : "" },
+        { label: "Subject prefix", value: communication.subjectPrefix }
+      ],
+      note: communication.schoolEmailConfigured || communication.senderIdentityConfigured
+        ? "Communication can be demoed immediately from the current workspace settings."
+        : "Configure school email branding or publish an announcement to unlock this area."
+    })
+  ];
+
+  return mode === "guided" ? [cards[1], cards[2]].filter(Boolean) : cards;
+}
+
+function renderOnboardingSummarySection(onboarding, mode = "dashboard") {
+  if (!onboardingSummarySection) return;
+  if (!onboarding) {
+    onboardingSummarySection.innerHTML = "";
+    onboardingSummarySection.classList.add("hidden");
+    return;
+  }
+  const cards = buildOnboardingSummaryCards(onboarding, mode);
+  onboardingSummarySection.classList.remove("hidden");
+  onboardingSummarySection.classList.toggle("is-guided", mode === "guided");
+  onboardingSummarySection.classList.toggle("is-dashboard", mode !== "guided");
+  onboardingSummarySection.innerHTML = `
+    <div class="onboarding-summary-head">
+      <div>
+        <p class="onboarding-kicker">${mode === "guided" ? "School snapshot" : "Workspace summary"}</p>
+        <h2>${mode === "guided" ? "Keep the essentials visible while you finish setup" : "Operational readiness for launch"}</h2>
+      </div>
+      <p class="onboarding-copy">${mode === "guided"
+        ? "A compact snapshot keeps the school identity and launch state visible without burying the current task."
+        : "Use the summary cards to see what is configured, what is still missing, and what can already be demoed to a school."}</p>
+    </div>
+    <div class="onboarding-summary-grid">
+      ${cards.join("")}
+    </div>
+  `;
+}
+
+async function persistOnboardingCurrentStep(stepId, meta = {}) {
+  const nextStepId = getOnboardingItem(stepId)?.id;
+  if (!nextStepId) return workspaceOnboarding;
+  const workspaceId = currentWorkspaceId || sessionUser?.workspaceId || "default";
+  const payload = await fetchJSON(`/api/workspaces/${encodeURIComponent(workspaceId)}/onboarding/steps/${encodeURIComponent(nextStepId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      currentStep: nextStepId,
+      meta: {
+        source: "wizard-navigation",
+        ...meta
+      }
+    })
+  });
+  workspaceOnboarding = payload?.onboarding || null;
+  workspaceOnboardingLoadedFor = workspaceId;
+  setOnboardingCurrentStep(nextStepId, workspaceOnboarding);
+  renderWorkspaceOnboarding(workspaceOnboarding);
+  return workspaceOnboarding;
+}
+
+function isSchoolAdminOnboardingEnforced(onboarding = workspaceOnboarding) {
+  if (!isSchoolAdmin() || shouldBypassOnboardingNavigation()) return false;
+  return !!getOnboardingVisibilityState(onboarding).shouldEnforce;
+}
+
+function getOnboardingAction(item) {
+  const id = String(item?.id || "");
+  const actions = {
+    welcome: {
+      label: "Start setup",
+      run: () => withOnboardingNavigationBypass(() => saveOnboardingStepState("welcome", "completed"))
+    },
+    school_profile: {
+      label: "Open profile settings",
+      run: () => withOnboardingNavigationBypass(async () => {
+        showPanel("adminPanel");
+        closeAdminDock();
+        setSuperAdminLanding(false);
+        await openCurrentUserProfile();
+        mountUserProfileCardToAdminPanel();
+      })
+    },
+    staff_setup: {
+      label: "Invite teacher",
+      run: () => withOnboardingNavigationBypass(() => openRegistrationModal(teacherRegisterModal, teacherRegisterError, "teacher"))
+    },
+    academic_structure: {
+      label: "Create class",
+      run: () => withOnboardingNavigationBypass(async () => {
+        showPanel("chatPanel");
+        setChatColumnsVisibility(true);
+        setAppFullScreenMode(false);
+        await handleAddChannel("classes");
+      })
+    },
+    student_setup: {
+      label: "Add student",
+      run: () => withOnboardingNavigationBypass(() => openRegistrationModal(studentRegisterModal, studentRegisterError, "student"))
+    },
+    communication_setup: {
+      label: "Open communication",
+      run: () => withOnboardingNavigationBypass(() => openCommunicationSetupFromOnboarding())
+    },
+    live_class_setup: {
+      label: "Schedule live class",
+      run: () => withOnboardingNavigationBypass(() => openLiveSessionModal())
+    },
+    homework_setup: {
+      label: "Create assignment",
+      run: () => withOnboardingNavigationBypass(async () => {
+        const targetChannel =
+          channels.find((channel) => normalizeChannelCategory(channel.category) === "homework") ||
+          channels.find((channel) => normalizeChannelCategory(channel.category) === "classes");
+        if (!targetChannel?.id) {
+          showToast("Create a class before creating homework.", "error");
+          return;
+        }
+        showPanel("chatPanel");
+        setChatColumnsVisibility(true);
+        setAppFullScreenMode(false);
+        openHomeworkAssignmentModalForItem(targetChannel.id);
+      })
+    },
+    ai_setup: {
+      label: "Set AI budget",
+      run: () => withOnboardingNavigationBypass(() => setAiBudgetFromOnboarding())
+    },
+    billing_setup: {
+      label: "Review billing guidance",
+      run: () => withOnboardingNavigationBypass(() => {
+        setOnboardingCurrentStep("billing_setup");
+        renderWorkspaceOnboarding(workspaceOnboarding);
+      })
+    },
+    launch_checklist: {
+      label: "Review launch checklist",
+      run: () => withOnboardingNavigationBypass(() => {
+        setOnboardingCurrentStep("launch_checklist");
+        renderWorkspaceOnboarding(workspaceOnboarding);
+      })
+    }
+  };
+  return actions[id] || { label: "Open", run: () => withOnboardingNavigationBypass(() => showHomeView()) };
+}
+
+function renderOnboardingMetricCard(label, value, note = "") {
+  return `
+    <div class="onboarding-metric-card">
+      <span class="dashboard-checklist-stat-label">${escapeHtmlText(label)}</span>
+      <strong>${escapeHtmlText(value)}</strong>
+      ${note ? `<div class="muted">${escapeHtmlText(note)}</div>` : ""}
+    </div>
+  `;
+}
+
+function renderOnboardingDetailCard(title, copy, items = []) {
+  return `
+    <section class="onboarding-detail-card">
+      <h3>${escapeHtmlText(title)}</h3>
+      <p>${escapeHtmlText(copy)}</p>
+      ${items.length ? `<ul class="onboarding-rule-list">${items.map((item) => `<li>${escapeHtmlText(item)}</li>`).join("")}</ul>` : ""}
+    </section>
+  `;
+}
+
+function buildOnboardingStepBody(item, onboarding) {
+  const metrics = onboarding?.metrics || {};
+  const score = getOnboardingActivationScore(onboarding);
+  const remainingRequired = getOutstandingOnboardingItems(onboarding);
+  switch (String(item?.id || "")) {
+    case "welcome":
+      return `
+        <section class="onboarding-completion-card">
+          <h3>Set up your school in one guided pass</h3>
+          <p>The wizard keeps your admin workspace focused until ${escapeHtmlText(onboarding?.metrics?.schoolName || "the school")} is ready for teachers and students. Every step below updates the real workspace data model.</p>
+          <div class="onboarding-metric-grid">
+            ${renderOnboardingMetricCard("Activation score", `${score}%`, "Updates from real workspace activity")}
+            ${renderOnboardingMetricCard("Required steps", `${onboarding?.progress?.requiredCompleted || 0}/${onboarding?.progress?.requiredTotal || 0}`, "Only required steps block launch")}
+          </div>
+          ${renderOnboardingDetailCard("What happens next", "Each setup step opens the existing tools already used by school admins.", [
+            "School profile saves into workspace profile and settings",
+            "Teacher and student steps use the real user creation and invite flow",
+            "Class, live class, homework, billing, and AI steps read from live workspace data"
+          ])}
+        </section>
+      `;
+    case "school_profile":
+      return `
+        <section class="onboarding-step-panel">
+          <div class="onboarding-metric-grid">
+            ${renderOnboardingMetricCard("Profile status", item.completed ? "Ready" : "Needs details", "Timezone and contact email are required")}
+            ${renderOnboardingMetricCard("Workspace", currentSchoolNameFallback() || "Current school", "Profile lives in the existing admin settings")}
+          </div>
+          ${renderOnboardingDetailCard("Save real school details", "Use the existing school profile form to set the school name, timezone, contact email, address, phone, website, and opening hours.", [
+            "Profile completion is detected from live workspace settings",
+            "This step completes automatically once the required fields exist"
+          ])}
+          <div class="onboarding-step-actions">
+            <button type="button" class="onboarding-step-action-btn" data-onboarding-step-action="primary">${escapeHtmlText(getOnboardingAction(item).label)}</button>
+          </div>
+        </section>
+      `;
+    case "staff_setup":
+      return `
+        <section class="onboarding-step-panel">
+          <div class="onboarding-metric-grid">
+            ${renderOnboardingMetricCard("Teachers", String(metrics.teachersCount || 0), "At least one active teacher is required")}
+            ${renderOnboardingMetricCard("Completed tasks", `${onboarding?.progress?.completed || 0}`, "The wizard updates in real time")}
+          </div>
+          ${renderOnboardingDetailCard("Invite teaching staff", "Open the existing teacher registration flow and create at least one real teacher account for this workspace.", [
+            "Uses the real user creation flow",
+            "Completion is detected from active teacher accounts"
+          ])}
+          <div class="onboarding-step-actions">
+            <button type="button" class="onboarding-step-action-btn" data-onboarding-step-action="primary">${escapeHtmlText(getOnboardingAction(item).label)}</button>
+          </div>
+        </section>
+      `;
+    case "academic_structure":
+      return `
+        <section class="onboarding-step-panel">
+          <div class="onboarding-metric-grid">
+            ${renderOnboardingMetricCard("Classes", String(metrics.classesCount || 0), "Default general and announcements channels do not count")}
+            ${renderOnboardingMetricCard("Channels", String(metrics.channelsCount || 0), "Shows real workspace structure")}
+          </div>
+          ${renderOnboardingDetailCard("Build the first class", "Create at least one class channel so teachers and students have a real academic workspace.", [
+            "Reuses the existing class/channel creation flow",
+            "Completion is detected from class channels beyond the defaults"
+          ])}
+          <div class="onboarding-step-actions">
+            <button type="button" class="onboarding-step-action-btn" data-onboarding-step-action="primary">${escapeHtmlText(getOnboardingAction(item).label)}</button>
+          </div>
+        </section>
+      `;
+    case "student_setup":
+      return `
+        <section class="onboarding-step-panel">
+          <div class="onboarding-metric-grid">
+            ${renderOnboardingMetricCard("Students", String(metrics.studentsCount || 0), "At least one real or prepared student record is required")}
+            ${renderOnboardingMetricCard("Current step", getOnboardingStatusLabel(item.status), "Detected from the real user directory")}
+          </div>
+          ${renderOnboardingDetailCard("Add students", "Use the student registration flow to create the first student account, optionally with direct class assignment.", [
+            "Uses the existing student creation form",
+            "Completion is detected from student accounts in the workspace"
+          ])}
+          <div class="onboarding-step-actions">
+            <button type="button" class="onboarding-step-action-btn" data-onboarding-step-action="primary">${escapeHtmlText(getOnboardingAction(item).label)}</button>
+          </div>
+        </section>
+      `;
+    case "communication_setup":
+      return `
+        <section class="onboarding-step-panel">
+          <div class="onboarding-metric-grid">
+            ${renderOnboardingMetricCard("Announcements", String(metrics.announcementsCount || 0), "School announcements count toward activation")}
+            ${renderOnboardingMetricCard("Optional step", "Skippable", "You can return later without blocking launch")}
+          </div>
+          ${renderOnboardingDetailCard("Prepare communication", "Open the existing school email settings or announcements tools to configure how the workspace communicates with staff and students.", [
+            "Completion is detected from announcements or school email settings",
+            "You can skip this and finish it later"
+          ])}
+          <div class="onboarding-step-actions">
+            <button type="button" class="onboarding-step-action-btn" data-onboarding-step-action="primary">${escapeHtmlText(getOnboardingAction(item).label)}</button>
+          </div>
+        </section>
+      `;
+    case "live_class_setup":
+      return `
+        <section class="onboarding-step-panel">
+          <div class="onboarding-metric-grid">
+            ${renderOnboardingMetricCard("Live sessions", String(metrics.liveSessionsCount || 0), "At least one live class is required")}
+            ${renderOnboardingMetricCard("Launch readiness", remainingRequired.length ? `${remainingRequired.length} required left` : "Ready", "This step unlocks launch confidence")}
+          </div>
+          ${renderOnboardingDetailCard("Schedule a live class", "Use the existing live session modal to schedule the first session for a class or audience.", [
+            "Reuses the live-session flow already in the app",
+            "Completion is detected from real live session records"
+          ])}
+          <div class="onboarding-step-actions">
+            <button type="button" class="onboarding-step-action-btn" data-onboarding-step-action="primary">${escapeHtmlText(getOnboardingAction(item).label)}</button>
+          </div>
+        </section>
+      `;
+    case "homework_setup":
+      return `
+        <section class="onboarding-step-panel">
+          <div class="onboarding-metric-grid">
+            ${renderOnboardingMetricCard("Homework items", String(metrics.homeworkCount || 0), "Assignments and tasks both count")}
+            ${renderOnboardingMetricCard("Optional step", "Skippable", "This improves launch quality but does not block it")}
+          </div>
+          ${renderOnboardingDetailCard("Create the first assignment", "Open the existing homework composer and publish a real assignment in a class or homework channel.", [
+            "Uses the existing homework modal",
+            "Completion is detected from real homework or task rows"
+          ])}
+          <div class="onboarding-step-actions">
+            <button type="button" class="onboarding-step-action-btn" data-onboarding-step-action="primary">${escapeHtmlText(getOnboardingAction(item).label)}</button>
+          </div>
+        </section>
+      `;
+    case "ai_setup":
+      return `
+        <section class="onboarding-step-panel">
+          <div class="onboarding-metric-grid">
+            ${renderOnboardingMetricCard("AI budget", metrics.aiEnabled ? "Configured" : "Not set", "Budget settings use the existing admin AI budget flow")}
+            ${renderOnboardingMetricCard("Score impact", "+5%", "Optional but visible on activation score")}
+          </div>
+          ${renderOnboardingDetailCard("Set the AI budget", "Choose the monthly AI practice budget that should govern the school workspace.", [
+            "Uses the existing AI budget endpoint",
+            "You can skip this and return later"
+          ])}
+          <div class="onboarding-step-actions">
+            <button type="button" class="onboarding-step-action-btn" data-onboarding-step-action="primary">${escapeHtmlText(getOnboardingAction(item).label)}</button>
+          </div>
+        </section>
+      `;
+    case "billing_setup":
+      return `
+        <section class="onboarding-step-panel">
+          <div class="onboarding-metric-grid">
+            ${renderOnboardingMetricCard("Billing readiness", metrics.billingReady ? "Ready" : "Needs review", "Billing contact and invoice owner should be explicit")}
+            ${renderOnboardingMetricCard("Billing owner", "Platform + school admin", "School admins can maintain contact details here")}
+          </div>
+          ${renderOnboardingDetailCard("Review billing state", "Billing bootstrap happens during workspace provisioning. This step does not create payments. It only keeps billing contact details honest and records launch readiness review.", [
+            metrics.billingContactEmail ? `Billing email: ${metrics.billingContactEmail}` : "Billing email is still missing",
+            metrics.billingInvoiceContactName ? `Invoice contact: ${metrics.billingInvoiceContactName}` : "Invoice contact name is still missing",
+            metrics.billingAcknowledgedAt ? "Readiness review already acknowledged" : "Readiness review has not been acknowledged yet"
+          ])}
+          <section class="onboarding-detail-card">
+            <h3>Update billing contact</h3>
+            <div class="onboarding-inline-form">
+              <label class="onboarding-inline-field">
+                <span>Billing email</span>
+                <input id="onboardingBillingEmailInput" type="email" value="${escapeHtmlText(metrics.billingContactEmail || "")}" placeholder="billing@school.example" />
+              </label>
+              <label class="onboarding-inline-field">
+                <span>Invoice contact name</span>
+                <input id="onboardingBillingContactNameInput" type="text" value="${escapeHtmlText(metrics.billingInvoiceContactName || "")}" placeholder="Finance contact" />
+              </label>
+            </div>
+            <label class="onboarding-inline-check">
+              <input id="onboardingBillingAckInput" type="checkbox" ${metrics.billingAcknowledgedAt ? "checked" : ""} />
+              <span>I reviewed the billing readiness for launch.</span>
+            </label>
+            <div class="onboarding-step-actions">
+              <button type="button" class="onboarding-step-action-btn" data-onboarding-step-action="save-billing">Save billing details</button>
+            </div>
+          </section>
+          <div class="onboarding-step-actions">
+            <button type="button" class="onboarding-step-action-btn" data-onboarding-step-action="primary">${escapeHtmlText(getOnboardingAction(item).label)}</button>
+          </div>
+        </section>
+      `;
+    case "launch_checklist":
+      return `
+        <section class="onboarding-step-panel">
+          <div class="onboarding-metric-grid">
+            ${renderOnboardingMetricCard("Activation score", `${score}%`, "Based on live workspace evidence")}
+            ${renderOnboardingMetricCard("Required remaining", String(remainingRequired.length), remainingRequired.length ? "Finish these before launch" : "All required setup is complete")}
+          </div>
+          ${renderOnboardingDetailCard("Review launch readiness", remainingRequired.length
+            ? "Finish the remaining required steps below, then activate the workspace."
+            : "All required setup is complete. Activate the workspace when you are ready.", remainingRequired.length
+            ? remainingRequired.map((entry) => entry.title || entry.id)
+            : ["All required steps are complete", "Optional setup can still be done later without blocking launch"]
+          )}
+          <div class="onboarding-step-actions">
+            ${remainingRequired.length ? `<button type="button" class="onboarding-step-action-btn" data-onboarding-step-action="jump-required">Jump to next required step</button>` : ""}
+            <button type="button" class="onboarding-step-action-btn" data-onboarding-step-action="activate">Activate workspace</button>
+          </div>
+        </section>
+      `;
+    default:
+      return `
+        <div class="onboarding-empty-state">
+          <h3>Setup details are not available yet</h3>
+          <p>Use the existing admin tools to continue this step, then return here to keep the setup moving.</p>
+        </div>
+      `;
+  }
+}
+
+async function openCommunicationSetupFromOnboarding() {
+  if (typeof openEmailPanel === "function") {
+    await openEmailPanel();
+    return;
+  }
+  await openStaticChannelByName("Announcements");
+}
+
+async function openStaticChannelByName(name) {
+  const wanted = String(name || "").trim().toLowerCase();
+  const channel = channels.find((ch) => String(ch.name || "").trim().toLowerCase() === wanted);
+  if (channel?.id) {
+    showPanel("chatPanel");
+    await selectChannel(channel.id);
+    return;
+  }
+  showToast("Channel is not available yet.");
+}
+
+async function openFirstHomeworkChannel() {
+  const homework = channels.find((ch) => normalizeChannelCategory(ch.category) === "homework");
+  if (homework?.id) {
+    showPanel("chatPanel");
+    await selectChannel(homework.id);
+    return;
+  }
+  const firstClass = channels.find((ch) => normalizeChannelCategory(ch.category) === "classes");
+  if (firstClass?.id) {
+    showPanel("chatPanel");
+    await selectChannel(firstClass.id);
+    return;
+  }
+  await handleAddChannel("classes");
+}
+
+async function setAiBudgetFromOnboarding() {
+  const currentValue = workspaceOnboarding?.metrics?.aiMonthlyCapEur;
+  const input = window.prompt("Monthly AI budget in EUR", currentValue != null ? String(currentValue) : "25");
+  if (input === null) return;
+  const cap = Number(input);
+  if (!Number.isFinite(cap) || cap < 0) {
+    showToast("Enter a non-negative AI budget.", "error");
+    return;
+  }
+  await fetchJSON("/api/admin/ai-budget", {
+    method: "POST",
+    body: JSON.stringify({
+      workspaceId: currentWorkspaceId || "default",
+      monthly_cap_eur: cap
+    })
+  });
+  await refreshOnboardingAfterWorkspaceMutation();
+  showToast("AI budget saved.");
+}
+
+async function loadBillingProfileForOnboarding() {
+  const workspaceId = currentWorkspaceId || sessionUser?.workspaceId || "default";
+  const payload = await fetchJSON(`/api/workspaces/${encodeURIComponent(workspaceId)}/billing-profile`);
+  return payload?.billing || null;
+}
+
+async function saveBillingProfileFromOnboarding(input = {}) {
+  const workspaceId = currentWorkspaceId || sessionUser?.workspaceId || "default";
+  const payload = await fetchJSON(`/api/workspaces/${encodeURIComponent(workspaceId)}/billing-profile`, {
+    method: "PATCH",
+    body: JSON.stringify(input)
+  });
+  await refreshOnboardingAfterWorkspaceMutation();
+  return payload?.billing || null;
+}
+
+async function loadWorkspaceOnboarding(force = false) {
+  const workspaceId = currentWorkspaceId || sessionUser?.workspaceId || "default";
+  if (!workspaceId || !isSchoolAdmin()) {
+    renderOnboardingResumeEntryPoint(null);
+    return null;
+  }
+  if (!force && workspaceOnboarding && workspaceOnboardingLoadedFor === workspaceId) {
+    setOnboardingCurrentStep(getOnboardingCurrentStepId(workspaceOnboarding), workspaceOnboarding);
+    renderWorkspaceSetupChecklistCard(workspaceOnboarding);
+    return workspaceOnboarding;
+  }
+  const payload = await fetchJSON(`/api/workspaces/${encodeURIComponent(workspaceId)}/onboarding`);
+  workspaceOnboarding = payload?.onboarding || null;
+  workspaceOnboardingLoadedFor = workspaceId;
+  setOnboardingCurrentStep(getOnboardingCurrentStepId(workspaceOnboarding), workspaceOnboarding);
+  renderWorkspaceSetupChecklistCard(workspaceOnboarding);
+  return workspaceOnboarding;
+}
+
+async function updateWorkspaceOnboardingVisibility(action, meta = {}) {
+  const workspaceId = currentWorkspaceId || sessionUser?.workspaceId || "default";
+  const payload = await fetchJSON(`/api/workspaces/${encodeURIComponent(workspaceId)}/onboarding`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      action,
+      meta
+    })
+  });
+  workspaceOnboarding = payload?.onboarding || null;
+  workspaceOnboardingLoadedFor = workspaceId;
+  setOnboardingCurrentStep(getOnboardingCurrentStepId(workspaceOnboarding), workspaceOnboarding);
+  renderWorkspaceSetupChecklistCard(workspaceOnboarding);
+  return workspaceOnboarding;
+}
+
+async function acknowledgeOnboardingAutoOpen() {
+  if (!getOnboardingVisibilityState(workspaceOnboarding).shouldAutoOpen) return workspaceOnboarding;
+  return updateWorkspaceOnboardingVisibility("acknowledge_auto_open", {
+    source: "auto-open",
+    seenAt: new Date().toISOString()
+  });
+}
+
+async function deferWorkspaceOnboarding() {
+  const onboarding = await updateWorkspaceOnboardingVisibility("defer", {
+    source: "wizard",
+    deferredAt: new Date().toISOString()
+  });
+  onboardingUiMode = "dashboard";
+  await hydrateWorkspaceAfterOnboardingIfNeeded(true);
+  renderWorkspaceSetupChecklistCard(onboarding);
+  return onboarding;
+}
+
+async function resumeWorkspaceOnboarding() {
+  const onboarding = await updateWorkspaceOnboardingVisibility("resume", {
+    source: "resume-entry-point",
+    resumedAt: new Date().toISOString()
+  });
+  onboardingUiMode = "dashboard";
+  renderWorkspaceOnboarding(onboarding);
+  return onboarding;
+}
+
+async function refreshOnboardingAfterWorkspaceMutation() {
+  if (!isSchoolAdmin()) return;
+  try {
+    await loadWorkspaceOnboarding(true);
+    if (onboardingPanel && !onboardingPanel.classList.contains("hidden")) {
+      renderWorkspaceOnboarding(workspaceOnboarding);
+    } else {
+      renderWorkspaceSetupChecklistCard(workspaceOnboarding);
+    }
+  } catch (err) {
+    console.warn("Could not refresh onboarding after workspace mutation", err);
+  }
+}
+
+async function hydrateWorkspaceAfterOnboardingIfNeeded(force = false) {
+  if (!force && workspaceAppHydrated) return;
+  if (shouldBlockForPolicyGate()) {
+    await openPolicyGatePanel({ refresh: true, force: true });
+    return false;
+  }
+  await loadServerData();
+  renderChannels();
+  renderDMs();
+  renderWorkspaces();
+  renderCommandLists();
+  renderPinnedSidebar();
+  setupRealtimeEvents();
+  if (typeof initCalendarIfNeeded === "function") {
+    initCalendarIfNeeded();
+  }
+  return true;
+}
+
+async function shouldShowWorkspaceOnboarding() {
+  if (!isSchoolAdmin()) return false;
+  try {
+    const onboarding = await loadWorkspaceOnboarding();
+    return !!getOnboardingVisibilityState(onboarding).shouldAutoOpen;
+  } catch (err) {
+    console.warn("Could not load onboarding state", err);
+    return false;
+  }
+}
+
+function renderOnboardingResumeEntryPoint(onboarding = workspaceOnboarding) {
+  if (!adminResumeSetupBtn) return;
+  const visible = isSchoolAdmin() && canResumeWorkspaceOnboarding(onboarding);
+  adminResumeSetupBtn.hidden = !visible;
+  adminResumeSetupBtn.disabled = !visible;
+  adminResumeSetupBtn.textContent = "Resume setup";
+}
+
+function renderWorkspaceSetupChecklistCard(onboarding) {
+  const mount = dashboardChecklistMount;
+  if (!mount) return;
+  renderOnboardingResumeEntryPoint(onboarding);
+  if (!isSchoolAdmin() || !onboarding || !canResumeWorkspaceOnboarding(onboarding)) {
+    mount.classList.add("hidden");
+    mount.innerHTML = "";
+    return;
+  }
+  mount.classList.remove("hidden");
+  const items = getOnboardingItems(onboarding);
+  const currentStep = getOnboardingItem(getOnboardingCurrentStepId(onboarding), onboarding) || items[0] || null;
+  const progress = onboarding.progress || {};
+  const completed = Number(progress.completed || 0);
+  const total = Number(progress.total || 0);
+  const remaining = Math.max(total - completed, 0);
+  const pct = total ? Math.round((completed / total) * 100) : 0;
+  const blockers = Array.isArray(onboarding.activationBlockedBy) ? onboarding.activationBlockedBy : [];
+  const nextActionLabel = onboarding.status === "skipped"
+    ? "Resume setup to continue launch preparation."
+    : currentStep?.title
+      ? `Next recommended action: ${currentStep.title}.`
+      : "Resume setup to continue launch preparation.";
+  mount.innerHTML = `
+    <section class="dashboard-checklist-card">
+      <div class="dashboard-checklist-head">
+        <div>
+          <p class="dashboard-checklist-kicker">Workspace activation</p>
+          <h3>School admin checklist</h3>
+          <p>${escapeHtmlText(onboarding.status === "skipped" ? "Setup is deferred. You can review the checklist or resume the guided flow whenever you are ready." : "Keep setup visible until the workspace is fully activated.")}</p>
+        </div>
+        <div class="dashboard-checklist-score">
+          <span>Activation score</span>
+          <strong>${escapeHtmlText(`${getOnboardingActivationScore(onboarding)}%`)}</strong>
+        </div>
+      </div>
+      <div class="dashboard-checklist-progress">
+        <div class="dashboard-checklist-progress-copy">
+          <span class="dashboard-checklist-stat-label">Setup progress</span>
+          <strong>${escapeHtmlText(`${completed}/${total}`)}</strong>
+        </div>
+        <div class="dashboard-checklist-progress-track" aria-hidden="true">
+          <span style="width:${escapeHtmlText(`${pct}%`)}"></span>
+        </div>
+      </div>
+      <section class="dashboard-checklist-primary">
+        <div class="dashboard-checklist-primary-copy">
+          <span class="dashboard-checklist-stat-label">${blockers.length ? "Current blockers" : "Next step"}</span>
+          <strong>${escapeHtmlText(blockers.length ? blockers.join(", ") : currentStep?.title || "Resume setup")}</strong>
+          <p>${escapeHtmlText(nextActionLabel)}</p>
+        </div>
+        <div class="dashboard-checklist-actions">
+          <button type="button" class="dashboard-checklist-btn" data-dashboard-onboarding-action="resume">Resume setup</button>
+          <button type="button" class="onboarding-ghost-btn" data-dashboard-onboarding-action="view_checklist">View setup checklist</button>
+        </div>
+      </section>
+      <div class="dashboard-checklist-stats">
+        <div class="dashboard-checklist-stat">
+          <span class="dashboard-checklist-stat-label">Completed tasks</span>
+          <strong>${escapeHtmlText(`${completed}`)}</strong>
+        </div>
+        <div class="dashboard-checklist-stat">
+          <span class="dashboard-checklist-stat-label">Remaining tasks</span>
+          <strong>${escapeHtmlText(`${remaining}`)}</strong>
+        </div>
+        <div class="dashboard-checklist-stat">
+          <span class="dashboard-checklist-stat-label">Current onboarding step</span>
+          <strong>${escapeHtmlText(currentStep?.title || "Setup")}</strong>
+          <div class="dashboard-checklist-step-label">${escapeHtmlText(getOnboardingStatusLabel(currentStep?.status || "pending"))}</div>
+        </div>
+      </div>
+      <div class="dashboard-checklist-blockers">
+        <span class="dashboard-checklist-stat-label">Launch blockers</span>
+        <strong>${escapeHtmlText(blockers.length ? blockers.join(", ") : "No required blockers")}</strong>
+      </div>
+      <section class="dashboard-checklist-secondary">
+        <span class="dashboard-checklist-stat-label">Quick actions</span>
+        <div class="dashboard-checklist-quick-actions">
+          <button type="button" data-dashboard-onboarding-action="invite_teacher">Invite teacher</button>
+          <button type="button" data-dashboard-onboarding-action="create_class">Create class</button>
+          <button type="button" data-dashboard-onboarding-action="add_students">Add students</button>
+        </div>
+      </section>
+    </section>
+  `;
+}
+
+function renderWorkspaceOnboarding(onboarding) {
+  if (!onboardingShell || !onboarding) return;
+  onboardingShell.setAttribute("aria-busy", "false");
+  const progress = onboarding.progress || {};
+  const total = Number(progress.total || 0);
+  const completed = Number(progress.completed || 0);
+  const pct = total ? Math.round((completed / total) * 100) : 0;
+  const activationScore = getOnboardingActivationScore(onboarding);
+  const items = getOnboardingItems(onboarding);
+  const currentItem = onboarding.status === "completed"
+    ? null
+    : getOnboardingItem(getOnboardingCurrentStepId(onboarding), onboarding) || items[0] || null;
+  const schoolName = onboarding?.metrics?.schoolName || currentSchoolNameFallback() || "Current school workspace";
+  const currentBlockers = Array.isArray(currentItem?.blockers) ? currentItem.blockers : [];
+  const visibility = getOnboardingVisibilityState(onboarding);
+  const inferredMode = onboardingUiMode === "guided" || onboardingUiMode === "dashboard"
+    ? onboardingUiMode
+    : getDefaultOnboardingUiMode(onboarding);
+  const mode = setOnboardingUiMode(inferredMode, onboarding);
+  const stepNumber = Math.max(getOnboardingStepIndex(currentItem?.id) + 1, 1);
+
+  if (onboardingStatusLabel) {
+    onboardingStatusLabel.textContent =
+      onboarding.status === "completed"
+        ? "Completed"
+        : onboarding.status === "skipped"
+          ? "Deferred"
+        : onboarding.activationReady
+          ? "Activation-ready"
+          : "In progress";
+  }
+  if (onboardingWorkspaceContext) {
+    onboardingWorkspaceContext.textContent = schoolName;
+  }
+  if (onboardingGuardNotice) {
+    const message = onboardingRedirectMessage || (
+      visibility.shouldEnforce
+        ? "New school admins are dropped into setup on first login so the workspace starts in a safe state."
+        : onboarding.status === "skipped"
+          ? "Setup is deferred. You can resume it later from the dashboard or settings."
+          : "");
+    onboardingGuardNotice.textContent = message;
+    onboardingGuardNotice.classList.toggle("hidden", !message);
+  }
+  if (onboardingProgressValue) onboardingProgressValue.textContent = `${completed}/${total || 0}`;
+  if (onboardingProgressBar) onboardingProgressBar.style.width = `${pct}%`;
+  if (onboardingModeStepCounter) {
+    onboardingModeStepCounter.textContent = onboarding.status === "completed"
+      ? "Setup complete"
+      : `Step ${stepNumber} of ${items.length}`;
+  }
+  if (onboardingModeProgressBar) {
+    onboardingModeProgressBar.style.width = `${pct}%`;
+  }
+  renderOnboardingSummarySection(onboarding, mode);
+  const onboardingActivationScoreValue = document.getElementById("onboardingActivationScoreValue");
+  if (onboardingActivationScoreValue) onboardingActivationScoreValue.textContent = `${activationScore}%`;
+  if (onboardingChecklistSummary) {
+    onboardingChecklistSummary.textContent = onboarding.activationReady
+      ? "Every required setup item is complete. You can activate the workspace."
+      : `${progress.requiredCompleted || 0} of ${progress.requiredTotal || 0} required items are complete. ${onboarding.activationBlockedBy?.length ? `Still missing: ${onboarding.activationBlockedBy.join(", ")}.` : ""}`;
+  }
+  if (onboardingStepList) {
+    onboardingStepList.innerHTML = items.map((item, index) => {
+      const done = item.status === "completed";
+      const skipped = item.status === "skipped";
+      return `
+        <article class="onboarding-step ${done ? "is-done" : ""} ${skipped ? "is-skipped" : ""} ${currentItem?.id === item.id ? "is-active" : ""}" data-onboarding-select-step="${escapeHtmlText(item.id)}">
+          <div class="onboarding-step-index">${done ? '<i class="fa-solid fa-check"></i>' : index + 1}</div>
+          <div class="onboarding-step-body">
+            <div class="onboarding-step-domain">${escapeHtmlText(item.domain || "setup")}${item.mvp ? " · MVP" : " · scaffold"}</div>
+            <h3>${escapeHtmlText(item.title || "")}</h3>
+            <p>${escapeHtmlText(item.description || "")}</p>
+          </div>
+          <span class="onboarding-step-state">${done ? "Done" : skipped ? "Deferred" : "Pending"}</span>
+        </article>`;
+    }).join("");
+  }
+  if (onboardingChecklist) {
+    onboardingChecklist.innerHTML = items.map((item) => `
+      <div class="onboarding-check ${item.status === "completed" ? "is-done" : ""}">
+        <i class="fa-solid ${item.status === "completed" ? "fa-circle-check" : "fa-circle"}"></i>
+        <span>${escapeHtmlText(item.title || "")}</span>
+      </div>
+    `).join("");
+  }
+  if (onboardingActivateBtn) {
+    onboardingActivateBtn.disabled = !onboarding.activationReady || onboarding.status === "completed";
+    onboardingActivateBtn.textContent = onboarding.status === "completed" ? "Workspace activated" : "Activate workspace";
+  }
+  renderWorkspaceSetupChecklistCard(onboarding);
+
+  const stepEyebrow = document.getElementById("onboardingStepEyebrow");
+  const stepTitle = document.getElementById("onboardingStepTitle");
+  const stepHelp = document.getElementById("onboardingStepHelp");
+  const stepBadge = document.getElementById("onboardingStepBadge");
+  const stepBody = document.getElementById("onboardingStepBody");
+  const backBtn = document.getElementById("onboardingBackBtn");
+  const skipBtn = document.getElementById("onboardingSkipBtn");
+  const saveBtn = document.getElementById("onboardingSaveBtn");
+
+  if (onboarding.status === "completed") {
+    if (stepEyebrow) stepEyebrow.textContent = "Completed";
+    if (stepTitle) stepTitle.textContent = "Workspace activation complete";
+    if (stepHelp) stepHelp.textContent = "Your school workspace is ready. You can move into the full dashboard and continue improving optional setup at any time.";
+    if (stepBadge) stepBadge.textContent = "Activated";
+    if (onboardingStepAlert) {
+      onboardingStepAlert.classList.add("hidden");
+      onboardingStepAlert.innerHTML = "";
+    }
+    if (stepBody) {
+      stepBody.innerHTML = `
+        <div class="onboarding-step-content onboarding-step-content-enter">
+        <section class="onboarding-completion-card onboarding-completion-card-strong">
+          <h3>${escapeHtmlText(schoolName)} is ready to launch</h3>
+          <p>The required onboarding steps are complete and the workspace is activated. Teachers and students can now enter the full workspace without setup gating.</p>
+          <div class="onboarding-metric-grid">
+            ${renderOnboardingMetricCard("Activation score", `${activationScore}%`, "Captured at the time of completion")}
+            ${renderOnboardingMetricCard("Completed steps", `${completed}/${total}`, "Optional steps can still be improved later")}
+          </div>
+          <section class="onboarding-detail-card">
+            <h3>Configured in this setup</h3>
+            <ul class="onboarding-rule-list">
+              <li>${escapeHtmlText(`${onboarding?.metrics?.teachersCount || 0} teacher account(s) ready`)}</li>
+              <li>${escapeHtmlText(`${onboarding?.metrics?.studentsCount || 0} student account(s) added`)}</li>
+              <li>${escapeHtmlText(`${onboarding?.metrics?.classesCount || 0} class workspace(s) created`)}</li>
+              <li>${escapeHtmlText(`${onboarding?.metrics?.liveSessionsCount || 0} live session(s) scheduled`)}</li>
+            </ul>
+          </section>
+          <div class="onboarding-step-actions">
+            <button type="button" class="onboarding-step-action-btn" data-onboarding-step-action="open-home">Open workspace</button>
+            <button type="button" class="onboarding-step-action-btn" data-onboarding-step-action="view-checklist">View setup checklist</button>
+          </div>
+        </section>
+        </div>
+      `;
+    }
+    if (backBtn) backBtn.disabled = true;
+    if (skipBtn) skipBtn.hidden = true;
+    if (saveBtn) {
+      saveBtn.textContent = "Open workspace";
+      saveBtn.disabled = false;
+    }
+    setOnboardingUiMode("dashboard", onboarding);
+    return;
+  }
+
+  if (stepEyebrow) {
+    stepEyebrow.textContent = mode === "guided"
+      ? `Step ${stepNumber} of ${items.length}`
+      : `Step ${stepNumber} of ${items.length}`;
+  }
+  if (stepTitle) stepTitle.textContent = currentItem?.title || "Workspace onboarding";
+  if (stepHelp) stepHelp.textContent = currentItem?.description || "Use the workspace setup tools to continue.";
+  if (stepBadge) stepBadge.textContent = getOnboardingStatusLabel(currentItem?.status || "pending");
+  if (onboardingStepAlert) {
+    const alertLines = [];
+    if (onboardingStepUiError) alertLines.push(onboardingStepUiError);
+    currentBlockers.forEach((line) => alertLines.push(line));
+    onboardingStepAlert.innerHTML = alertLines.map((line) => `<p>${escapeHtmlText(line)}</p>`).join("");
+    onboardingStepAlert.classList.toggle("hidden", alertLines.length === 0);
+  }
+  if (stepBody) {
+    stepBody.innerHTML = currentItem
+      ? `<div class="onboarding-step-content onboarding-step-content-enter" data-onboarding-step-id="${escapeHtmlText(currentItem.id || "")}">${buildOnboardingStepBody(currentItem, onboarding)}</div>`
+      : "";
+  }
+  if (backBtn) backBtn.disabled = !getPreviousOnboardingStep(currentItem?.id);
+  if (skipBtn) {
+    skipBtn.hidden = false;
+    skipBtn.disabled = false;
+    skipBtn.textContent = "Skip for now";
+  }
+  if (saveBtn) {
+    saveBtn.textContent = getOnboardingContinueLabel(currentItem);
+    saveBtn.disabled = false;
+  }
+}
+
+async function openOnboardingPanel(options = {}) {
+  showPanel("onboardingPanel");
+  setChatColumnsVisibility(false);
+  setAppFullScreenMode(true);
+  renderOnboardingLoadingState(options);
+  try {
+    let onboarding = await loadWorkspaceOnboarding(true);
+    if (options?.autoOpen) {
+      onboarding = await acknowledgeOnboardingAutoOpen();
+    }
+    onboardingUiMode = getDefaultOnboardingUiMode(onboarding, options);
+    if (options?.stepId) {
+      setOnboardingCurrentStep(options.stepId, onboarding);
+    }
+    renderWorkspaceOnboarding(onboarding);
+  } catch (err) {
+    console.error("Failed to open onboarding", err);
+    renderOnboardingLoadError(err);
+  }
+}
+
+async function updateOnboardingStep(stepId, status, options = {}) {
+  if (!stepId) return;
+  const workspaceId = currentWorkspaceId || sessionUser?.workspaceId || "default";
+  const payload = await fetchJSON(`/api/workspaces/${encodeURIComponent(workspaceId)}/onboarding/steps/${encodeURIComponent(stepId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      status,
+      currentStep: options.currentStep || null,
+      meta: options.meta || {}
+    })
+  });
+  workspaceOnboarding = payload?.onboarding || null;
+  workspaceOnboardingLoadedFor = workspaceId;
+  setOnboardingCurrentStep(options.currentStep || getOnboardingCurrentStepId(workspaceOnboarding), workspaceOnboarding);
+  renderWorkspaceOnboarding(workspaceOnboarding);
+  return workspaceOnboarding;
+}
+
+async function saveOnboardingStepState(stepId, status = "in_progress", options = {}) {
+  const currentItem = getOnboardingItem(stepId) || getOnboardingItem(getOnboardingCurrentStepId());
+  const nextStep = options.currentStep || getNextOnboardingStep(stepId)?.id || stepId;
+  const nextStatus =
+    status ||
+    (currentItem?.completed || currentItem?.evidence ? "completed" : "in_progress");
+  return updateOnboardingStep(stepId, nextStatus, {
+    currentStep: nextStep,
+    meta: {
+      source: "wizard",
+      updatedAt: new Date().toISOString(),
+      ...(options.meta || {})
+    }
+  });
+}
+
+async function activateOnboardingWorkspace() {
+  const workspaceId = currentWorkspaceId || sessionUser?.workspaceId || "default";
+  const payload = await fetchJSON(`/api/workspaces/${encodeURIComponent(workspaceId)}/onboarding/activate`, {
+    method: "POST"
+  });
+  workspaceOnboarding = payload?.onboarding || null;
+  onboardingRedirectMessage = "";
+  onboardingStepUiError = "";
+  workspaceOnboardingLoadedFor = workspaceId;
+  setOnboardingCurrentStep(getOnboardingCurrentStepId(workspaceOnboarding), workspaceOnboarding);
+  await hydrateWorkspaceAfterOnboardingIfNeeded(true);
+  renderWorkspaceOnboarding(workspaceOnboarding);
+  showToast("Workspace activated.");
 }
 
 function previewEmailTemplate() {
@@ -10070,21 +11821,43 @@ function initRailAndComposerListeners() {
     const initialBtn =
       document.querySelector(`.app-rail-btn[data-rail-id="${selectRail}"]`) || railButtons[0];
     if (initialBtn) {
-      openRailSection(initialBtn.dataset.railId || "messages");
       document
         .querySelectorAll(".app-rail-btn")
         .forEach((b) => b.classList.remove("app-rail-btn-active"));
       initialBtn.classList.add("app-rail-btn-active");
+      if (sessionUser || ACCESS_TOKEN) {
+        openRailSection(initialBtn.dataset.railId || "messages");
+      }
     } else {
-      openRailSection("messages");
+      if (sessionUser || ACCESS_TOKEN) {
+        openRailSection("messages");
+      }
     }
     attachLiveEvents();
   });
 }
 
 // ======================= FUNCTION HANDLER ========================
-function openRailSection(id) {
+async function openRailSection(id) {
   const targetId = id || "messages";
+  if (targetId !== "profile" && shouldBlockForPolicyGate()) {
+    showToast("Accept the workspace policy before continuing.", "error");
+    await openPolicyGatePanel({ force: true });
+    return;
+  }
+  if (
+    targetId !== "profile" &&
+    targetId !== "admin" &&
+    await shouldShowWorkspaceOnboarding()
+  ) {
+    onboardingRedirectMessage = "Complete the guided setup before navigating to the rest of the workspace.";
+    showToast("Finish onboarding before leaving setup.", "error");
+    await openOnboardingPanel({ autoOpen: true });
+    return;
+  }
+  if (!workspaceAppHydrated) {
+    await hydrateWorkspaceAfterOnboardingIfNeeded(true);
+  }
   const activeBtn = document.querySelector(`.app-rail-btn[data-rail-id="${targetId}"]`);
   setActiveRailButton(activeBtn);
   closeAllUnreads();
@@ -11132,6 +12905,7 @@ async function saveLiveSession() {
     }
     closeLiveSessionModal();
     loadLiveSessions(liveScope);
+    await refreshOnboardingAfterWorkspaceMutation();
     showToast("Session saved.");
   } catch (err) {
     console.error("Failed to save session", err);
@@ -13922,10 +15696,10 @@ function renderAdminUsers() {
   }
 
   if (!list.length) {
-    const empty = document.createElement("div");
-    empty.className = "muted";
-    empty.textContent = "No users yet.";
-    adminUserList.appendChild(empty);
+    renderUiState(adminUserList, {
+      message: "No users yet.",
+      compact: true
+    });
     return;
   }
 
@@ -13968,10 +15742,10 @@ function renderAdminChannelUsers() {
   });
 
   if (!list.length) {
-    const empty = document.createElement("div");
-    empty.className = "muted";
-    empty.textContent = "No users found.";
-    adminChannelUserList.appendChild(empty);
+    renderUiState(adminChannelUserList, {
+      message: "No users found.",
+      compact: true
+    });
     return;
   }
 
@@ -14015,10 +15789,10 @@ function renderAdminChannelUsers2() {
   });
 
   if (!list.length) {
-    const empty = document.createElement("div");
-    empty.className = "muted";
-    empty.textContent = "No users found.";
-    adminChannelUserList2.appendChild(empty);
+    renderUiState(adminChannelUserList2, {
+      message: "No users found.",
+      compact: true
+    });
     return;
   }
 
@@ -14101,10 +15875,10 @@ function renderAdminChannels() {
   }
 
   if (!list.length) {
-    const empty = document.createElement("div");
-    empty.className = "muted";
-    empty.textContent = "No channels yet.";
-    adminChannelList.appendChild(empty);
+    renderUiState(adminChannelList, {
+      message: "No channels yet.",
+      compact: true
+    });
     return;
   }
 
@@ -14157,10 +15931,10 @@ function renderAdminSchoolRequests() {
   if (!adminSchoolRequestsList) return;
   adminSchoolRequestsList.innerHTML = "";
   if (!adminSchoolRequests.length) {
-    const empty = document.createElement("div");
-    empty.className = "muted";
-    empty.textContent = "No pending requests.";
-    adminSchoolRequestsList.appendChild(empty);
+    renderUiState(adminSchoolRequestsList, {
+      message: "No pending requests.",
+      compact: true
+    });
     return;
   }
 
@@ -14365,10 +16139,10 @@ function renderAssignUsers() {
     return !term || full.includes(term);
   });
   if (!list.length) {
-    const empty = document.createElement("div");
-    empty.className = "muted";
-    empty.textContent = "No users found.";
-    adminAssignUserList.appendChild(empty);
+    renderUiState(adminAssignUserList, {
+      message: "No users found.",
+      compact: true
+    });
     return;
   }
   list.forEach((u) => {
@@ -14396,10 +16170,10 @@ function renderAssignWorkspaces() {
     !term || `${w.name} ${w.id}`.toLowerCase().includes(term)
   );
   if (!list.length) {
-    const empty = document.createElement("div");
-    empty.className = "muted";
-    empty.textContent = "No workspaces found.";
-    adminAssignWorkspaceList.appendChild(empty);
+    renderUiState(adminAssignWorkspaceList, {
+      message: "No workspaces found.",
+      compact: true
+    });
     return;
   }
   list.forEach((w) => {
@@ -14431,10 +16205,10 @@ function renderAssignChannels() {
     return matchesWs && matchesTerm;
   });
   if (!list.length) {
-    const empty = document.createElement("div");
-    empty.className = "muted";
-    empty.textContent = "No channels found.";
-    adminAssignChannelList.appendChild(empty);
+    renderUiState(adminAssignChannelList, {
+      message: "No channels found.",
+      compact: true
+    });
     return;
   }
   list.forEach((c) => {
@@ -14701,17 +16475,25 @@ function toggleAdminFullscreen() {
 
 
 async function loadChannelsForWorkspace(workspaceId) {
+  const resolvedWorkspaceId = resolveActiveWorkspaceId(workspaceId);
   try {
     const isSuper = isSuperAdmin();
     const wsParam = isSuper
       ? ""
-      : `?workspaceId=${encodeURIComponent(workspaceId || getCurrentWorkspaceId())}`;
+      : `?workspaceId=${encodeURIComponent(resolvedWorkspaceId)}`;
     const headers = isSuper ? { "x-super-admin": "1" } : {};
+    if (!isSuper) {
+      currentWorkspaceId = resolvedWorkspaceId;
+      if (typeof window !== "undefined") {
+        window.currentWorkspaceId = resolvedWorkspaceId;
+        window.selectedWorkspaceId = resolvedWorkspaceId;
+      }
+    }
     const fetchedChannels = await fetchJSON(`/api/channels${wsParam}`, { headers });
     channels = Array.isArray(fetchedChannels)
       ? fetchedChannels.map(normalizeChannelType)
       : [];
-    await loadCurrentUserClasses(workspaceId);
+    await loadCurrentUserClasses(resolvedWorkspaceId);
     populateLiveClassOptions();
     refreshRegistrationClassOptions().catch((err) => console.error("Registration options failed", err));
   } catch (err) {
@@ -15660,6 +17442,30 @@ const userProfileInnerCard = userProfileModal
   ? userProfileModal.querySelector(".user-profile-inner-card")
   : null;
 const adminPanelContent = document.getElementById("adminPanelContent");
+const dashboardChecklistMount = document.getElementById("dashboardChecklistMount");
+const onboardingPanel = document.getElementById("onboardingPanel");
+const policyGatePanel = document.getElementById("policyGatePanel");
+const policyGateRoot = document.getElementById("policyGateRoot");
+const onboardingShell = document.getElementById("onboardingRoot");
+const onboardingStatusLabel = document.getElementById("onboardingStatusLabel");
+const onboardingProgressValue = document.getElementById("onboardingProgressValue");
+const onboardingProgressBar = document.getElementById("onboardingProgressBar");
+const onboardingModeLabel = document.getElementById("onboardingModeLabel");
+const onboardingModeStepCounter = document.getElementById("onboardingModeStepCounter");
+const onboardingModeProgressBar = document.getElementById("onboardingModeProgressBar");
+const onboardingModeToggleBtn = document.getElementById("onboardingModeToggleBtn");
+const onboardingWorkspaceContext = document.getElementById("onboardingWorkspaceContext");
+const onboardingGuardNotice = document.getElementById("onboardingGuardNotice");
+const onboardingSummarySection = document.getElementById("onboardingSummarySection");
+const onboardingStepList = document.getElementById("onboardingStepList");
+const onboardingChecklist = document.getElementById("onboardingChecklist");
+const onboardingChecklistSummary = document.getElementById("onboardingChecklistSummary");
+const onboardingActivateBtn = document.getElementById("onboardingActivateBtn");
+const onboardingResumeBtn = document.getElementById("onboardingResumeBtn");
+const onboardingBackBtn = document.getElementById("onboardingBackBtn");
+const onboardingSkipBtn = document.getElementById("onboardingSkipBtn");
+const onboardingSaveBtn = document.getElementById("onboardingSaveBtn");
+const onboardingStepAlert = document.getElementById("onboardingStepAlert");
 const userProfileAvatar = document.getElementById("userProfileAvatar");
 const userProfileName = document.getElementById("userProfileName");
 const userProfileUsername = document.getElementById("userProfileUsername");
@@ -15782,6 +17588,7 @@ const adminWorkspaceModalClose = document.getElementById("adminWorkspaceModalClo
 const adminUserModalClose = document.getElementById("adminUserModalClose");
 const adminChannelModalClose = document.getElementById("adminChannelModalClose");
 const adminThemeToggle = document.getElementById("adminThemeToggle");
+const adminResumeSetupBtn = document.getElementById("adminResumeSetupBtn");
 const adminNavButtons = document.querySelectorAll(".admin-nav-btn");
 const adminPanels = document.querySelectorAll(".admin-section[data-admin-panel]");
 const adminStatWorkspaces = document.getElementById("adminStatWorkspaces");
@@ -16567,10 +18374,9 @@ function renderDirectoryRows(list, role = "") {
   const listRole = String(role || "").toLowerCase();
 
   if (!Array.isArray(list) || !list.length) {
-    const empty = document.createElement("div");
-    empty.className = "muted";
-    empty.textContent = "No users found.";
-    messagesContainer.appendChild(empty);
+    renderUiState(messagesContainer, {
+      message: "No users found."
+    });
     return;
   }
 
@@ -17883,10 +19689,10 @@ function renderDmCreateList(term = "") {
     return !filter || name.includes(filter);
   });
   if (!candidates.length) {
-    const empty = document.createElement("div");
-    empty.className = "muted";
-    empty.textContent = "No users found.";
-    dmCreateList.appendChild(empty);
+    renderUiState(dmCreateList, {
+      message: "No users found.",
+      compact: true
+    });
     return;
   }
   candidates.forEach((u) => {
@@ -18045,10 +19851,10 @@ function renderDmMembersList(dmId, term = "") {
   });
 
   if (!candidates.length) {
-    const empty = document.createElement("div");
-    empty.className = "muted";
-    empty.textContent = "No users found.";
-    dmMembersList.appendChild(empty);
+    renderUiState(dmMembersList, {
+      message: "No users found.",
+      compact: true
+    });
     return;
   }
 
@@ -18213,10 +20019,10 @@ function renderChannelAssignList(term = "") {
   });
 
   if (!candidates.length) {
-    const empty = document.createElement("div");
-    empty.className = "muted";
-    empty.textContent = "No users found.";
-    channelAssignList.appendChild(empty);
+    renderUiState(channelAssignList, {
+      message: "No users found.",
+      compact: true
+    });
     return;
   }
 
@@ -18383,10 +20189,10 @@ function renderChannelMembersList(role) {
     (u) => getUserRoleBucket(u) === roleKey
   );
   if (!candidates.length) {
-    const empty = document.createElement("div");
-    empty.className = "muted";
-    empty.textContent = "No users found.";
-    channelMembersList.appendChild(empty);
+    renderUiState(channelMembersList, {
+      message: "No users found.",
+      compact: true
+    });
     return;
   }
 
@@ -18896,6 +20702,7 @@ async function handleSchoolProfileSave() {
     }
     showSchoolProfileStatus("Saved", false);
     setTimeout(() => showSchoolProfileStatus("", false), 2200);
+    await refreshOnboardingAfterWorkspaceMutation();
     showToast("School profile saved");
     const ws = workspaces.find((w) => w.id === workspaceId);
     if (ws && typeof updated.workspaceName === "string") {
@@ -20670,6 +22477,7 @@ function openInlineChannelForm(category, container) {
       closeInlineChannelForm();
       renderChannels();
       renderCommandLists();
+      await refreshOnboardingAfterWorkspaceMutation();
       selectChannel(newChannel.id);
       showToast(`#${newChannel.name} created`);
     } catch (err) {
@@ -21707,7 +23515,10 @@ function renderAttendanceList() {
   list.innerHTML = "";
 
   if (!attendanceState.records.length) {
-    list.innerHTML = '<div class="muted">No students found.</div>';
+    renderUiState(list, {
+      message: "No students found.",
+      compact: true
+    });
     return;
   }
 
@@ -21778,7 +23589,14 @@ async function loadAttendanceForChannel(channelId, requestedDate) {
     console.warn("Failed to load attendance", error);
     if (status) status.textContent = "Could not load attendance data.";
     const list = document.getElementById("attendanceList");
-    if (list) list.innerHTML = "<div class=\"muted\">Unable to load students.</div>";
+    if (list) {
+      renderUiState(list, {
+        variant: "error",
+        title: "Attendance unavailable",
+        message: "Unable to load students.",
+        compact: true
+      });
+    }
     showToast?.("Could not load attendance data.");
   }
 }
@@ -23033,10 +24851,6 @@ function renderMessages(channelId, options = {}) {
 
   renderUniversalEmptyState(channelId, msgs.length);
 
-  if (isPolicyAcceptanceRequired() && !policyAccepted && isPrivacyRulesChannel(channelId)) {
-    renderPolicyAcceptanceCard(messagesContainer);
-  }
-
   if (restoreScroll) {
     if (isRestoringView && savedScrollTop !== null) {
       messagesContainer.scrollTop = savedScrollTop;
@@ -23078,10 +24892,9 @@ function renderSavedMessages() {
 
   const savedList = Object.values(savedMessagesById);
   if (!savedList.length) {
-    const empty = document.createElement("div");
-    empty.className = "empty-state";
-    empty.textContent = "No saved messages yet.";
-    messagesContainer.appendChild(empty);
+    renderUiState(messagesContainer, {
+      message: "No saved messages yet."
+    });
     return;
   }
 
@@ -28576,6 +30389,24 @@ if (profilePopoverLogout) {
 if (railLogoutBtn) {
   railLogoutBtn.addEventListener("click", logout);
 }
+if (policyGateRoot) {
+  policyGateRoot.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-policy-gate-action]");
+    if (!button) return;
+    const action = button.getAttribute("data-policy-gate-action") || "";
+    if (action === "logout") {
+      await logout();
+      return;
+    }
+    if (action === "retry") {
+      await runButtonBusyState(button, "Retrying…", () => openPolicyGatePanel({ refresh: true, force: true }));
+      return;
+    }
+    if (action === "accept") {
+      await acceptWorkspacePolicy();
+    }
+  });
+}
 if (userProfileLogoutBtn) {
   userProfileLogoutBtn.addEventListener("click", () => {
     closeUserProfile();
@@ -28584,6 +30415,208 @@ if (userProfileLogoutBtn) {
 }
 if (filesRefreshBtn) {
   filesRefreshBtn.addEventListener("click", renderFilesPanel);
+}
+if (onboardingStepList) {
+  onboardingStepList.addEventListener("click", async (event) => {
+    const row = event.target.closest("[data-onboarding-select-step]");
+    if (!row) return;
+    const nextStepId = row.getAttribute("data-onboarding-select-step") || "";
+    try {
+      await persistOnboardingCurrentStep(nextStepId, { source: "rail-select" });
+    } catch (err) {
+      onboardingStepUiError = formatOnboardingUiError(err, "Could not switch onboarding step.");
+      renderWorkspaceOnboarding(workspaceOnboarding);
+    }
+  });
+}
+if (onboardingActivateBtn) {
+  onboardingActivateBtn.addEventListener("click", () => {
+    runButtonBusyState(onboardingActivateBtn, "Activating…", () => activateOnboardingWorkspace()).catch((err) => {
+      console.error("Activation failed", err);
+      showToast(err?.message || "Workspace is not activation-ready", "error");
+    });
+  });
+}
+if (onboardingResumeBtn) {
+  onboardingResumeBtn.addEventListener("click", async () => {
+    try {
+      await runButtonBusyState(onboardingResumeBtn, "Resuming…", async () => {
+        if (workspaceOnboarding?.status === "skipped") {
+          await resumeWorkspaceOnboarding();
+        }
+        onboardingUiMode = "guided";
+        renderWorkspaceOnboarding(workspaceOnboarding);
+      });
+    } catch (err) {
+      console.error("Onboarding resume failed", err);
+      showToast(err?.message || "Could not resume setup", "error");
+    }
+  });
+}
+if (onboardingBackBtn) {
+  onboardingBackBtn.addEventListener("click", async () => {
+    const previous = getPreviousOnboardingStep(getOnboardingCurrentStepId());
+    if (!previous?.id) return;
+    try {
+      await persistOnboardingCurrentStep(previous.id, { source: "back-button" });
+    } catch (err) {
+      onboardingStepUiError = formatOnboardingUiError(err, "Could not go back to that step.");
+      renderWorkspaceOnboarding(workspaceOnboarding);
+    }
+  });
+}
+if (onboardingSkipBtn) {
+  onboardingSkipBtn.addEventListener("click", async () => {
+    try {
+      await runButtonBusyState(onboardingSkipBtn, "Skipping…", async () => {
+        await deferWorkspaceOnboarding();
+        showToast("Setup deferred. You can resume it later.", "success");
+        showPanel("adminPanel");
+        setChatColumnsVisibility(false);
+        setAppFullScreenMode(false);
+      });
+    } catch (err) {
+      console.error("Onboarding defer failed", err);
+      showToast(err?.message || "Could not defer setup", "error");
+    }
+  });
+}
+if (onboardingSaveBtn) {
+  onboardingSaveBtn.addEventListener("click", () => {
+    if (workspaceOnboarding?.status === "completed") {
+      showHomeView();
+      return;
+    }
+    const currentItem = getOnboardingItem(getOnboardingCurrentStepId());
+    if (!currentItem) return;
+    const nextStep = getNextOnboardingStep(currentItem.id)?.id || currentItem.id;
+    const shouldComplete = currentItem.id === "welcome" || currentItem.completed || currentItem.evidence;
+    runButtonBusyState(onboardingSaveBtn, "Continuing…", () => saveOnboardingStepState(currentItem.id, shouldComplete ? "completed" : "in_progress", {
+      currentStep: nextStep,
+      meta: { source: "wizard-continue", autoCompleted: shouldComplete ? 1 : 0 }
+    })).catch((err) => {
+      console.error("Onboarding save failed", err);
+      showToast(err?.message || "Could not save onboarding progress", "error");
+    });
+  });
+}
+if (onboardingShell) {
+  onboardingShell.addEventListener("click", async (event) => {
+    const panelButton = event.target.closest("[data-onboarding-panel-action]");
+    if (panelButton) {
+      const panelAction = panelButton.getAttribute("data-onboarding-panel-action") || "";
+      if (panelAction === "retry-load") {
+        await runButtonBusyState(panelButton, "Retrying…", () => openOnboardingPanel({ preferredMode: onboardingUiMode || "guided" }));
+      }
+      return;
+    }
+    const button = event.target.closest("[data-onboarding-step-action]");
+    if (!button) return;
+    const currentItem = getOnboardingItem(getOnboardingCurrentStepId());
+    const action = button.getAttribute("data-onboarding-step-action") || "";
+    try {
+      const busyText =
+        action === "activate" ? "Activating…" :
+        action === "save-billing" ? "Saving…" :
+        action === "jump-required" ? "Opening…" :
+        action === "open-home" ? "Opening…" :
+        action === "view-checklist" ? "Opening…" :
+        "Loading…";
+      await runButtonBusyState(button, busyText, async () => {
+        if (action === "primary") {
+          await getOnboardingAction(currentItem).run();
+        } else if (action === "activate") {
+          await activateOnboardingWorkspace();
+        } else if (action === "jump-required") {
+          const nextRequired = getOutstandingOnboardingItems().find((item) => item.id !== currentItem?.id) || getOutstandingOnboardingItems()[0];
+          if (nextRequired?.id) {
+            await persistOnboardingCurrentStep(nextRequired.id, { source: "jump-required" });
+          }
+        } else if (action === "save-billing") {
+          const billingEmail = document.getElementById("onboardingBillingEmailInput")?.value || "";
+          const invoiceContactName = document.getElementById("onboardingBillingContactNameInput")?.value || "";
+          const acknowledgeReadiness = !!document.getElementById("onboardingBillingAckInput")?.checked;
+          await saveBillingProfileFromOnboarding({ billingEmail, invoiceContactName, acknowledgeReadiness });
+          showToast("Billing details saved.");
+        } else if (action === "open-home") {
+          const hydrated = await hydrateWorkspaceAfterOnboardingIfNeeded(true);
+          if (hydrated) {
+            showHomeView();
+          }
+        } else if (action === "view-checklist") {
+          setOnboardingUiMode("dashboard", workspaceOnboarding);
+          renderWorkspaceOnboarding(workspaceOnboarding);
+        }
+      });
+      await loadWorkspaceOnboarding(true);
+      renderWorkspaceOnboarding(workspaceOnboarding);
+    } catch (err) {
+      console.error("Onboarding step action failed", err);
+      onboardingStepUiError = formatOnboardingUiError(err, "Onboarding action failed");
+      renderWorkspaceOnboarding(workspaceOnboarding);
+      showToast(err?.message || "Onboarding action failed", "error");
+    }
+  });
+}
+if (dashboardChecklistMount) {
+  dashboardChecklistMount.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-dashboard-onboarding-action]");
+    if (!button) return;
+    const action = button.getAttribute("data-dashboard-onboarding-action") || "";
+    try {
+      await runButtonBusyState(button, action === "resume" ? "Opening…" : "Loading…", async () => {
+        if (action === "resume") {
+          await resumeWorkspaceOnboarding();
+          await openOnboardingPanel({ preferredMode: "dashboard" });
+        } else if (action === "view_checklist") {
+          await loadWorkspaceOnboarding(true);
+          onboardingUiMode = "dashboard";
+          await openOnboardingPanel({ preferredMode: "dashboard" });
+        } else if (action === "invite_teacher") {
+          await getOnboardingAction(getOnboardingItem("staff_setup")).run();
+        } else if (action === "create_class") {
+          await getOnboardingAction(getOnboardingItem("academic_structure")).run();
+        } else if (action === "add_students") {
+          await getOnboardingAction(getOnboardingItem("student_setup")).run();
+        }
+      });
+      await loadWorkspaceOnboarding(true);
+    } catch (err) {
+      console.error("Dashboard onboarding shortcut failed", err);
+      showToast(err?.message || "Could not open that setup flow", "error");
+    }
+  });
+}
+if (adminResumeSetupBtn) {
+  adminResumeSetupBtn.addEventListener("click", async () => {
+    try {
+      await runButtonBusyState(adminResumeSetupBtn, "Opening…", async () => {
+        await resumeWorkspaceOnboarding();
+        await openOnboardingPanel({ preferredMode: "dashboard" });
+      });
+    } catch (err) {
+      console.error("Settings onboarding resume failed", err);
+      showToast(err?.message || "Could not resume setup", "error");
+    }
+  });
+}
+if (onboardingModeToggleBtn) {
+  onboardingModeToggleBtn.addEventListener("click", async () => {
+    try {
+      if (onboardingUiMode === "guided") {
+        onboardingUiMode = "dashboard";
+      } else {
+        if (workspaceOnboarding?.status === "skipped") {
+          await resumeWorkspaceOnboarding();
+        }
+        onboardingUiMode = "guided";
+      }
+      renderWorkspaceOnboarding(workspaceOnboarding);
+    } catch (err) {
+      console.error("Onboarding mode toggle failed", err);
+      showToast(err?.message || "Could not switch onboarding view", "error");
+    }
+  });
 }
 if (filesTypeButtons && filesTypeButtons.length) {
   filesTypeButtons.forEach((btn) => {
@@ -29623,6 +31656,7 @@ async function submitRegistration({
     if (emergencyRelationEl) emergencyRelationEl.selectedIndex = 0;
     closeRegistrationModal(modalEl, errorEl);
     userDirectoryLoaded = false;
+    await refreshOnboardingAfterWorkspaceMutation();
     showToast(`${role === "teacher" ? "Teacher" : "Student"} registered`);
   } catch (err) {
     console.error("Registration failed", err);
@@ -29800,7 +31834,7 @@ function persistCurrentWorkspace() {
 }
 
 async function loadWorkspace(workspaceId) {
-  const candidate = String(workspaceId || "").trim();
+  const candidate = resolveActiveWorkspaceId(workspaceId);
   currentWorkspaceId = candidate || "default";
   if (typeof window !== "undefined") {
     window.currentWorkspaceId = currentWorkspaceId;
@@ -29878,6 +31912,22 @@ function setupRealtimeEvents() {
     return;
   }
 
+  if (shouldBlockForPolicyGate()) {
+    if (realtimeRetryTimer) {
+      clearTimeout(realtimeRetryTimer);
+      realtimeRetryTimer = null;
+    }
+    if (eventSource) {
+      try {
+        eventSource.close();
+      } catch (_err) {
+        // ignore
+      }
+      eventSource = null;
+    }
+    return;
+  }
+
   if (realtimeRetryTimer) {
     clearTimeout(realtimeRetryTimer);
     realtimeRetryTimer = null;
@@ -29902,6 +31952,15 @@ function setupRealtimeEvents() {
   });
 
   es.addEventListener("error", () => {
+    if (shouldBlockForPolicyGate()) {
+      try {
+        es.close();
+      } catch (_err) {
+        // ignore
+      }
+      eventSource = null;
+      return;
+    }
     const retryIn = realtimeRetryDelayMs;
     console.warn(`Realtime connection lost, retrying in ${Math.round(retryIn / 1000)}s…`);
     try {
@@ -30328,31 +32387,41 @@ async function init() {
       return;
     }
     updateAdminButtonState();
-    await loadServerData();
-    renderChannels();
-    renderDMs();
-    renderWorkspaces();
-    renderCommandLists();
+    const onboardingRequired = await shouldShowWorkspaceOnboarding();
+    const policyBlocked = shouldBlockForPolicyGate();
+    if (!onboardingRequired && !policyBlocked) {
+      await loadServerData();
+      renderChannels();
+      renderDMs();
+      renderWorkspaces();
+      renderCommandLists();
+    }
     let savedRailView = "messages";
     try {
       savedRailView = localStorage.getItem(LAST_RAIL_VIEW_KEY) || "messages";
     } catch (_err) {
       savedRailView = "messages";
     }
-    if (isPolicyAcceptanceRequired() && !policyAccepted) {
-      await openPrivacyRulesChannel();
+    if (policyBlocked) {
+      await openPolicyGatePanel({ refresh: true, force: true });
     }
     if (sidebarScroll) {
       const savedSidebarTop = loadSidebarScroll();
       sidebarScroll.scrollTop = savedSidebarTop;
     }
-    setupRealtimeEvents();
-    if (typeof initCalendarIfNeeded === "function") {
-      initCalendarIfNeeded();
+    if (!onboardingRequired && !policyBlocked) {
+      setupRealtimeEvents();
+      if (typeof initCalendarIfNeeded === "function") {
+        initCalendarIfNeeded();
+      }
     }
     if (typingIndicator) typingIndicator.style.opacity = "0.3";
     if (recordingOverlay) recordingOverlay.hidden = true;
-    if (channels.length) {
+    if (onboardingRequired) {
+      await openOnboardingPanel({ autoOpen: true });
+    } else if (policyBlocked) {
+      await openPolicyGatePanel({ refresh: true, force: true });
+    } else if (channels.length) {
       if (!channels.some((c) => c.id === currentChannelId) && !isSchoolSettingsChannel(currentChannelId)) {
         currentChannelId = getDefaultLandingChannelId() || channels[0].id;
       }
@@ -30379,7 +32448,11 @@ async function init() {
     renderPinnedSidebar();
     setupDensityToggle();
     refreshMessageBadge();
-    if (savedRailView === "email") {
+    if (onboardingRequired) {
+      await openOnboardingPanel({ autoOpen: true });
+    } else if (policyBlocked) {
+      await openPolicyGatePanel({ refresh: true, force: true });
+    } else if (savedRailView === "email") {
       await openEmailPanel();
     } else if (savedRailView === "analytics") {
       openAnalyticsPanel();
@@ -30389,6 +32462,11 @@ async function init() {
   }
 }
 init();
+
+if (typeof window !== "undefined") {
+  window.shouldBlockForPolicyGate = shouldBlockForPolicyGate;
+  window.openPolicyGatePanel = openPolicyGatePanel;
+}
 
 if (!messageMenuCloseHandlerBound && typeof document !== "undefined") {
   document.addEventListener("click", (e) => {
@@ -33281,10 +35359,9 @@ window.addEventListener("popstate", () => {
       updateMailboxModeUI();
 
       if (!filtered.length) {
-        const empty = document.createElement("div");
-        empty.className = "mbx-empty-state";
-        empty.textContent = "No messages";
-        listEl.appendChild(empty);
+        renderUiState(listEl, {
+          message: "No messages"
+        });
         return;
       }
 

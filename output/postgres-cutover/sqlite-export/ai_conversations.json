@@ -1,0 +1,911 @@
+[
+  {
+    "id": "aic_22cdee5966f7ee27d6766a3c68420e79",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "job",
+    "mode": "vad",
+    "started_at": 1772301961958,
+    "ended_at": null
+  },
+  {
+    "id": "aic_3a1bfe4c3c113102e8af5dccac8c0172",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "travel",
+    "mode": "vad",
+    "started_at": 1772302034173,
+    "ended_at": null
+  },
+  {
+    "id": "aic_b026449f1821ce3297db5f5ec5bc921a",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "exam",
+    "mode": "vad",
+    "started_at": 1772302174739,
+    "ended_at": null
+  },
+  {
+    "id": "aic_98309313964b0bc033452a4164195878",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "job",
+    "mode": "vad",
+    "started_at": 1772303219132,
+    "ended_at": null
+  },
+  {
+    "id": "aic_e3ab6bc16559ceab1bf4291b61f26470",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "free",
+    "mode": "vad",
+    "started_at": 1772310360446,
+    "ended_at": null
+  },
+  {
+    "id": "aic_be491fadfa568b3631b80589aa1f8263",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "free",
+    "mode": "vad",
+    "started_at": 1772310361162,
+    "ended_at": null
+  },
+  {
+    "id": "aic_dcd36ca33b909d219de5b3e5f0a83c83",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "free",
+    "mode": "vad",
+    "started_at": 1772310361712,
+    "ended_at": null
+  },
+  {
+    "id": "aic_04bfcd290aede70639ac5e7dbd87b7d8",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "free",
+    "mode": "vad",
+    "started_at": 1772310361893,
+    "ended_at": null
+  },
+  {
+    "id": "aic_78e3d717f9eb0a4d8dc6585462beb634",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "free",
+    "mode": "vad",
+    "started_at": 1772310362059,
+    "ended_at": null
+  },
+  {
+    "id": "aic_8e27b1acc73fa15c6d3273300e6a3ebe",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "free",
+    "mode": "vad",
+    "started_at": 1772310362209,
+    "ended_at": null
+  },
+  {
+    "id": "aic_5597b74f6e7583a5fcd2cb5d9208e323",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "free",
+    "mode": "vad",
+    "started_at": 1772310362362,
+    "ended_at": null
+  },
+  {
+    "id": "aic_e5f4e3fd88f5bcaf1cf193aba7b173c6",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "job",
+    "mode": "vad",
+    "started_at": 1772310365441,
+    "ended_at": null
+  },
+  {
+    "id": "aic_3dfff375d4eca6c28e5166eb8ddfcae3",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "job",
+    "mode": "vad",
+    "started_at": 1772310366996,
+    "ended_at": null
+  },
+  {
+    "id": "aic_9f04c4b8aace2559ec062d63f4fcd113",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "job",
+    "mode": "vad",
+    "started_at": 1772310367579,
+    "ended_at": null
+  },
+  {
+    "id": "aic_47fe81c8c713e05572cbf1d6095beb77",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "job",
+    "mode": "vad",
+    "started_at": 1772310367778,
+    "ended_at": null
+  },
+  {
+    "id": "aic_629866f8141f9df5d4b19bde493dfa66",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "job",
+    "mode": "vad",
+    "started_at": 1772310367945,
+    "ended_at": null
+  },
+  {
+    "id": "aic_1819c5c3d21521b8568a95b659f17e21",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "job",
+    "mode": "vad",
+    "started_at": 1772310368095,
+    "ended_at": null
+  },
+  {
+    "id": "aic_d7f9784ab4e50c0290cb71c224f1a149",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "job",
+    "mode": "vad",
+    "started_at": 1772310368261,
+    "ended_at": null
+  },
+  {
+    "id": "aic_651fc0122b3256941f6aeb2330054118",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "job",
+    "mode": "vad",
+    "started_at": 1772310368412,
+    "ended_at": null
+  },
+  {
+    "id": "aic_2f8b4a45a2befa9eb66628a5f95d12ef",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "job",
+    "mode": "vad",
+    "started_at": 1772310368577,
+    "ended_at": null
+  },
+  {
+    "id": "aic_76d7be7e282ee5f0f0ce2c6d531180e7",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "free",
+    "mode": "vad",
+    "started_at": 1772310375897,
+    "ended_at": null
+  },
+  {
+    "id": "aic_f57910055303cbd51593f68c6da9416d",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "free",
+    "mode": "ptt",
+    "started_at": 1772310423707,
+    "ended_at": null
+  },
+  {
+    "id": "aic_5638e28fb7f57c8db5a2ee995eefdef8",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "free",
+    "mode": "ptt",
+    "started_at": 1772310425795,
+    "ended_at": null
+  },
+  {
+    "id": "aic_e6179c166381417da63edde3b3980c1e",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "free",
+    "mode": "ptt",
+    "started_at": 1772310426393,
+    "ended_at": null
+  },
+  {
+    "id": "aic_d0a7e8c187782466aa1fb2dcb454dc0b",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "free",
+    "mode": "ptt",
+    "started_at": 1772310426627,
+    "ended_at": null
+  },
+  {
+    "id": "aic_251ded1e0f2b0b571cbf66bcf27db208",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "free",
+    "mode": "ptt",
+    "started_at": 1772310426827,
+    "ended_at": null
+  },
+  {
+    "id": "aic_318797f16acbc2e19ad5388d05e1eb38",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "free",
+    "mode": "ptt",
+    "started_at": 1772310427011,
+    "ended_at": null
+  },
+  {
+    "id": "aic_d1b4e811f86d7595b1eac51c5a406279",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "free",
+    "mode": "ptt",
+    "started_at": 1772310427177,
+    "ended_at": null
+  },
+  {
+    "id": "aic_8d38bdf6b61e24a2b430541026fd7545",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "free",
+    "mode": "ptt",
+    "started_at": 1772310427330,
+    "ended_at": null
+  },
+  {
+    "id": "aic_b39065d8fa7cda19b26d8acec5a34c44",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "free",
+    "mode": "ptt",
+    "started_at": 1772310427478,
+    "ended_at": null
+  },
+  {
+    "id": "aic_6ba0aaa21f00af10d56a76324f555474",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "free",
+    "mode": "ptt",
+    "started_at": 1772310427611,
+    "ended_at": null
+  },
+  {
+    "id": "aic_4e8d76364cd3d026661dec86a4b2a132",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "free",
+    "mode": "ptt",
+    "started_at": 1772310427763,
+    "ended_at": null
+  },
+  {
+    "id": "aic_f99a478d196bbe1e1d8fd0ca44f1a215",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "free",
+    "mode": "ptt",
+    "started_at": 1772311176653,
+    "ended_at": null
+  },
+  {
+    "id": "aic_8c390b5ca5a16729723a2bc5d45a961a",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "free",
+    "mode": "ptt",
+    "started_at": 1772311179257,
+    "ended_at": null
+  },
+  {
+    "id": "aic_60ab3d6741706e75e36974e3d4b572b5",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "free",
+    "mode": "ptt",
+    "started_at": 1772311179957,
+    "ended_at": null
+  },
+  {
+    "id": "aic_bda445f94f53df07407a4c1c847262ce",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "free",
+    "mode": "ptt",
+    "started_at": 1772311180143,
+    "ended_at": null
+  },
+  {
+    "id": "aic_14b635b0beb0c74b701658f379a4ae88",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "free",
+    "mode": "ptt",
+    "started_at": 1772311180312,
+    "ended_at": null
+  },
+  {
+    "id": "aic_cfe9ebb87ee4f9a74642eafe84ffc30a",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "free",
+    "mode": "ptt",
+    "started_at": 1772324166883,
+    "ended_at": null
+  },
+  {
+    "id": "aic_37656d0b6a37ae98cf92aad6bf9d3c2f",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "restaurant",
+    "mode": "ptt",
+    "started_at": 1773184063066,
+    "ended_at": null
+  },
+  {
+    "id": "aic_2a0053fbab52cfee524ec7839cb31d85",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "restaurant",
+    "mode": "ptt",
+    "started_at": 1773184066248,
+    "ended_at": null
+  },
+  {
+    "id": "aic_f2c090bfd0a2646930370f9107b83ba5",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "restaurant",
+    "mode": "ptt",
+    "started_at": 1773184067412,
+    "ended_at": null
+  },
+  {
+    "id": "aic_7be1585e706ad86c8b893de5b57a58ce",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "restaurant",
+    "mode": "ptt",
+    "started_at": 1773184070010,
+    "ended_at": null
+  },
+  {
+    "id": "aic_9cd149825d155c3dae697e99c824182b",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "restaurant",
+    "mode": "ptt",
+    "started_at": 1773184070711,
+    "ended_at": null
+  },
+  {
+    "id": "aic_3c3b33053c4e6678a9b16f05b7f6e7ca",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "restaurant",
+    "mode": "ptt",
+    "started_at": 1773184070929,
+    "ended_at": null
+  },
+  {
+    "id": "aic_f995468e29077b68da37b18b8df66a4a",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "restaurant",
+    "mode": "ptt",
+    "started_at": 1773184071092,
+    "ended_at": null
+  },
+  {
+    "id": "aic_c98b49ea4dc217ebd420d9f1865a246e",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "restaurant",
+    "mode": "ptt",
+    "started_at": 1773184071277,
+    "ended_at": null
+  },
+  {
+    "id": "aic_6f86605385de37feee40c3d18bf548de",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "restaurant",
+    "mode": "ptt",
+    "started_at": 1773184071708,
+    "ended_at": null
+  },
+  {
+    "id": "aic_0175dd431d3e9250e4af372aa502559c",
+    "workspace_id": "lens",
+    "user_id": "utm5n61xv",
+    "scenario": "chat",
+    "mode": "assistant",
+    "started_at": 1773623049106,
+    "ended_at": null
+  },
+  {
+    "id": "aic_ff6eba892f5cbf4913df8a40c6d0d39a",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774303769584,
+    "ended_at": null
+  },
+  {
+    "id": "aic_bc641f692060fb4f6f6bc14a4c03839f",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774303773298,
+    "ended_at": null
+  },
+  {
+    "id": "aic_d073348599d374980481d221d742ecce",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774303774681,
+    "ended_at": null
+  },
+  {
+    "id": "aic_347103502fd847a4a5e6d0ecc39f2502",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774303775748,
+    "ended_at": null
+  },
+  {
+    "id": "aic_49b8593be8d0464059ac728a006a2962",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774303775945,
+    "ended_at": null
+  },
+  {
+    "id": "aic_62d9ffa209f2238c171ec76115273391",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774303776129,
+    "ended_at": null
+  },
+  {
+    "id": "aic_d534c620ae44836ae414614ed88dab42",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774303776297,
+    "ended_at": null
+  },
+  {
+    "id": "aic_1cb965f8e8689c1f2ee73182fcce4aef",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774303776530,
+    "ended_at": null
+  },
+  {
+    "id": "aic_a796b396768e1a4dad5075c48ba39525",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774303777013,
+    "ended_at": null
+  },
+  {
+    "id": "aic_ddd76664d0e34e4f3f9ac1d9ed8458df",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774303777429,
+    "ended_at": null
+  },
+  {
+    "id": "aic_8dac91bcaa4504206f63e14a340ad9ae",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774303777812,
+    "ended_at": null
+  },
+  {
+    "id": "aic_e2ebfc7e2b4071e1b7b0451a75ef7a10",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "networking",
+    "mode": "ptt",
+    "started_at": 1774304038549,
+    "ended_at": null
+  },
+  {
+    "id": "aic_fb49a43d576e2326c4a5064c519d8190",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "emergency",
+    "mode": "ptt",
+    "started_at": 1774304052559,
+    "ended_at": null
+  },
+  {
+    "id": "aic_125d6c013299f911c847528c3a298938",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "wellness",
+    "mode": "ptt",
+    "started_at": 1774304545936,
+    "ended_at": null
+  },
+  {
+    "id": "aic_50f08b6dc23280216a2913a05268b39d",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "wellness",
+    "mode": "ptt",
+    "started_at": 1774304547824,
+    "ended_at": null
+  },
+  {
+    "id": "aic_0f65eec466a53fa9a06247d1b323bed6",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "wellness",
+    "mode": "ptt",
+    "started_at": 1774304548545,
+    "ended_at": null
+  },
+  {
+    "id": "aic_c510a98f0e7ebd98166a8e87c19fe406",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "wellness",
+    "mode": "ptt",
+    "started_at": 1774304548728,
+    "ended_at": null
+  },
+  {
+    "id": "aic_32508dacbe14c47a983fbcc4de2e2b6a",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "wellness",
+    "mode": "ptt",
+    "started_at": 1774304548912,
+    "ended_at": null
+  },
+  {
+    "id": "aic_7557ff0f8b0d3a0ef9854e6f10193f24",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "wellness",
+    "mode": "ptt",
+    "started_at": 1774304549258,
+    "ended_at": null
+  },
+  {
+    "id": "aic_d77f087c0d8b0722431c9b188a5ecee7",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "wellness",
+    "mode": "ptt",
+    "started_at": 1774304549711,
+    "ended_at": null
+  },
+  {
+    "id": "aic_d6ccca1454d896b4c3832424dc051067",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "exam",
+    "mode": "ptt",
+    "started_at": 1774304748646,
+    "ended_at": null
+  },
+  {
+    "id": "aic_5ff267c14a85239e6205fd4d0ca94b18",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774306384832,
+    "ended_at": null
+  },
+  {
+    "id": "aic_f2f3b844347e97eef0e327cd908f66f3",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774306388804,
+    "ended_at": null
+  },
+  {
+    "id": "aic_187dcb11137445b598e1bb00bcc38dba",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774306390797,
+    "ended_at": null
+  },
+  {
+    "id": "aic_e50ce6b73302807bb4753522d88dbea5",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774306832325,
+    "ended_at": null
+  },
+  {
+    "id": "aic_2cb6e407e66fc0ea52afb2677fd251ad",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774306835212,
+    "ended_at": null
+  },
+  {
+    "id": "aic_f6ce64edb141ebde8d5e480c78994e61",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774306918677,
+    "ended_at": 1774306997230
+  },
+  {
+    "id": "aic_2a5035c4faa75ba5992b93f9edd612de",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774306936014,
+    "ended_at": 1774306997234
+  },
+  {
+    "id": "aic_7d8bd042d380f04dbb22f1f58acee825",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774306944698,
+    "ended_at": 1774306997235
+  },
+  {
+    "id": "aic_54a063a8b2bee46314b236684be878b1",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774306953115,
+    "ended_at": 1774307027232
+  },
+  {
+    "id": "aic_e7b82798d4ab034ffdf4f98348a9de1b",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774306982822,
+    "ended_at": 1774307057233
+  },
+  {
+    "id": "aic_4c3132a8df28a9a58a640ea33dce684e",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774306987666,
+    "ended_at": 1774306993499
+  },
+  {
+    "id": "aic_97fdde4bf7325e66b4a9b223e9e6a969",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774307493622,
+    "ended_at": 1774307540800
+  },
+  {
+    "id": "aic_81d80f8ff8cf8968ab94c512cc990d43",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774307508307,
+    "ended_at": 1774307668340
+  },
+  {
+    "id": "aic_d505bb5996474e7ebf030699fcc38739",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774307617818,
+    "ended_at": 1774307901687
+  },
+  {
+    "id": "aic_4917614dab2152c0bdebe319d62d1006",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774307852135,
+    "ended_at": 1774308209456
+  },
+  {
+    "id": "aic_21ce61c4a1f4835b9c4584e46c0a8afc",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774308163434,
+    "ended_at": 1774308193116
+  },
+  {
+    "id": "aic_c6db06a881faf7e1bc49713216d14b35",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774308195201,
+    "ended_at": 1774309109486
+  },
+  {
+    "id": "aic_3dfd05c65edfe3e5422cd7ccb5b8578f",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774309186105,
+    "ended_at": 1774309442311
+  },
+  {
+    "id": "aic_7f1d25e2ec65af525da8c1096a23d658",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774309388114,
+    "ended_at": 1774309502316
+  },
+  {
+    "id": "aic_8ab349ecd29df12f2fdebaac6c6b759d",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1774309820400,
+    "ended_at": 1774309863704
+  },
+  {
+    "id": "aic_b0369c871995768e7ad9e38e25fd7f5b",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "restaurant",
+    "mode": "ptt",
+    "started_at": 1774309885248,
+    "ended_at": 1774310041920
+  },
+  {
+    "id": "aic_7fdc26094e18092df194219a399107df",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "restaurant",
+    "mode": "ptt",
+    "started_at": 1774311234222,
+    "ended_at": 1774311395418
+  },
+  {
+    "id": "aic_13389a8add131c0a5f6f7d3f0b8620ec",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "travel",
+    "mode": "ptt",
+    "started_at": 1774311411884,
+    "ended_at": 1774311495545
+  },
+  {
+    "id": "aic_3692409e4093b998cba12256627b0f3f",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "coldcall",
+    "mode": "ptt",
+    "started_at": 1774311824293,
+    "ended_at": 1774311835798
+  },
+  {
+    "id": "aic_3b64b1767d50c548ba2f0f50c578bd91",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "emergency",
+    "mode": "ptt",
+    "started_at": 1774311849941,
+    "ended_at": 1774312016293
+  },
+  {
+    "id": "aic_86a2ebb75bd305cd113acb3fcaf39221",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "sales",
+    "mode": "ptt",
+    "started_at": 1774312003691,
+    "ended_at": 1774312196299
+  },
+  {
+    "id": "aic_8247e6cf4a27765f68675fb1dcb187e2",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "restaurant",
+    "mode": "ptt",
+    "started_at": 1774312198058,
+    "ended_at": 1774312676341
+  },
+  {
+    "id": "aic_f3aae5a6994f8a7ba7f8c15806ed309e",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "restaurant",
+    "mode": "ptt",
+    "started_at": 1774312625072,
+    "ended_at": 1774312791272
+  },
+  {
+    "id": "aic_b7bef0b27e9fdbe45a04ef0e908075f5",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "restaurant",
+    "mode": "vad",
+    "started_at": 1774312845290,
+    "ended_at": 1774312931213
+  },
+  {
+    "id": "aic_c608377305a20011f706c8762f5fae57",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "travel",
+    "mode": "ptt",
+    "started_at": 1774313572806,
+    "ended_at": 1774313711275
+  },
+  {
+    "id": "aic_17a8fa8a8783768fe433a0ce421399e2",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "scenario": "restaurant",
+    "mode": "ptt",
+    "started_at": 1774313968223,
+    "ended_at": 1774314101117
+  },
+  {
+    "id": "aic_f88aebef8ce979616fe59817914a21a5",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "scenario": "smalltalk",
+    "mode": "ptt",
+    "started_at": 1775317414558,
+    "ended_at": 1775317429743
+  }
+]

@@ -1,0 +1,892 @@
+[
+  {
+    "id": "a1-morning-1",
+    "name": "A1-Morning",
+    "topic": "Describe this channel’s purpose…",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-05 23:17:53",
+    "workspace_id": "default",
+    "category": "classes"
+  },
+  {
+    "id": "conversation-club",
+    "name": "Conversation Club",
+    "topic": "Describe this channel’s purpose…",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-06 16:20:03",
+    "workspace_id": "default",
+    "category": "clubs"
+  },
+  {
+    "id": "speaking-club",
+    "name": "Speaking Club",
+    "topic": "Describe this channel’s purpose…",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-06 16:20:05",
+    "workspace_id": "default",
+    "category": "clubs"
+  },
+  {
+    "id": "culture-exchange",
+    "name": "Culture Exchange",
+    "topic": "Describe this channel’s purpose…",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-06 16:20:06",
+    "workspace_id": "default",
+    "category": "clubs"
+  },
+  {
+    "id": "announcements",
+    "name": "announcements",
+    "topic": "Company-wide announcements",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-06 22:19:09",
+    "workspace_id": "default",
+    "category": "classes"
+  },
+  {
+    "id": "conversation-club-8",
+    "name": "Conversation Club",
+    "topic": "Weekly conversation practice",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-07 13:01:56",
+    "workspace_id": "sprachschule-duisburg",
+    "category": "clubs"
+  },
+  {
+    "id": "speaking-club-8",
+    "name": "Speaking Club",
+    "topic": "Fluency and speaking drills",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-07 13:01:56",
+    "workspace_id": "sprachschule-duisburg",
+    "category": "clubs"
+  },
+  {
+    "id": "culture-exchange-8",
+    "name": "Culture Exchange",
+    "topic": "Share culture and language tips",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-07 13:01:56",
+    "workspace_id": "sprachschule-duisburg",
+    "category": "clubs"
+  },
+  {
+    "id": "announcements-1",
+    "name": "Announcements",
+    "topic": "Describe this channel’s purpose…",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-07 23:34:38",
+    "workspace_id": "sprachschule-duisburg",
+    "category": "tools"
+  },
+  {
+    "id": "learning-materials",
+    "name": "Learning Materials",
+    "topic": "Describe this channel’s purpose…",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-07 23:34:42",
+    "workspace_id": "sprachschule-duisburg",
+    "category": "tools"
+  },
+  {
+    "id": "speaking-practice",
+    "name": "Speaking Practice",
+    "topic": "Describe this channel’s purpose…",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-07 23:34:44",
+    "workspace_id": "sprachschule-duisburg",
+    "category": "tools"
+  },
+  {
+    "id": "listening-practice",
+    "name": "Listening Practice",
+    "topic": "Describe this channel’s purpose…",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-07 23:34:45",
+    "workspace_id": "sprachschule-duisburg",
+    "category": "tools"
+  },
+  {
+    "id": "announcements-2",
+    "name": "Announcements",
+    "topic": "Important school updates",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-07 23:38:03",
+    "workspace_id": "default",
+    "category": "tools"
+  },
+  {
+    "id": "learning-materials-1",
+    "name": "Learning Materials",
+    "topic": "Study guides and resources",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-07 23:38:03",
+    "workspace_id": "default",
+    "category": "tools"
+  },
+  {
+    "id": "speaking-practice-1",
+    "name": "Speaking Practice",
+    "topic": "Speaking drills and prompts",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-07 23:38:03",
+    "workspace_id": "default",
+    "category": "tools"
+  },
+  {
+    "id": "listening-practice-1",
+    "name": "Listening Practice",
+    "topic": "Listening activities and audio",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-07 23:38:03",
+    "workspace_id": "default",
+    "category": "tools"
+  },
+  {
+    "id": "schedule",
+    "name": "Schedule",
+    "topic": "Class schedule and timetable",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-07 23:38:03",
+    "workspace_id": "default",
+    "category": "tools"
+  },
+  {
+    "id": "exam-registration",
+    "name": "Exam Registration",
+    "topic": "Exam registration details",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-07 23:38:03",
+    "workspace_id": "default",
+    "category": "tools"
+  },
+  {
+    "id": "exam-registration-7",
+    "name": "Exam Registration",
+    "topic": "Exam registration details",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-07 23:38:03",
+    "workspace_id": "sprachschule-duisburg",
+    "category": "tools"
+  },
+  {
+    "id": "b1-mock-test",
+    "name": "B1 Mock Test",
+    "topic": "Mock exam practice",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-08 00:03:36",
+    "workspace_id": "default",
+    "category": "exams"
+  },
+  {
+    "id": "placement-test",
+    "name": "Placement Test",
+    "topic": "Placement assessment",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-08 00:03:36",
+    "workspace_id": "default",
+    "category": "exams"
+  },
+  {
+    "id": "final-exam-march",
+    "name": "Final Exam – March",
+    "topic": "Final exam session",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-08 00:03:36",
+    "workspace_id": "default",
+    "category": "exams"
+  },
+  {
+    "id": "final-exam-march-7",
+    "name": "Final Exam – March",
+    "topic": "Final exam session",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-08 00:03:36",
+    "workspace_id": "sprachschule-duisburg",
+    "category": "exams"
+  },
+  {
+    "id": "privacy-rules",
+    "name": "Privacy & Rules",
+    "topic": "School privacy and communication guidelines",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-08 00:10:13",
+    "workspace_id": "default",
+    "category": "tools"
+  },
+  {
+    "id": "privacy-rules-7",
+    "name": "Privacy & Rules",
+    "topic": "School privacy and communication guidelines",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-08 00:10:13",
+    "workspace_id": "sprachschule-duisburg",
+    "category": "tools"
+  },
+  {
+    "id": "a1-morning-1-homework",
+    "name": "A1-Morning Homework",
+    "topic": "homework_for:a1-morning-1",
+    "members": 0,
+    "unread": 0,
+    "created_at": "2026-01-08 16:52:37",
+    "workspace_id": "default",
+    "category": "homework"
+  },
+  {
+    "id": "announcements-homework",
+    "name": "announcements Homework",
+    "topic": "homework_for:announcements",
+    "members": 0,
+    "unread": 0,
+    "created_at": "2026-01-08 16:52:37",
+    "workspace_id": "default",
+    "category": "homework"
+  },
+  {
+    "id": "b1-mock-test-7",
+    "name": "B1 Mock Test",
+    "topic": "Mock exam practice",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-29 23:01:47",
+    "workspace_id": "sprachschule-duisburg",
+    "category": "exams"
+  },
+  {
+    "id": "placement-test-9",
+    "name": "Placement Test",
+    "topic": "Placement assessment",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-29 23:21:53",
+    "workspace_id": "sprachschule-duisburg",
+    "category": "exams"
+  },
+  {
+    "id": "teachers-default",
+    "name": "Teachers",
+    "topic": "Teachers-only staff room",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-31 19:45:52",
+    "workspace_id": "default",
+    "category": "teachers"
+  },
+  {
+    "id": "teachers-sprachschule-duisburg",
+    "name": "Teachers",
+    "topic": "Teachers-only staff room",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-01-31 19:45:52",
+    "workspace_id": "sprachschule-duisburg",
+    "category": "teachers"
+  },
+  {
+    "id": "grammar",
+    "name": "Grammar",
+    "topic": "",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-12 22:55:51",
+    "workspace_id": "sprachschule-duisburg",
+    "category": "tools"
+  },
+  {
+    "id": "grammar-1",
+    "name": "Grammar",
+    "topic": "",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 00:36:29",
+    "workspace_id": "default",
+    "category": "tools"
+  },
+  {
+    "id": "conversation-club-1",
+    "name": "Conversation Club",
+    "topic": "Weekly conversation practice",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 19:56:11",
+    "workspace_id": "spraschule-düsseldorf",
+    "category": "clubs"
+  },
+  {
+    "id": "speaking-club-1",
+    "name": "Speaking Club",
+    "topic": "Fluency and speaking drills",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 19:56:11",
+    "workspace_id": "spraschule-düsseldorf",
+    "category": "clubs"
+  },
+  {
+    "id": "culture-exchange-1",
+    "name": "Culture Exchange",
+    "topic": "Share culture and language tips",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 19:56:11",
+    "workspace_id": "spraschule-düsseldorf",
+    "category": "clubs"
+  },
+  {
+    "id": "announcements-3",
+    "name": "Announcements",
+    "topic": "Important school updates",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 19:56:11",
+    "workspace_id": "spraschule-düsseldorf",
+    "category": "tools"
+  },
+  {
+    "id": "learning-materials-2",
+    "name": "Learning Materials",
+    "topic": "Study guides and resources",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 19:56:11",
+    "workspace_id": "spraschule-düsseldorf",
+    "category": "tools"
+  },
+  {
+    "id": "speaking-practice-2",
+    "name": "Speaking Practice",
+    "topic": "Speaking drills and prompts",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 19:56:11",
+    "workspace_id": "spraschule-düsseldorf",
+    "category": "tools"
+  },
+  {
+    "id": "listening-practice-2",
+    "name": "Listening Practice",
+    "topic": "Listening activities and audio",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 19:56:11",
+    "workspace_id": "spraschule-düsseldorf",
+    "category": "tools"
+  },
+  {
+    "id": "schedule-1",
+    "name": "Schedule",
+    "topic": "Class schedule and timetable",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 19:56:11",
+    "workspace_id": "spraschule-düsseldorf",
+    "category": "tools"
+  },
+  {
+    "id": "exam-registration-1",
+    "name": "Exam Registration",
+    "topic": "Exam registration details",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 19:56:11",
+    "workspace_id": "spraschule-düsseldorf",
+    "category": "tools"
+  },
+  {
+    "id": "privacy-rules-1",
+    "name": "Privacy & Rules",
+    "topic": "School privacy and communication guidelines",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 19:56:11",
+    "workspace_id": "spraschule-düsseldorf",
+    "category": "tools"
+  },
+  {
+    "id": "b1-mock-test-1",
+    "name": "B1 Mock Test",
+    "topic": "Mock exam practice",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 19:56:11",
+    "workspace_id": "spraschule-düsseldorf",
+    "category": "exams"
+  },
+  {
+    "id": "placement-test-1",
+    "name": "Placement Test",
+    "topic": "Placement assessment",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 19:56:11",
+    "workspace_id": "spraschule-düsseldorf",
+    "category": "exams"
+  },
+  {
+    "id": "final-exam-march-1",
+    "name": "Final Exam – March",
+    "topic": "Final exam session",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 19:56:11",
+    "workspace_id": "spraschule-düsseldorf",
+    "category": "exams"
+  },
+  {
+    "id": "teachers-spraschule-düsseldorf",
+    "name": "Teachers",
+    "topic": "Teachers-only staff room",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 19:56:11",
+    "workspace_id": "spraschule-düsseldorf",
+    "category": "teachers"
+  },
+  {
+    "id": "grammar-2",
+    "name": "Grammar",
+    "topic": "",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 21:31:45",
+    "workspace_id": "default",
+    "category": "tools"
+  },
+  {
+    "id": "conversation-club-2",
+    "name": "Conversation Club",
+    "topic": "Weekly conversation practice",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 21:39:19",
+    "workspace_id": "lens",
+    "category": "clubs"
+  },
+  {
+    "id": "speaking-club-2",
+    "name": "Speaking Club",
+    "topic": "Fluency and speaking drills",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 21:39:19",
+    "workspace_id": "lens",
+    "category": "clubs"
+  },
+  {
+    "id": "culture-exchange-2",
+    "name": "Culture Exchange",
+    "topic": "Share culture and language tips",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 21:39:19",
+    "workspace_id": "lens",
+    "category": "clubs"
+  },
+  {
+    "id": "announcements-5",
+    "name": "Announcements",
+    "topic": "Important school updates",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 21:39:19",
+    "workspace_id": "lens",
+    "category": "tools"
+  },
+  {
+    "id": "learning-materials-3",
+    "name": "Learning Materials",
+    "topic": "Study guides and resources",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 21:39:19",
+    "workspace_id": "lens",
+    "category": "tools"
+  },
+  {
+    "id": "speaking-practice-3",
+    "name": "Speaking Practice",
+    "topic": "Speaking drills and prompts",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 21:39:19",
+    "workspace_id": "lens",
+    "category": "tools"
+  },
+  {
+    "id": "listening-practice-3",
+    "name": "Listening Practice",
+    "topic": "Listening activities and audio",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 21:39:19",
+    "workspace_id": "lens",
+    "category": "tools"
+  },
+  {
+    "id": "schedule-2",
+    "name": "Schedule",
+    "topic": "Class schedule and timetable",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 21:39:19",
+    "workspace_id": "lens",
+    "category": "tools"
+  },
+  {
+    "id": "exam-registration-2",
+    "name": "Exam Registration",
+    "topic": "Exam registration details",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 21:39:19",
+    "workspace_id": "lens",
+    "category": "tools"
+  },
+  {
+    "id": "privacy-rules-2",
+    "name": "Privacy & Rules",
+    "topic": "School privacy and communication guidelines",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 21:39:19",
+    "workspace_id": "lens",
+    "category": "tools"
+  },
+  {
+    "id": "b1-mock-test-2",
+    "name": "B1 Mock Test",
+    "topic": "Mock exam practice",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 21:39:19",
+    "workspace_id": "lens",
+    "category": "exams"
+  },
+  {
+    "id": "placement-test-2",
+    "name": "Placement Test",
+    "topic": "Placement assessment",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 21:39:19",
+    "workspace_id": "lens",
+    "category": "exams"
+  },
+  {
+    "id": "final-exam-march-2",
+    "name": "Final Exam – March",
+    "topic": "Final exam session",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 21:39:19",
+    "workspace_id": "lens",
+    "category": "exams"
+  },
+  {
+    "id": "teachers-lens",
+    "name": "Teachers",
+    "topic": "Teachers-only staff room",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 21:39:19",
+    "workspace_id": "lens",
+    "category": "teachers"
+  },
+  {
+    "id": "grammar-3",
+    "name": "Grammar",
+    "topic": "",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-17 21:43:02",
+    "workspace_id": "lens",
+    "category": "tools"
+  },
+  {
+    "id": "wortscatzt-1",
+    "name": "Wortscatzt",
+    "topic": "Vocabulary practice and word games",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-24 00:18:22",
+    "workspace_id": "default",
+    "category": "tools"
+  },
+  {
+    "id": "school-task-1",
+    "name": "School Task",
+    "topic": "School-wide task board",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-24 00:18:22",
+    "workspace_id": "default",
+    "category": "tasks"
+  },
+  {
+    "id": "teachers-task-1",
+    "name": "Teachers Task",
+    "topic": "Teacher task list",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-24 00:18:22",
+    "workspace_id": "default",
+    "category": "tasks"
+  },
+  {
+    "id": "wortscatzt-3",
+    "name": "Wortscatzt",
+    "topic": "Vocabulary practice and word games",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-24 00:18:22",
+    "workspace_id": "spraschule-düsseldorf",
+    "category": "tools"
+  },
+  {
+    "id": "wordmeaning",
+    "name": "Wordmeaning",
+    "topic": "",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-24 23:45:19",
+    "workspace_id": "sprachschule-duisburg",
+    "category": "tools"
+  },
+  {
+    "id": "wordmeaning-1",
+    "name": "Wordmeaning",
+    "topic": "Word meaning discussion and usage",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-24 23:57:55",
+    "workspace_id": "default",
+    "category": "tools"
+  },
+  {
+    "id": "wordmeaning-2",
+    "name": "Wordmeaning",
+    "topic": "Word meaning discussion and usage",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-24 23:57:55",
+    "workspace_id": "lens",
+    "category": "tools"
+  },
+  {
+    "id": "wordmeaning-3",
+    "name": "Wordmeaning",
+    "topic": "Word meaning discussion and usage",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-02-24 23:57:55",
+    "workspace_id": "spraschule-düsseldorf",
+    "category": "tools"
+  },
+  {
+    "id": "a1-evening",
+    "name": "A1-Evening",
+    "topic": "",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-03-13 23:43:43",
+    "workspace_id": "lens",
+    "category": "classes"
+  },
+  {
+    "id": "a1-evening-homework",
+    "name": "A1-Evening Homework",
+    "topic": "homework_for:a1-evening",
+    "members": 0,
+    "unread": 0,
+    "created_at": "2026-03-13 23:43:43",
+    "workspace_id": "lens",
+    "category": "homework"
+  },
+  {
+    "id": "a2-evening",
+    "name": "A2-Evening",
+    "topic": "",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-03-15 00:37:12",
+    "workspace_id": "lens",
+    "category": "classes"
+  },
+  {
+    "id": "a2-evening-homework",
+    "name": "A2-Evening Homework",
+    "topic": "homework_for:a2-evening",
+    "members": 0,
+    "unread": 0,
+    "created_at": "2026-03-15 00:37:12",
+    "workspace_id": "lens",
+    "category": "homework"
+  },
+  {
+    "id": "student-tasks",
+    "name": "Student Tasks",
+    "topic": "Student task list",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-03-15 02:11:04",
+    "workspace_id": "default",
+    "category": "tasks"
+  },
+  {
+    "id": "school-task-3",
+    "name": "School Task",
+    "topic": "School-wide task board",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-03-15 02:11:09",
+    "workspace_id": "sprachschule-duisburg",
+    "category": "tasks"
+  },
+  {
+    "id": "teachers-task-3",
+    "name": "Teachers Task",
+    "topic": "Teacher task list",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-03-15 02:11:09",
+    "workspace_id": "sprachschule-duisburg",
+    "category": "tasks"
+  },
+  {
+    "id": "student-tasks-1",
+    "name": "Student Tasks",
+    "topic": "Student task list",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-03-15 02:11:09",
+    "workspace_id": "sprachschule-duisburg",
+    "category": "tasks"
+  },
+  {
+    "id": "school-task-4",
+    "name": "School Task",
+    "topic": "School-wide task board",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-03-15 02:27:35",
+    "workspace_id": "lens",
+    "category": "tasks"
+  },
+  {
+    "id": "teachers-task-4",
+    "name": "Teachers Task",
+    "topic": "Teacher task list",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-03-15 02:27:35",
+    "workspace_id": "lens",
+    "category": "tasks"
+  },
+  {
+    "id": "student-tasks-2",
+    "name": "Student Tasks",
+    "topic": "Student task list",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-03-15 02:27:35",
+    "workspace_id": "lens",
+    "category": "tasks"
+  },
+  {
+    "id": "a1-morning",
+    "name": "A1-Morning",
+    "topic": "",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-04-04 00:16:54",
+    "workspace_id": "sprachschule-duisburg",
+    "category": "classes"
+  },
+  {
+    "id": "a1-morning-homework",
+    "name": "A1-Morning Homework",
+    "topic": "homework_for:a1-morning",
+    "members": 0,
+    "unread": 0,
+    "created_at": "2026-04-04 00:16:54",
+    "workspace_id": "sprachschule-duisburg",
+    "category": "homework"
+  },
+  {
+    "id": "a2-morning",
+    "name": "A2-Morning",
+    "topic": "",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-04-04 15:41:33",
+    "workspace_id": "sprachschule-duisburg",
+    "category": "classes"
+  },
+  {
+    "id": "a2-morning-homework",
+    "name": "A2-Morning Homework",
+    "topic": "homework_for:a2-morning",
+    "members": 0,
+    "unread": 0,
+    "created_at": "2026-04-04 15:41:33",
+    "workspace_id": "sprachschule-duisburg",
+    "category": "homework"
+  },
+  {
+    "id": "private",
+    "name": "Private",
+    "topic": "",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-04-14 09:44:33",
+    "workspace_id": "sprachschule-duisburg",
+    "category": "classes"
+  },
+  {
+    "id": "private-homework",
+    "name": "Private Homework",
+    "topic": "homework_for:private",
+    "members": 0,
+    "unread": 0,
+    "created_at": "2026-04-14 09:44:33",
+    "workspace_id": "sprachschule-duisburg",
+    "category": "homework"
+  },
+  {
+    "id": "schedule-3",
+    "name": "Schedule",
+    "topic": "Class schedule and timetable",
+    "members": 1,
+    "unread": 0,
+    "created_at": "2026-04-22 16:09:07",
+    "workspace_id": "sprachschule-duisburg",
+    "category": "tools"
+  }
+]

@@ -1,0 +1,625 @@
+{
+  "importedTables": [
+    "audit_log",
+    "audit_logs",
+    "platform_settings",
+    "register_otps",
+    "registration_review_requests",
+    "registration_sessions",
+    "school_requests",
+    "workspaces",
+    "channels",
+    "users",
+    "workspace_billing",
+    "workspace_class_meta",
+    "workspace_email_settings",
+    "workspace_profile",
+    "workspace_settings_admin",
+    "announcements",
+    "messages",
+    "attendance_sessions",
+    "channel_members",
+    "dms",
+    "files_registry",
+    "homework_items",
+    "invoices",
+    "login_attempts",
+    "password_history",
+    "password_resets",
+    "refresh_tokens",
+    "registration_links",
+    "revoked_access_tokens",
+    "security_events",
+    "task_reactions",
+    "tasks",
+    "user_channel_prefs",
+    "workspace_members",
+    "announcement_reads",
+    "message_reaction_users",
+    "message_reactions",
+    "message_translations",
+    "replies",
+    "attendance_notifications",
+    "attendance_records",
+    "dm_members",
+    "dm_messages",
+    "homework_completions",
+    "homework_item_files",
+    "homework_submissions",
+    "payments",
+    "task_comments",
+    "reply_reaction_users",
+    "reply_reactions",
+    "dm_message_reactions",
+    "dm_replies",
+    "homework_submission_comments",
+    "homework_submission_files",
+    "dm_reply_reaction_users",
+    "dm_reply_reactions"
+  ],
+  "skippedTables": [
+    {
+      "table": "ai_budget_settings",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "ai_conversation_messages",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "ai_conversations",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "ai_runtime_sessions",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "ai_usage_ledger",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "calendar_event_targets",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "calendar_events",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "certificates",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "class_attendance",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "class_attendance_records",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "deleted_inbound_emails",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "dm_message_reaction_users",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "email_events",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "email_replies",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "file_events",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "file_stats",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "inbound_emails",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "ip_blocklist",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "knowledge_items",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "live_attendance",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "live_sessions",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "orphaned_attendance_notifications_archive",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "orphaned_attendance_records_archive",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "orphaned_attendance_sessions_archive",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "orphaned_file_events_archive",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "orphaned_files_registry_archive",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "orphaned_homework_item_files_archive",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "orphaned_homework_items_archive",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "orphaned_homework_submission_comments_archive",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "orphaned_homework_submission_files_archive",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "orphaned_homework_submissions_archive",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "orphaned_registration_links_archive",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "orphaned_workspace_class_meta_archive",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "policy_acceptances",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "slide_state",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "speaking_reviews",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "student_notes",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "student_progress",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "test_answers",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "test_attempts",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "test_channels",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "test_options",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "test_sections",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "test_tasks",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "transcript_items",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "user_preferences",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "workspace_email_logs",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "workspace_email_templates",
+      "reason": "not present in db/schema/pg/*.sql"
+    },
+    {
+      "table": "writing_reviews",
+      "reason": "not present in db/schema/pg/*.sql"
+    }
+  ],
+  "tableStats": {
+    "audit_log": {
+      "sourceRows": 29,
+      "importedRows": 29,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "audit_logs": {
+      "sourceRows": 259,
+      "importedRows": 259,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "platform_settings": {
+      "sourceRows": 1,
+      "importedRows": 1,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "register_otps": {
+      "sourceRows": 0,
+      "importedRows": 0,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "registration_review_requests": {
+      "sourceRows": 7,
+      "importedRows": 7,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "registration_sessions": {
+      "sourceRows": 0,
+      "importedRows": 0,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "school_requests": {
+      "sourceRows": 1,
+      "importedRows": 1,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "workspaces": {
+      "sourceRows": 4,
+      "importedRows": 4,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "channels": {
+      "sourceRows": 89,
+      "importedRows": 89,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "users": {
+      "sourceRows": 5,
+      "importedRows": 5,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "workspace_billing": {
+      "sourceRows": 0,
+      "importedRows": 0,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "workspace_class_meta": {
+      "sourceRows": 1,
+      "importedRows": 1,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "workspace_email_settings": {
+      "sourceRows": 2,
+      "importedRows": 2,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "workspace_profile": {
+      "sourceRows": 2,
+      "importedRows": 2,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "workspace_settings_admin": {
+      "sourceRows": 0,
+      "importedRows": 0,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "announcements": {
+      "sourceRows": 10,
+      "importedRows": 10,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "messages": {
+      "sourceRows": 77,
+      "importedRows": 77,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "attendance_sessions": {
+      "sourceRows": 0,
+      "importedRows": 0,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "channel_members": {
+      "sourceRows": 80,
+      "importedRows": 80,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "dms": {
+      "sourceRows": 1,
+      "importedRows": 1,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "files_registry": {
+      "sourceRows": 232,
+      "importedRows": 232,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "homework_items": {
+      "sourceRows": 5,
+      "importedRows": 5,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "invoices": {
+      "sourceRows": 2,
+      "importedRows": 2,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "login_attempts": {
+      "sourceRows": 149,
+      "importedRows": 149,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "password_history": {
+      "sourceRows": 0,
+      "importedRows": 0,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "password_resets": {
+      "sourceRows": 6,
+      "importedRows": 1,
+      "repairedRows": 1,
+      "skippedOrphanRows": 5
+    },
+    "refresh_tokens": {
+      "sourceRows": 4932,
+      "importedRows": 4863,
+      "repairedRows": 0,
+      "skippedOrphanRows": 69
+    },
+    "registration_links": {
+      "sourceRows": 14,
+      "importedRows": 14,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "revoked_access_tokens": {
+      "sourceRows": 96,
+      "importedRows": 96,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "security_events": {
+      "sourceRows": 4865,
+      "importedRows": 4865,
+      "repairedRows": 4865,
+      "skippedOrphanRows": 0
+    },
+    "task_reactions": {
+      "sourceRows": 0,
+      "importedRows": 0,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "tasks": {
+      "sourceRows": 2,
+      "importedRows": 2,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "user_channel_prefs": {
+      "sourceRows": 2,
+      "importedRows": 2,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "workspace_members": {
+      "sourceRows": 4,
+      "importedRows": 4,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "announcement_reads": {
+      "sourceRows": 10,
+      "importedRows": 10,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "message_reaction_users": {
+      "sourceRows": 21,
+      "importedRows": 21,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "message_reactions": {
+      "sourceRows": 21,
+      "importedRows": 21,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "message_translations": {
+      "sourceRows": 4,
+      "importedRows": 4,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "replies": {
+      "sourceRows": 4,
+      "importedRows": 4,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "attendance_notifications": {
+      "sourceRows": 0,
+      "importedRows": 0,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "attendance_records": {
+      "sourceRows": 0,
+      "importedRows": 0,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "dm_members": {
+      "sourceRows": 2,
+      "importedRows": 2,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "dm_messages": {
+      "sourceRows": 0,
+      "importedRows": 0,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "homework_completions": {
+      "sourceRows": 1,
+      "importedRows": 0,
+      "repairedRows": 0,
+      "skippedOrphanRows": 1
+    },
+    "homework_item_files": {
+      "sourceRows": 0,
+      "importedRows": 0,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "homework_submissions": {
+      "sourceRows": 0,
+      "importedRows": 0,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "payments": {
+      "sourceRows": 2,
+      "importedRows": 2,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "task_comments": {
+      "sourceRows": 0,
+      "importedRows": 0,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "reply_reaction_users": {
+      "sourceRows": 0,
+      "importedRows": 0,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "reply_reactions": {
+      "sourceRows": 0,
+      "importedRows": 0,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "dm_message_reactions": {
+      "sourceRows": 0,
+      "importedRows": 0,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "dm_replies": {
+      "sourceRows": 0,
+      "importedRows": 0,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "homework_submission_comments": {
+      "sourceRows": 0,
+      "importedRows": 0,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "homework_submission_files": {
+      "sourceRows": 0,
+      "importedRows": 0,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "dm_reply_reaction_users": {
+      "sourceRows": 0,
+      "importedRows": 0,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    },
+    "dm_reply_reactions": {
+      "sourceRows": 0,
+      "importedRows": 0,
+      "repairedRows": 0,
+      "skippedOrphanRows": 0
+    }
+  },
+  "repaired_rows": [
+    {
+      "table": "password_resets",
+      "count": 1,
+      "reason": "used_normalized"
+    },
+    {
+      "table": "security_events",
+      "count": 4865,
+      "reason": "event_type_backfilled"
+    }
+  ],
+  "skipped_orphan_rows": [
+    {
+      "table": "password_resets",
+      "count": 5,
+      "reason": "orphaned_auth_records"
+    },
+    {
+      "table": "refresh_tokens",
+      "count": 69,
+      "reason": "orphaned_auth_records"
+    },
+    {
+      "table": "homework_completions",
+      "count": 1,
+      "reason": "missing_homework_id"
+    }
+  ]
+}

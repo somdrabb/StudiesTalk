@@ -186,6 +186,23 @@ async function fetchDashboardSummary(input = {}, options = {}) {
   }
 }
 
+function isPolicyGateBlocking() {
+  if (typeof window === "undefined") return false;
+  if (typeof window.shouldBlockForPolicyGate !== "function") return false;
+  try {
+    return !!window.shouldBlockForPolicyGate();
+  } catch (_err) {
+    return false;
+  }
+}
+
+function reopenPolicyGateIfNeeded(err) {
+  if (err?.payload?.code !== "policy_acceptance_required") return;
+  if (typeof window === "undefined") return;
+  if (typeof window.openPolicyGatePanel !== "function") return;
+  window.openPolicyGatePanel({ refresh: true, force: true }).catch(() => null);
+}
+
 function formatAnalyticsEta(ms) {
   const totalSeconds = Math.max(1, Math.ceil((Number(ms) || 0) / 1000));
   return totalSeconds <= 2 ? `${totalSeconds} sec` : `about ${totalSeconds} sec`;
@@ -1011,6 +1028,7 @@ async function renderAnalyticsPanel() {
 }
 
 async function prefetchDashboardSummary(options = {}) {
+  if (isPolicyGateBlocking()) return null;
   const cacheContext = getDashboardSummaryCacheContext(options);
   if (!cacheContext.userId || !cacheContext.workspaceId) return null;
   const cached = getCachedDashboardSummary(cacheContext);
@@ -1021,9 +1039,13 @@ async function prefetchDashboardSummary(options = {}) {
   try {
     return await fetchDashboardSummary(cacheContext, { force: !!options.force });
   } catch (err) {
+    reopenPolicyGateIfNeeded(err);
     if (cached?.data) {
       setAnalyticsContextSnapshot(cached.data);
       return cached.data;
+    }
+    if (err?.payload?.code === "policy_acceptance_required") {
+      return null;
     }
     throw err;
   }
@@ -1036,6 +1058,7 @@ if (typeof window !== "undefined") {
   window.prefetchDashboardSummary = prefetchDashboardSummary;
 
   window.addEventListener("worknestAuthReady", (event) => {
+    if (isPolicyGateBlocking()) return;
     const detail = event?.detail || {};
     void prefetchDashboardSummary({
       userId: detail.user?.id || detail.user?.userId || "",
@@ -1045,6 +1068,7 @@ if (typeof window !== "undefined") {
   });
 
   window.addEventListener("worknestWorkspaceReady", (event) => {
+    if (isPolicyGateBlocking()) return;
     const workspaceId = String(event?.detail?.workspaceId || "").trim();
     if (!workspaceId) return;
     void prefetchDashboardSummary({ workspaceId }).catch(() => null);
@@ -1055,7 +1079,7 @@ if (typeof window !== "undefined") {
   });
 
   const activeUser = getAnalyticsSessionUser();
-  if (activeUser?.id || activeUser?.userId) {
+  if ((activeUser?.id || activeUser?.userId) && !isPolicyGateBlocking()) {
     void prefetchDashboardSummary().catch(() => null);
   }
 }

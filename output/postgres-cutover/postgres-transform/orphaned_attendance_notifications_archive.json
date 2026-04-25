@@ -1,0 +1,24 @@
+[
+  {
+    "id": "anotif_bceaff35-6918-455b-9b07-d2d3f6b1bc8f",
+    "workspace_id": "sprachschule-duisburg",
+    "session_id": "asess_fc6f9482-3c59-4336-a762-779fc97aba52",
+    "channel_id": "b1-morning-1",
+    "student_user_id": "ubdnnsrqy",
+    "type": "absence_email",
+    "sent_at": "2026-02-11 14:01:26",
+    "archive_reason": "missing_channel;missing_student;session_parent_invalid",
+    "archived_at": "2026-04-20 18:50:16"
+  },
+  {
+    "id": "anotif_9a531c82-5f32-441f-8cef-65a947d71273",
+    "workspace_id": "sprachschule-duisburg",
+    "session_id": "asess_629027a5-5bc7-4b78-af65-17a4252b9500",
+    "channel_id": "a1-nood",
+    "student_user_id": "ubdnnsrqy",
+    "type": "absence_email",
+    "sent_at": "2026-02-11 15:32:36",
+    "archive_reason": "missing_channel;missing_student;session_parent_invalid",
+    "archived_at": "2026-04-20 18:50:16"
+  }
+]

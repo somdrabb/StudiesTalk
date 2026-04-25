@@ -1,0 +1,24 @@
+[
+  {
+    "id": "pay_e8c38651915abcb5",
+    "invoice_id": "inv_266b0cb3636819b2",
+    "workspace_id": "lens",
+    "amount_cents": 10,
+    "currency": "EUR",
+    "provider": "manual",
+    "provider_ref": null,
+    "created_at": 1776780524774,
+    "student_user_id": null
+  },
+  {
+    "id": "pay_153bddf6f7d3f89b",
+    "invoice_id": "inv_4c279a2d6a831399",
+    "workspace_id": "lens",
+    "amount_cents": 1010,
+    "currency": "EUR",
+    "provider": "manual",
+    "provider_ref": null,
+    "created_at": 1776780556306,
+    "student_user_id": null
+  }
+]

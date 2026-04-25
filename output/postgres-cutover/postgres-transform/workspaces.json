@@ -1,0 +1,46 @@
+[
+  {
+    "id": "default",
+    "name": "Default Workspace",
+    "created_at": "2025-11-30 14:07:41",
+    "school_code": null,
+    "status": "approved",
+    "admin_email": null,
+    "approved_at": null,
+    "approved_by": null,
+    "logo_url": null
+  },
+  {
+    "id": "sprachschule-duisburg",
+    "name": "Sprachschule Duisburg",
+    "created_at": "2026-01-07 13:01:56",
+    "school_code": "SCHOOL-0009",
+    "status": "approved",
+    "admin_email": "mdgolamrabbani057@gmail.com",
+    "approved_at": "2026-01-07 13:01:56",
+    "approved_by": "19972002-super",
+    "logo_url": "/uploads/workspaces/sprachschule-duisburg/logo.png"
+  },
+  {
+    "id": "spraschule-düsseldorf",
+    "name": "Sprachschule Düsseldorf",
+    "created_at": "2026-02-17T19:51:20.765Z",
+    "school_code": null,
+    "status": "approved",
+    "admin_email": "rafsan1997ahmed@gmail.com",
+    "approved_at": "2026-02-17T19:51:20.765Z",
+    "approved_by": "19972002",
+    "logo_url": null
+  },
+  {
+    "id": "lens",
+    "name": "Lens",
+    "created_at": "2026-02-17T21:39:19.771Z",
+    "school_code": null,
+    "status": "approved",
+    "admin_email": "ajmariadnisk@gmail.com",
+    "approved_at": "2026-02-17T21:39:19.771Z",
+    "approved_by": "19972002",
+    "logo_url": "/uploads/workspaces/lens/logo.jpg"
+  }
+]

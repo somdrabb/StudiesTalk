@@ -1,0 +1,263 @@
+[
+  {
+    "id": 1,
+    "workspace_id": "de-d-sseldorf",
+    "actor": "19972002",
+    "action": "workspace.delete",
+    "target": "de-d-sseldorf",
+    "payload_json": null,
+    "created_at": 1771345411441
+  },
+  {
+    "id": 2,
+    "workspace_id": "duisburg",
+    "actor": "19972002",
+    "action": "workspace.delete",
+    "target": "duisburg",
+    "payload_json": null,
+    "created_at": 1771345420022
+  },
+  {
+    "id": 3,
+    "workspace_id": "d-sseldorf",
+    "actor": "19972002",
+    "action": "workspace.delete",
+    "target": "d-sseldorf",
+    "payload_json": null,
+    "created_at": 1771345423317
+  },
+  {
+    "id": 4,
+    "workspace_id": "essen",
+    "actor": "19972002",
+    "action": "workspace.delete",
+    "target": "essen",
+    "payload_json": null,
+    "created_at": 1771345425534
+  },
+  {
+    "id": 5,
+    "workspace_id": "k-ln",
+    "actor": "19972002",
+    "action": "workspace.delete",
+    "target": "k-ln",
+    "payload_json": null,
+    "created_at": 1771345427835
+  },
+  {
+    "id": 6,
+    "workspace_id": "wuppertal",
+    "actor": "19972002",
+    "action": "workspace.delete",
+    "target": "wuppertal",
+    "payload_json": null,
+    "created_at": 1771345430952
+  },
+  {
+    "id": 7,
+    "workspace_id": "d-jff-e",
+    "actor": "19972002",
+    "action": "workspace.delete",
+    "target": "d-jff-e",
+    "payload_json": null,
+    "created_at": 1771345433984
+  },
+  {
+    "id": 8,
+    "workspace_id": null,
+    "actor": "19972002",
+    "action": "school_request.reject",
+    "target": "6",
+    "payload_json": "{\"note\":null}",
+    "created_at": 1771353371285
+  },
+  {
+    "id": 9,
+    "workspace_id": null,
+    "actor": "19972002",
+    "action": "school_request.reject",
+    "target": "5",
+    "payload_json": "{\"note\":null}",
+    "created_at": 1771353376502
+  },
+  {
+    "id": 10,
+    "workspace_id": null,
+    "actor": "19972002",
+    "action": "school_request.reject",
+    "target": "3",
+    "payload_json": "{\"note\":null}",
+    "created_at": 1771353382216
+  },
+  {
+    "id": 11,
+    "workspace_id": null,
+    "actor": "19972002",
+    "action": "school_request.reject",
+    "target": "2",
+    "payload_json": "{\"note\":null}",
+    "created_at": 1771353385845
+  },
+  {
+    "id": 12,
+    "workspace_id": null,
+    "actor": "19972002",
+    "action": "school_request.reject",
+    "target": "1",
+    "payload_json": "{\"note\":null}",
+    "created_at": 1771353389833
+  },
+  {
+    "id": 13,
+    "workspace_id": null,
+    "actor": "19972002",
+    "action": "school_request.approve",
+    "target": "4",
+    "payload_json": "{\"note\":null}",
+    "created_at": 1771353394218
+  },
+  {
+    "id": 14,
+    "workspace_id": null,
+    "actor": "19972002",
+    "action": "school_request.bulk",
+    "target": "flag:1",
+    "payload_json": "{\"action\":\"flag\",\"ids\":[\"6\"],\"note\":\"will be reviwed\"}",
+    "created_at": 1771354858250
+  },
+  {
+    "id": 15,
+    "workspace_id": "spraschule-düsseldorf",
+    "actor": "19972002",
+    "action": "school_request.create_workspace",
+    "target": "4",
+    "payload_json": "{\"workspaceId\":\"spraschule-düsseldorf\",\"email\":\"rafsan1997ahmed@gmail.com\",\"adminId\":\"upwgs16ty\"}",
+    "created_at": 1771357880775
+  },
+  {
+    "id": 16,
+    "workspace_id": null,
+    "actor": "19972002",
+    "action": "school_request.approve",
+    "target": "7",
+    "payload_json": "{\"note\":null}",
+    "created_at": 1771364294241
+  },
+  {
+    "id": 17,
+    "workspace_id": "lens",
+    "actor": "19972002",
+    "action": "school_request.create_workspace",
+    "target": "7",
+    "payload_json": "{\"workspaceId\":\"lens\",\"email\":\"ajmariadnisk@gmail.com\",\"adminId\":\"utm5n61xv\"}",
+    "created_at": 1771364361511
+  },
+  {
+    "id": 18,
+    "workspace_id": "sprachschule-duesseldorf",
+    "actor": null,
+    "action": "user.update",
+    "target": "upwgs16ty",
+    "payload_json": "{\"role\":\"school_admin\",\"status\":\"disabled\"}",
+    "created_at": 1771545994451
+  },
+  {
+    "id": 19,
+    "workspace_id": "sprachschule-duesseldorf",
+    "actor": null,
+    "action": "user.update",
+    "target": "upwgs16ty",
+    "payload_json": "{\"role\":\"school_admin\",\"status\":\"active\"}",
+    "created_at": 1771545998729
+  },
+  {
+    "id": 20,
+    "workspace_id": "sprachschule-duesseldorf",
+    "actor": null,
+    "action": "user.update",
+    "target": "upwgs16ty",
+    "payload_json": "{\"role\":\"school_admin\",\"status\":\"disabled\"}",
+    "created_at": 1771545999793
+  },
+  {
+    "id": 21,
+    "workspace_id": "sprachschule-duesseldorf",
+    "actor": null,
+    "action": "user.update",
+    "target": "upwgs16ty",
+    "payload_json": "{\"role\":\"school_admin\",\"status\":\"active\"}",
+    "created_at": 1771546000395
+  },
+  {
+    "id": 22,
+    "workspace_id": "sprachschule-duesseldorf",
+    "actor": null,
+    "action": "user.delete",
+    "target": "upwgs16ty",
+    "payload_json": null,
+    "created_at": 1771546055189
+  },
+  {
+    "id": 23,
+    "workspace_id": "lens",
+    "actor": "19972002",
+    "action": "invoice.create",
+    "target": "inv_266b0cb3636819b2",
+    "payload_json": "{\"amountCents\":10,\"currency\":\"EUR\",\"description\":\"Monthly Invoices\",\"dueDate\":\"2026-10-10\",\"studentUserId\":null}",
+    "created_at": 1776780516875
+  },
+  {
+    "id": 24,
+    "workspace_id": "lens",
+    "actor": "19972002",
+    "action": "invoice.mark_paid",
+    "target": "inv_266b0cb3636819b2",
+    "payload_json": "{\"paymentId\":\"pay_e8c38651915abcb5\"}",
+    "created_at": 1776780524776
+  },
+  {
+    "id": 25,
+    "workspace_id": "lens",
+    "actor": "19972002",
+    "action": "invoice.create",
+    "target": "inv_4c279a2d6a831399",
+    "payload_json": "{\"amountCents\":1010,\"currency\":\"EUR\",\"description\":\"Monthly Invoices\",\"dueDate\":\"2026-10-10\",\"studentUserId\":null}",
+    "created_at": 1776780544374
+  },
+  {
+    "id": 26,
+    "workspace_id": "lens",
+    "actor": "19972002",
+    "action": "invoice.mark_paid",
+    "target": "inv_4c279a2d6a831399",
+    "payload_json": "{\"paymentId\":\"pay_153bddf6f7d3f89b\"}",
+    "created_at": 1776780556308
+  },
+  {
+    "id": 27,
+    "workspace_id": "lens",
+    "actor": "19972002",
+    "action": "workspace.email_settings.update",
+    "target": "lens",
+    "payload_json": "{\"replyTo\":\"mgrms98@gmail.com\",\"enabled\":0}",
+    "created_at": 1776792363776
+  },
+  {
+    "id": 28,
+    "workspace_id": "lens",
+    "actor": "19972002",
+    "action": "invoice.create",
+    "target": "inv_2a47241b8821f7e1",
+    "payload_json": "{\"amountCents\":12345,\"currency\":\"EUR\",\"description\":\"Postgres rehearsal invoice\",\"dueDate\":\"2026-05-15\",\"studentUserId\":\"uzkzzyy6q\"}",
+    "created_at": 1776870476287
+  },
+  {
+    "id": 29,
+    "workspace_id": "lens",
+    "actor": "19972002",
+    "action": "invoice.mark_paid",
+    "target": "inv_2a47241b8821f7e1",
+    "payload_json": "{\"paymentId\":\"pay_fa19af04f80d75d9\"}",
+    "created_at": 1776870527544
+  }
+]

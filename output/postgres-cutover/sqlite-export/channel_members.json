@@ -1,0 +1,322 @@
+[
+  {
+    "channel_id": "conversation-club",
+    "user_id": "u-you"
+  },
+  {
+    "channel_id": "speaking-club",
+    "user_id": "u-you"
+  },
+  {
+    "channel_id": "culture-exchange",
+    "user_id": "u-you"
+  },
+  {
+    "channel_id": "announcements-2",
+    "user_id": "u-you"
+  },
+  {
+    "channel_id": "learning-materials-1",
+    "user_id": "u-you"
+  },
+  {
+    "channel_id": "speaking-practice-1",
+    "user_id": "u-you"
+  },
+  {
+    "channel_id": "listening-practice-1",
+    "user_id": "u-you"
+  },
+  {
+    "channel_id": "conversation-club-8",
+    "user_id": "uyshv0srx"
+  },
+  {
+    "channel_id": "speaking-club-8",
+    "user_id": "uyshv0srx"
+  },
+  {
+    "channel_id": "culture-exchange-8",
+    "user_id": "uyshv0srx"
+  },
+  {
+    "channel_id": "announcements-1",
+    "user_id": "uyshv0srx"
+  },
+  {
+    "channel_id": "learning-materials",
+    "user_id": "uyshv0srx"
+  },
+  {
+    "channel_id": "speaking-practice",
+    "user_id": "uyshv0srx"
+  },
+  {
+    "channel_id": "listening-practice",
+    "user_id": "uyshv0srx"
+  },
+  {
+    "channel_id": "privacy-rules",
+    "user_id": "u-you"
+  },
+  {
+    "channel_id": "privacy-rules-7",
+    "user_id": "uyshv0srx"
+  },
+  {
+    "channel_id": "schedule",
+    "user_id": "u-you"
+  },
+  {
+    "channel_id": "exam-registration",
+    "user_id": "u-you"
+  },
+  {
+    "channel_id": "exam-registration-7",
+    "user_id": "uyshv0srx"
+  },
+  {
+    "channel_id": "final-exam-march-7",
+    "user_id": "uyshv0srx"
+  },
+  {
+    "channel_id": "b1-mock-test-7",
+    "user_id": "uyshv0srx"
+  },
+  {
+    "channel_id": "placement-test-9",
+    "user_id": "uyshv0srx"
+  },
+  {
+    "channel_id": "teachers-sprachschule-duisburg",
+    "user_id": "uyshv0srx"
+  },
+  {
+    "channel_id": "grammar",
+    "user_id": "uyshv0srx"
+  },
+  {
+    "channel_id": "teachers-lens",
+    "user_id": "utm5n61xv"
+  },
+  {
+    "channel_id": "conversation-club-2",
+    "user_id": "utm5n61xv"
+  },
+  {
+    "channel_id": "speaking-club-2",
+    "user_id": "utm5n61xv"
+  },
+  {
+    "channel_id": "culture-exchange-2",
+    "user_id": "utm5n61xv"
+  },
+  {
+    "channel_id": "announcements-5",
+    "user_id": "utm5n61xv"
+  },
+  {
+    "channel_id": "learning-materials-3",
+    "user_id": "utm5n61xv"
+  },
+  {
+    "channel_id": "speaking-practice-3",
+    "user_id": "utm5n61xv"
+  },
+  {
+    "channel_id": "listening-practice-3",
+    "user_id": "utm5n61xv"
+  },
+  {
+    "channel_id": "schedule-2",
+    "user_id": "utm5n61xv"
+  },
+  {
+    "channel_id": "exam-registration-2",
+    "user_id": "utm5n61xv"
+  },
+  {
+    "channel_id": "privacy-rules-2",
+    "user_id": "utm5n61xv"
+  },
+  {
+    "channel_id": "b1-mock-test-2",
+    "user_id": "utm5n61xv"
+  },
+  {
+    "channel_id": "placement-test-2",
+    "user_id": "utm5n61xv"
+  },
+  {
+    "channel_id": "final-exam-march-2",
+    "user_id": "utm5n61xv"
+  },
+  {
+    "channel_id": "grammar-3",
+    "user_id": "utm5n61xv"
+  },
+  {
+    "channel_id": "wordmeaning",
+    "user_id": "uyshv0srx"
+  },
+  {
+    "channel_id": "wordmeaning-2",
+    "user_id": "utm5n61xv"
+  },
+  {
+    "channel_id": "conversation-club-8",
+    "user_id": "ubmz6ih1e"
+  },
+  {
+    "channel_id": "speaking-club-8",
+    "user_id": "ubmz6ih1e"
+  },
+  {
+    "channel_id": "culture-exchange-8",
+    "user_id": "ubmz6ih1e"
+  },
+  {
+    "channel_id": "announcements-1",
+    "user_id": "ubmz6ih1e"
+  },
+  {
+    "channel_id": "learning-materials",
+    "user_id": "ubmz6ih1e"
+  },
+  {
+    "channel_id": "speaking-practice",
+    "user_id": "ubmz6ih1e"
+  },
+  {
+    "channel_id": "listening-practice",
+    "user_id": "ubmz6ih1e"
+  },
+  {
+    "channel_id": "exam-registration-7",
+    "user_id": "ubmz6ih1e"
+  },
+  {
+    "channel_id": "privacy-rules-7",
+    "user_id": "ubmz6ih1e"
+  },
+  {
+    "channel_id": "a1-evening",
+    "user_id": "utm5n61xv"
+  },
+  {
+    "channel_id": "a1-evening-homework",
+    "user_id": "utm5n61xv"
+  },
+  {
+    "channel_id": "conversation-club-2",
+    "user_id": "uzkzzyy6q"
+  },
+  {
+    "channel_id": "speaking-club-2",
+    "user_id": "uzkzzyy6q"
+  },
+  {
+    "channel_id": "culture-exchange-2",
+    "user_id": "uzkzzyy6q"
+  },
+  {
+    "channel_id": "announcements-5",
+    "user_id": "uzkzzyy6q"
+  },
+  {
+    "channel_id": "learning-materials-3",
+    "user_id": "uzkzzyy6q"
+  },
+  {
+    "channel_id": "speaking-practice-3",
+    "user_id": "uzkzzyy6q"
+  },
+  {
+    "channel_id": "listening-practice-3",
+    "user_id": "uzkzzyy6q"
+  },
+  {
+    "channel_id": "schedule-2",
+    "user_id": "uzkzzyy6q"
+  },
+  {
+    "channel_id": "exam-registration-2",
+    "user_id": "uzkzzyy6q"
+  },
+  {
+    "channel_id": "privacy-rules-2",
+    "user_id": "uzkzzyy6q"
+  },
+  {
+    "channel_id": "a1-evening",
+    "user_id": "uzkzzyy6q"
+  },
+  {
+    "channel_id": "a1-evening-homework",
+    "user_id": "uzkzzyy6q"
+  },
+  {
+    "channel_id": "a2-evening",
+    "user_id": "utm5n61xv"
+  },
+  {
+    "channel_id": "a2-evening-homework",
+    "user_id": "utm5n61xv"
+  },
+  {
+    "channel_id": "school-task-3",
+    "user_id": "uyshv0srx"
+  },
+  {
+    "channel_id": "teachers-task-3",
+    "user_id": "uyshv0srx"
+  },
+  {
+    "channel_id": "student-tasks-1",
+    "user_id": "uyshv0srx"
+  },
+  {
+    "channel_id": "school-task-4",
+    "user_id": "utm5n61xv"
+  },
+  {
+    "channel_id": "teachers-task-4",
+    "user_id": "utm5n61xv"
+  },
+  {
+    "channel_id": "student-tasks-2",
+    "user_id": "utm5n61xv"
+  },
+  {
+    "channel_id": "a1-morning",
+    "user_id": "uyshv0srx"
+  },
+  {
+    "channel_id": "a1-morning-homework",
+    "user_id": "uyshv0srx"
+  },
+  {
+    "channel_id": "a2-morning",
+    "user_id": "uyshv0srx"
+  },
+  {
+    "channel_id": "a2-morning-homework",
+    "user_id": "uyshv0srx"
+  },
+  {
+    "channel_id": "private",
+    "user_id": "uyshv0srx"
+  },
+  {
+    "channel_id": "private-homework",
+    "user_id": "uyshv0srx"
+  },
+  {
+    "channel_id": "schedule-3",
+    "user_id": "uyshv0srx"
+  },
+  {
+    "channel_id": "schedule-3",
+    "user_id": "ubmz6ih1e"
+  }
+]

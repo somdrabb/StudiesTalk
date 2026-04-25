@@ -1,0 +1,68 @@
+[
+  {
+    "workspace_id": "sprachschule-duisburg",
+    "channel_id": "b1-morning-1",
+    "start_date": "2026-02-12",
+    "end_date": "2026-02-28",
+    "status": "private",
+    "capacity": 60,
+    "updated_at": "2026-02-12 00:25:13",
+    "archive_reason": "missing_channel",
+    "archived_at": "2026-04-20 20:44:35"
+  },
+  {
+    "workspace_id": "sprachschule-duisburg",
+    "channel_id": "a1-nood",
+    "start_date": "2026-02-02",
+    "end_date": "2026-04-28",
+    "status": "public",
+    "capacity": 1,
+    "updated_at": "2026-03-30 20:42:53",
+    "archive_reason": "missing_channel",
+    "archived_at": "2026-04-20 20:44:35"
+  },
+  {
+    "workspace_id": "sprachschule-duisburg",
+    "channel_id": "a2-evening-1",
+    "start_date": "2026-02-12",
+    "end_date": "2026-04-05",
+    "status": "public",
+    "capacity": 50,
+    "updated_at": "2026-03-31 19:38:31",
+    "archive_reason": "missing_channel",
+    "archived_at": "2026-04-20 20:44:35"
+  },
+  {
+    "workspace_id": "sprachschule-duisburg",
+    "channel_id": "c2-morning-1",
+    "start_date": "2026-02-12",
+    "end_date": "2026-02-28",
+    "status": "private",
+    "capacity": 30,
+    "updated_at": "2026-02-12 12:49:04",
+    "archive_reason": "missing_channel",
+    "archived_at": "2026-04-20 20:44:35"
+  },
+  {
+    "workspace_id": "sprachschule-duisburg",
+    "channel_id": "b2-morning-1",
+    "start_date": "2026-02-12",
+    "end_date": "2026-02-28",
+    "status": "private",
+    "capacity": 30,
+    "updated_at": "2026-02-12 12:49:17",
+    "archive_reason": "missing_channel",
+    "archived_at": "2026-04-20 20:44:35"
+  },
+  {
+    "workspace_id": "sprachschule-duisburg",
+    "channel_id": "c1-evening",
+    "start_date": "2026-02-12",
+    "end_date": "2026-03-08",
+    "status": "public",
+    "capacity": 20,
+    "updated_at": "2026-03-01 18:39:13",
+    "archive_reason": "missing_channel",
+    "archived_at": "2026-04-20 20:44:35"
+  }
+]

@@ -1,0 +1,26 @@
+[
+  {
+    "id": "inv_266b0cb3636819b2",
+    "workspace_id": "lens",
+    "amount_cents": 10,
+    "currency": "EUR",
+    "description": "Monthly Invoices",
+    "status": "paid",
+    "due_date": "2026-10-10",
+    "created_at": 1776780516873,
+    "paid_at": 1776780524774,
+    "student_user_id": null
+  },
+  {
+    "id": "inv_4c279a2d6a831399",
+    "workspace_id": "lens",
+    "amount_cents": 1010,
+    "currency": "EUR",
+    "description": "Monthly Invoices",
+    "status": "paid",
+    "due_date": "2026-10-10",
+    "created_at": 1776780544372,
+    "paid_at": 1776780556306,
+    "student_user_id": null
+  }
+]

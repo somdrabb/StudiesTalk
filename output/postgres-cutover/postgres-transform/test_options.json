@@ -1,0 +1,258 @@
+[
+  {
+    "id": "placement-test-9:hoeren-p1-q1-a",
+    "test_task_id": "placement-test-9:hoeren-p1-q1",
+    "option_label": "A",
+    "option_text": "Platform 2",
+    "is_correct": 0,
+    "sort_order": 1
+  },
+  {
+    "id": "placement-test-9:hoeren-p1-q1-b",
+    "test_task_id": "placement-test-9:hoeren-p1-q1",
+    "option_label": "B",
+    "option_text": "Platform 4",
+    "is_correct": 1,
+    "sort_order": 2
+  },
+  {
+    "id": "placement-test-9:hoeren-p1-q1-c",
+    "test_task_id": "placement-test-9:hoeren-p1-q1",
+    "option_label": "C",
+    "option_text": "Platform 6",
+    "is_correct": 0,
+    "sort_order": 3
+  },
+  {
+    "id": "placement-test-9:hoeren-p1-q2-a",
+    "test_task_id": "placement-test-9:hoeren-p1-q2",
+    "option_label": "A",
+    "option_text": "09:15",
+    "is_correct": 0,
+    "sort_order": 1
+  },
+  {
+    "id": "placement-test-9:hoeren-p1-q2-b",
+    "test_task_id": "placement-test-9:hoeren-p1-q2",
+    "option_label": "B",
+    "option_text": "10:30",
+    "is_correct": 1,
+    "sort_order": 2
+  },
+  {
+    "id": "placement-test-9:hoeren-p1-q2-c",
+    "test_task_id": "placement-test-9:hoeren-p1-q2",
+    "option_label": "C",
+    "option_text": "11:45",
+    "is_correct": 0,
+    "sort_order": 3
+  },
+  {
+    "id": "placement-test-9:hoeren-p2-q1-r",
+    "test_task_id": "placement-test-9:hoeren-p2-q1",
+    "option_label": "Richtig",
+    "option_text": "Richtig",
+    "is_correct": 0,
+    "sort_order": 1
+  },
+  {
+    "id": "placement-test-9:hoeren-p2-q1-f",
+    "test_task_id": "placement-test-9:hoeren-p2-q1",
+    "option_label": "Falsch",
+    "option_text": "Falsch",
+    "is_correct": 1,
+    "sort_order": 2
+  },
+  {
+    "id": "placement-test-9:hoeren-p2-q2-r",
+    "test_task_id": "placement-test-9:hoeren-p2-q2",
+    "option_label": "Richtig",
+    "option_text": "Richtig",
+    "is_correct": 1,
+    "sort_order": 1
+  },
+  {
+    "id": "placement-test-9:hoeren-p2-q2-f",
+    "test_task_id": "placement-test-9:hoeren-p2-q2",
+    "option_label": "Falsch",
+    "option_text": "Falsch",
+    "is_correct": 0,
+    "sort_order": 2
+  },
+  {
+    "id": "placement-test-9:hoeren-p3-q1-a",
+    "test_task_id": "placement-test-9:hoeren-p3-q1",
+    "option_label": "A",
+    "option_text": "Tea",
+    "is_correct": 0,
+    "sort_order": 1
+  },
+  {
+    "id": "placement-test-9:hoeren-p3-q1-b",
+    "test_task_id": "placement-test-9:hoeren-p3-q1",
+    "option_label": "B",
+    "option_text": "Coffee",
+    "is_correct": 1,
+    "sort_order": 2
+  },
+  {
+    "id": "placement-test-9:hoeren-p3-q1-c",
+    "test_task_id": "placement-test-9:hoeren-p3-q1",
+    "option_label": "C",
+    "option_text": "Orange juice",
+    "is_correct": 0,
+    "sort_order": 3
+  },
+  {
+    "id": "placement-test-9:hoeren-p3-q2-a",
+    "test_task_id": "placement-test-9:hoeren-p3-q2",
+    "option_label": "A",
+    "option_text": "At the museum entrance",
+    "is_correct": 1,
+    "sort_order": 1
+  },
+  {
+    "id": "placement-test-9:hoeren-p3-q2-b",
+    "test_task_id": "placement-test-9:hoeren-p3-q2",
+    "option_label": "B",
+    "option_text": "At the bus stop",
+    "is_correct": 0,
+    "sort_order": 2
+  },
+  {
+    "id": "placement-test-9:hoeren-p3-q2-c",
+    "test_task_id": "placement-test-9:hoeren-p3-q2",
+    "option_label": "C",
+    "option_text": "At the station cafe",
+    "is_correct": 0,
+    "sort_order": 3
+  },
+  {
+    "id": "placement-test-9:lesen-p1-q1-t",
+    "test_task_id": "placement-test-9:lesen-p1-q1",
+    "option_label": "Richtig",
+    "option_text": "Richtig",
+    "is_correct": 0,
+    "sort_order": 1
+  },
+  {
+    "id": "placement-test-9:lesen-p1-q1-f",
+    "test_task_id": "placement-test-9:lesen-p1-q1",
+    "option_label": "Falsch",
+    "option_text": "Falsch",
+    "is_correct": 1,
+    "sort_order": 2
+  },
+  {
+    "id": "placement-test-9:lesen-p1-q2-t",
+    "test_task_id": "placement-test-9:lesen-p1-q2",
+    "option_label": "Richtig",
+    "option_text": "Richtig",
+    "is_correct": 0,
+    "sort_order": 1
+  },
+  {
+    "id": "placement-test-9:lesen-p1-q2-f",
+    "test_task_id": "placement-test-9:lesen-p1-q2",
+    "option_label": "Falsch",
+    "option_text": "Falsch",
+    "is_correct": 1,
+    "sort_order": 2
+  },
+  {
+    "id": "placement-test-9:lesen-p2-q1-a",
+    "test_task_id": "placement-test-9:lesen-p2-q1",
+    "option_label": "A",
+    "option_text": "City bikes",
+    "is_correct": 0,
+    "sort_order": 1
+  },
+  {
+    "id": "placement-test-9:lesen-p2-q1-b",
+    "test_task_id": "placement-test-9:lesen-p2-q1",
+    "option_label": "B",
+    "option_text": "Student market",
+    "is_correct": 1,
+    "sort_order": 2
+  },
+  {
+    "id": "placement-test-9:lesen-p2-q1-c",
+    "test_task_id": "placement-test-9:lesen-p2-q1",
+    "option_label": "C",
+    "option_text": "Sports shop",
+    "is_correct": 0,
+    "sort_order": 3
+  },
+  {
+    "id": "placement-test-9:lesen-p2-q2-a",
+    "test_task_id": "placement-test-9:lesen-p2-q2",
+    "option_label": "A",
+    "option_text": "Praxis Nord",
+    "is_correct": 0,
+    "sort_order": 1
+  },
+  {
+    "id": "placement-test-9:lesen-p2-q2-b",
+    "test_task_id": "placement-test-9:lesen-p2-q2",
+    "option_label": "B",
+    "option_text": "Praxis West",
+    "is_correct": 1,
+    "sort_order": 2
+  },
+  {
+    "id": "placement-test-9:lesen-p2-q2-c",
+    "test_task_id": "placement-test-9:lesen-p2-q2",
+    "option_label": "C",
+    "option_text": "Praxis Mitte",
+    "is_correct": 0,
+    "sort_order": 3
+  },
+  {
+    "id": "placement-test-9:lesen-p3-q1-a",
+    "test_task_id": "placement-test-9:lesen-p3-q1",
+    "option_label": "A",
+    "option_text": "You can pay only with bank card.",
+    "is_correct": 1,
+    "sort_order": 1
+  },
+  {
+    "id": "placement-test-9:lesen-p3-q1-b",
+    "test_task_id": "placement-test-9:lesen-p3-q1",
+    "option_label": "B",
+    "option_text": "Cash is preferred but cards are possible.",
+    "is_correct": 0,
+    "sort_order": 2
+  },
+  {
+    "id": "placement-test-9:lesen-p3-q1-c",
+    "test_task_id": "placement-test-9:lesen-p3-q1",
+    "option_label": "C",
+    "option_text": "Only online payment is possible.",
+    "is_correct": 0,
+    "sort_order": 3
+  },
+  {
+    "id": "placement-test-9:lesen-p3-q2-a",
+    "test_task_id": "placement-test-9:lesen-p3-q2",
+    "option_label": "A",
+    "option_text": "Be quiet after 22:00.",
+    "is_correct": 1,
+    "sort_order": 1
+  },
+  {
+    "id": "placement-test-9:lesen-p3-q2-b",
+    "test_task_id": "placement-test-9:lesen-p3-q2",
+    "option_label": "B",
+    "option_text": "Leave the building after 22:00.",
+    "is_correct": 0,
+    "sort_order": 2
+  },
+  {
+    "id": "placement-test-9:lesen-p3-q2-c",
+    "test_task_id": "placement-test-9:lesen-p3-q2",
+    "option_label": "C",
+    "option_text": "Close the main door at 22:00.",
+    "is_correct": 0,
+    "sort_order": 3
+  }
+]

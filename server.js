@@ -13,10 +13,18 @@ const morgan = require('morgan');
 const Database = require('better-sqlite3');
 const { sendPlatformEmail, providerName } = require('./emailSender');
 const bcrypt = require('bcryptjs');
+const argon2 = (() => {
+  try {
+    return require('argon2');
+  } catch (_err) {
+    return null;
+  }
+})();
 const twilio = require('twilio');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
+const { RateLimiterMemory } = require('rate-limiter-flexible');
 const helmet = require('helmet');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
@@ -25,15 +33,83 @@ const inboundEmailService = require('./server/services/inboundEmail.service');
 const jitsiConfig = require('./server/config/jitsi');
 const { generateJitsiToken } = require('./server/services/jitsiTokenService');
 const aiSpeakingScenarioConfig = require('./public/AIvoicepractice/scenarioConfig.js');
+const { createBillingRepository } = require('./server/repositories/billingRepository');
+const { createTasksRepository } = require('./server/repositories/tasksRepository');
+const { createAttendanceRepository } = require('./server/repositories/attendanceRepository');
+const { createWorkspaceRepository } = require('./server/repositories/workspaceRepository');
+const { createAnnouncementRepository } = require('./server/repositories/announcementRepository');
+const { createAuditRepository } = require('./server/repositories/auditRepository');
+const { createChannelRepository } = require('./server/repositories/channelRepository');
+const { createMessageRepository } = require('./server/repositories/messageRepository');
+const { createUserRepository } = require('./server/repositories/userRepository');
+const { createAuthRepository } = require('./server/repositories/authRepository');
+const { createSchoolRequestRepository } = require('./server/repositories/schoolRequestRepository');
+const { createRegistrationRepository } = require('./server/repositories/registrationRepository');
+const { createPolicyRepository, DEFAULT_POLICY_VERSION, PLATFORM_POLICY_VERSION_KEY } = require('./server/repositories/policyRepository');
+const { createOnboardingRepository, OnboardingValidationError } = require('./server/repositories/onboardingRepository');
+const { createOnboardingGuard } = require('./server/onboarding/onboardingGuard');
+const { createPolicyGuard, buildPolicyGateResponse } = require('./server/policy/policyGuard');
+
+const SENSITIVE_LOG_PATTERNS = [
+  /(authorization:\s*bearer\s+)[^\s]+/gi,
+  /(refresh_token=)[^;]+/gi,
+  /(access_token=)[^;]+/gi,
+  /("?(?:password|token|secret|authorization|cookie|set-cookie)"?\s*:\s*")[^"]+(")/gi
+];
+
+function redactSensitiveText(value) {
+  let text = String(value || '');
+  for (const pattern of SENSITIVE_LOG_PATTERNS) {
+    text = text.replace(pattern, '$1[redacted]$2');
+  }
+  return text;
+}
+
+function safeSerializeError(error, { includeStack = false } = {}) {
+  if (!error) return null;
+  return {
+    name: error?.name || 'Error',
+    message: redactSensitiveText(error?.message || String(error)),
+    code: error?.code || undefined,
+    stack: includeStack && error?.stack ? redactSensitiveText(error.stack) : undefined
+  };
+}
+
+function logEvent(level, message, meta = null) {
+  const fn =
+    level === 'error' ? console.error :
+    level === 'warn' ? console.warn :
+    console.log;
+  if (meta && Object.keys(meta).length) {
+    fn(message, meta);
+    return;
+  }
+  fn(message);
+}
+
+function makeRequestId() {
+  return typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `req_${crypto.randomBytes(12).toString('hex')}`;
+}
+
+function summarizeEnvValidation() {
+  return {
+    warnings: ENV.ENV_VALIDATION?.warnings || [],
+    summary: ENV.ENV_VALIDATION?.summary || {}
+  };
+}
+
+if (ENV.ENV_VALIDATION?.hasWarnings) {
+  for (const warning of ENV.ENV_VALIDATION.warnings) {
+    logEvent('warn', `[ENV] ${warning}`);
+  }
+}
 
 if (ENV.OPENAI_API_KEY) {
-  console.log(
-    `[AI] Realtime configured: model=${ENV.OPENAI_REALTIME_MODEL} url=${ENV.OPENAI_REALTIME_URL}`
-  );
+  logEvent('info', `[AI] Realtime configured: model=${ENV.OPENAI_REALTIME_MODEL} url=${ENV.OPENAI_REALTIME_URL}`);
 } else {
-  console.warn(
-    '[AI] OPENAI_API_KEY is missing. Speaking Practice Realtime sessions will fail until it is set in the server .env file.'
-  );
+  logEvent('warn', '[AI] OPENAI_API_KEY is missing. Speaking Practice Realtime sessions will fail until it is set in the server .env file.');
 }
 
 const FFMPEG_CMD = (() => {
@@ -53,7 +129,8 @@ const FFMPEG_CMD = (() => {
 })();
 
 const LEGACY_DB_PATH = path.join(__dirname, 'worknest.db');
-const DEFAULT_DB_PATH = path.join(__dirname, 'storage', 'worknest.db');
+const LEGACY_STORAGE_DB_PATH = path.join(__dirname, 'storage', 'worknest.db');
+const DEFAULT_DB_PATH = path.join(__dirname, 'storage', 'studiestalk.db');
 const DEFAULT_BACKUP_DIR = path.join(__dirname, 'backup');
 
 function resolveAppPath(inputPath, fallbackAbsPath) {
@@ -83,11 +160,18 @@ const DB_PATH = (() => {
     return resolveAppPath(explicitDbPath, DEFAULT_DB_PATH);
   }
 
+  migrateLegacyDatabaseFiles(LEGACY_STORAGE_DB_PATH, DEFAULT_DB_PATH);
   migrateLegacyDatabaseFiles(LEGACY_DB_PATH, DEFAULT_DB_PATH);
   if (fs.existsSync(DEFAULT_DB_PATH)) return DEFAULT_DB_PATH;
+  if (fs.existsSync(LEGACY_STORAGE_DB_PATH)) return LEGACY_STORAGE_DB_PATH;
   if (fs.existsSync(LEGACY_DB_PATH)) return LEGACY_DB_PATH;
   return DEFAULT_DB_PATH;
 })();
+if (ENV.DB_ENGINE && ENV.DB_ENGINE !== 'sqlite') {
+  console.warn(
+    `[DB] DB_ENGINE=${ENV.DB_ENGINE} is configured, but server.js still runs on SQLite during the staged PostgreSQL migration.`
+  );
+}
 const BACKUP_DIR = resolveAppPath(ENV.DB_BACKUP_DIR, DEFAULT_BACKUP_DIR);
 const UPLOADS_DIR = String(ENV.UPLOADS_DIR || path.join(__dirname, 'uploads')).trim();
 const ATTACHMENTS_DIR = path.join(process.cwd(), 'storage', 'email_attachments');
@@ -191,11 +275,21 @@ async function callMobileOtpProxy(path, payload) {
 
 const app = express();
 app.set('trust proxy', 1);
+app.disable('x-powered-by');
+app.use((req, res, next) => {
+  req.id = String(req.headers['x-request-id'] || '').trim() || makeRequestId();
+  res.setHeader('X-Request-Id', req.id);
+  next();
+});
 app.use(cookieParser());
 app.use(
   helmet({
     contentSecurityPolicy: false,
-    crossOriginEmbedderPolicy: false
+    crossOriginEmbedderPolicy: false,
+    crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
+    crossOriginResourcePolicy: { policy: 'same-site' },
+    frameguard: { action: 'deny' },
+    referrerPolicy: { policy: 'strict-origin-when-cross-origin' }
   })
 );
 const allowedOrigins = [
@@ -222,19 +316,91 @@ if (ENV.IS_PROD) {
     return next();
   });
 }
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many attempts. Please try again later.' }
+function sendRateLimitedJson(res, retryAfterSeconds = 60) {
+  const safeRetryAfter = Math.max(1, Number(retryAfterSeconds) || 1);
+  res.set('Retry-After', String(safeRetryAfter));
+  return res.status(429).json({
+    error: 'Too many requests. Please try again later.',
+    code: 'rate_limited'
+  });
+}
+
+function createMemoryRateLimiter({
+  keyPrefix,
+  points,
+  duration,
+  blockDuration = duration,
+  keyFn = (req) => String(req.ip || 'unknown'),
+  onBlocked = null
+}) {
+  const limiter = new RateLimiterMemory({
+    keyPrefix,
+    points,
+    duration,
+    blockDuration
+  });
+
+  return async function rateLimited(req, res, next) {
+    try {
+      await limiter.consume(String(keyFn(req) || 'unknown'));
+      return next();
+    } catch (rateError) {
+      if (typeof onBlocked === 'function') {
+        try {
+          void onBlocked(req, rateError);
+        } catch (_err) {
+          // ignore limiter side effects
+        }
+      }
+      const retryAfterSeconds = Math.ceil(Number(rateError?.msBeforeNext || 0) / 1000) || duration;
+      return sendRateLimitedJson(res, retryAfterSeconds);
+    }
+  };
+}
+
+function createScopedRateLimiter({ methods = null, patterns = [], ...config }) {
+  const middleware = createMemoryRateLimiter(config);
+  const methodSet = Array.isArray(methods) && methods.length
+    ? new Set(methods.map((method) => String(method || '').toUpperCase()))
+    : null;
+
+  return function scopedRateLimiter(req, res, next) {
+    const requestMethod = String(req.method || '').toUpperCase();
+    if (methodSet && !methodSet.has(requestMethod)) {
+      return next();
+    }
+    if (Array.isArray(patterns) && patterns.length) {
+      const requestPath = String(req.path || req.originalUrl || '');
+      const matched = patterns.some((pattern) => pattern.test(requestPath));
+      if (!matched) {
+        return next();
+      }
+    }
+    return middleware(req, res, next);
+  };
+}
+
+const authLimiter = createMemoryRateLimiter({
+  keyPrefix: 'login',
+  points: 10,
+  duration: 15 * 60,
+  blockDuration: 15 * 60,
+  onBlocked: (req) =>
+    logSecurityEvent({
+      type: 'security.login_rate_limited',
+      severity: 'warn',
+      ip: req.ip || null,
+      userAgent: req.headers['user-agent'] || null,
+      payload: {
+        identifier: String(req.body?.email || req.body?.login || '').trim().toLowerCase()
+      }
+    })
 });
-const strictLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many attempts. Please try again later.' }
+const strictLimiter = createMemoryRateLimiter({
+  keyPrefix: 'otp',
+  points: 5,
+  duration: 15 * 60,
+  blockDuration: 15 * 60
 });
 const aiLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -242,9 +408,160 @@ const aiLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false
 });
+const passwordResetRequestLimiter = createScopedRateLimiter({
+  keyPrefix: 'password_reset_request',
+  points: 5,
+  duration: 60 * 60,
+  blockDuration: 60 * 60,
+  methods: ['POST'],
+  patterns: [/^\/api\/auth\/forgot-password$/]
+});
+const passwordResetCompletionLimiter = createScopedRateLimiter({
+  keyPrefix: 'password_reset_complete',
+  points: 8,
+  duration: 60 * 60,
+  blockDuration: 60 * 60,
+  methods: ['POST'],
+  patterns: [/^\/api\/auth\/reset-password\/complete$/]
+});
+const registrationMutationLimiter = createScopedRateLimiter({
+  keyPrefix: 'registration_mutation',
+  points: 30,
+  duration: 15 * 60,
+  blockDuration: 15 * 60,
+  methods: ['POST'],
+  patterns: [
+    /^\/api\/register\/session$/,
+    /^\/api\/register\/request-review$/,
+    /^\/api\/register\/send-link$/,
+    /^\/api\/register\/complete$/
+  ]
+});
+const policyAcceptanceLimiter = createScopedRateLimiter({
+  keyPrefix: 'policy_acceptance',
+  points: 12,
+  duration: 15 * 60,
+  blockDuration: 15 * 60,
+  methods: ['POST'],
+  patterns: [
+    /^\/api\/workspaces\/[^/]+\/policy\/accept$/,
+    /^\/api\/policy\/accept$/
+  ]
+});
+const onboardingMutationLimiter = createScopedRateLimiter({
+  keyPrefix: 'onboarding_mutation',
+  points: 45,
+  duration: 15 * 60,
+  blockDuration: 15 * 60,
+  methods: ['PATCH', 'POST'],
+  patterns: [
+    /^\/api\/workspaces\/[^/]+\/onboarding$/,
+    /^\/api\/workspaces\/[^/]+\/onboarding\/steps\/[^/]+$/,
+    /^\/api\/workspaces\/[^/]+\/onboarding\/activate$/,
+    /^\/api\/onboarding\/[^/]+\/start$/,
+    /^\/api\/onboarding\/[^/]+\/(?:auto-open-seen|defer|resume|complete)$/,
+    /^\/api\/onboarding\/[^/]+\/steps\/[^/]+$/,
+    /^\/api\/onboarding\/[^/]+\/steps\/[^/]+\/(?:complete|skip)$/
+  ]
+});
+const adminSensitiveMutationLimiter = createScopedRateLimiter({
+  keyPrefix: 'admin_sensitive_mutation',
+  points: 30,
+  duration: 15 * 60,
+  blockDuration: 15 * 60,
+  methods: ['POST', 'PATCH', 'PUT', 'DELETE'],
+  patterns: [
+    /^\/api\/admin\/school-requests\/[^/]+\/(?:approve|create-workspace|reject|flag)$/,
+    /^\/api\/admin\/school-requests\/bulk$/,
+    /^\/api\/admin\/requests\/bulk$/,
+    /^\/api\/admin\/security\/(?:ip-block|ip-unblock)$/,
+    /^\/api\/admin\/security\/sessions\/[^/]+\/revoke$/,
+    /^\/api\/admin\/security\/users\/[^/]+\/revoke-all-sessions$/,
+    /^\/api\/admin\/owner-email-settings(?:\/test)?$/,
+    /^\/api\/admin\/workspace-email-settings\/[^/]+(?:\/test)?$/,
+    /^\/api\/admin\/workspaces\/upsert$/,
+    /^\/api\/admin\/workspaces\/[^/]+$/,
+    /^\/api\/admin\/users\/[^/]+$/,
+    /^\/api\/admin\/invoices$/,
+    /^\/api\/admin\/invoices\/[^/]+\/mark-paid$/,
+    /^\/api\/admin\/workspace-settings\/[^/]+$/
+  ]
+});
 const PORT = ENV.PORT;
 const WS_UPLOADS_DIR = path.join(UPLOADS_DIR, 'workspaces');
 const UPLOAD_DIR = UPLOADS_DIR;
+const UPLOAD_MAX_FILE_BYTES = Math.max(1_000_000, Number(ENV.UPLOAD_MAX_FILE_BYTES || 25 * 1024 * 1024));
+const BLOCKED_UPLOAD_EXTENSIONS = new Set([
+  '.app', '.bat', '.cmd', '.com', '.cpl', '.css', '.dll', '.exe', '.hta', '.html', '.htm',
+  '.jar', '.js', '.jsp', '.jspx', '.mjs', '.msi', '.php', '.phar', '.ps1', '.py', '.rb',
+  '.scr', '.sh', '.svg', '.svgz', '.ts', '.vbs', '.wsf', '.xhtml', '.xml'
+]);
+const BLOCKED_UPLOAD_MIME_TYPES = new Set([
+  'application/javascript',
+  'application/x-httpd-php',
+  'application/x-msdownload',
+  'application/x-sh',
+  'image/svg+xml',
+  'text/css',
+  'text/html',
+  'text/javascript',
+  'text/xml'
+]);
+const SAFE_INLINE_UPLOAD_MIME_TYPES = new Set([
+  'application/pdf',
+  'image/gif',
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/webp',
+  'audio/aac',
+  'audio/m4a',
+  'audio/mpeg',
+  'audio/mp4',
+  'audio/ogg',
+  'audio/wav',
+  'audio/webm',
+  'video/mp4',
+  'video/ogg',
+  'video/quicktime',
+  'video/webm'
+]);
+const ALLOWED_UPLOAD_EXTENSIONS = new Set([
+  '.aac', '.avi', '.csv', '.doc', '.docx', '.gif', '.heic', '.heif',
+  '.jpeg', '.jpg', '.m4a', '.mov', '.mp3', '.mp4', '.ogg', '.pdf',
+  '.png', '.ppt', '.pptx', '.rtf', '.txt', '.wav', '.webm', '.webp',
+  '.xls', '.xlsx'
+]);
+const ALLOWED_UPLOAD_MIME_TYPES = new Set([
+  'application/msword',
+  'application/pdf',
+  'application/rtf',
+  'application/vnd.ms-excel',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'audio/aac',
+  'audio/m4a',
+  'audio/mpeg',
+  'audio/mp4',
+  'audio/ogg',
+  'audio/wav',
+  'audio/webm',
+  'image/gif',
+  'image/heic',
+  'image/heif',
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/webp',
+  'text/csv',
+  'text/plain',
+  'video/mp4',
+  'video/ogg',
+  'video/quicktime',
+  'video/webm'
+]);
 
 function ensureDir(dirPath) {
   if (!fs.existsSync(dirPath)) {
@@ -258,6 +575,73 @@ function uploadsPath(...parts) {
 
 function workspaceUploadsPath(workspaceId, ...parts) {
   return path.join(WS_UPLOADS_DIR, String(workspaceId), ...parts.map((p) => String(p)));
+}
+
+function sanitizeUploadExtension(fileName = '') {
+  const ext = path.extname(String(fileName || '')).trim().toLowerCase();
+  return /^[.a-z0-9_-]{0,16}$/.test(ext) ? ext : '';
+}
+
+function normalizeUploadOriginalName(fileName = '', fallbackBase = 'file') {
+  const base = path.basename(String(fileName || ''));
+  const cleaned = base
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/[\\/:"*?<>|]+/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 180);
+  if (!cleaned || cleaned === '.' || cleaned === '..') {
+    return fallbackBase;
+  }
+  return cleaned;
+}
+
+function resolveSafePath(baseDir, ...parts) {
+  const resolvedBase = path.resolve(baseDir);
+  const targetPath = path.resolve(resolvedBase, ...parts.map((part) => String(part || '')));
+  const relative = path.relative(resolvedBase, targetPath);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+    return null;
+  }
+  return targetPath;
+}
+
+function contentDispositionFilename(filename = 'file') {
+  const safeName = normalizeUploadOriginalName(filename, 'file').replace(/["\\]/g, '');
+  const encoded = encodeURIComponent(safeName).replace(/['()]/g, escape).replace(/\*/g, '%2A');
+  return `filename="${safeName}"; filename*=UTF-8''${encoded}`;
+}
+
+function isSafeInlineUploadMime(mimeType = '') {
+  return SAFE_INLINE_UPLOAD_MIME_TYPES.has(normalizeMimeType(mimeType));
+}
+
+function isAllowedUploadMimeOrExtension(mimeType = '', ext = '') {
+  const normalizedMime = normalizeMimeType(mimeType);
+  const normalizedExt = sanitizeUploadExtension(ext);
+  if (normalizedMime && ALLOWED_UPLOAD_MIME_TYPES.has(normalizedMime)) return true;
+  if (normalizedExt && ALLOWED_UPLOAD_EXTENSIONS.has(normalizedExt)) return true;
+  return false;
+}
+
+function isUploadFileSafe(file = {}) {
+  const safeName = normalizeUploadOriginalName(file.originalname || file.name || '', 'upload');
+  const ext = sanitizeUploadExtension(safeName);
+  const mimeType = String(file.mimetype || file.mimeType || '').trim().toLowerCase();
+  if (ext && BLOCKED_UPLOAD_EXTENSIONS.has(ext)) {
+    return { ok: false, reason: `Files of type ${ext} are not allowed.` };
+  }
+  if (mimeType && BLOCKED_UPLOAD_MIME_TYPES.has(mimeType)) {
+    return { ok: false, reason: `Files with MIME type ${mimeType} are not allowed.` };
+  }
+  if (!isAllowedUploadMimeOrExtension(mimeType, ext)) {
+    return {
+      ok: false,
+      statusCode: 415,
+      reason: 'Unsupported file type.'
+    };
+  }
+  return { ok: true, ext, mimeType, safeName };
 }
 
 function normalizePhoneCountryCode(value = '') {
@@ -403,11 +787,95 @@ function findUsersByPhoneForVerification(phone) {
   return rows.filter((row) => phoneMatchesUserRow(phone, row));
 }
 
+function isPromiseLike(value) {
+  return !!value && typeof value.then === 'function';
+}
+
   ensureDir(UPLOADS_DIR);
   ensureDir(WS_UPLOADS_DIR);
 
   // open / create SQLite DB
   const db = new Database(DB_PATH);
+  // Billing migration boundary: this repository is the first domain allowed
+  // to use either SQLite or PostgreSQL while auth/session runtime stays SQLite.
+  const billingRepository = createBillingRepository({
+    engine: ENV.BILLING_DB_ENGINE || 'sqlite',
+    sqliteDb: db
+  });
+  if (billingRepository.engine !== 'sqlite') {
+    console.warn(`[Billing] Using ${billingRepository.engine} adapter. Auth/session runtime remains SQLite.`);
+  }
+  const tasksRepository = createTasksRepository({
+    engine: ENV.TASKS_DB_ENGINE || 'sqlite',
+    sqliteDb: db
+  });
+  if (tasksRepository.engine !== 'sqlite') {
+    console.warn(`[Tasks] Using ${tasksRepository.engine} adapter. Auth/session runtime remains SQLite.`);
+  }
+  // Attendance migration boundary: only attendance tables may rehearse on
+  // PostgreSQL while auth/session and the rest of the runtime stay on SQLite.
+  const attendanceRepository = createAttendanceRepository({
+    engine: ENV.ATTENDANCE_DB_ENGINE || 'sqlite',
+    sqliteDb: db
+  });
+  if (attendanceRepository.engine !== 'sqlite') {
+    console.warn(`[Attendance] Using ${attendanceRepository.engine} adapter. Auth/session runtime remains SQLite.`);
+  }
+  // Phase B migration boundary: workspaces/settings, announcements, and audit
+  // are repository-backed now, but they remain pinned to SQLite until the final
+  // full-runtime PostgreSQL switch.
+  const workspaceRepository = createWorkspaceRepository({
+    engine: ENV.DB_ENGINE || 'sqlite',
+    sqliteDb: db
+  });
+  const onboardingRepository = createOnboardingRepository({
+    engine: ENV.DB_ENGINE || 'sqlite',
+    sqliteDb: db
+  });
+  const announcementRepository = createAnnouncementRepository({
+    engine: ENV.DB_ENGINE || 'sqlite',
+    sqliteDb: db
+  });
+  const auditRepository = createAuditRepository({
+    engine: ENV.DB_ENGINE || 'sqlite',
+    sqliteDb: db
+  });
+  // Phase C migration boundary: channels, messages, and users are moving behind
+  // repository adapters, but SQLite remains the default runtime until smoke
+  // coverage is complete for the final PostgreSQL cutover.
+  const channelRepository = createChannelRepository({
+    engine: ENV.CHANNELS_DB_ENGINE || 'sqlite',
+    sqliteDb: db
+  });
+  const messageRepository = createMessageRepository({
+    engine: ENV.MESSAGES_DB_ENGINE || 'sqlite',
+    sqliteDb: db
+  });
+  // Users still have synchronous analytics helpers in server.js, so the user
+  // repository boundary is introduced here while runtime ownership stays
+  // SQLite-pinned until those helpers are made async-safe.
+  const userRepository = createUserRepository({
+    engine: ENV.DB_ENGINE || 'sqlite',
+    sqliteDb: db
+  });
+  // Auth/session remains intentionally SQLite-default until final cutover
+  // verification is in place, but shared auth state access now has a boundary.
+  const authRepository = createAuthRepository({
+    engine: ENV.DB_ENGINE || 'sqlite',
+    sqliteDb: db
+  });
+  const schoolRequestRepository = createSchoolRequestRepository({
+    engine: ENV.DB_ENGINE || 'sqlite',
+    sqliteDb: db
+  });
+  const registrationRepository = createRegistrationRepository({
+    engine: ENV.DB_ENGINE || 'sqlite',
+    sqliteDb: db
+  });
+  const policyRepository = createPolicyRepository({
+    engine: ENV.DB_ENGINE || 'sqlite',
+    sqliteDb: db
+  });
   inboundEmailService.cleanupOrphanAttachments(db).catch((err) => {
     console.warn('[InboundEmail] Cleanup failed on startup', err?.message || err);
   });
@@ -456,7 +924,7 @@ function normalizeMailboxRole(role = '') {
 }
 
 function isMailboxAdminRole(role = '') {
-  return ['admin', 'school_admin', 'super_admin'].includes(normalizeMailboxRole(role));
+  return ['admin', 'school_admin'].includes(normalizeMailboxRole(role));
 }
 
 function isMailboxStudentRole(role = '') {
@@ -578,23 +1046,30 @@ function buildReplyHtml(replyText = '', original = {}) {
   `.trim();
 }
 
-const transporter = nodemailer.createTransport({
-  host: process.env.IONOS_SMTP_HOST,
-  port: Number(process.env.IONOS_SMTP_PORT),
-  secure: String(process.env.IONOS_SMTP_SECURE) === 'true',
-  auth: {
-    user: process.env.IONOS_SMTP_USER,
-    pass: process.env.IONOS_SMTP_PASS
-  }
-});
+const transporter =
+  ENV.IONOS_SMTP_HOST && ENV.IONOS_SMTP_USER && ENV.IONOS_SMTP_PASS
+    ? nodemailer.createTransport({
+        host: ENV.IONOS_SMTP_HOST,
+        port: Number(ENV.IONOS_SMTP_PORT),
+        secure: ENV.IONOS_SMTP_SECURE,
+        auth: {
+          user: ENV.IONOS_SMTP_USER,
+          pass: ENV.IONOS_SMTP_PASS
+        }
+      })
+    : null;
 
-transporter.verify((err) => {
-  if (err) {
-    console.error('[SMTP] verify failed:', err?.message || err);
-  } else {
-    console.log('[SMTP] verify OK');
-  }
-});
+if (transporter) {
+  transporter.verify((err) => {
+    if (err) {
+      logEvent('warn', '[SMTP] verify failed', { error: safeSerializeError(err) });
+    } else {
+      logEvent('info', '[SMTP] verify OK');
+    }
+  });
+} else {
+  logEvent('warn', '[SMTP] inbound reply transport disabled; IONOS SMTP settings are incomplete.');
+}
 
 function findInboxAttachment(emailId, attachmentId) {
   if (!emailId || !attachmentId) return null;
@@ -610,20 +1085,18 @@ function findInboxAttachment(emailId, attachmentId) {
 
 function resolveAttachmentFilePath(storedName) {
   if (!storedName) return null;
-  const resolvedDir = path.resolve(ATTACHMENTS_DIR);
-  const filePath = path.join(resolvedDir, storedName);
-  const relativePath = path.relative(resolvedDir, filePath);
-  if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
-    return null;
-  }
-  return filePath;
+  return resolveSafePath(ATTACHMENTS_DIR, storedName);
 }
 
 function streamAttachmentResponse(res, filePath, attachment, disposition = 'attachment') {
   if (!filePath || !attachment) return false;
-  const filename = String(attachment.filename || 'attachment').replace(/["\\]/g, '');
-  res.setHeader('Content-Type', attachment.contentType || 'application/octet-stream');
-  res.setHeader('Content-Disposition', `${disposition}; filename="${filename}"`);
+  const filename = normalizeUploadOriginalName(attachment.filename || 'attachment', 'attachment');
+  const mimeType = normalizeMimeType(attachment.contentType || 'application/octet-stream');
+  const safeDisposition = disposition === 'inline' && isSafeInlineUploadMime(mimeType) ? 'inline' : 'attachment';
+  res.setHeader('Content-Type', mimeType || 'application/octet-stream');
+  res.setHeader('Content-Disposition', `${safeDisposition}; ${contentDispositionFilename(filename)}`);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'private, max-age=60');
   const stream = fs.createReadStream(filePath);
   stream.on('error', (streamErr) => {
     console.error('[InboundEmail] Attachment stream failed', streamErr?.message || streamErr);
@@ -643,7 +1116,7 @@ db.pragma('busy_timeout = 5000');
 async function backupDatabase(label = 'backup') {
   ensureDir(BACKUP_DIR);
   const safeLabel = String(label || 'backup').toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
-  const backupPath = path.join(BACKUP_DIR, `worknest-${safeLabel}-${Date.now()}.db`);
+  const backupPath = path.join(BACKUP_DIR, `studiestalk-${safeLabel}-${Date.now()}.db`);
   if (typeof db.backup === 'function') {
     await db.backup(backupPath);
   } else {
@@ -739,7 +1212,9 @@ function secId(prefix = 'sec') {
   return `${prefix}_${crypto.randomBytes(16).toString('hex')}`;
 }
 
-function logSecurityEvent({
+// Auth/session migration boundary: security-event writes now flow through the
+// auth repository so route handlers stop owning table-level persistence.
+async function logSecurityEvent({
   workspaceId = null,
   actorUserId = null,
   targetUserId = null,
@@ -750,12 +1225,9 @@ function logSecurityEvent({
   payload = null
 }) {
   try {
-    db.prepare(`
-      INSERT INTO security_events (id, created_at, workspace_id, actor_user_id, target_user_id, type, severity, ip, user_agent, payload)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      secId('evt'),
-      Date.now(),
+    await authRepository.writeSecurityEvent({
+      id: secId('evt'),
+      createdAt: Date.now(),
       workspaceId,
       actorUserId,
       targetUserId,
@@ -763,19 +1235,27 @@ function logSecurityEvent({
       severity,
       ip,
       userAgent,
-      payload ? JSON.stringify(payload) : null
-    );
+      payload: payload ? JSON.stringify(payload) : null
+    });
   } catch (e) {
     console.warn('logSecurityEvent failed', e);
   }
 }
 
-function logLoginAttempt({ identifier, success, userId = null, workspaceId = null, ip = null, userAgent = null }) {
+// Auth/session migration boundary: login-attempt writes now flow through the
+// auth repository instead of reaching the auth tables directly.
+async function logLoginAttempt({ identifier, success, userId = null, workspaceId = null, ip = null, userAgent = null }) {
   try {
-    db.prepare(`
-      INSERT INTO login_attempts (id, created_at, identifier, success, user_id, workspace_id, ip, user_agent)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(secId('la'), Date.now(), String(identifier || ''), success ? 1 : 0, userId, workspaceId, ip, userAgent);
+    await authRepository.writeLoginAttempt({
+      id: secId('la'),
+      createdAt: Date.now(),
+      identifier: String(identifier || ''),
+      success: !!success,
+      userId,
+      workspaceId,
+      ip,
+      userAgent
+    });
   } catch (e) {
     console.warn('logLoginAttempt failed', e);
   }
@@ -833,10 +1313,16 @@ CREATE TABLE IF NOT EXISTS workspace_billing (
   currency TEXT DEFAULT 'EUR',
   monthly_price_cents INTEGER DEFAULT 0,
   billing_email TEXT,
+  invoice_contact_name TEXT,
+  readiness_acknowledged_at TEXT,
+  readiness_acknowledged_by_user_id TEXT,
   updated_at INTEGER NOT NULL,
   FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
 );
 `);
+safeAlter(`ALTER TABLE workspace_billing ADD COLUMN invoice_contact_name TEXT;`);
+safeAlter(`ALTER TABLE workspace_billing ADD COLUMN readiness_acknowledged_at TEXT;`);
+safeAlter(`ALTER TABLE workspace_billing ADD COLUMN readiness_acknowledged_by_user_id TEXT;`);
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS invoices (
@@ -892,12 +1378,142 @@ CREATE TABLE IF NOT EXISTS workspace_settings_admin (
 );
 `);
 
+try {
+  const onboardingTable = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'workspace_onboarding'")
+    .get();
+  if (
+    onboardingTable?.sql &&
+    (onboardingTable.sql.includes('activation_ready') ||
+      onboardingTable.sql.includes('activated') ||
+      onboardingTable.sql.includes('completed_steps_json'))
+  ) {
+    db.exec('ALTER TABLE workspace_onboarding RENAME TO workspace_onboarding_legacy');
+    db.exec(`
+      CREATE TABLE workspace_onboarding (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL DEFAULT 'not_started',
+        current_step TEXT DEFAULT 'welcome',
+        started_at TEXT,
+        completed_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        started_by_user_id TEXT,
+        completed_by_user_id TEXT,
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+        CHECK (status IN ('not_started','in_progress','completed','skipped'))
+      );
+    `);
+    db.exec(`
+      INSERT OR IGNORE INTO workspace_onboarding (
+        id, workspace_id, status, current_step, started_at, completed_at,
+        created_at, updated_at, started_by_user_id, completed_by_user_id
+      )
+      SELECT
+        'ob_' || lower(hex(randomblob(16))),
+        workspace_id,
+        CASE WHEN status = 'activated' THEN 'completed'
+             WHEN status = 'skipped' THEN 'skipped'
+             WHEN status = 'not_started' THEN 'not_started'
+             ELSE 'in_progress'
+        END,
+        COALESCE(current_step, 'welcome'),
+        NULL,
+        activated_at,
+        COALESCE(created_at, datetime('now')),
+        COALESCE(updated_at, datetime('now')),
+        created_by,
+        NULL
+      FROM workspace_onboarding_legacy;
+    `);
+    db.exec('DROP TABLE workspace_onboarding_legacy');
+  }
+} catch (err) {
+  console.warn('[Onboarding] Legacy onboarding table migration skipped:', err?.message || err);
+}
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS workspace_onboarding (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'not_started',
+  current_step TEXT DEFAULT 'welcome',
+  started_at TEXT,
+  completed_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  started_by_user_id TEXT,
+  completed_by_user_id TEXT,
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+  CHECK (status IN ('not_started','in_progress','completed','skipped'))
+);
+`);
+safeAlter(`ALTER TABLE workspace_onboarding ADD COLUMN id TEXT;`);
+safeAlter(`ALTER TABLE workspace_onboarding ADD COLUMN current_step TEXT DEFAULT 'welcome';`);
+safeAlter(`ALTER TABLE workspace_onboarding ADD COLUMN started_at TEXT;`);
+safeAlter(`ALTER TABLE workspace_onboarding ADD COLUMN completed_at TEXT;`);
+safeAlter(`ALTER TABLE workspace_onboarding ADD COLUMN started_by_user_id TEXT;`);
+safeAlter(`ALTER TABLE workspace_onboarding ADD COLUMN completed_by_user_id TEXT;`);
+db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_onboarding_workspace ON workspace_onboarding(workspace_id);`);
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS workspace_onboarding_steps (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  step_key TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  completed_at TEXT,
+  completed_by_user_id TEXT,
+  meta_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+  UNIQUE (workspace_id, step_key),
+  CHECK (status IN ('pending','in_progress','completed','skipped'))
+);
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_workspace_onboarding_steps_workspace ON workspace_onboarding_steps(workspace_id);`);
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS workspace_onboarding_events (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT,
+  event_type TEXT NOT NULL,
+  step_key TEXT,
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+);
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_workspace_onboarding_events_workspace ON workspace_onboarding_events(workspace_id, created_at);`);
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS workspace_activation_metrics (
+  workspace_id TEXT PRIMARY KEY,
+  teachers_count INTEGER NOT NULL DEFAULT 0,
+  students_count INTEGER NOT NULL DEFAULT 0,
+  classes_count INTEGER NOT NULL DEFAULT 0,
+  channels_count INTEGER NOT NULL DEFAULT 0,
+  live_sessions_count INTEGER NOT NULL DEFAULT 0,
+  homework_count INTEGER NOT NULL DEFAULT 0,
+  announcements_count INTEGER NOT NULL DEFAULT 0,
+  ai_enabled INTEGER NOT NULL DEFAULT 0,
+  billing_ready INTEGER NOT NULL DEFAULT 0,
+  activation_score INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+);
+`);
+
 db.exec(`
 CREATE TABLE IF NOT EXISTS refresh_tokens (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
   token_hash TEXT NOT NULL,
   created_at INTEGER NOT NULL,
+  issued_at INTEGER,
   expires_at INTEGER NOT NULL,
   revoked_at INTEGER,
   replaced_by TEXT,
@@ -907,12 +1523,20 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
 `);
 
 safeAlter(`ALTER TABLE refresh_tokens ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0;`);
+safeAlter(`ALTER TABLE refresh_tokens ADD COLUMN issued_at INTEGER;`);
 try {
   db.prepare(
     `UPDATE refresh_tokens SET created_at = issued_at WHERE (created_at IS NULL OR created_at = 0) AND issued_at IS NOT NULL`
   ).run();
 } catch (_err) {
   // ignore when issued_at is not available yet
+}
+try {
+  db.prepare(
+    `UPDATE refresh_tokens SET issued_at = created_at WHERE issued_at IS NULL AND created_at IS NOT NULL`
+  ).run();
+} catch (_err) {
+  // ignore when refresh_tokens is still being initialized
 }
 
 db.exec(`
@@ -929,6 +1553,23 @@ CREATE TABLE IF NOT EXISTS revoked_access_tokens (
   revoked_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL
 );
+`);
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS password_resets (
+  token TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  workspace_id TEXT,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  used INTEGER NOT NULL DEFAULT 0,
+  used_at TEXT
+);
+`);
+
+db.exec(`
+CREATE INDEX IF NOT EXISTS idx_password_resets_user
+  ON password_resets(user_id, created_at DESC);
 `);
 
 /* ========== LEGACY AUDIT LOG (deprecated; keep only for compatibility) ========== */
@@ -1089,11 +1730,8 @@ function getAccessTokenFromRequest(req) {
 }
 
 function isAccessTokenRevoked(jti) {
-  if (!jti) return true;
-  const row = db
-    .prepare('SELECT jti FROM revoked_access_tokens WHERE jti = ?')
-    .get(jti);
-  return Boolean(row);
+  if (!jti) return Promise.resolve(true);
+  return authRepository.isAccessTokenRevoked(jti);
 }
 
 function verifyAccessToken(token) {
@@ -1110,20 +1748,34 @@ function verifyAccessToken(token) {
   }
 }
 
-function requireAccessToken(req, res, next) {
+async function requireAccessToken(req, res, next) {
   const token = getAccessTokenFromRequest(req);
   if (!token) return res.status(401).json({ error: 'Not authenticated' });
 
   const decoded = verifyAccessToken(token);
   if (!decoded) return res.status(401).json({ error: 'Token expired' });
 
-  if (isAccessTokenRevoked(decoded.jti)) {
+  if (await isAccessTokenRevoked(decoded.jti)) {
     return res.status(401).json({ error: 'Session revoked' });
   }
 
   req.auth = decoded;
   attachRequestContext(req);
   return next();
+}
+
+async function attachAccessTokenIfPresent(req) {
+  if (req.auth) return req.auth;
+  const token = getAccessTokenFromRequest(req);
+  if (!token) return null;
+  const decoded = verifyAccessToken(token);
+  if (!decoded) return null;
+  if (await isAccessTokenRevoked(decoded.jti)) {
+    return null;
+  }
+  req.auth = decoded;
+  attachRequestContext(req);
+  return decoded;
 }
 
 function buildRequestContext(req, user) {
@@ -1144,30 +1796,29 @@ function attachRequestContext(req) {
 }
 
 function audit(action, req, { target = null, meta = null, workspaceId = null, user = null } = {}) {
-  try {
+  void (async () => {
+    try {
     const ctxUser = user || req.auth || getAuthedUser(req);
     const ctx = user ? buildRequestContext(req, ctxUser) : req?.ctx || buildRequestContext(req, ctxUser);
     const userId = ctxUser?.sub || ctxUser?.id || ctx.userId;
     const role = ctxUser?.role || ctx.role;
     const workspace = workspaceId || ctxUser?.workspaceId || ctxUser?.workspace_id || ctx.workspaceId || null;
-    db.prepare(`
-      INSERT INTO audit_logs (id, at, user_id, role, workspace_id, action, target, meta_json, ip, user_agent)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      crypto.randomUUID(),
-      Date.now(),
-      userId,
-      role,
-      workspace,
-      action,
-      target ? String(target) : null,
-      meta ? JSON.stringify(meta) : null,
-      ctx.ip,
-      ctx.ua || ''
-    );
-  } catch (e) {
-    console.warn('[audit] failed:', e?.message || e);
-  }
+      // Phase B migration boundary: audit writes now flow through the repository.
+      await auditRepository.writeAuditLog({
+        at: Date.now(),
+        userId,
+        role,
+        workspaceId: workspace,
+        action,
+        target: target ? String(target) : null,
+        metaJson: meta ? JSON.stringify(meta) : null,
+        ip: ctx.ip,
+        userAgent: ctx.ua || ''
+      });
+    } catch (e) {
+      console.warn('[audit] failed:', e?.message || e);
+    }
+  })();
 }
 
 function makeId(prefix = 't') {
@@ -1218,8 +1869,8 @@ function setAuthCookies(res, accessToken, refreshToken) {
 }
 
 function clearAuthCookies(res) {
-  res.clearCookie('access_token', { path: '/' });
-  res.clearCookie('refresh_token', { path: '/' });
+  res.clearCookie('access_token', cookieOpts());
+  res.clearCookie('refresh_token', cookieOpts());
 }
 
 function cookieOpts({ path = '/', maxAge } = {}) {
@@ -1258,6 +1909,20 @@ function csrfRequired(req, res, next) {
   const headerToken = req.headers['x-csrf-token'];
 
   if (!cookieToken || !headerToken || String(headerToken) !== String(cookieToken)) {
+    void logSecurityEvent({
+      workspaceId: req.auth?.workspaceId || req.auth?.workspace_id || null,
+      actorUserId: req.auth?.sub || req.auth?.id || null,
+      type: 'security.csrf_rejected',
+      severity: 'warn',
+      ip: req.ip || null,
+      userAgent: req.headers['user-agent'] || null,
+      payload: {
+        method,
+        path: req.path || req.originalUrl || '',
+        missingCookie: !cookieToken,
+        missingHeader: !headerToken
+      }
+    });
     return res.status(403).json({ error: 'CSRF blocked' });
   }
   next();
@@ -1337,11 +2002,338 @@ function requireWorkspaceAccess(getWorkspaceId) {
     if (user.superAdmin) return next();
 
     if (String(workspaceId) !== String(user.workspaceId)) {
-      return res.status(403).json({ error: 'Workspace isolation: denied' });
+      void logTenantIsolationEvent(req, {
+        workspaceId,
+        targetType: 'workspace',
+        targetId: workspaceId,
+        reason: 'workspace_mismatch'
+      });
+      return tenantForbidden(res);
     }
 
     next();
   };
+}
+
+function tenantForbidden(res) {
+  return res.status(403).json({
+    error: 'Forbidden',
+    code: 'tenant_forbidden'
+  });
+}
+
+async function logTenantIsolationEvent(req, {
+  type = 'security.cross_workspace_access_attempt',
+  workspaceId = null,
+  targetType = '',
+  targetId = '',
+  reason = ''
+} = {}) {
+  const user = req.auth || getAuthedUser(req) || null;
+  await logSecurityEvent({
+    workspaceId: workspaceId || user?.workspaceId || user?.workspace_id || null,
+    actorUserId: user?.sub || user?.id || null,
+    type,
+    severity: 'warn',
+    ip: req.ip || null,
+    userAgent: req.headers['user-agent'] || null,
+    payload: {
+      targetType: String(targetType || ''),
+      targetId: String(targetId || ''),
+      reason: String(reason || '')
+    }
+  });
+}
+
+async function denyTenantAccess(req, res, {
+  workspaceId = null,
+  targetType = '',
+  targetId = '',
+  reason = '',
+  type = ''
+} = {}) {
+  const user = req.auth || getAuthedUser(req) || null;
+  const isSuper = isSuperAdminRole(user);
+  await logTenantIsolationEvent(req, {
+    workspaceId,
+    targetType,
+    targetId,
+    reason,
+    type: isSuper
+      ? 'security.super_admin_private_content_denied'
+      : (type || `security.forbidden_${String(targetType || 'resource')}_access`)
+  });
+  return tenantForbidden(res);
+}
+
+function getTenantAccessUser(req) {
+  return req.auth || getAuthedUser(req) || null;
+}
+
+function userWorkspaceId(user) {
+  return String(user?.workspaceId || user?.workspace_id || '').trim();
+}
+
+function resolveChannelAccessRow(channelId) {
+  return db.prepare(`
+    SELECT id, name, topic, category, workspace_id AS workspaceId
+    FROM channels
+    WHERE id = ?
+    LIMIT 1
+  `).get(String(channelId || '').trim()) || null;
+}
+
+function resolveMessageAccessRow(messageId) {
+  return db.prepare(`
+    SELECT m.id,
+           m.channel_id AS channelId,
+           c.workspace_id AS workspaceId,
+           c.name AS channelName,
+           c.category AS channelCategory
+    FROM messages m
+    JOIN channels c ON c.id = m.channel_id
+    WHERE m.id = ?
+    LIMIT 1
+  `).get(String(messageId || '').trim()) || null;
+}
+
+function resolveReplyAccessRow(replyId) {
+  return db.prepare(`
+    SELECT r.id,
+           r.message_id AS messageId,
+           m.channel_id AS channelId,
+           c.workspace_id AS workspaceId
+    FROM replies r
+    JOIN messages m ON m.id = r.message_id
+    JOIN channels c ON c.id = m.channel_id
+    WHERE r.id = ?
+    LIMIT 1
+  `).get(String(replyId || '').trim()) || null;
+}
+
+function resolveHomeworkAccessRow(homeworkId) {
+  return db.prepare(`
+    SELECT id,
+           workspace_id AS workspaceId,
+           class_channel_id AS classChannelId
+    FROM homework_items
+    WHERE id = ?
+    LIMIT 1
+  `).get(String(homeworkId || '').trim()) || null;
+}
+
+function resolveDmWorkspaceId(dmId) {
+  const rows = db.prepare(`
+    SELECT DISTINCT u.workspace_id AS workspaceId
+    FROM (
+      SELECT created_by AS user_id FROM dms WHERE id = ?
+      UNION
+      SELECT user_id FROM dm_members WHERE dm_id = ?
+    ) refs
+    JOIN users u ON u.id = refs.user_id
+    WHERE u.workspace_id IS NOT NULL AND TRIM(u.workspace_id) != ''
+  `).all(String(dmId || '').trim(), String(dmId || '').trim());
+  const workspaces = rows.map((row) => String(row.workspaceId || '').trim()).filter(Boolean);
+  if (!workspaces.length) return '';
+  if (new Set(workspaces).size > 1) return '__mixed__';
+  return workspaces[0];
+}
+
+function isUserInChannel(userId, channelId) {
+  if (!userId || !channelId) return false;
+  const row = db
+    .prepare("SELECT 1 FROM channel_members WHERE user_id = ? AND channel_id = ? LIMIT 1")
+    .get(String(userId), String(channelId));
+  return Boolean(row);
+}
+
+async function assertSameWorkspace(user, workspaceId, req, { targetType = 'workspace', targetId = '', privateContent = false } = {}) {
+  if (!user) return { ok: false, status: 401 };
+  const normalizedWorkspaceId = String(workspaceId || '').trim();
+  if (!normalizedWorkspaceId) {
+    return { ok: false, status: 404 };
+  }
+  if (privateContent && isSuperAdminRole(user)) {
+    await logTenantIsolationEvent(req, {
+      workspaceId: normalizedWorkspaceId,
+      targetType,
+      targetId,
+      reason: 'super_admin_private_content_denied',
+      type: 'security.super_admin_private_content_denied'
+    });
+    return { ok: false, status: 403 };
+  }
+  if (userWorkspaceId(user) !== normalizedWorkspaceId) {
+    await logTenantIsolationEvent(req, {
+      workspaceId: normalizedWorkspaceId,
+      targetType,
+      targetId,
+      reason: 'workspace_mismatch'
+    });
+    return { ok: false, status: 403 };
+  }
+  return { ok: true };
+}
+
+async function assertAdminForWorkspace(user, workspaceId, req, { allowSuperAdmin = true } = {}) {
+  if (!user) return { ok: false, status: 401 };
+  if (isSuperAdminRole(user) && allowSuperAdmin) {
+    return { ok: true };
+  }
+  const sameWorkspace = await assertSameWorkspace(user, workspaceId, req, {
+    targetType: 'workspace',
+    targetId: workspaceId
+  });
+  if (!sameWorkspace.ok) return sameWorkspace;
+  if (!isSchoolAdminRole(user)) {
+    return { ok: false, status: 403 };
+  }
+  return { ok: true };
+}
+
+async function assertChannelAccess(user, channelId, req, { targetType = 'channel', requireMembership = false } = {}) {
+  const channel = resolveChannelAccessRow(channelId);
+  if (!channel) return { ok: false, status: 404 };
+  const sameWorkspace = await assertSameWorkspace(user, channel.workspaceId, req, {
+    targetType,
+    targetId: channel.id,
+    privateContent: true
+  });
+  if (!sameWorkspace.ok) return { ok: false, status: sameWorkspace.status, channel };
+  if (isTaskChannelName(channel.name)) {
+    const allowed = assertTaskChannelAccess(userWorkspaceId(user), channel.id, getNormalizedUserRole(user));
+    if (!allowed) {
+      await logTenantIsolationEvent(req, {
+        workspaceId: channel.workspaceId,
+        targetType,
+        targetId: channel.id,
+        reason: 'task_channel_denied',
+        type: 'security.forbidden_channel_access'
+      });
+      return { ok: false, status: 403, channel };
+    }
+  }
+  if (!requireMembership) {
+    return { ok: true, channel };
+  }
+  const role = getNormalizedUserRole(user);
+  if (isSchoolAdminRole(user) || role === 'teacher') {
+    return { ok: true, channel };
+  }
+  if (isUserInChannel(String(user?.id || user?.sub || ''), channel.id)) {
+    return { ok: true, channel };
+  }
+  await logTenantIsolationEvent(req, {
+    workspaceId: channel.workspaceId,
+    targetType,
+    targetId: channel.id,
+    reason: 'channel_membership_denied',
+    type: 'security.forbidden_channel_access'
+  });
+  return { ok: false, status: 403, channel };
+}
+
+async function assertMessageAccess(user, messageId, req) {
+  const message = resolveMessageAccessRow(messageId);
+  if (!message) return { ok: false, status: 404 };
+  const channelAccess = await assertChannelAccess(user, message.channelId, req, {
+    targetType: 'message',
+    requireMembership: true
+  });
+  return {
+    ok: channelAccess.ok,
+    status: channelAccess.status,
+    message,
+    channel: channelAccess.channel
+  };
+}
+
+async function assertFileAccess(user, fileId, req) {
+  const file = findManagedUploadRecordById(fileId);
+  if (!file || file.deleted) return { ok: false, status: 404 };
+  const sameWorkspace = await assertSameWorkspace(user, file.workspaceId, req, {
+    targetType: 'file',
+    targetId: file.fileId,
+    privateContent: true
+  });
+  if (!sameWorkspace.ok) {
+    return { ok: false, status: sameWorkspace.status, file };
+  }
+  if (!canAccessManagedUploadRecord({
+    userId: String(user?.id || user?.sub || '').trim(),
+    workspaceId: userWorkspaceId(user),
+    role: getNormalizedUserRole(user),
+    superAdmin: false
+  }, file)) {
+    await logTenantIsolationEvent(req, {
+      workspaceId: file.workspaceId,
+      targetType: 'file',
+      targetId: file.fileId,
+      reason: 'file_membership_denied',
+      type: 'security.forbidden_file_access'
+    });
+    return { ok: false, status: 403, file };
+  }
+  return { ok: true, file };
+}
+
+async function assertHomeworkAccess(user, homeworkId, req) {
+  const item = await tasksRepository.getHomeworkItemById(String(homeworkId || '').trim());
+  if (!item) return { ok: false, status: 404 };
+  const sameWorkspace = await assertSameWorkspace(user, item.workspaceId, req, {
+    targetType: 'homework',
+    targetId: item.id,
+    privateContent: true
+  });
+  if (!sameWorkspace.ok) return { ok: false, status: sameWorkspace.status, item };
+  const homeworkChannel = getHomeworkChannelForClass({
+    id: item.classChannelId,
+    workspaceId: item.workspaceId
+  });
+  if (!homeworkChannel || !canViewHomeworkChannel(user, homeworkChannel)) {
+    await logTenantIsolationEvent(req, {
+      workspaceId: item.workspaceId,
+      targetType: 'homework',
+      targetId: item.id,
+      reason: 'homework_channel_denied',
+      type: 'security.forbidden_homework_access'
+    });
+    return { ok: false, status: 403, item };
+  }
+  return { ok: true, item, homeworkChannel };
+}
+
+async function assertDmAccess(user, dmId, req) {
+  const dm = db.prepare('SELECT id, created_by AS createdBy FROM dms WHERE id = ? LIMIT 1').get(String(dmId || '').trim());
+  if (!dm) return { ok: false, status: 404 };
+  const workspaceId = resolveDmWorkspaceId(dm.id);
+  if (!workspaceId || workspaceId === '__mixed__') {
+    await logTenantIsolationEvent(req, {
+      workspaceId: workspaceId === '__mixed__' ? null : workspaceId,
+      targetType: 'dm',
+      targetId: dm.id,
+      reason: workspaceId === '__mixed__' ? 'mixed_workspace_dm' : 'missing_dm_workspace'
+    });
+    return { ok: false, status: 403, dm, workspaceId };
+  }
+  const sameWorkspace = await assertSameWorkspace(user, workspaceId, req, {
+    targetType: 'dm',
+    targetId: dm.id,
+    privateContent: true
+  });
+  if (!sameWorkspace.ok) return { ok: false, status: sameWorkspace.status, dm, workspaceId };
+  const userId = String(user?.id || user?.sub || '').trim();
+  const allowed = isUserInDm(userId, dm.id) || String(dm.createdBy || '') === userId;
+  if (!allowed) {
+    await logTenantIsolationEvent(req, {
+      workspaceId,
+      targetType: 'dm',
+      targetId: dm.id,
+      reason: 'dm_membership_denied'
+    });
+    return { ok: false, status: 403, dm, workspaceId };
+  }
+  return { ok: true, dm, workspaceId };
 }
 
 function requireWorkspaceAccess(getWorkspaceId) {
@@ -1359,7 +2351,13 @@ function requireWorkspaceAccess(getWorkspaceId) {
     }
 
     if (requestedWorkspaceId !== req.auth.workspaceId) {
-      return res.status(403).json({ error: 'Workspace isolation: denied' });
+      void logTenantIsolationEvent(req, {
+        workspaceId: requestedWorkspaceId,
+        targetType: 'workspace',
+        targetId: requestedWorkspaceId,
+        reason: 'workspace_mismatch'
+      });
+      return tenantForbidden(res);
     }
 
     next();
@@ -1369,6 +2367,102 @@ function requireWorkspaceAccess(getWorkspaceId) {
 function normalizeRegistrationEmail(value) {
   const normalized = String(value || '').trim().toLowerCase();
   return normalized.includes('@') ? normalized : '';
+}
+
+function normalizeDateOfBirth(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const directMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (directMatch) {
+    const [year, month, day] = directMatch.slice(1).map((part) => Number.parseInt(part, 10));
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (
+      date.getUTCFullYear() === year &&
+      date.getUTCMonth() === month - 1 &&
+      date.getUTCDate() === day
+    ) {
+      return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+    return '';
+  }
+
+  const slashMatch = raw.match(/^(\d{4})[\/.](\d{2})[\/.](\d{2})$/);
+  if (slashMatch) {
+    return normalizeDateOfBirth(`${slashMatch[1]}-${slashMatch[2]}-${slashMatch[3]}`);
+  }
+
+  const euroMatch = raw.match(/^(\d{2})[./-](\d{2})[./-](\d{4})$/);
+  if (euroMatch) {
+    return normalizeDateOfBirth(`${euroMatch[3]}-${euroMatch[2]}-${euroMatch[1]}`);
+  }
+
+  return '';
+}
+
+function buildAccountAlreadyExistsResponse() {
+  return {
+    error: 'An account already exists for this user.',
+    code: 'account_already_exists',
+    actions: ['login', 'forgot_password']
+  };
+}
+
+async function logDuplicateRegistrationAttempt(req, { workspaceId = null, targetUserId = null, reason = 'unknown' } = {}) {
+  await logSecurityEvent({
+    workspaceId,
+    actorUserId: null,
+    targetUserId,
+    type: 'security.duplicate_registration_attempt',
+    severity: 'warn',
+    ip: req.ip || null,
+    userAgent: req.headers['user-agent'] || null,
+    payload: { reason }
+  });
+}
+
+async function findWorkspaceRegistrationConflict({
+  workspaceId,
+  email = '',
+  phone = '',
+  phoneCountry = '',
+  phoneNumber = '',
+  dateOfBirth = ''
+}) {
+  const normalizedEmail = normalizeRegistrationEmail(email);
+  if (normalizedEmail) {
+    const emailMatch = await userRepository.findWorkspaceUserByEmail(workspaceId, normalizedEmail);
+    if (emailMatch?.id) {
+      return { field: 'email', userId: emailMatch.id };
+    }
+  }
+
+  const normalizedPhone = normalizePhoneValue(phone) || buildUserPhoneValue(phoneCountry, phoneNumber);
+  if (normalizedPhone) {
+    const normalizedNational = normalizePhoneNationalNumber(phoneNumber).replace(/^0+/, '');
+    const phoneMatch = await userRepository.findWorkspaceUserByPhone({
+      workspaceId,
+      phone: normalizedPhone,
+      phoneNumber: normalizedNational || normalizePhoneNationalNumber(phoneNumber),
+      phoneCountry: normalizePhoneCountryCode(phoneCountry),
+      alternatePhoneNumber: normalizedNational ? `0${normalizedNational}` : ''
+    });
+    if (phoneMatch?.id) {
+      return { field: 'phone', userId: phoneMatch.id };
+    }
+  }
+
+  const normalizedDob = normalizeDateOfBirth(dateOfBirth);
+  if (normalizedDob) {
+    const dobMatch = await userRepository.findWorkspaceUserByDateOfBirth({
+      workspaceId,
+      dateOfBirth: normalizedDob
+    });
+    if (dobMatch?.id) {
+      return { field: 'dateOfBirth', userId: dobMatch.id };
+    }
+  }
+
+  return null;
 }
 
 function isAdminUser(req) {
@@ -1416,7 +2510,7 @@ function getPlatformOwnerEmailSettings() {
     enabled: 0,
     display_name: 'Platform Owner',
     owner_email: '',
-    subject_prefix: '[WorkNest Owner]',
+    subject_prefix: '[StudiesTalk Owner]',
     footer_text: 'Kind regards,\nPlatform Owner'
   };
   const raw = getPlatformSetting(PLATFORM_OWNER_EMAIL_SETTINGS_KEY, '');
@@ -1728,7 +2822,10 @@ async function createOpenAIRealtimeSession(options = {}) {
       instructions: instructions || undefined
     }
   };
-  console.log('[AI] Realtime client secret payload', payload);
+  logEvent('info', '[AI] Realtime client secret request prepared', {
+    model: payload?.session?.model || null,
+    hasInstructions: Boolean(payload?.session?.instructions)
+  });
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: {
@@ -1811,24 +2908,19 @@ function serializeRegistrationSession(row) {
   };
 }
 
-function loadRegistrationSessionById(sessionId) {
+async function loadRegistrationSessionById(sessionId) {
   if (!sessionId) return null;
-  const row = db.prepare('SELECT * FROM registration_sessions WHERE session_id = ?').get(sessionId);
+  const row = await registrationRepository.getSession(sessionId);
   return serializeRegistrationSession(row);
 }
 
-function ensureRegistrationSession(req, res) {
+async function ensureRegistrationSession(req, res) {
   const sessionId = getRegistrationSessionId(req, res);
-  let row = db.prepare('SELECT * FROM registration_sessions WHERE session_id = ?').get(sessionId);
-  if (!row) {
-    const now = nowMs();
-    db.prepare('INSERT INTO registration_sessions(session_id, step, created_at, last_updated) VALUES (?, ?, ?, ?)').run(sessionId, 'info', now, now);
-    row = db.prepare('SELECT * FROM registration_sessions WHERE session_id = ?').get(sessionId);
-  }
+  const row = await registrationRepository.ensureSession({ sessionId, now: nowMs() });
   return serializeRegistrationSession(row);
 }
 
-function updateRegistrationSessionRecord(sessionId, updates = {}) {
+async function updateRegistrationSessionRecord(sessionId, updates = {}) {
   if (!sessionId) return;
   const now = nowMs();
   const allowed = new Set(['step', 'email', 'phone', 'email_verified', 'mobile_verified', 'otp_sent_at', 'last_updated']);
@@ -1846,39 +2938,32 @@ function updateRegistrationSessionRecord(sessionId, updates = {}) {
     }
   });
   sanitized.last_updated = now;
-  const fields = [];
-  const values = [];
-  Object.entries(sanitized).forEach(([key, value]) => {
-    fields.push(`${key} = ?`);
-    values.push(value);
-  });
-  if (!fields.length) return;
-  values.push(sessionId);
-  db.prepare(`UPDATE registration_sessions SET ${fields.join(', ')} WHERE session_id = ?`).run(...values);
+  if (!Object.keys(sanitized).length) return;
+  await registrationRepository.updateSession(sessionId, sanitized);
 }
 
-function getRegistrationSession(req, res) {
-  const session = ensureRegistrationSession(req, res);
+async function getRegistrationSession(req, res) {
+  const session = await ensureRegistrationSession(req, res);
   if (!session) return null;
   return loadRegistrationSessionById(session.sessionId);
 }
 
-function setRegistrationEmailVerified(req, res, email) {
-  const session = getRegistrationSession(req, res);
+async function setRegistrationEmailVerified(req, res, email) {
+  const session = await getRegistrationSession(req, res);
   const normalizedEmail = normalizeRegistrationEmail(email);
   if (!session?.sessionId || !normalizedEmail) return null;
-  updateRegistrationSessionRecord(session.sessionId, {
+  await updateRegistrationSessionRecord(session.sessionId, {
     email: normalizedEmail,
     email_verified: 1
   });
   return loadRegistrationSessionById(session.sessionId);
 }
 
-function setRegistrationMobileVerified(req, res, phone) {
-  const session = getRegistrationSession(req, res);
+async function setRegistrationMobileVerified(req, res, phone) {
+  const session = await getRegistrationSession(req, res);
   const normalizedPhone = normalizePhoneValue(phone);
   if (!session?.sessionId || !normalizedPhone) return null;
-  updateRegistrationSessionRecord(session.sessionId, {
+  await updateRegistrationSessionRecord(session.sessionId, {
     phone: normalizedPhone,
     mobile_verified: 1
   });
@@ -1904,8 +2989,17 @@ async function sendRegistrationOtpEmail(email, code) {
 }
 
 function getWorkspaceName(workspaceId) {
+  const repositoryValue = workspaceRepository.getWorkspaceName(workspaceId);
+  if (!isPromiseLike(repositoryValue)) {
+    return repositoryValue || 'School';
+  }
   const row = db.prepare('SELECT name FROM workspaces WHERE id = ?').get(workspaceId);
   return row?.name || 'School';
+}
+
+async function getWorkspaceNameAsync(workspaceId) {
+  const name = await workspaceRepository.getWorkspaceName(workspaceId);
+  return name || 'School';
 }
 
 function buildSchoolDisplayName(schoolName = '') {
@@ -1993,15 +3087,33 @@ function findUserByEmail(email) {
     .get(normalized);
 }
 
-function getResetToken(token) {
-  return db
-    .prepare(
-      `SELECT token, user_id AS userId, workspace_id AS workspaceId, created_at AS createdAt,
-              expires_at AS expiresAt, used
-       FROM password_resets
-       WHERE token = ?`
-    )
-    .get(String(token || '').trim());
+async function getResetToken(token) {
+  const normalizedToken = String(token || '').trim();
+  if (!normalizedToken) return null;
+  const tokenHash = sha256(normalizedToken);
+  const hashedRow = await authRepository.getPasswordResetByHash(tokenHash);
+  if (hashedRow) {
+    return {
+      ...hashedRow,
+      tokenHash,
+      legacyToken: null,
+      storageMode: 'hashed'
+    };
+  }
+  const legacyRow = await authRepository.getLegacyPasswordReset(normalizedToken);
+  if (!legacyRow) return null;
+  return {
+    ...legacyRow,
+    tokenHash,
+    legacyToken: normalizedToken,
+    storageMode: 'legacy'
+  };
+}
+
+function generatePasswordResetToken() {
+  const override = !ENV.IS_PROD ? String(process.env.PASSWORD_RESET_TOKEN_OVERRIDE || '').trim() : '';
+  if (override) return override;
+  return crypto.randomBytes(24).toString('hex');
 }
 
 async function sendPasswordResetEmail(user, token) {
@@ -2271,6 +3383,73 @@ function tryAlter(sql) {
     if (!String(e?.message || '').toLowerCase().includes('duplicate column')) {
       throw e;
     }
+  }
+}
+
+function tableHasDuplicateWorkspaceEmailRows() {
+  try {
+    const row = db.prepare(`
+      SELECT 1
+      FROM users
+      WHERE email IS NOT NULL AND TRIM(email) != ''
+      GROUP BY workspace_id, lower(trim(email))
+      HAVING COUNT(*) > 1
+      LIMIT 1
+    `).get();
+    return !!row;
+  } catch (_err) {
+    return true;
+  }
+}
+
+function tableHasDuplicateWorkspacePhoneRows() {
+  try {
+    const row = db.prepare(`
+      SELECT 1
+      FROM users
+      WHERE phone IS NOT NULL AND TRIM(phone) != ''
+      GROUP BY workspace_id, trim(phone)
+      HAVING COUNT(*) > 1
+      LIMIT 1
+    `).get();
+    return !!row;
+  } catch (_err) {
+    return true;
+  }
+}
+
+function ensureUserIdentityIndexes() {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_users_workspace_email_lookup
+      ON users(workspace_id, lower(email));
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_users_workspace_phone_lookup
+      ON users(workspace_id, phone);
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_users_workspace_dob_lookup
+      ON users(workspace_id, date_of_birth);
+  `);
+
+  if (!tableHasDuplicateWorkspaceEmailRows()) {
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_users_workspace_email_unique
+        ON users(workspace_id, lower(email))
+        WHERE email IS NOT NULL AND TRIM(email) != '';
+    `);
+  } else {
+    logEvent('warn', '[Auth] Skipping SQLite unique email index because duplicate workspace emails already exist.');
+  }
+
+  if (!tableHasDuplicateWorkspacePhoneRows()) {
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_users_workspace_phone_unique
+        ON users(workspace_id, phone)
+        WHERE phone IS NOT NULL AND TRIM(phone) != '';
+    `);
+  } else {
+    logEvent('warn', '[Auth] Skipping SQLite unique phone index because duplicate workspace phones already exist.');
   }
 }
 
@@ -2891,17 +4070,32 @@ try {
   console.warn('[AI Budget] default seed failed:', err?.message || String(err));
 }
 
+try {
+  const row = db.prepare('SELECT value FROM platform_settings WHERE key = ?').get(PLATFORM_POLICY_VERSION_KEY);
+  if (!row) {
+    db.prepare(`
+      INSERT INTO platform_settings (key, value, updated_at)
+      VALUES (?, ?, ?)
+    `).run(PLATFORM_POLICY_VERSION_KEY, DEFAULT_POLICY_VERSION, new Date().toISOString());
+  }
+} catch (err) {
+  console.warn('[Policy] default version seed failed:', err?.message || String(err));
+}
+
 // disable ETag to avoid stale 304 responses on API JSON
 app.set('etag', false);
 
 // body parsing / logging / static assets must be before routes
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
-if (ENV.IS_PROD) {
-  app.use(morgan('combined'));
-} else {
-  app.use(morgan('dev'));
-}
+morgan.token('request-id', (req) => String(req.id || '-'));
+const prodMorganFormat = ':request-id :remote-addr :method :url :status :res[content-length] - :response-time ms';
+const devMorganFormat = ':request-id :method :url :status :response-time ms';
+app.use(
+  morgan(ENV.IS_PROD ? prodMorganFormat : devMorganFormat, {
+    skip: (req) => String(req.path || '').startsWith('/health')
+  })
+);
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(
   '/integration-assets',
@@ -2912,13 +4106,16 @@ app.use(
 app.use('/admin', express.static(path.join(__dirname, 'admin')));
 
 app.use((req, res, next) => {
-  if (req.path.startsWith('/uploads')) {
-    return express.static(UPLOADS_DIR)(req, res, next);
-  }
   ensureCsrfCookie(req, res);
   next();
 });
 app.use(csrfRequired);
+app.use(passwordResetRequestLimiter);
+app.use(passwordResetCompletionLimiter);
+app.use(registrationMutationLimiter);
+app.use(policyAcceptanceLimiter);
+app.use(onboardingMutationLimiter);
+app.use(adminSensitiveMutationLimiter);
 
 app.use((req, res, next) => {
   if (!req.ctx) {
@@ -2927,6 +4124,22 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+const onboardingGuard = createOnboardingGuard({
+  onboardingRepository,
+  attachAccessTokenIfPresent,
+  logger: console
+});
+
+app.use('/api', onboardingGuard.middleware);
+
+const policyGuard = createPolicyGuard({
+  policyRepository,
+  attachAccessTokenIfPresent,
+  logger: console
+});
+
+app.use('/api', policyGuard.middleware);
 
 // Friendly route
 app.get('/admin', (req, res) => {
@@ -2941,16 +4154,80 @@ app.post('/admin/backup-db', requireAdmin, (req, res) => {
       return res.status(500).json({ error: 'Backup failed' });
     });
 });
-app.use(
-  '/uploads',
-  express.static(UPLOADS_DIR, {
-    setHeaders(res, filePath) {
-      if (filePath.endsWith('.webm')) {
-        res.setHeader('Content-Type', 'video/webm');
-      }
+app.get('/uploads/*', async (req, res) => {
+  const rawTail = String(req.params[0] || '').trim();
+  let decodedTail = rawTail;
+  try {
+    decodedTail = decodeURIComponent(rawTail);
+  } catch (_err) {
+    logPathTraversalAttempt(req, { route: req.originalUrl || req.url, reason: 'decode_failed' });
+    return res.status(400).json({ error: 'Invalid file path' });
+  }
+
+  if (!decodedTail || decodedTail.includes('\0')) {
+    return res.status(400).json({ error: 'Invalid file path' });
+  }
+
+  const normalizedUrl = `/uploads/${decodedTail.split('/').map((part) => encodeURIComponent(part)).join('/')}`;
+  const requestedPath = resolveSafePath(UPLOADS_DIR, decodedTail);
+  if (!requestedPath) {
+    logPathTraversalAttempt(req, { route: req.originalUrl || req.url, path: decodedTail, reason: 'outside_upload_root' });
+    return res.status(400).json({ error: 'Invalid file path' });
+  }
+
+  const segments = decodedTail.split('/').filter(Boolean);
+  const isWorkspaceLogo =
+    segments.length === 3 &&
+    segments[0] === 'workspaces' &&
+    segments[2].startsWith('logo.');
+
+  if (isWorkspaceLogo) {
+    if (!fs.existsSync(requestedPath)) {
+      return res.status(404).json({ error: 'File not found' });
     }
-  })
-);
+    const ext = sanitizeUploadExtension(segments[2]);
+    const mimeType =
+      ext === '.png' ? 'image/png' :
+      ext === '.webp' ? 'image/webp' :
+      'image/jpeg';
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Disposition', `inline; ${contentDispositionFilename(segments[2])}`);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    return res.sendFile(requestedPath);
+  }
+
+  const requester = getEffectiveRequestUser(req);
+  if (!requester.userId) {
+    logForbiddenFileAccess(req, { route: req.originalUrl || req.url, reason: 'missing_auth' });
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+
+  const fileRecord = findManagedUploadRecordByUrl(normalizedUrl);
+  if (!fileRecord || fileRecord.deleted) {
+    logForbiddenFileAccess(req, { route: req.originalUrl || req.url, fileUrl: normalizedUrl, reason: 'missing_registry_record' });
+    return res.status(404).json({ error: 'File not found' });
+  }
+
+  if (!canAccessManagedUploadRecord(requester, fileRecord)) {
+    logForbiddenFileAccess(req, {
+      route: req.originalUrl || req.url,
+      fileId: fileRecord.fileId,
+      fileUrl: normalizedUrl,
+      reason: 'workspace_or_membership_denied'
+    });
+    return tenantForbidden(res);
+  }
+
+  if (!fs.existsSync(requestedPath)) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+
+  return sendManagedUploadResponse(res, requestedPath, {
+    fileName: fileRecord.name || path.basename(decodedTail),
+    mimeType: fileRecord.mime || 'application/octet-stream'
+  });
+});
 
 app.get('/.well-known/appspecific/com.chrome.devtools.json', (_req, res) => {
   res.status(204).json({});
@@ -2972,16 +4249,10 @@ app.post('/api/register/otp/send', strictLimiter, async (req, res) => {
   const code = generateOtpCode();
   const expiresAt = Date.now() + 5 * 60 * 1000;
   try {
-    db.prepare(
-      `
-        INSERT INTO register_otps(email, code, expires_at)
-        VALUES (?, ?, ?)
-        ON CONFLICT(email) DO UPDATE SET code = excluded.code, expires_at = excluded.expires_at
-      `
-    ).run(email, code, expiresAt);
-    const session = getRegistrationSession(req, res);
+    await registrationRepository.upsertOtp({ email, code, expiresAt, createdAt: nowMs() });
+    const session = await getRegistrationSession(req, res);
     if (session?.sessionId) {
-      updateRegistrationSessionRecord(session.sessionId, {
+      await updateRegistrationSessionRecord(session.sessionId, {
         email,
         email_verified: 0,
         otp_sent_at: nowMs()
@@ -2997,27 +4268,25 @@ app.post('/api/register/otp/send', strictLimiter, async (req, res) => {
   }
 });
 
-app.post('/api/register/otp/verify', strictLimiter, (req, res) => {
+app.post('/api/register/otp/verify', strictLimiter, async (req, res) => {
   const email = normalizeRegistrationEmail(req.body?.email);
   const code = String(req.body?.code || '').trim();
   if (!email || !code) {
     return res.status(400).json({ error: 'Email and OTP code are required.' });
   }
-  const row = db
-    .prepare('SELECT code, expires_at FROM register_otps WHERE email = ? LIMIT 1')
-    .get(email);
+  const row = await registrationRepository.getOtp(email);
   if (!row) {
     return res.status(400).json({ error: 'OTP code is incorrect or has expired.' });
   }
   if (row.expires_at < Date.now()) {
-    db.prepare('DELETE FROM register_otps WHERE email = ?').run(email);
+    await registrationRepository.deleteOtp(email);
     return res.status(400).json({ error: 'OTP code is incorrect or has expired.' });
   }
   if (row.code !== code) {
     return res.status(400).json({ error: 'OTP code is incorrect or has expired.' });
   }
-  db.prepare('DELETE FROM register_otps WHERE email = ?').run(email);
-  const session = setRegistrationEmailVerified(req, res, email);
+  await registrationRepository.deleteOtp(email);
+  const session = await setRegistrationEmailVerified(req, res, email);
   return res.json({
     ok: true,
     email_verified: true,
@@ -3033,10 +4302,10 @@ app.post('/api/register/mobile-otp/send', strictLimiter, async (req, res) => {
     if (!phone) {
       return res.status(400).json({ error: 'phone is required (E.164 format)' });
     }
-    const session = getRegistrationSession(req, res);
+    const session = await getRegistrationSession(req, res);
     if (session?.sessionId) {
       const currentPhone = normalizePhoneValue(session.phone);
-      updateRegistrationSessionRecord(session.sessionId, {
+      await updateRegistrationSessionRecord(session.sessionId, {
         phone,
         mobile_verified: currentPhone && currentPhone === phone ? session.mobile_verified : 0
       });
@@ -3075,7 +4344,7 @@ app.post('/api/register/mobile-otp/verify', strictLimiter, async (req, res) => {
         if (!payload?.valid) {
           return res.status(400).json({ error: 'Invalid or expired OTP.' });
         }
-        const session = setRegistrationMobileVerified(req, res, phone);
+        const session = await setRegistrationMobileVerified(req, res, phone);
         const userMatch = markUsersPhoneVerified(phone);
         return res.json({
           ok: true,
@@ -3100,7 +4369,7 @@ app.post('/api/register/mobile-otp/verify', strictLimiter, async (req, res) => {
       return res.status(400).json({ error: 'Invalid or expired OTP.' });
     }
 
-    const session = setRegistrationMobileVerified(req, res, phone);
+    const session = await setRegistrationMobileVerified(req, res, phone);
     const userMatch = markUsersPhoneVerified(phone);
     return res.json({
       ok: true,
@@ -3119,16 +4388,16 @@ app.get('/api/register/mobile-otp/status', (req, res) => {
   return res.json({ available: MOBILE_OTP_ENABLED });
 });
 
-app.get('/api/register/session', (req, res) => {
-  const session = getRegistrationSession(req, res);
+app.get('/api/register/session', async (req, res) => {
+  const session = await getRegistrationSession(req, res);
   if (!session) {
     return res.status(500).json({ error: 'Failed to load registration session.' });
   }
   return res.json({ ok: true, session });
 });
 
-app.post('/api/register/session', (req, res) => {
-  const row = ensureRegistrationSession(req, res);
+app.post('/api/register/session', async (req, res) => {
+  const row = await ensureRegistrationSession(req, res);
   if (!row) {
     return res.status(500).json({ error: 'Failed to create registration session.' });
   }
@@ -3143,20 +4412,20 @@ app.post('/api/register/session', (req, res) => {
     const parsed = Number(payload.otpSentAt);
     updates.otp_sent_at = Number.isFinite(parsed) ? parsed : nowMs();
   }
-  updateRegistrationSessionRecord(row.sessionId, updates);
-  return res.json({ ok: true, session: loadRegistrationSessionById(row.sessionId) });
+  await updateRegistrationSessionRecord(row.sessionId, updates);
+  return res.json({ ok: true, session: await loadRegistrationSessionById(row.sessionId) });
 });
 
-app.get('/api/register/session', (req, res) => {
-  const session = getRegistrationSession(req, res);
+app.get('/api/register/session', async (req, res) => {
+  const session = await getRegistrationSession(req, res);
   if (!session) {
     return res.status(500).json({ error: 'Failed to load registration session.' });
   }
   return res.json({ ok: true, session });
 });
 
-app.post('/api/register/session', (req, res) => {
-  const row = ensureRegistrationSession(req, res);
+app.post('/api/register/session', async (req, res) => {
+  const row = await ensureRegistrationSession(req, res);
   if (!row) {
     return res.status(500).json({ error: 'Failed to create registration session.' });
   }
@@ -3171,11 +4440,11 @@ app.post('/api/register/session', (req, res) => {
     const parsed = Number(payload.otpSentAt);
     updates.otp_sent_at = Number.isFinite(parsed) ? parsed : nowMs();
   }
-  updateRegistrationSessionRecord(row.sessionId, updates);
-  return res.json({ ok: true, session: loadRegistrationSessionById(row.sessionId) });
+  await updateRegistrationSessionRecord(row.sessionId, updates);
+  return res.json({ ok: true, session: await loadRegistrationSessionById(row.sessionId) });
 });
 
-app.post('/api/register/request-review', (req, res) => {
+app.post('/api/register/request-review', async (req, res) => {
   const formPayload = req.body?.form || {};
   const email = normalizeRegistrationEmail(req.body?.email || formPayload?.schoolEmail);
   const phone = String(formPayload?.phone || formPayload?.schoolPhone || formPayload?.phoneNumber || '').trim();
@@ -3185,9 +4454,7 @@ app.post('/api/register/request-review', (req, res) => {
     return res.status(400).json({ error: 'Email is required to submit for review.' });
   }
 
-  const existingUser = db
-    .prepare(`SELECT id, role, workspace_id AS workspaceId FROM users WHERE lower(email) = lower(?) LIMIT 1`)
-    .get(email);
+  const existingUser = await userRepository.findUserByEmailGlobal(email);
 
   if (existingUser) {
     return res.status(409).json({
@@ -3198,15 +4465,7 @@ app.post('/api/register/request-review', (req, res) => {
     });
   }
 
-  const existingReq = db
-    .prepare(`
-    SELECT id, status, created_at AS createdAt
-    FROM registration_review_requests
-    WHERE lower(email) = lower(?)
-    ORDER BY created_at DESC
-    LIMIT 1
-  `)
-    .get(email);
+  const existingReq = await schoolRequestRepository.findLatestRegistrationReviewRequestByEmail(email);
 
   if (existingReq) {
     const st = String(existingReq.status || 'pending').toLowerCase();
@@ -3225,15 +4484,7 @@ app.post('/api/register/request-review', (req, res) => {
   }
 
   if (phone) {
-    const dupPhone = db
-      .prepare(`
-      SELECT id, status
-      FROM registration_review_requests
-      WHERE payload LIKE ?
-      ORDER BY created_at DESC
-      LIMIT 1
-    `)
-      .get(`%${phone}%`);
+    const dupPhone = await schoolRequestRepository.findPendingRegistrationReviewRequestByPhone(phone);
     if (dupPhone && String(dupPhone.status || '').toLowerCase() === 'pending') {
       return res.status(409).json({
         error: 'A school request with this phone number is already pending.',
@@ -3243,9 +4494,13 @@ app.post('/api/register/request-review', (req, res) => {
   }
 
   const payloadText = JSON.stringify({ form: formPayload, submittedAt: Date.now(), schoolName });
-  db.prepare(
-    'INSERT INTO registration_review_requests (email, payload, status, created_at) VALUES (?, ?, ?, ?)'
-  ).run(email, payloadText, 'pending', Date.now());
+  await schoolRequestRepository.createRegistrationReviewRequest({
+    id: `rr_${Date.now()}_${crypto.randomBytes(6).toString('hex')}`,
+    email,
+    payload: payloadText,
+    status: 'pending',
+    createdAt: Date.now()
+  });
 
   return res.json({ ok: true });
 });
@@ -3355,117 +4610,34 @@ function requireSuperAdmin(req, res, next) {
 }
 
 function legacyAuditLog({ workspaceId = null, actor = null, action = '', target = '', payload = null }) {
-  try {
-    db.prepare(
-      `INSERT INTO audit_log (workspace_id, actor, action, target, payload_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).run(workspaceId, actor, action, target, payload ? JSON.stringify(payload) : null, nowMs());
-  } catch (_e) {
+  void auditRepository.writeLegacyAuditLog({
+    workspaceId,
+    actor,
+    action,
+    target,
+    payloadJson: payload ? JSON.stringify(payload) : null,
+    createdAt: nowMs()
+  }).catch(() => {
     // do not block main flow on audit errors
-  }
+  });
 }
 
 function deleteWorkspaceCascade(workspaceId) {
-  const channelIds = db
-    .prepare('SELECT id FROM channels WHERE workspace_id = ?')
-    .all(workspaceId)
-    .map((row) => row.id);
-  const userIds = db
-    .prepare('SELECT id FROM users WHERE workspace_id = ?')
-    .all(workspaceId)
-    .map((row) => row.id);
-
-  const tx = db.transaction(() => {
-    if (channelIds.length) {
-      const channelPlaceholders = channelIds.map(() => '?').join(',');
-      const messageIdQuery = `SELECT id FROM messages WHERE channel_id IN (${channelPlaceholders})`;
-      const replyIdQuery = `SELECT id FROM replies WHERE message_id IN (${messageIdQuery})`;
-
-      db.prepare(`DELETE FROM message_reaction_users WHERE message_id IN (${messageIdQuery})`).run(
-        ...channelIds
-      );
-      db.prepare(`DELETE FROM message_reactions WHERE message_id IN (${messageIdQuery})`).run(
-        ...channelIds
-      );
-      db.prepare(`DELETE FROM reply_reaction_users WHERE reply_id IN (${replyIdQuery})`).run(
-        ...channelIds
-      );
-      db.prepare(`DELETE FROM reply_reactions WHERE reply_id IN (${replyIdQuery})`).run(...channelIds);
-      db.prepare(`DELETE FROM replies WHERE message_id IN (${messageIdQuery})`).run(...channelIds);
-      db.prepare(`DELETE FROM messages WHERE channel_id IN (${channelPlaceholders})`).run(...channelIds);
-      db.prepare(`DELETE FROM channel_members WHERE channel_id IN (${channelPlaceholders})`).run(
-        ...channelIds
-      );
-    }
-
-    db.prepare('DELETE FROM channels WHERE workspace_id = ?').run(workspaceId);
-    db.prepare('DELETE FROM workspace_members WHERE workspace_id = ?').run(workspaceId);
-    db.prepare('DELETE FROM calendar_events WHERE workspace_id = ?').run(workspaceId);
-
-    if (userIds.length) {
-      const userPlaceholders = userIds.map(() => '?').join(',');
-      const dmIds = db
-        .prepare(`SELECT id FROM dms WHERE created_by IN (${userPlaceholders})`)
-        .all(...userIds)
-        .map((row) => row.id);
-
-      db.prepare(`DELETE FROM dm_members WHERE user_id IN (${userPlaceholders})`).run(...userIds);
-
-      if (dmIds.length) {
-        const dmPlaceholders = dmIds.map(() => '?').join(',');
-        const dmMsgQuery = `SELECT id FROM dm_messages WHERE dm_id IN (${dmPlaceholders})`;
-        const dmReplyQuery = `SELECT id FROM dm_replies WHERE dm_message_id IN (${dmMsgQuery})`;
-
-        db.prepare(`DELETE FROM dm_reply_reaction_users WHERE reply_id IN (${dmReplyQuery})`).run(
-          ...dmIds
-        );
-        db.prepare(`DELETE FROM dm_reply_reactions WHERE reply_id IN (${dmReplyQuery})`).run(
-          ...dmIds
-        );
-        db.prepare(`DELETE FROM dm_replies WHERE dm_message_id IN (${dmMsgQuery})`).run(...dmIds);
-        db.prepare(
-          `DELETE FROM dm_message_reaction_users WHERE message_id IN (${dmMsgQuery})`
-        ).run(...dmIds);
-        db.prepare(`DELETE FROM dm_message_reactions WHERE message_id IN (${dmMsgQuery})`).run(
-          ...dmIds
-        );
-        db.prepare(`DELETE FROM dm_messages WHERE dm_id IN (${dmPlaceholders})`).run(...dmIds);
-        db.prepare(`DELETE FROM dm_members WHERE dm_id IN (${dmPlaceholders})`).run(...dmIds);
-        db.prepare(`DELETE FROM dms WHERE id IN (${dmPlaceholders})`).run(...dmIds);
-      }
-
-      db.prepare(`DELETE FROM channel_members WHERE user_id IN (${userPlaceholders})`).run(...userIds);
-      db.prepare(`DELETE FROM users WHERE id IN (${userPlaceholders})`).run(...userIds);
-    }
-
-    db.prepare('DELETE FROM workspaces WHERE id = ?').run(workspaceId);
-  });
-
-  tx();
+  // Phase B migration boundary: workspace deletion now delegates to the
+  // repository so the workspace/settings domain no longer owns raw SQL here.
+  return workspaceRepository.deleteWorkspaceCascade(workspaceId);
 }
 
-function deleteUserCascade(userId) {
-  const existing = db
-    .prepare('SELECT id, workspace_id AS workspaceId FROM users WHERE id = ?')
-    .get(userId);
+async function deleteUserCascade(userId) {
+  const existing = await userRepository.getUserById(userId);
   if (!existing) {
     return null;
   }
 
-  const tx = db.transaction(() => {
-    db.prepare('DELETE FROM channel_members WHERE user_id = ?').run(userId);
-    db.prepare('DELETE FROM workspace_members WHERE user_id = ?').run(userId);
-    db.prepare('DELETE FROM dm_members WHERE user_id = ?').run(userId);
-    db.prepare('DELETE FROM refresh_tokens WHERE user_id = ?').run(userId);
-    db.prepare('DELETE FROM revoked_access_tokens WHERE user_id = ?').run(userId);
-    db.prepare('DELETE FROM password_history WHERE user_id = ?').run(userId);
-    db.prepare('DELETE FROM password_resets WHERE user_id = ?').run(userId);
-    db.prepare('DELETE FROM login_attempts WHERE user_id = ?').run(userId);
-    db.prepare('DELETE FROM security_events WHERE actor_user_id = ? OR target_user_id = ?').run(userId, userId);
-    db.prepare('DELETE FROM users WHERE id = ?').run(userId);
-  });
-
-  tx();
+  // Auth/session isolation boundary: shared auth cleanup now routes through the
+  // auth repository, while user-owned membership rows route through the user repository.
+  await authRepository.deleteUserAuthState(userId);
+  await userRepository.deleteUserMembershipRecords(userId);
   return existing.workspaceId;
 }
 
@@ -3509,49 +4681,45 @@ app.post("/api/register/send-link", async (req, res) => {
     const roleNorm = String(inviteRole || "").trim().toLowerCase();
     const firstNameNorm = String(firstName || "").trim();
     const lastNameNorm = String(lastName || "").trim();
-    const dobNorm = String(dateOfBirth || "").trim();
-    const emailNorm = String(email || "").trim().toLowerCase();
-    const phoneNorm = String(phoneNumber || "").trim();
+    const dobNorm = normalizeDateOfBirth(dateOfBirth);
+    const emailNorm = normalizeRegistrationEmail(email);
+    const phoneCountryNorm = normalizePhoneCountryCode(phoneCountry);
+    const phoneNumberNorm = normalizePhoneNationalNumber(phoneNumber).replace(/^0+/, '');
+    const phoneNorm = buildUserPhoneValue(phoneCountryNorm, phoneNumberNorm);
     if (!workspaceId) return res.status(400).json({ error: "workspaceId required" });
     if (!emailNorm) return res.status(400).json({ error: "email required" });
+    if (dateOfBirth && !dobNorm) return res.status(400).json({ error: 'dateOfBirth must be YYYY-MM-DD' });
     if (!["student", "teacher"].includes(roleNorm)) {
       return res.status(400).json({ error: "role must be student or teacher" });
     }
 
-    const ws = db.prepare("SELECT id FROM workspaces WHERE id = ?").get(workspaceId);
+    const ws = await workspaceRepository.workspaceExists(workspaceId);
     if (!ws) return res.status(404).json({ error: "workspace not found" });
 
-    if (emailNorm) {
-      const existingEmail = db
-        .prepare('SELECT id FROM users WHERE workspace_id = ? AND lower(email) = lower(?) LIMIT 1')
-        .get(workspaceId, emailNorm);
-      if (existingEmail) {
-        return res.status(400).json({ error: 'Email already used', field: 'email' });
-      }
-    }
-    if (phoneNorm) {
-      const existingPhone = db
-        .prepare('SELECT id FROM users WHERE workspace_id = ? AND phone_number = ? LIMIT 1')
-        .get(workspaceId, phoneNorm);
-      if (existingPhone) {
-        return res.status(400).json({ error: 'Phone number already used', field: 'phone' });
-      }
-    }
-    if (firstNameNorm && lastNameNorm && dobNorm) {
-      const existingNameDob = db
-        .prepare(
-          'SELECT id FROM users WHERE workspace_id = ? AND lower(first_name) = lower(?) AND lower(last_name) = lower(?) AND date_of_birth = ? LIMIT 1'
-        )
-        .get(workspaceId, firstNameNorm, lastNameNorm, dobNorm);
-      if (existingNameDob) {
-        return res.status(400).json({ error: 'Name and date of birth already registered', field: 'nameDob' });
-      }
+    const duplicate = await userRepository.findWorkspaceUserDuplicateForInvite({
+      workspaceId,
+      email: emailNorm,
+      phone: phoneNorm,
+      phoneNumber: phoneNumberNorm,
+      phoneCountry: phoneCountryNorm,
+      alternatePhoneNumber: phoneNumberNorm ? `0${phoneNumberNorm}` : '',
+      firstName: firstNameNorm,
+      lastName: lastNameNorm,
+      dateOfBirth: dobNorm
+    });
+    if (duplicate?.field) {
+      await logDuplicateRegistrationAttempt(req, {
+        workspaceId,
+        targetUserId: duplicate.userId || null,
+        reason: duplicate.field
+      });
+      return res.status(409).json(buildAccountAlreadyExistsResponse());
     }
 
     if (channelId) {
-      const ch = db.prepare("SELECT id, workspace_id, category FROM channels WHERE id = ?").get(channelId);
+      const ch = await channelRepository.getChannelById(channelId);
       if (!ch) return res.status(404).json({ error: "class not found" });
-      if (String(ch.workspace_id) !== String(workspaceId)) {
+      if (String(ch.workspaceId || ch.workspace_id) !== String(workspaceId)) {
         return res.status(400).json({ error: "class not in this workspace" });
       }
     }
@@ -3572,9 +4740,9 @@ app.post("/api/register/send-link", async (req, res) => {
       first_name: firstName || null,
       last_name: lastName || null,
       salutation: salutation || "",
-      date_of_birth: dateOfBirth || null,
-      phone_country: phoneCountry || "",
-      phone_number: phoneNumber || "",
+      date_of_birth: dobNorm || null,
+      phone_country: phoneCountryNorm || "",
+      phone_number: phoneNumberNorm || "",
       native_language: nativeLanguage || "",
       learning_goal: learningGoal || "",
       available_days: JSON.stringify(Array.isArray(availableDays) ? availableDays : []),
@@ -3588,7 +4756,7 @@ app.post("/api/register/send-link", async (req, res) => {
       used_at: null
     };
 
-    insertAdaptive('registration_links', invitePayload);
+    await registrationRepository.createInvite(invitePayload);
     audit('registration.invite_created', req, {
       user: authed,
       target: token,
@@ -3616,19 +4784,24 @@ app.post("/api/register/send-link", async (req, res) => {
     const text = rendered.bodyText || `Welcome to ${schoolName}. Open your registration link: ${link}`;
     const fromName = buildAutomatedEmailSenderName(schoolName, 'welcome_email');
 
-    console.log('SEND-LINK: provider =', providerName);
-    console.log('SEND-LINK: from =', ENV.EMAIL_FROM);
-    console.log('SEND-LINK: smtp host =', ENV.SMTP_HOST);
-    console.log('SEND-LINK: smtp user =', ENV.SMTP_USER);
-    console.log('SEND-LINK: to =', emailNorm);
-    console.log('SEND-LINK: link =', link);
+    if (!ENV.IS_PROD) {
+      logEvent('info', 'SEND-LINK: preparing welcome email', {
+        requestId: req.id || null,
+        workspaceId,
+        provider: providerName,
+        recipientDomain: String(emailNorm || '').split('@')[1] || ''
+      });
+    }
 
     try {
       await sendPlatformEmail({ to: emailNorm, subject, html, text, fromName });
-      console.log('SEND-LINK: ✅ email sent');
+      logEvent('info', 'SEND-LINK: email sent', { requestId: req.id || null, workspaceId });
     } catch (err) {
-      console.error('SEND-LINK: ❌ email failed:', err?.message || err);
-      console.error(err);
+      logEvent('error', 'SEND-LINK: email failed', {
+        requestId: req.id || null,
+        workspaceId,
+        error: safeSerializeError(err, { includeStack: !ENV.IS_PROD })
+      });
       return res.status(500).json({ error: 'Could not send registration email' });
     }
 
@@ -3638,14 +4811,10 @@ app.post("/api/register/send-link", async (req, res) => {
     return res.status(500).json({ error: "Could not create/send link" });
   }
 });
-app.get("/api/register/link/:token", (req, res) => {
+app.get("/api/register/link/:token", async (req, res) => {
   try {
     const token = String(req.params.token || "").trim();
-    const row = db.prepare(`
-      SELECT *
-      FROM registration_links
-      WHERE token = ?
-    `).get(token);
+    const row = await registrationRepository.getInvite(token);
 
     if (!row) return res.status(404).json({ error: "Invalid token" });
     if (row.used) return res.status(400).json({ error: "Link already used" });
@@ -3654,7 +4823,7 @@ app.get("/api/register/link/:token", (req, res) => {
     return res.json({
       token: row.token,
       workspaceId: row.workspace_id,
-      workspaceName: getWorkspaceName(row.workspace_id),
+      workspaceName: await getWorkspaceNameAsync(row.workspace_id),
       classId: row.channel_id || "",
       role: row.role,
       email: row.email,
@@ -3705,35 +4874,30 @@ app.post('/api/register/complete', async (req, res) => {
     if (!firstName || !String(firstName).trim()) return res.status(400).json({ error: 'firstName is required' });
     if (!lastName || !String(lastName).trim()) return res.status(400).json({ error: 'lastName is required' });
     if (!password || !String(password).trim()) return res.status(400).json({ error: 'password is required' });
-    if (!validatePassword(String(password).trim())) {
-      return res.status(400).json({
-        error: 'Password must be at least 8 characters and include upper, lower, number, and symbol.'
+    const passwordValidationError = getPasswordValidationError(String(password).trim());
+    if (passwordValidationError) {
+      await logSecurityEvent({
+        workspaceId: null,
+        actorUserId: null,
+        type: 'security.weak_password_rejected',
+        severity: 'warn',
+        ip: req.ip || null,
+        userAgent: req.headers['user-agent'] || null,
+        payload: { route: 'register.complete' }
       });
+      return res.status(400).json({ error: passwordValidationError });
     }
 
-    const linkRow = db
-      .prepare(`
-        SELECT token, workspace_id AS workspaceId, channel_id AS classId, role, email,
-               course_level AS courseLevel, course_start AS linkCourseStart, course_end AS linkCourseEnd,
-               expires_at AS expiresAt, used,
-               first_name AS linkFirstName, last_name AS linkLastName,
-               salutation AS linkSalutation, date_of_birth AS linkDateOfBirth,
-               phone_country AS linkPhoneCountry, phone_number AS linkPhoneNumber,
-               native_language AS linkNativeLanguage, learning_goal AS linkLearningGoal,
-               available_days AS linkAvailableDays, emergency_contact_name AS linkEmergencyName,
-               emergency_contact_phone AS linkEmergencyPhone, emergency_contact_relation AS linkEmergencyRelation
-        FROM registration_links WHERE token = ?
-      `)
-      .get(tokenNorm);
+    const linkRow = await registrationRepository.getInviteForComplete(tokenNorm);
 
     if (!linkRow) return res.status(404).json({ error: 'Invalid token' });
     if (linkRow.used) return res.status(400).json({ error: 'This link was already used' });
     if (Number(linkRow.expiresAt) < nowMs()) return res.status(400).json({ error: 'This link expired' });
 
     const linkSalutation = String(linkRow.linkSalutation || '').trim();
-    const linkDateOfBirth = String(linkRow.linkDateOfBirth || '').trim() || null;
-    const linkPhoneCountry = String(linkRow.linkPhoneCountry || '').trim() || null;
-    const linkPhoneNumber = String(linkRow.linkPhoneNumber || '').trim() || null;
+    const linkDateOfBirth = normalizeDateOfBirth(linkRow.linkDateOfBirth || '') || null;
+    const linkPhoneCountry = normalizePhoneCountryCode(linkRow.linkPhoneCountry || '') || null;
+    const linkPhoneNumber = normalizePhoneNationalNumber(linkRow.linkPhoneNumber || '').replace(/^0+/, '') || null;
     const linkNativeLanguage = String(linkRow.linkNativeLanguage || '').trim() || null;
     const linkLearningGoal = String(linkRow.linkLearningGoal || '').trim() || null;
     const linkEmergencyName = String(linkRow.linkEmergencyName || '').trim() || null;
@@ -3756,9 +4920,9 @@ app.post('/api/register/complete', async (req, res) => {
     const finalCourseStart = String(courseStart || linkRow.linkCourseStart || '').trim() || null;
     const finalCourseEnd = String(courseEnd || linkRow.linkCourseEnd || '').trim() || null;
     const finalPhoneCountry =
-      String(phoneCountryInput || linkPhoneCountry || '').trim() || null;
+      normalizePhoneCountryCode(phoneCountryInput || linkPhoneCountry || '') || null;
     const finalPhoneNumber =
-      String(phoneNumberInput || linkPhoneNumber || '').trim() || null;
+      normalizePhoneNationalNumber(phoneNumberInput || linkPhoneNumber || '').replace(/^0+/, '') || null;
     const finalNativeLanguage =
       String(nativeLanguageInput || linkNativeLanguage || '').trim() || null;
     const finalLearningGoal =
@@ -3770,22 +4934,12 @@ app.post('/api/register/complete', async (req, res) => {
     const finalEmergencyRelation =
       String(emergencyRelationInput || linkEmergencyRelation || '').trim() || null;
     const finalSalutation = String(salutationInput || linkSalutation || '').trim() || null;
-    const finalDateOfBirth = String(dateOfBirthInput || linkDateOfBirth || '').trim() || null;
-
-    const existing = db
-      .prepare('SELECT id FROM users WHERE workspace_id = ? AND lower(email) = lower(?) LIMIT 1')
-      .get(linkRow.workspaceId, linkRow.email);
-
-    if (existing) {
-      return res.status(409).json({
-        error: 'This email is already registered. Please login or reset your password.',
-        action: 'login_or_reset',
-        login: true,
-        forgotPassword: true,
-        workspaceId: linkRow.workspaceId
-      });
+    const finalDateOfBirth = normalizeDateOfBirth(dateOfBirthInput || linkDateOfBirth || '') || null;
+    if (dateOfBirthInput && !finalDateOfBirth) {
+      return res.status(400).json({ error: 'dateOfBirth must be YYYY-MM-DD' });
     }
-    const registrationSession = getRegistrationSession(req, res);
+
+    const registrationSession = await getRegistrationSession(req, res);
     const verifiedSessionPhone = normalizePhoneValue(registrationSession?.phone);
     const finalStoredPhone = buildUserPhoneValue(finalPhoneCountry, finalPhoneNumber) || verifiedSessionPhone || null;
     const verifiedPhoneInSession =
@@ -3793,66 +4947,41 @@ app.post('/api/register/complete', async (req, res) => {
       Boolean(verifiedSessionPhone) &&
       (!finalStoredPhone || phonesEquivalent(verifiedSessionPhone, finalStoredPhone));
 
-    if (finalStoredPhone) {
-      const sessionNationalNumber = normalizePhoneNationalNumber(verifiedSessionPhone).replace(/^0+/, '');
-      const candidatePhoneNumber = String(finalPhoneNumber || sessionNationalNumber || '').trim();
-      const existingPhone = db
-        .prepare(
-          `SELECT id
-           FROM users
-           WHERE workspace_id = ?
-             AND (
-               phone = ?
-                OR phone_number = ?
-                OR (phone_country = ? AND phone_number IN (?, ?))
-             )
-           LIMIT 1`
-        )
-        .get(
-          linkRow.workspaceId,
-          finalStoredPhone,
-          candidatePhoneNumber,
-          finalPhoneCountry || '',
-          candidatePhoneNumber,
-          sessionNationalNumber
-        );
-      if (existingPhone) {
-        return res.status(409).json({
-          error: 'This phone number is already registered. Please login or contact your school admin.',
-          action: 'already_registered_phone'
-        });
-      }
-    }
-    const normalizedFirstName = String(firstName || '').trim();
-    const normalizedLastName = String(lastName || '').trim();
-    if (normalizedFirstName && normalizedLastName && finalDateOfBirth) {
-      const existingName = db
-        .prepare(
-          'SELECT id FROM users WHERE workspace_id = ? AND lower(first_name) = lower(?) AND lower(last_name) = lower(?) AND date_of_birth = ? LIMIT 1'
-        )
-        .get(linkRow.workspaceId, normalizedFirstName, normalizedLastName, finalDateOfBirth);
-      if (existingName) {
-        return res.status(409).json({
-          error: 'A user with this name and date of birth already exists. Please login or ask your school admin.',
-          action: 'already_registered_name_dob'
-        });
-      }
+    const duplicate = await findWorkspaceRegistrationConflict({
+      workspaceId: linkRow.workspaceId,
+      email: linkRow.email,
+      phone: finalStoredPhone || '',
+      phoneCountry: finalPhoneCountry || '',
+      phoneNumber: finalPhoneNumber || '',
+      dateOfBirth: finalDateOfBirth || ''
+    });
+    if (duplicate?.field) {
+      await logDuplicateRegistrationAttempt(req, {
+        workspaceId: linkRow.workspaceId,
+        targetUserId: duplicate.userId || null,
+        reason: duplicate.field
+      });
+      return res.status(409).json(buildAccountAlreadyExistsResponse());
     }
 
-    const tx = db.transaction(() => {
-      const ws = linkRow.workspaceId;
-      const fn = String(firstName).trim();
-      const ln = String(lastName).trim();
-      const fullName = `${fn} ${ln}`.trim();
-      const username = generateUsername(ws, fn, ln);
-      const userId = generateId('u');
-      const passwordHash = hashPassword(String(password));
-      const emailTrimmed = String(linkRow.email).trim().toLowerCase();
-      const role = String(linkRow.role || 'student').trim().toLowerCase();
-      const genderValue = finalSalutation || '';
-      const selectedCourseLevel = (linkRow.courseLevel || '').trim() || null;
+    const ws = linkRow.workspaceId;
+    const fn = String(firstName).trim();
+    const ln = String(lastName).trim();
+    const fullName = `${fn} ${ln}`.trim();
+    const username = await userRepository.generateUsername(ws, fn, ln);
+    const userId = generateId('u');
+    const passwordHash = await hashPassword(String(password));
+    const emailTrimmed = String(linkRow.email).trim().toLowerCase();
+    const role = String(linkRow.role || 'student').trim().toLowerCase();
+    const genderValue = finalSalutation || '';
+    const selectedCourseLevel = (linkRow.courseLevel || '').trim() || null;
 
-      const userObj = {
+    const out = await userRepository.completeInviteRegistration({
+      token: tokenNorm,
+      usedAt: new Date().toISOString(),
+      classId: linkRow.classId || null,
+      autoJoinToolChannelNames: Array.from(AUTO_JOIN_TOOL_CHANNELS),
+      user: {
         id: userId,
         workspace_id: ws,
         first_name: fn,
@@ -3879,38 +5008,14 @@ app.post('/api/register/complete', async (req, res) => {
         emergency_contact_name: finalEmergencyName,
         emergency_contact_phone: finalEmergencyPhone,
         emergency_contact_relation: finalEmergencyRelation
-      };
-
-      insertIntoUsersAdaptive(userObj);
-
-      db.prepare(`
-        INSERT OR IGNORE INTO workspace_members (workspace_id, user_id, role)
-        VALUES (?, ?, ?)
-      `).run(ws, userId, role);
-
-      addUserToDefaultChannels(ws, userId);
-
-      if (linkRow.classId) {
-        db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)')
-          .run(linkRow.classId, userId);
       }
-
-      db.prepare(`
-        UPDATE registration_links
-        SET used = 1, used_at = ?
-        WHERE token = ?
-      `).run(new Date().toISOString(), tokenNorm);
-
-      return { userId, workspaceId: ws };
     });
-
-    const out = tx();
 
     const loginUrl = `${getBaseUrl(PORT)}/login?workspace=${encodeURIComponent(out.workspaceId)}`;
     const schoolNameForEmail = getWorkspaceName(out.workspaceId);
     const supportEmailForWelcome = getSupportEmailFallback();
-    const resolvedFirstName = (body.firstName || linkRow.firstName || '').trim();
-    const resolvedLastName = (body.lastName || linkRow.lastName || '').trim();
+    const resolvedFirstName = String(firstName || linkRow.linkFirstName || '').trim();
+    const resolvedLastName = String(lastName || linkRow.linkLastName || '').trim();
     const recipientName =
       [resolvedFirstName, resolvedLastName].filter((v) => !!v).join(' ') || linkRow.email || 'Student';
     const welcomeSubject = `Welcome to ${schoolNameForEmail} – Your Account Is Ready`;
@@ -3978,35 +5083,18 @@ app.post('/api/register/complete', async (req, res) => {
   }
 });
 
-app.get('/api/register/invite-info', (req, res) => {
+app.get('/api/register/invite-info', async (req, res) => {
   const token = String(req.query.token || '').trim();
   if (!token) return res.status(400).json({ error: 'Missing token' });
 
-  const row = db
-    .prepare(`
-      SELECT rl.workspace_id AS workspaceId,
-             rl.role AS role,
-             rl.expires_at AS expiresAt,
-             w.name AS workspaceName
-      FROM registration_links rl
-      LEFT JOIN workspaces w ON w.id = rl.workspace_id
-      WHERE rl.token = ?
-    `)
-    .get(token);
+  const row = await registrationRepository.getInviteInfo(token);
 
   if (!row) {
     return res.status(404).json({ error: 'Invite not found' });
   }
 
-  const admin = db
-    .prepare(`
-      SELECT email
-      FROM users
-      WHERE workspace_id = ? AND lower(role) IN ('school_admin','admin')
-      ORDER BY created_at ASC
-      LIMIT 1
-    `)
-    .get(row.workspaceId);
+  const adminRows = await userRepository.listAdminUsers(row.workspaceId);
+  const admin = adminRows.find((u) => ['school_admin', 'admin'].includes(String(u.role || '').toLowerCase()));
 
   res.json({
     ok: true,
@@ -4368,6 +5456,12 @@ function buildAiWorkspaceOverviewBlock(workspaceId, user) {
 
 function buildAiWorkspaceAttendanceBlock(workspaceId) {
   return readAiContextCache(`ai:attendance:${workspaceId}`, 60 * 1000, () => {
+    if (attendanceRepository.engine !== 'sqlite') {
+      return buildAiBlock("Attendance summary", [
+        "Attendance rehearsal is running on the adapter path.",
+        "AI attendance summaries stay on SQLite until the analytics slice is migrated."
+      ]);
+    }
     const totals = db
       .prepare(
         `
@@ -4828,24 +5922,16 @@ function listClassStudents(workspaceId, channelId) {
     .all(channelId, workspaceId);
 }
 
-function getOrCreateAttendanceSession(workspaceId, channelId, sessionDate, createdByUserId) {
-  const existing = db
-    .prepare(
-      `SELECT * FROM attendance_sessions
-       WHERE workspace_id = ? AND channel_id = ? AND session_date = ?
-       LIMIT 1`
-    )
-    .get(workspaceId, channelId, sessionDate);
-
-  if (existing) return existing;
-
-  const id = uuid('asess');
-  db.prepare(
-    `INSERT INTO attendance_sessions (id, workspace_id, channel_id, session_date, created_by_user_id)
-     VALUES (?, ?, ?, ?, ?)`
-  ).run(id, workspaceId, channelId, sessionDate, createdByUserId || null);
-
-  return db.prepare(`SELECT * FROM attendance_sessions WHERE id = ? LIMIT 1`).get(id);
+async function getOrCreateAttendanceSession(workspaceId, channelId, sessionDate, createdByUserId) {
+  // Attendance migration boundary: session creation is delegated to the
+  // attendance repository so SQLite and PostgreSQL keep identical semantics.
+  return attendanceRepository.getOrCreateAttendanceSession({
+    idFactory: uuid,
+    workspaceId,
+    channelId,
+    sessionDate,
+    createdByUserId
+  });
 }
 
 function getWorkspaceEmailTemplateRow(workspaceId, templateKey) {
@@ -4999,80 +6085,48 @@ async function detectViaGoogle(text) {
   return normalizeLanguageCode(det?.language || 'en');
 }
 
-function getUserNativeLanguage(userId) {
+async function getUserNativeLanguage(userId) {
   if (!userId) return 'en';
-  const row = db
-    .prepare('SELECT native_language AS lang FROM users WHERE id = ?')
-    .get(userId);
-  return normalizeLanguageCode(row?.lang || 'en');
+  return normalizeLanguageCode(await userRepository.getUserNativeLanguage(userId) || 'en');
 }
 
-function getCachedTranslation(messageId, targetLang, viewerUserId = '') {
-  return db
-    .prepare(
-      `SELECT translated_text, status, provider, error_message
-       FROM message_translations
-       WHERE message_id = ? AND target_language = ? AND viewer_user_id = ?`
-    )
-    .get(messageId, targetLang, viewerUserId || '');
+async function getCachedTranslation(messageId, targetLang, viewerUserId = '') {
+  return messageRepository.getCachedTranslation(messageId, targetLang, viewerUserId);
 }
 
-function upsertPendingTranslation(messageId, targetLang, viewerUserId, provider = 'argos') {
+async function upsertPendingTranslation(messageId, targetLang, viewerUserId, provider = 'argos') {
   const providerDefault = String(provider || process.env.TRANSLATION_PROVIDER || 'google').toLowerCase();
-  db.prepare(
-    `INSERT OR IGNORE INTO message_translations
-     (id, message_id, target_language, viewer_user_id, status, provider, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'pending', ?, datetime('now'), datetime('now'))`
-  ).run(
-    translationRowId(messageId, targetLang, viewerUserId),
+  return messageRepository.upsertPendingTranslation({
+    id: translationRowId(messageId, targetLang, viewerUserId),
     messageId,
     targetLang,
-    viewerUserId || '',
-    providerDefault
-  );
+    viewerUserId: viewerUserId || '',
+    provider: providerDefault
+  });
 }
 
-function saveReadyTranslation(messageId, targetLang, translatedText, viewerUserId, provider = 'argos') {
+async function saveReadyTranslation(messageId, targetLang, translatedText, viewerUserId, provider = 'argos') {
   const resolvedProvider = provider || 'argos';
-  db.prepare(
-    `INSERT INTO message_translations
-     (id, message_id, target_language, viewer_user_id, translated_text, status, provider, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, 'ready', ?, datetime('now'), datetime('now'))
-     ON CONFLICT(message_id, target_language, viewer_user_id)
-     DO UPDATE SET translated_text = excluded.translated_text,
-                  status = 'ready',
-                  provider = excluded.provider,
-                  error_message = NULL,
-                  updated_at = datetime('now')`
-  ).run(
-    translationRowId(messageId, targetLang, viewerUserId),
+  return messageRepository.saveReadyTranslation({
+    id: translationRowId(messageId, targetLang, viewerUserId),
     messageId,
     targetLang,
-    viewerUserId || '',
+    viewerUserId: viewerUserId || '',
     translatedText,
-    resolvedProvider
-  );
+    provider: resolvedProvider
+  });
 }
 
-function markTranslationFailed(messageId, targetLang, errMsg, viewerUserId, provider = 'argos') {
+async function markTranslationFailed(messageId, targetLang, errMsg, viewerUserId, provider = 'argos') {
   const resolvedProvider = provider || 'argos';
-  db.prepare(
-    `INSERT INTO message_translations
-     (id, message_id, target_language, viewer_user_id, status, provider, error_message, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'failed', ?, ?, datetime('now'), datetime('now'))
-     ON CONFLICT(id)
-      DO UPDATE SET status = 'failed',
-                   provider = excluded.provider,
-                   error_message = excluded.error_message,
-                   updated_at = datetime('now')`
-  ).run(
-    translationRowId(messageId, targetLang, viewerUserId),
+  return messageRepository.markTranslationFailed({
+    id: translationRowId(messageId, targetLang, viewerUserId),
     messageId,
     targetLang,
-    viewerUserId || '',
-    resolvedProvider,
-    String(errMsg || '')
-  );
+    viewerUserId: viewerUserId || '',
+    provider: resolvedProvider,
+    errorMessage: String(errMsg || '')
+  });
 }
 
 /* ---------- DB schema + seed ---------- */
@@ -6128,6 +7182,7 @@ tryAlter("ALTER TABLE registration_links ADD COLUMN emergency_contact_phone TEXT
 tryAlter("ALTER TABLE registration_links ADD COLUMN emergency_contact_relation TEXT DEFAULT ''");
 tryAlter("ALTER TABLE registration_links ADD COLUMN course_start TEXT");
 tryAlter("ALTER TABLE registration_links ADD COLUMN course_end TEXT");
+ensureUserIdentityIndexes();
 
 function dropLiveSessionsOldReferences() {
   try {
@@ -7863,11 +8918,14 @@ function normalizeReservedTaskChannels(workspaceId, name, topic = '') {
         db.prepare('UPDATE messages SET channel_id = ? WHERE channel_id = ?').run(targetId, duplicateId);
         db.prepare('UPDATE tasks SET channel_id = ? WHERE channel_id = ?').run(targetId, duplicateId);
         db.prepare('UPDATE files_registry SET channel_id = ? WHERE channel_id = ?').run(targetId, duplicateId);
-        // Class attendance uses channel_id as part of its ownership model, so
-        // channel consolidation must remap those rows before the old channel is deleted.
-        db.prepare('UPDATE attendance_sessions SET channel_id = ? WHERE channel_id = ?').run(targetId, duplicateId);
-        db.prepare('UPDATE attendance_records SET channel_id = ? WHERE channel_id = ?').run(targetId, duplicateId);
-        db.prepare('UPDATE attendance_notifications SET channel_id = ? WHERE channel_id = ?').run(targetId, duplicateId);
+        // Attendance migration boundary: channel consolidation now remaps
+        // attendance ownership only through the attendance repository.
+        void attendanceRepository.reassignChannelAttendance({
+          targetChannelId: targetId,
+          duplicateChannelId: duplicateId
+        }).catch((err) => {
+          console.warn('[Attendance] Channel remap mirror failed', err?.message || err);
+        });
         db.prepare(
           `INSERT OR IGNORE INTO channel_members (channel_id, user_id)
            SELECT ?, user_id
@@ -8065,6 +9123,7 @@ function isHomeworkSubmissionDeadlinePassed(dueDate) {
 
 function canManageHomeworkChannel(user, homeworkChannel) {
   if (!user || !homeworkChannel) return false;
+  if (isSuperAdminRole(user)) return false;
   if (isWorkspaceAdmin(user)) {
     return String(user.workspaceId || user.workspace_id || '') === String(homeworkChannel.workspaceId || '');
   }
@@ -8081,6 +9140,7 @@ function canManageHomeworkChannel(user, homeworkChannel) {
 
 function canViewHomeworkChannel(user, homeworkChannel) {
   if (!user || !homeworkChannel) return false;
+  if (isSuperAdminRole(user)) return false;
   if (isWorkspaceAdmin(user)) {
     return String(user.workspaceId || user.workspace_id || '') === String(homeworkChannel.workspaceId || '');
   }
@@ -8107,7 +9167,7 @@ function canSubmitHomework(user, homeworkChannel, studentId = null) {
   return canViewHomeworkChannel(user, homeworkChannel);
 }
 
-function registerHomeworkLinkedFile({
+async function registerHomeworkLinkedFile({
   workspaceId,
   channelId,
   ownerId,
@@ -8128,6 +9188,18 @@ function registerHomeworkLinkedFile({
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, datetime('now'), datetime('now'))
   `
   ).run(fileId, workspaceId, channelId, messageId, ownerId || null, purpose, name, mime, sizeBytes, url);
+  await tasksRepository.ensureLinkedFileRegistered({
+    fileId,
+    workspaceId,
+    channelId,
+    messageId,
+    uploaderId: ownerId || null,
+    purpose,
+    fileName: name,
+    mime,
+    sizeBytes,
+    url
+  });
   return {
     fileId,
     fileName: name,
@@ -8137,196 +9209,19 @@ function registerHomeworkLinkedFile({
   };
 }
 
-function syncHomeworkCompletion(homeworkId, studentId, status) {
-  const normalizedStatus = String(status || '').trim().toLowerCase();
-  if (HOMEWORK_SUBMISSION_ACTIVE_STATUSES.has(normalizedStatus)) {
-    db.prepare(
-      `INSERT OR REPLACE INTO homework_completions (homework_id, student_id, completed_at)
-       VALUES (?, ?, datetime('now'))`
-    ).run(homeworkId, studentId);
-    return;
-  }
-  db.prepare(`DELETE FROM homework_completions WHERE homework_id = ? AND student_id = ?`).run(homeworkId, studentId);
+async function syncHomeworkCompletion(homeworkId, studentId, status) {
+  await tasksRepository.syncHomeworkCompletion(homeworkId, studentId, status);
 }
 
-function listHomeworkItemFiles(itemIds = []) {
-  const normalized = itemIds.map((id) => String(id || '').trim()).filter(Boolean);
-  if (!normalized.length) return new Map();
-  const rows = db
-    .prepare(
-      `SELECT id, item_id AS itemId, file_id AS fileId, file_name AS fileName, mime, size_bytes AS sizeBytes, url, created_at AS createdAt
-             , file_role AS fileRole
-       FROM homework_item_files
-       WHERE item_id IN (${normalized.map(() => '?').join(',')})
-       ORDER BY created_at ASC`
-    )
-    .all(...normalized);
-  const map = new Map();
-  rows.forEach((row) => {
-    const key = String(row.itemId || '');
-    if (!map.has(key)) map.set(key, []);
-    map.get(key).push(row);
-  });
-  return map;
-}
-
-function listHomeworkSubmissionFiles(submissionIds = []) {
-  const normalized = submissionIds.map((id) => String(id || '').trim()).filter(Boolean);
-  if (!normalized.length) return new Map();
-  const rows = db
-    .prepare(
-      `SELECT id, submission_id AS submissionId, file_id AS fileId, file_name AS fileName, mime, size_bytes AS sizeBytes, url, created_at AS createdAt
-       FROM homework_submission_files
-       WHERE submission_id IN (${normalized.map(() => '?').join(',')})
-       ORDER BY created_at ASC`
-    )
-    .all(...normalized);
-  const map = new Map();
-  rows.forEach((row) => {
-    const key = String(row.submissionId || '');
-    if (!map.has(key)) map.set(key, []);
-    map.get(key).push(row);
-  });
-  return map;
-}
-
-function listHomeworkSubmissionComments(submissionIds = []) {
-  const normalized = submissionIds.map((id) => String(id || '').trim()).filter(Boolean);
-  if (!normalized.length) return new Map();
-  const rows = db
-    .prepare(
-      `SELECT
-         hsc.id,
-         hsc.submission_id AS submissionId,
-         hsc.author_id AS authorId,
-         hsc.comment_text AS commentText,
-         hsc.created_at AS createdAt,
-         hsc.updated_at AS updatedAt,
-         COALESCE(u.name, u.email, u.username, hsc.author_id) AS authorName
-       FROM homework_submission_comments hsc
-       LEFT JOIN users u ON u.id = hsc.author_id
-       WHERE hsc.submission_id IN (${normalized.map(() => '?').join(',')})
-       ORDER BY datetime(hsc.created_at) ASC`
-    )
-    .all(...normalized);
-  const map = new Map();
-  rows.forEach((row) => {
-    const key = String(row.submissionId || '');
-    if (!map.has(key)) map.set(key, []);
-    map.get(key).push(row);
-  });
-  return map;
-}
-
-function listHomeworkBoardForChannel(homeworkChannel, viewer) {
+async function listHomeworkBoardForChannel(homeworkChannel, viewer) {
   const classId = getHomeworkClassIdFromChannel(homeworkChannel);
   if (!classId) return [];
-  const viewerId = String(viewer?.id || viewer?.sub || '').trim();
-  const viewerRole = getNormalizedUserRole(viewer);
-  const itemUpdatedAtSelect = hasColumn('homework_items', 'updated_at')
-    ? 'hi.updated_at AS updatedAt,'
-    : 'hi.created_at AS updatedAt,';
-  const items = db
-    .prepare(
-      `
-      SELECT
-        hi.id,
-        hi.workspace_id AS workspaceId,
-        hi.class_channel_id AS classChannelId,
-        hi.title,
-        hi.description,
-        hi.resource_url AS resourceUrl,
-        hi.due_date AS dueDate,
-        hi.is_locked AS isLocked,
-        hi.is_archived AS isArchived,
-        hi.created_by AS createdBy,
-        hi.created_at AS createdAt,
-        ${itemUpdatedAtSelect}
-        COALESCE(u.name, u.email, u.username, hi.created_by) AS createdByName
-      FROM homework_items hi
-      LEFT JOIN users u ON u.id = hi.created_by
-      WHERE hi.workspace_id = ?
-        AND hi.class_channel_id = ?
-        AND COALESCE(hi.is_archived, 0) = 0
-      ORDER BY datetime(COALESCE(hi.due_date, hi.created_at)) ASC, hi.created_at DESC
-    `
-    )
-    .all(homeworkChannel.workspaceId, classId);
-  if (!items.length) return [];
-
-  const itemIds = items.map((item) => String(item.id || ''));
-  const itemFiles = listHomeworkItemFiles(itemIds);
-  const submissionBaseSql = `
-      SELECT
-        hs.id,
-        hs.homework_item_id AS homeworkItemId,
-        hs.workspace_id AS workspaceId,
-        hs.channel_id AS channelId,
-        hs.student_id AS studentId,
-        hs.status,
-        hs.submission_text AS submissionText,
-        hs.is_late AS isLate,
-        hs.submitted_at AS submittedAt,
-        hs.reviewed_at AS reviewedAt,
-        hs.reviewed_by AS reviewedBy,
-        hs.returned_at AS returnedAt,
-        hs.feedback_text AS feedbackText,
-        hs.grade_value AS gradeValue,
-        hs.created_at AS createdAt,
-        hs.updated_at AS updatedAt,
-        COALESCE(u.name, u.email, u.username, hs.student_id) AS studentName,
-        COALESCE(r.name, r.email, r.username, hs.reviewed_by) AS reviewedByName
-      FROM homework_submissions hs
-      LEFT JOIN users u ON u.id = hs.student_id
-      LEFT JOIN users r ON r.id = hs.reviewed_by
-      WHERE hs.homework_item_id IN (${itemIds.map(() => '?').join(',')})
-  `;
-  const submissionRows = viewerRole === 'student'
-    ? db
-        .prepare(
-          `${submissionBaseSql}
-           AND hs.student_id = ?
-           ORDER BY datetime(hs.updated_at) DESC, hs.created_at DESC`
-        )
-        .all(...itemIds, viewerId)
-    : db
-        .prepare(
-          `${submissionBaseSql}
-           ORDER BY datetime(hs.updated_at) DESC, hs.created_at DESC`
-        )
-        .all(...itemIds);
-  const submissionFiles = listHomeworkSubmissionFiles(submissionRows.map((row) => row.id));
-  const submissionComments = listHomeworkSubmissionComments(submissionRows.map((row) => row.id));
-  const submissionsByItem = new Map();
-  submissionRows.forEach((row) => {
-    const key = String(row.homeworkItemId || '');
-    if (!submissionsByItem.has(key)) submissionsByItem.set(key, []);
-    submissionsByItem.get(key).push({
-      ...row,
-      files: submissionFiles.get(String(row.id || '')) || [],
-      comments: submissionComments.get(String(row.id || '')) || []
-    });
-  });
-
-  return items.map((item) => {
-    const itemId = String(item.id || '');
-    const itemSubmissions = submissionsByItem.get(itemId) || [];
-    const mySubmission = viewerRole === 'student'
-      ? itemSubmissions.find((submission) => String(submission.studentId || '') === viewerId) || null
-      : null;
-    return {
-      ...item,
-      homeworkChannelId: homeworkChannel.id,
-      files: itemFiles.get(itemId) || [],
-      mySubmission,
-      submissions: viewerRole === 'student' ? [] : itemSubmissions,
-      submissionSummary: {
-        total: itemSubmissions.length,
-        submitted: itemSubmissions.filter((row) => ['submitted', 'late', 'reviewed'].includes(String(row.status || '').toLowerCase())).length,
-        reviewed: itemSubmissions.filter((row) => String(row.status || '').toLowerCase() === 'reviewed').length,
-        returned: itemSubmissions.filter((row) => String(row.status || '').toLowerCase() === 'returned').length
-      }
-    };
+  return tasksRepository.listHomeworkBoardForChannel({
+    workspaceId: homeworkChannel.workspaceId,
+    classChannelId: classId,
+    homeworkChannelId: homeworkChannel.id,
+    viewerId: String(viewer?.id || viewer?.sub || '').trim(),
+    viewerRole: getNormalizedUserRole(viewer)
   });
 }
 
@@ -8406,7 +9301,7 @@ function ensureDefaultWorkspaceAndUser() {
       name: 'You User',
       username: '@you',
       email: 'you@example.com',
-      password_hash: hashPassword('you'),
+      password_hash: hashPasswordSync('you'),
       role: 'member',
       status: 'active',
       native_language: 'en',
@@ -8503,13 +9398,180 @@ function getRequesterRole(req) {
   return String(req.headers['x-user-role'] || '').trim().toLowerCase();
 }
 
+function getEffectiveRequestUser(req) {
+  const authUser = req.auth || getAuthedUser(req);
+  if (authUser?.id || authUser?.sub) {
+    return {
+      userId: String(authUser.sub || authUser.id || '').trim(),
+      workspaceId: String(authUser.workspaceId || authUser.workspace_id || '').trim(),
+      role: normalizeRoleName(authUser.role || ''),
+      superAdmin: !!authUser.superAdmin || normalizeRoleName(authUser.role || '') === 'super_admin',
+      via: 'token'
+    };
+  }
+
+  const requesterId = String(getRequesterId(req) || '').trim();
+  if (!requesterId) {
+    return {
+      userId: '',
+      workspaceId: '',
+      role: normalizeRoleName(getRequesterRole(req)),
+      superAdmin: normalizeRoleName(getRequesterRole(req)) === 'super_admin',
+      via: 'headers'
+    };
+  }
+
+  const user = getUserById(requesterId);
+  return {
+    userId: requesterId,
+    workspaceId: String(user?.workspaceId || req.headers['x-workspace-id'] || req.query.workspaceId || '').trim(),
+    role: normalizeRoleName(user?.role || getRequesterRole(req)),
+    superAdmin: normalizeRoleName(user?.role || getRequesterRole(req)) === 'super_admin',
+    via: 'headers'
+  };
+}
+
+function isTeacherLikeRole(role = '') {
+  return ['teacher', 'admin', 'school_admin', 'super_admin'].includes(normalizeRoleName(role));
+}
+
 function requireTeacher(req, res) {
-  const role = getRequesterRole(req);
-  if (role === 'teacher' || role === 'admin' || role === 'school_admin' || role === 'super_admin') {
+  const role = getEffectiveRequestUser(req).role;
+  if (isTeacherLikeRole(role)) {
     return true;
   }
   res.status(403).json({ error: 'Forbidden' });
   return false;
+}
+
+function findManagedUploadRecordByUrl(fileUrl = '') {
+  const normalizedUrl = String(fileUrl || '').trim();
+  if (!normalizedUrl.startsWith('/uploads/')) return null;
+  return db.prepare(`
+    SELECT file_id AS fileId,
+           workspace_id AS workspaceId,
+           channel_id AS channelId,
+           message_id AS messageId,
+           uploader_id AS uploaderId,
+           purpose,
+           file_name AS name,
+           mime,
+           size_bytes AS sizeBytes,
+           url,
+           pinned,
+           deleted
+    FROM files_registry
+    WHERE url = ?
+    LIMIT 1
+  `).get(normalizedUrl) || null;
+}
+
+function findManagedUploadRecordById(fileId = '') {
+  const normalizedId = String(fileId || '').trim();
+  if (!normalizedId) return null;
+  return db.prepare(`
+    SELECT file_id AS fileId,
+           workspace_id AS workspaceId,
+           channel_id AS channelId,
+           message_id AS messageId,
+           uploader_id AS uploaderId,
+           purpose,
+           file_name AS name,
+           mime,
+           size_bytes AS sizeBytes,
+           url,
+           pinned,
+           deleted
+    FROM files_registry
+    WHERE file_id = ?
+    LIMIT 1
+  `).get(normalizedId) || null;
+}
+
+function isUserInDm(userId, dmId) {
+  if (!userId || !dmId) return false;
+  return !!db.prepare('SELECT 1 FROM dm_members WHERE dm_id = ? AND user_id = ? LIMIT 1').get(dmId, userId);
+}
+
+function canAccessManagedUploadRecord(user, record) {
+  if (!user?.userId || !record) return false;
+  const recordWorkspaceId = String(record.workspaceId || record.workspace_id || '').trim();
+  const recordUploaderId = String(record.uploaderId || record.uploader_id || '').trim();
+  const recordChannelId = String(record.channelId || record.channel_id || '').trim();
+  if (user.superAdmin) return false;
+  if (!user.workspaceId || recordWorkspaceId !== String(user.workspaceId)) return false;
+  if (['admin', 'school_admin'].includes(user.role)) return true;
+  if (recordUploaderId === String(user.userId)) return true;
+  if (!recordChannelId) return true;
+  if (isTeacherLikeRole(user.role)) return true;
+  if (recordChannelId.startsWith('dm_') || recordChannelId.startsWith('dm:')) {
+    return isUserInDm(user.userId, recordChannelId.replace(/^dm:/, ''));
+  }
+  return getUserChannelIds(user.userId, user.workspaceId).includes(recordChannelId);
+}
+
+function logForbiddenFileAccess(req, details = {}) {
+  const user = getEffectiveRequestUser(req);
+  void logSecurityEvent({
+    workspaceId: user.workspaceId || null,
+    actorUserId: user.userId || null,
+    type: 'security.forbidden_file_access',
+    severity: 'warn',
+    ip: req.ip || null,
+    userAgent: req.headers['user-agent'] || null,
+    payload: details
+  });
+}
+
+async function requireAuthenticatedTenantUser(req, res) {
+  const user = await attachAccessTokenIfPresent(req);
+  if (!user) {
+    res.status(401).json({ error: 'Not authenticated' });
+    return null;
+  }
+  if (!userWorkspaceId(user)) {
+    res.status(401).json({ error: 'Not authenticated' });
+    return null;
+  }
+  return user;
+}
+
+async function enforceRequestedWorkspaceScope(req, res, user, workspaceId, targetType, targetId) {
+  const normalizedRequestedWorkspaceId = String(workspaceId || '').trim();
+  if (!normalizedRequestedWorkspaceId) return true;
+  if (normalizedRequestedWorkspaceId === userWorkspaceId(user)) return true;
+  await denyTenantAccess(req, res, {
+    workspaceId: normalizedRequestedWorkspaceId,
+    targetType,
+    targetId: String(targetId || normalizedRequestedWorkspaceId),
+    reason: isSuperAdminRole(user)
+      ? 'super_admin_private_content_denied'
+      : 'workspace_mismatch'
+  });
+  return false;
+}
+
+function logPathTraversalAttempt(req, details = {}) {
+  const user = getEffectiveRequestUser(req);
+  void logSecurityEvent({
+    workspaceId: user.workspaceId || null,
+    actorUserId: user.userId || null,
+    type: 'security.path_traversal_attempt',
+    severity: 'warn',
+    ip: req.ip || null,
+    userAgent: req.headers['user-agent'] || null,
+    payload: details
+  });
+}
+
+function sendManagedUploadResponse(res, filePath, { fileName = 'file', mimeType = 'application/octet-stream' } = {}) {
+  const normalizedMime = normalizeMimeType(mimeType || 'application/octet-stream') || 'application/octet-stream';
+  const safeInline = isSafeInlineUploadMime(normalizedMime);
+  res.setHeader('Content-Type', normalizedMime);
+  res.setHeader('Content-Disposition', `${safeInline ? 'inline' : 'attachment'}; ${contentDispositionFilename(fileName)}`);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'private, max-age=60');
+  res.sendFile(filePath);
 }
 
 function generateInitials(name) {
@@ -8557,7 +9619,6 @@ const TEACHER_ONLY_TOOL_CHANNELS = new Set([
   'speaking practice',
   'listening practice'
 ]);
-const POLICY_VERSION = 'v1';
 const AUTO_JOIN_OTHER_TOOL_CHANNELS = new Set([
   'schedule',
   'exam registration'
@@ -8709,25 +9770,63 @@ function generateSchoolCode() {
   }
 }
 
+const PASSWORD_POLICY_MIN_LENGTH = 10;
+const COMMON_WEAK_PASSWORDS = new Set([
+  '1234567890',
+  '123456789012',
+  'password',
+  'password1',
+  'password123',
+  'qwerty123',
+  'welcome123',
+  'letmein123',
+  'admin12345',
+  'studiestalk',
+  'studiestalk123',
+  'passw0rd!',
+  'passw0rd!1',
+  'changeme123',
+  'iloveyou123'
+]);
+
+function getPasswordValidationError(pw) {
+  if (typeof pw !== 'string') {
+    return 'Password is required.';
+  }
+  const password = String(pw);
+  if (password.length < PASSWORD_POLICY_MIN_LENGTH) {
+    return `Password must be at least ${PASSWORD_POLICY_MIN_LENGTH} characters.`;
+  }
+  const normalized = password.trim().toLowerCase();
+  if (COMMON_WEAK_PASSWORDS.has(normalized)) {
+    return 'Password is too common. Choose a stronger password.';
+  }
+  const checks = [
+    /[A-Z]/.test(password),
+    /[a-z]/.test(password),
+    /[0-9]/.test(password),
+    /[^A-Za-z0-9]/.test(password)
+  ];
+  if (checks.filter(Boolean).length < 3) {
+    return 'Password must include at least three of: uppercase, lowercase, number, symbol.';
+  }
+  if (/^(.)\1+$/.test(password)) {
+    return 'Password is too weak. Choose a less repetitive password.';
+  }
+  return '';
+}
+
 function validatePassword(pw) {
-  return (
-    typeof pw === 'string' &&
-    pw.length >= 8 &&
-    /[A-Z]/.test(pw) &&
-    /[a-z]/.test(pw) &&
-    /[0-9]/.test(pw) &&
-    /[^A-Za-z0-9]/.test(pw)
-  );
+  return !getPasswordValidationError(pw);
 }
 
 function isStrongPassword(password) {
   return validatePassword(String(password || ''));
 }
 
-function hashPassword(password) {
+function hashPasswordSync(password) {
   if (!password) return null;
   try {
-    const crypto = require('crypto');
     const salt = crypto.randomBytes(16).toString('hex');
     const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
     return `${salt}:${hash}`;
@@ -8737,10 +9836,34 @@ function hashPassword(password) {
   }
 }
 
-function verifyPassword(password, stored) {
+async function hashPassword(password) {
+  if (!password) return null;
+  try {
+    if (argon2?.hash) {
+      return await argon2.hash(password, {
+        type: argon2.argon2id,
+        memoryCost: 19456,
+        timeCost: 2,
+        parallelism: 1
+      });
+    }
+    return hashPasswordSync(password);
+  } catch (err) {
+    console.error('Failed to hash password', safeSerializeError(err, { includeStack: !ENV.IS_PROD }));
+    return hashPasswordSync(password);
+  }
+}
+
+async function verifyPassword(password, stored) {
   try {
     if (!password || !stored) return false;
-    const crypto = require('crypto');
+    if (String(stored).startsWith('$argon2')) {
+      if (!argon2?.verify) return false;
+      return await argon2.verify(stored, password);
+    }
+    if (String(stored).startsWith('$2')) {
+      return await bcrypt.compare(password, stored);
+    }
     const [salt, hash] = stored.split(':');
     if (!salt || !hash) return false;
     const calc = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
@@ -8798,13 +9921,38 @@ app.get('/api/events', (req, res) => {
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOADS_DIR),
   filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname || '') || '';
+    const ext = sanitizeUploadExtension(normalizeUploadOriginalName(file.originalname || '', 'upload')) || '';
     const id = crypto.randomBytes(12).toString('hex');
     cb(null, `${Date.now()}-${id}${ext}`);
   }
 });
 
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: UPLOAD_MAX_FILE_BYTES },
+  fileFilter: (req, file, cb) => {
+    const safety = isUploadFileSafe(file);
+    if (!safety.ok) {
+      void logSecurityEvent({
+        workspaceId: req.auth?.workspaceId || req.auth?.workspace_id || null,
+        actorUserId: req.auth?.sub || req.auth?.id || null,
+        type: 'security.upload_rejected',
+        severity: 'warn',
+        ip: req.ip || null,
+        userAgent: req.headers['user-agent'] || null,
+        payload: {
+          fileName: String(file?.originalname || ''),
+          mimeType: String(file?.mimetype || ''),
+          reason: safety.reason
+        }
+      });
+      const err = new Error(safety.reason);
+      err.statusCode = Number(safety.statusCode || 400) || 400;
+      return cb(err);
+    }
+    return cb(null, true);
+  }
+});
 const logoUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 2_000_000 }
@@ -8929,9 +10077,16 @@ app.post('/api/uploads', (req, res) => {
   upload.array('files', 50)(req, res, async (uploadErr) => {
     if (uploadErr) {
       const isMulterErr = uploadErr instanceof multer.MulterError;
+      const isValidationErr = !isMulterErr && uploadErr instanceof Error;
       console.error('Upload middleware failed:', uploadErr);
-      return res.status(isMulterErr ? 400 : 500).json({
-        error: uploadErr?.message || 'Upload failed'
+      const statusCode = uploadErr?.code === 'LIMIT_FILE_SIZE'
+        ? 400
+        : Number(uploadErr?.statusCode || (isMulterErr || isValidationErr ? 400 : 500));
+      return res.status(statusCode).json({
+        error:
+          uploadErr?.code === 'LIMIT_FILE_SIZE'
+            ? `File too large. Maximum size is ${Math.floor(UPLOAD_MAX_FILE_BYTES / (1024 * 1024))} MB.`
+            : uploadErr?.message || 'Upload failed'
       });
     }
 
@@ -8968,7 +10123,7 @@ app.post('/api/uploads', (req, res) => {
 
         out.push({
           url: `/uploads/${filename}`,
-          originalName: f.originalname,
+          originalName: normalizeUploadOriginalName(f.originalname, path.parse(filename).name || 'upload'),
           size: Number(stat.size) || Number(f.size) || 0,
           mimeType: outMime || f.mimetype || 'application/octet-stream'
         });
@@ -8983,7 +10138,7 @@ app.post('/api/uploads', (req, res) => {
 });
 
 /* ---------- File events (analytics) ---------- */
-app.post('/api/file-events', (req, res) => {
+app.post('/api/file-events', async (req, res) => {
   const {
     fileId,
     eventType,
@@ -9004,9 +10159,31 @@ app.post('/api/file-events', (req, res) => {
     return res.status(400).json({ error: 'Invalid file event' });
   }
 
+  const requester = await requireAuthenticatedTenantUser(req, res);
+  if (!requester) return;
+  if (!await enforceRequestedWorkspaceScope(req, res, requester, workspaceId, 'workspace', String(workspaceId || file_id || 'file-events'))) {
+    return;
+  }
+
+  const record =
+    findManagedUploadRecordById(file_id) ||
+    findManagedUploadRecordByUrl(String(fileUrl || '').trim()) ||
+    null;
+
+  if (record) {
+    const access = await assertFileAccess(requester, record.fileId, req);
+    if (!access.ok) {
+      if (access.status === 401) return res.status(401).json({ error: 'Not authenticated' });
+      if (access.status === 404) return res.status(404).json({ error: 'File not found' });
+      return tenantForbidden(res);
+    }
+  } else if (String(fileUrl || '').trim().startsWith('/uploads/')) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+
   const id = generateId('fe_');
-  const workspace_id = String(workspaceId || 'default');
-  const user_id = getRequesterId(req) || null;
+  const workspace_id = String(record?.workspaceId || userWorkspaceId(requester) || '').trim();
+  const user_id = String(requester.id || requester.sub || '').trim() || null;
 
   try {
     db.prepare(
@@ -9019,12 +10196,12 @@ app.post('/api/file-events', (req, res) => {
       workspace_id,
       user_id,
       event_type,
-      purpose ? String(purpose) : null,
-      channelId ? String(channelId) : null,
-      messageId ? String(messageId) : null,
-      fileName ? String(fileName) : null,
-      mime ? String(mime) : null,
-      fileUrl ? String(fileUrl) : null
+      record?.purpose ? String(record.purpose) : (purpose ? String(purpose) : null),
+      record?.channelId ? String(record.channelId) : (channelId ? String(channelId) : null),
+      record?.messageId ? String(record.messageId) : (messageId ? String(messageId) : null),
+      record?.name ? String(record.name) : (fileName ? String(fileName) : null),
+      record?.mime ? String(record.mime) : (mime ? String(mime) : null),
+      record?.url ? String(record.url) : (fileUrl ? String(fileUrl) : null)
     );
   } catch (err) {
     console.error('Failed to log file event', err);
@@ -9034,11 +10211,27 @@ app.post('/api/file-events', (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/analytics/files', (req, res) => {
-  if (req.get('x-admin') !== '1' && req.get('x-super-admin') !== '1') {
-    return res.status(403).json({ error: 'Admins only' });
+app.get('/api/analytics/files', async (req, res) => {
+  const requester = await requireAuthenticatedTenantUser(req, res);
+  if (!requester) return;
+
+  if (!await enforceRequestedWorkspaceScope(req, res, requester, req.query.workspaceId, 'workspace', String(req.query.workspaceId || 'file-analytics'))) {
+    return;
   }
-  const workspaceId = String(req.query.workspaceId || 'default');
+
+  const workspaceId = userWorkspaceId(requester);
+  if (isSuperAdminRole(requester)) {
+    return denyTenantAccess(req, res, {
+      workspaceId,
+      targetType: 'workspace',
+      targetId: 'file-analytics',
+      reason: 'super_admin_private_content_denied'
+    });
+  }
+  if (!isSchoolAdminRole(requester)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
   const daysRaw = parseInt(req.query.days || '30', 10);
   const days = Number.isFinite(daysRaw) ? Math.max(1, Math.min(daysRaw, 365)) : 30;
   const since = `-${days} days`;
@@ -9092,13 +10285,30 @@ app.get('/api/analytics/files', (req, res) => {
   }
 });
 
-app.get('/api/file-stats', (req, res) => {
-  const workspaceId = workspaceIdFromRequest(req);
+app.get('/api/file-stats', async (req, res) => {
+  const requester = await requireAuthenticatedTenantUser(req, res);
+  if (!requester) return;
+  if (!await enforceRequestedWorkspaceScope(req, res, requester, req.query.workspaceId, 'workspace', String(req.query.workspaceId || 'file-stats'))) {
+    return;
+  }
+
+  const workspaceId = userWorkspaceId(requester);
   const raw = req.query.url;
   const urls = Array.isArray(raw) ? raw : raw ? [raw] : [];
   const filtered = urls.map((v) => String(v || '').trim()).filter(Boolean);
   if (!filtered.length) {
     return res.json({ stats: {} });
+  }
+
+  for (const url of filtered) {
+    const record = findManagedUploadRecordByUrl(url);
+    if (!record) continue;
+    const access = await assertFileAccess(requester, record.fileId, req);
+    if (!access.ok) {
+      if (access.status === 401) return res.status(401).json({ error: 'Not authenticated' });
+      if (access.status === 404) return res.status(404).json({ error: 'File not found' });
+      return tenantForbidden(res);
+    }
   }
 
   const placeholders = filtered.map(() => '?').join(', ');
@@ -9126,13 +10336,31 @@ app.get('/api/file-stats', (req, res) => {
   res.json({ stats });
 });
 
-app.post('/api/file-stats/increment', (req, res) => {
+app.post('/api/file-stats/increment', async (req, res) => {
   const { fileUrl, type, fileName, size } = req.body || {};
   if (!fileUrl || !['view', 'download'].includes(type)) {
     return res.status(400).json({ error: 'fileUrl and type are required' });
   }
 
-  const workspaceId = workspaceIdFromRequest(req);
+  const requester = await requireAuthenticatedTenantUser(req, res);
+  if (!requester) return;
+  if (!await enforceRequestedWorkspaceScope(req, res, requester, req.body?.workspaceId, 'workspace', String(req.body?.workspaceId || fileUrl))) {
+    return;
+  }
+
+  const record = findManagedUploadRecordByUrl(String(fileUrl || '').trim());
+  if (record) {
+    const access = await assertFileAccess(requester, record.fileId, req);
+    if (!access.ok) {
+      if (access.status === 401) return res.status(401).json({ error: 'Not authenticated' });
+      if (access.status === 404) return res.status(404).json({ error: 'File not found' });
+      return tenantForbidden(res);
+    }
+  } else if (String(fileUrl || '').trim().startsWith('/uploads/')) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+
+  const workspaceId = String(record?.workspaceId || userWorkspaceId(requester) || '').trim();
   const parsedSize = Number.isFinite(Number(size)) ? Number(size) : 0;
   const insertViews = type === 'view' ? 1 : 0;
   const insertDownloads = type === 'download' ? 1 : 0;
@@ -9149,14 +10377,21 @@ app.post('/api/file-stats/increment', (req, res) => {
       ${updateField},
       updated_at = strftime('%s','now')
   `
-  ).run(workspaceId, fileUrl, fileName ? String(fileName) : null, parsedSize, insertViews, insertDownloads);
+  ).run(
+    workspaceId,
+    record?.url ? String(record.url) : String(fileUrl),
+    record?.name ? String(record.name) : (fileName ? String(fileName) : null),
+    record?.sizeBytes != null ? Number(record.sizeBytes) : parsedSize,
+    insertViews,
+    insertDownloads
+  );
 
   const stats = db
     .prepare('SELECT views, downloads FROM file_stats WHERE workspace_id = ? AND file_url = ?')
-    .get(workspaceId, fileUrl);
+    .get(workspaceId, record?.url ? String(record.url) : String(fileUrl));
 
   res.json({
-    fileUrl,
+    fileUrl: record?.url ? String(record.url) : String(fileUrl),
     views: Number(stats?.views || 0),
     downloads: Number(stats?.downloads || 0)
   });
@@ -9164,7 +10399,22 @@ app.post('/api/file-stats/increment', (req, res) => {
 
 /* ---------- Files registry ---------- */
 app.get('/api/files/registry', (req, res) => {
-  const ws = String(req.query.workspaceId || 'default');
+  const requester = getEffectiveRequestUser(req);
+  if (!requester.userId) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+  if (requester.superAdmin) {
+    void logTenantIsolationEvent(req, {
+      workspaceId: requester.workspaceId || null,
+      targetType: 'file',
+      targetId: 'registry',
+      reason: 'super_admin_private_content_denied',
+      type: 'security.super_admin_private_content_denied'
+    });
+    return tenantForbidden(res);
+  }
+  const requestedWorkspaceId = String(req.query.workspaceId || '').trim();
+  const ws = requester.workspaceId || requestedWorkspaceId || 'default';
   const channelId = String(req.query.channelId || '');
   const includeDeleted = String(req.query.includeDeleted || '0') === '1';
 
@@ -9175,6 +10425,20 @@ app.get('/api/files/registry', (req, res) => {
     params.push(channelId);
   }
   if (!includeDeleted) where.push('deleted = 0');
+  if (!requester.superAdmin && !['admin', 'school_admin'].includes(requester.role)) {
+    if (isTeacherLikeRole(requester.role)) {
+      // teacher access stays workspace-scoped to preserve current working file panels
+    } else {
+      const channelIds = getUserChannelIds(requester.userId, ws);
+      where.push(`(
+        uploader_id = ?
+        OR channel_id IS NULL
+        OR channel_id = ''
+        OR channel_id IN (${channelIds.length ? channelIds.map(() => '?').join(',') : "''"})
+      )`);
+      params.push(requester.userId, ...channelIds);
+    }
+  }
 
   const rows = db
     .prepare(
@@ -9207,8 +10471,15 @@ app.get('/api/files/registry', (req, res) => {
 
 app.post('/api/files/:fileId/pin', (req, res) => {
   if (!requireTeacher(req, res)) return;
+  const requester = getEffectiveRequestUser(req);
   const fileId = String(req.params.fileId || '');
   if (!fileId) return res.status(400).json({ error: 'fileId required' });
+  const record = findManagedUploadRecordById(fileId);
+  if (!record || record.deleted) return res.status(404).json({ error: 'File not found' });
+  if (!canAccessManagedUploadRecord(requester, record)) {
+    logForbiddenFileAccess(req, { fileId, reason: 'pin_denied' });
+    return tenantForbidden(res);
+  }
 
   const pinned =
     req.body && typeof req.body.pinned !== 'undefined' ? (req.body.pinned ? 1 : 0) : null;
@@ -9232,8 +10503,15 @@ app.post('/api/files/:fileId/pin', (req, res) => {
 
 app.post('/api/files/:fileId/delete', (req, res) => {
   if (!requireTeacher(req, res)) return;
+  const requester = getEffectiveRequestUser(req);
   const fileId = String(req.params.fileId || '');
   if (!fileId) return res.status(400).json({ error: 'fileId required' });
+  const record = findManagedUploadRecordById(fileId);
+  if (!record || record.deleted) return res.status(404).json({ error: 'File not found' });
+  if (!canAccessManagedUploadRecord(requester, record)) {
+    logForbiddenFileAccess(req, { fileId, reason: 'delete_denied' });
+    return tenantForbidden(res);
+  }
 
   db.prepare(
     "UPDATE files_registry SET deleted = 1, pinned = 0, updated_at = datetime('now') WHERE file_id = ?"
@@ -9246,7 +10524,8 @@ app.post('/api/files/:fileId/replace', (req, res) => {
   if (!requireTeacher(req, res)) return;
 
   const fileId = String(req.params.fileId || '');
-  const userId = getRequesterId(req) || 'anon';
+  const requester = getEffectiveRequestUser(req);
+  const userId = requester.userId || 'anon';
   const { newFile, workspaceId, channelId, messageId, purpose } = req.body || {};
 
   if (!fileId || !newFile?.url || !workspaceId || !channelId || !messageId) {
@@ -9257,8 +10536,38 @@ app.post('/api/files/:fileId/replace', (req, res) => {
 
   const old = db.prepare('SELECT * FROM files_registry WHERE file_id = ?').get(fileId);
   if (!old) return res.status(404).json({ error: 'File not found' });
+  if (!canAccessManagedUploadRecord(requester, old)) {
+    logForbiddenFileAccess(req, { fileId, reason: 'replace_denied' });
+    return tenantForbidden(res);
+  }
+  if (requester.workspaceId && String(workspaceId) !== String(requester.workspaceId)) {
+    return tenantForbidden(res);
+  }
 
-  const name = String(newFile.originalName || newFile.name || 'attachment');
+  if (!String(newFile.url || '').startsWith('/uploads/')) {
+    return res.status(400).json({ error: 'Replacement file must come from managed uploads' });
+  }
+
+  const replacementSafety = isUploadFileSafe({
+    originalname: newFile.originalName || newFile.name || '',
+    mimetype: newFile.mimeType || newFile.mime || ''
+  });
+  if (!replacementSafety.ok) {
+    return res.status(400).json({ error: replacementSafety.reason });
+  }
+
+  let replacementRelativePath = String(newFile.url || '').replace(/^\/uploads\//, '');
+  try {
+    replacementRelativePath = decodeURIComponent(replacementRelativePath);
+  } catch (_err) {
+    return res.status(400).json({ error: 'Replacement file path is invalid' });
+  }
+  const replacementPath = resolveSafePath(UPLOADS_DIR, replacementRelativePath);
+  if (!replacementPath || !fs.existsSync(replacementPath)) {
+    return res.status(400).json({ error: 'Replacement file not found' });
+  }
+
+  const name = normalizeUploadOriginalName(newFile.originalName || newFile.name || 'attachment', 'attachment');
   const mime = String(newFile.mimeType || newFile.mime || 'application/octet-stream');
   const sizeBytes = Number(newFile.size || newFile.sizeBytes || 0) || 0;
   const url = String(newFile.url);
@@ -9422,13 +10731,13 @@ app.post('/api/workspaces', (req, res) => {
   });
 });
 
-app.delete('/api/workspaces/:workspaceId', (req, res) => {
+app.delete('/api/workspaces/:workspaceId', async (req, res) => {
   if (req.get('x-super-admin') !== '1') {
     return res.status(403).json({ error: 'Super admin only' });
   }
 
   const { workspaceId } = req.params;
-  const workspace = db.prepare('SELECT id, name FROM workspaces WHERE id = ?').get(workspaceId);
+  const workspace = await workspaceRepository.getWorkspaceBasic(workspaceId);
   if (!workspace) {
     return res.status(404).json({ error: 'Workspace not found' });
   }
@@ -9436,7 +10745,7 @@ app.delete('/api/workspaces/:workspaceId', (req, res) => {
     return res.status(400).json({ error: 'Default workspace cannot be deleted' });
   }
 
-  deleteWorkspaceCascade(workspaceId);
+  await deleteWorkspaceCascade(workspaceId);
   res.json({ ok: true });
 });
 
@@ -9493,7 +10802,7 @@ app.post('/api/workspaces/:workspaceId/logo', (req, res) => {
 
 /* ---------- SCHOOL REQUESTS API ---------- */
 
-app.post('/api/schools/request', (req, res) => {
+app.post('/api/schools/request', async (req, res) => {
   const { schoolName, adminEmail, password } = req.body || {};
   const name = String(schoolName || '').trim();
   const email = String(adminEmail || '').trim().toLowerCase();
@@ -9509,26 +10818,29 @@ app.post('/api/schools/request', (req, res) => {
     return res.status(400).json({ error: 'Password does not meet requirements' });
   }
 
-  const existingUser = db.prepare('SELECT 1 FROM users WHERE lower(email) = ?').get(email);
+  const existingUser = await userRepository.findUserByEmailGlobal(email);
   if (existingUser) {
     return res.status(409).json({ error: 'Email is already registered' });
   }
-  const existingReq = db.prepare('SELECT 1 FROM school_requests WHERE admin_email = ?').get(email);
+  const existingReq = await schoolRequestRepository.publicSchoolRequestExistsByAdminEmail(email);
   if (existingReq) {
     return res.status(409).json({ error: 'A request already exists for this email' });
   }
 
   const id = generateId('req');
-  const passwordHash = hashPassword(pwd);
-  db.prepare(
-    `INSERT INTO school_requests (id, school_name, admin_email, password_hash, status)
-     VALUES (?, ?, ?, ?, 'PENDING')`
-  ).run(id, name, email, passwordHash);
+  const passwordHash = await hashPassword(pwd);
+  await schoolRequestRepository.createPublicSchoolRequest({
+    id,
+    schoolName: name,
+    adminEmail: email,
+    passwordHash,
+    status: 'PENDING'
+  });
 
   res.status(201).json({ ok: true, id });
 });
 
-app.get('/api/admin/school-requests', (req, res) => {
+app.get('/api/admin/school-requests', async (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
 
@@ -9536,38 +10848,12 @@ app.get('/api/admin/school-requests', (req, res) => {
   const q = String(req.query.q || '').trim().toLowerCase();
   const sort = String(req.query.sort || 'new').toLowerCase();
 
-  const whereParts = [];
-  const params = [];
-  if (status !== 'all') {
-    whereParts.push('status = ?');
-    params.push(status);
-  }
-  if (q) {
-    whereParts.push(`(
-      LOWER(email) LIKE ? OR
-      LOWER(payload) LIKE ?
-    )`);
-    params.push(`%${q}%`, `%${q}%`);
-  }
-
-  const where = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
-  const order = sort === 'old' ? 'created_at ASC' : 'created_at DESC';
-
-  const rows = db.prepare(`
-    SELECT
-      id,
-      email,
-      status,
-      payload,
-      created_at AS createdAt,
-      reviewed_by AS reviewedBy,
-      reviewed_at AS reviewedAt,
-      review_note AS reviewNote
-    FROM registration_review_requests
-    ${where}
-    ORDER BY ${order}
-    LIMIT 500
-  `).all(...params);
+  const rows = await schoolRequestRepository.listAdminSchoolRequests({
+    status,
+    query: q,
+    sort,
+    limit: 500
+  });
 
   const mapped = rows.map((r) => {
     let data = {};
@@ -9581,12 +10867,8 @@ app.get('/api/admin/school-requests', (req, res) => {
   res.json(mapped);
 });
 
-function getRequestCounts() {
-  const rows = db.prepare(`
-    SELECT status, COUNT(*) AS c
-    FROM registration_review_requests
-    GROUP BY status
-  `).all();
+async function getRequestCounts() {
+  const rows = await schoolRequestRepository.countRegistrationReviewRequests();
 
   const counts = { pending: 0, approved: 0, rejected: 0, flagged: 0, all: 0 };
   for (const row of rows) {
@@ -9600,13 +10882,19 @@ function getRequestCounts() {
 app.get('/api/admin/school-requests-counts', (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
-  res.json(getRequestCounts());
+  getRequestCounts().then((counts) => res.json(counts)).catch((error) => {
+    console.error('Failed to load request counts', error);
+    res.status(500).json({ error: 'Failed to load request counts' });
+  });
 });
 
 app.get('/api/admin/requests/counts', (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
-  res.json(getRequestCounts());
+  getRequestCounts().then((counts) => res.json(counts)).catch((error) => {
+    console.error('Failed to load request counts', error);
+    res.status(500).json({ error: 'Failed to load request counts' });
+  });
 });
 
 function encodeRequestCursor(row) {
@@ -9626,7 +10914,7 @@ function parseRequestCursor(cursor) {
   return { createdAt, id };
 }
 
-function performBulkRequestAction({ action, ids, note, user }) {
+async function performBulkRequestAction({ action, ids, note, user }) {
   if (!['approve', 'reject', 'flag'].includes(action)) {
     const err = new Error('Invalid action');
     err.status = 400;
@@ -9641,12 +10929,9 @@ function performBulkRequestAction({ action, ids, note, user }) {
   const statusMap = { approve: 'approved', reject: 'rejected', flag: 'flagged' };
   const newStatus = statusMap[action];
 
-  const tx = db.transaction(() => {
-    for (const id of ids) {
-      updateSchoolRequestStatus({ id, status: newStatus, actorId: user.id, note });
-    }
-  });
-  tx();
+  for (const id of ids) {
+    await updateSchoolRequestStatus({ id, status: newStatus, actorId: user.id, note });
+  }
 
   legacyAuditLog({
     workspaceId: null,
@@ -9658,7 +10943,7 @@ function performBulkRequestAction({ action, ids, note, user }) {
   return ids.length;
 }
 
-app.get('/api/admin/requests', (req, res) => {
+app.get('/api/admin/requests', async (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
 
@@ -9673,36 +10958,13 @@ app.get('/api/admin/requests', (req, res) => {
         : 25;
     const cursor = parseRequestCursor(req.query.cursor);
 
-    const whereParts = [];
-    const params = [];
-    if (status !== 'all') {
-      whereParts.push('status = ?');
-      params.push(status);
-    }
-    if (search) {
-      const term = `%${search}%`;
-      whereParts.push('(LOWER(email) LIKE ? OR LOWER(payload) LIKE ?)');
-      params.push(term, term);
-    }
-    if (cursor) {
-      const compare = sort === 'old' ? '>' : '<';
-      whereParts.push(`(created_at ${compare} ? OR (created_at = ? AND id ${compare} ?))`);
-      params.push(cursor.createdAt, cursor.createdAt, cursor.id);
-    }
-
-    const whereClause = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
-    const orderClause = sort === 'old' ? 'created_at ASC, id ASC' : 'created_at DESC, id DESC';
-
-    const rows = db
-      .prepare(`
-      SELECT id, email, status, payload, created_at AS createdAt, reviewed_by AS reviewedBy,
-             reviewed_at AS reviewedAt, review_note AS reviewNote
-      FROM registration_review_requests
-      ${whereClause}
-      ORDER BY ${orderClause}
-      LIMIT ?
-    `)
-      .all(...params, limit + 1);
+    const rows = await schoolRequestRepository.listRegistrationReviewRequestsPage({
+      status,
+      search,
+      sort,
+      limit,
+      cursor
+    });
 
     const hasMore = rows.length > limit;
     if (hasMore) {
@@ -9730,7 +10992,7 @@ app.get('/api/admin/requests', (req, res) => {
       };
     });
 
-    const counts = getRequestCounts();
+    const counts = await getRequestCounts();
     res.json({ items, nextCursor, counts });
   } catch (error) {
     console.error('Failed to fetch admin requests', error);
@@ -9738,15 +11000,17 @@ app.get('/api/admin/requests', (req, res) => {
   }
 });
 
-function updateSchoolRequestStatus({ id, status, actorId, note }) {
-  db.prepare(`
-    UPDATE registration_review_requests
-    SET status = ?, reviewed_by = ?, reviewed_at = ?, review_note = ?
-    WHERE id = ?
-  `).run(status, actorId, Date.now(), note || null, id);
+async function updateSchoolRequestStatus({ id, status, actorId, note }) {
+  await schoolRequestRepository.updateRegistrationReviewRequestStatus({
+    id,
+    status,
+    actorId,
+    note: note || null,
+    reviewedAt: Date.now()
+  });
 }
 
-function ensureWorkspaceForRequest(row, reviewerId) {
+async function ensureWorkspaceForRequest(row, reviewerId) {
   if (!row) return null;
   const payload = safeJsonParse(row.payload, {});
   const form = payload?.form || payload || {};
@@ -9793,25 +11057,29 @@ function ensureWorkspaceForRequest(row, reviewerId) {
     VALUES (?, ?, ?, 'approved', ?, ?, ?)
   `).run(workspaceId, name, schoolCode, adminEmail, now, reviewerId);
 
-  db.prepare(`
-    INSERT OR IGNORE INTO workspace_billing (workspace_id, plan, status, currency, monthly_price_cents, billing_email, updated_at)
-    VALUES (?, 'free', 'active', 'EUR', 0, ?, ?)
-  `).run(workspaceId, adminEmail, nowMs());
+  // Billing migration boundary: initialize billing through the adapter.
+  await billingRepository.ensureWorkspaceBilling({ workspaceId, billingEmail: adminEmail });
+  await onboardingRepository.ensureWorkspaceOnboarding({
+    workspaceId,
+    requestId: row.id,
+    createdBy: reviewerId,
+    now
+  });
 
   return workspaceId;
 }
 
-app.post('/api/admin/school-requests/:id/approve', (req, res) => {
+app.post('/api/admin/school-requests/:id/approve', async (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
 
   const id = req.params.id;
   const note = String(req.body?.note || '').trim() || null;
 
-  const row = db.prepare(`SELECT id, payload FROM registration_review_requests WHERE id = ?`).get(id);
+  const row = await schoolRequestRepository.getRegistrationReviewRequestById(id);
   if (!row) return res.status(404).json({ error: 'Request not found' });
 
-  updateSchoolRequestStatus({ id, status: 'approved', actorId: user.id, note });
+  await updateSchoolRequestStatus({ id, status: 'approved', actorId: user.id, note });
   legacyAuditLog({ workspaceId: null, actor: user.id, action: 'school_request.approve', target: id, payload: { note } });
   audit('school_request.approve', req, { user, target: id, workspaceId: null, meta: { note } });
 
@@ -9823,9 +11091,7 @@ app.post('/api/admin/school-requests/:id/create-workspace', async (req, res) => 
   if (!user) return;
 
   const id = req.params.id;
-  const row = db
-    .prepare(`SELECT id, email, status, payload FROM registration_review_requests WHERE id = ?`)
-    .get(id);
+  const row = await schoolRequestRepository.getRegistrationReviewRequestById(id);
   if (!row) return res.status(404).json({ error: 'Request not found' });
 
   if (String(row.status || '').toLowerCase() !== 'approved') {
@@ -9859,7 +11125,7 @@ app.post('/api/admin/school-requests/:id/create-workspace', async (req, res) => 
     workspaceId = `school-${Date.now()}`;
   }
 
-  if (db.prepare('SELECT 1 FROM workspaces WHERE id = ?').get(workspaceId)) {
+  if (await workspaceRepository.workspaceExists(workspaceId)) {
     return res.status(409).json({ error: 'Workspace already exists', workspaceId });
   }
 
@@ -9867,74 +11133,65 @@ app.post('/api/admin/school-requests/:id/create-workspace', async (req, res) => 
   const now = new Date(nowMs()).toISOString();
   const workspaceName = schoolName || `School ${workspaceId}`;
 
-  db.prepare(
-    `INSERT INTO workspaces (id, name, school_code, status, admin_email, approved_at, approved_by, created_at)
-     VALUES (?, ?, ?, 'approved', ?, ?, ?, ?)`
-  ).run(workspaceId, workspaceName, schoolCode, email, now, user.id, now);
-
   const contactName = String(
     form?.contactPerson || form?.contact_name || form?.adminName || 'School Admin'
   ).trim();
   const [firstName = 'Admin', ...rest] = contactName.split(' ').filter(Boolean);
   const lastName = rest.join(' ') || 'Admin';
-  const username = generateUsername(workspaceId, firstName, lastName);
-  let tempPassword = null;
+  const username = await userRepository.generateUsername(workspaceId, firstName, lastName);
+  const tempPassword = (Math.random().toString(36).slice(2, 10) + 'A9!').slice(0, 10);
+  const passwordHash = await hashPassword(tempPassword);
+  const tempLoginStartedAt = Date.now();
 
-  const existingUser = db
-    .prepare('SELECT id FROM users WHERE lower(email) = lower(?) AND workspace_id = ? LIMIT 1')
-    .get(email, workspaceId);
-
-  let adminId;
-  if (existingUser) {
-    adminId = existingUser.id;
-    tempPassword = (Math.random().toString(36).slice(2, 10) + 'A9!').slice(0, 10);
-    const passwordHash = hashPassword(tempPassword);
-    db.prepare(
-      `UPDATE users
-       SET role='school_admin',
-           status='active',
-           workspace_id=?,
-           password_hash=?,
-           must_change_password=1,
-           temp_login_started_at=?
-       WHERE id=?`
-    ).run(workspaceId, passwordHash, Date.now(), adminId);
-  } else {
-    adminId = generateId('u');
-    tempPassword = (Math.random().toString(36).slice(2, 10) + 'A9!').slice(0, 10);
-    const passwordHash = hashPassword(tempPassword);
-    db.prepare(
-      `INSERT INTO users
-       (id, workspace_id, first_name, last_name, name, username, email, password_hash, role, status, created_at, must_change_password, temp_login_started_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'school_admin', 'active', ?, 1, ?)`
-    ).run(
-      adminId,
-      workspaceId,
+  const workspaceBootstrap = await workspaceRepository.createApprovedWorkspaceWithAdmin({
+    workspace: {
+      id: workspaceId,
+      name: workspaceName,
+      schoolCode,
+      adminEmail: email,
+      approvedAt: now,
+      approvedBy: user.id,
+      createdAt: now
+    },
+    admin: {
+      id: generateId('u'),
       firstName,
       lastName,
-      contactName,
+      name: contactName,
       username,
       email,
       passwordHash,
-      now,
-      Date.now()
-    );
-  }
+      tempLoginStartedAt
+    },
+    defaultChannels: [
+      { name: 'general', category: 'classes', topic: 'Welcome to your new workspace' },
+      { name: 'announcements', category: 'classes', topic: 'School-wide announcements' },
+      { name: 'Conversation Club', category: 'clubs', topic: 'Weekly conversation practice' },
+      { name: 'Speaking Club', category: 'clubs', topic: 'Fluency and speaking drills' },
+      { name: 'Culture Exchange', category: 'clubs', topic: 'Share culture and language tips' },
+      { name: 'Announcements', category: 'tools', topic: 'Important school updates' },
+      { name: 'Learning Materials', category: 'tools', topic: 'Study guides and resources' },
+      { name: 'Speaking Practice', category: 'tools', topic: 'Speaking drills and prompts' },
+      { name: 'Listening Practice', category: 'tools', topic: 'Listening activities and audio' },
+      { name: 'Wordmeaning', category: 'tools', topic: 'Word meaning discussion and usage' },
+      { name: 'Schedule', category: 'tools', topic: 'Class schedule and timetable' },
+      { name: 'Exam Registration', category: 'tools', topic: 'Exam registration details' },
+      { name: 'B1 Mock Test', category: 'exams', topic: 'Mock exam practice' },
+      { name: 'Placement Test', category: 'exams', topic: 'Placement assessment' },
+      { name: 'Final Exam – March', category: 'exams', topic: 'Final exam session' },
+      { id: `teachers-${workspaceId}`, name: 'Teachers', category: 'teachers', topic: 'Teachers-only staff room' }
+    ]
+  });
+  const adminId = workspaceBootstrap.adminId;
+  const existingUser = workspaceBootstrap.existingUser;
 
-  ensureNamedChannel(workspaceId, 'general', {
-    category: 'classes',
-    topic: 'Welcome to your new workspace'
+  await billingRepository.ensureWorkspaceBilling({ workspaceId, billingEmail: email });
+  await onboardingRepository.ensureWorkspaceOnboarding({
+    workspaceId,
+    requestId: id,
+    createdBy: user.id,
+    now
   });
-  ensureNamedChannel(workspaceId, 'announcements', {
-    category: 'classes',
-    topic: 'School-wide announcements'
-  });
-  ensureClubChannels(workspaceId);
-  ensureToolChannels(workspaceId);
-  ensureExamChannels(workspaceId);
-  ensureTeachersChannel(workspaceId);
-  addUserToDefaultChannels(workspaceId, adminId);
-  ensureAdminsInWorkspaceChannels(workspaceId);
 
   let emailSent = false;
   let emailError = null;
@@ -10001,45 +11258,46 @@ app.post('/api/admin/school-requests/:id/create-workspace', async (req, res) => 
     tempPassword: existingUser ? null : tempPassword,
     emailSent,
     emailError,
-    emailProvider: emailProviderUsed
+    emailProvider: emailProviderUsed,
+    onboarding: await onboardingRepository.getWorkspaceOnboarding(workspaceId)
   });
 });
 
-app.post('/api/admin/school-requests/:id/reject', (req, res) => {
+app.post('/api/admin/school-requests/:id/reject', async (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
 
   const id = req.params.id;
   const note = String(req.body?.note || '').trim() || null;
 
-  const row = db.prepare(`SELECT id FROM registration_review_requests WHERE id = ?`).get(id);
+  const row = await schoolRequestRepository.getRegistrationReviewRequestById(id);
   if (!row) return res.status(404).json({ error: 'Request not found' });
 
-  updateSchoolRequestStatus({ id, status: 'rejected', actorId: user.id, note });
+  await updateSchoolRequestStatus({ id, status: 'rejected', actorId: user.id, note });
   legacyAuditLog({ workspaceId: null, actor: user.id, action: 'school_request.reject', target: id, payload: { note } });
   audit('school_request.reject', req, { user, target: id, workspaceId: null, meta: { note } });
 
   res.json({ ok: true });
 });
 
-app.post('/api/admin/school-requests/:id/flag', (req, res) => {
+app.post('/api/admin/school-requests/:id/flag', async (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
 
   const id = req.params.id;
   const note = String(req.body?.note || '').trim() || null;
 
-  const row = db.prepare(`SELECT id FROM registration_review_requests WHERE id = ?`).get(id);
+  const row = await schoolRequestRepository.getRegistrationReviewRequestById(id);
   if (!row) return res.status(404).json({ error: 'Request not found' });
 
-  updateSchoolRequestStatus({ id, status: 'flagged', actorId: user.id, note });
+  await updateSchoolRequestStatus({ id, status: 'flagged', actorId: user.id, note });
   legacyAuditLog({ workspaceId: null, actor: user.id, action: 'school_request.flag', target: id, payload: { note } });
   audit('school_request.flag', req, { user, target: id, workspaceId: null, meta: { note } });
 
   res.json({ ok: true });
 });
 
-app.post('/api/admin/school-requests/bulk', (req, res) => {
+app.post('/api/admin/school-requests/bulk', async (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
 
@@ -10048,14 +11306,14 @@ app.post('/api/admin/school-requests/bulk', (req, res) => {
   const note = String(req.body?.note || '').trim() || null;
 
   try {
-    const updated = performBulkRequestAction({ action, ids, note, user });
+    const updated = await performBulkRequestAction({ action, ids, note, user });
     res.json({ ok: true, updated });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.post('/api/admin/requests/bulk', (req, res) => {
+app.post('/api/admin/requests/bulk', async (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
 
@@ -10064,7 +11322,7 @@ app.post('/api/admin/requests/bulk', (req, res) => {
   const note = String(req.body?.note || '').trim() || null;
 
   try {
-    const updated = performBulkRequestAction({ action, ids, note, user });
+    const updated = await performBulkRequestAction({ action, ids, note, user });
     res.json({ ok: true, updated });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
@@ -10163,7 +11421,7 @@ function buildRequestFilter(whereParts, params, status, search) {
   }
 }
 
-app.get('/api/admin/requests/export.csv', (req, res) => {
+app.get('/api/admin/requests/export.csv', async (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
 
@@ -10177,21 +11435,12 @@ app.get('/api/admin/requests/export.csv', (req, res) => {
         ? Math.min(MAX_EXPORT_ROWS, Math.floor(limitParam))
         : 1000;
 
-    const whereParts = [];
-    const params = [];
-    buildRequestFilter(whereParts, params, status, search);
-    const whereClause = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
-    const orderClause = sort === 'old' ? 'created_at ASC, id ASC' : 'created_at DESC, id DESC';
-
-    const rows = db
-      .prepare(`
-      SELECT id, email, status, payload, created_at AS createdAt, review_note AS reviewNote
-      FROM registration_review_requests
-      ${whereClause}
-      ORDER BY ${orderClause}
-      LIMIT ?
-    `)
-      .all(...params, limit);
+    const rows = await schoolRequestRepository.listRegistrationReviewRequestsForExport({
+      status,
+      search,
+      sort,
+      limit
+    });
 
     const csv = buildRequestCsv(rows);
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -10203,7 +11452,7 @@ app.get('/api/admin/requests/export.csv', (req, res) => {
   }
 });
 
-app.post('/api/admin/requests/export.csv', (req, res) => {
+app.post('/api/admin/requests/export.csv', async (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
 
@@ -10216,15 +11465,7 @@ app.post('/api/admin/requests/export.csv', (req, res) => {
   }
 
   try {
-    const placeholders = ids.map(() => '?').join(',');
-    const rows = db
-      .prepare(`
-      SELECT id, email, status, payload, created_at AS createdAt, review_note AS reviewNote
-      FROM registration_review_requests
-      WHERE id IN (${placeholders})
-      ORDER BY created_at DESC, id DESC
-    `)
-      .all(...ids);
+    const rows = await schoolRequestRepository.listRegistrationReviewRequestsByIds(ids);
     const csv = buildRequestCsv(rows);
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="school_requests_selected.csv"');
@@ -10235,42 +11476,13 @@ app.post('/api/admin/requests/export.csv', (req, res) => {
   }
 });
 
-app.get('/api/admin/security/overview', (req, res) => {
+app.get('/api/admin/security/overview', async (req, res) => {
   const u = getAuthedUser(req);
   if (!u || !isSuperAdminUser(u)) return res.status(403).json({ error: 'Forbidden' });
 
   const now = Date.now();
   const day = 24 * 60 * 60 * 1000;
-
-  const failed24h = db
-    .prepare(
-      `
-      SELECT COUNT(*) AS n
-      FROM login_attempts
-      WHERE success = 0 AND created_at >= ?
-    `
-    )
-    .get(now - day).n;
-
-  const success24h = db
-    .prepare(
-      `
-      SELECT COUNT(*) AS n
-      FROM login_attempts
-      WHERE success = 1 AND created_at >= ?
-    `
-    )
-    .get(now - day).n;
-
-  const pwdChanges24h = db
-    .prepare(
-      `
-      SELECT COUNT(*) AS n
-      FROM security_events
-      WHERE type = 'security.password_changed' AND created_at >= ?
-    `
-    )
-    .get(now - day).n;
+  const securityOverview = await authRepository.getSecurityOverview({ since: now - day });
 
   const mustChange = db
     .prepare(
@@ -10306,9 +11518,9 @@ app.get('/api/admin/security/overview', (req, res) => {
   res.json({
     ok: true,
     kpis: {
-      failedLogins24h: failed24h,
-      successfulLogins24h: success24h,
-      passwordChanges24h: pwdChanges24h,
+      failedLogins24h: securityOverview.failed24h,
+      successfulLogins24h: securityOverview.success24h,
+      passwordChanges24h: securityOverview.passwordChanges24h,
       usersMustChangePassword: mustChange,
       invitesCreated7d: invites7d,
       invitesUsed7d: inviteUsed7d
@@ -10316,54 +11528,24 @@ app.get('/api/admin/security/overview', (req, res) => {
   });
 });
 
-app.get('/api/admin/security/top-attacks', (req, res) => {
+app.get('/api/admin/security/top-attacks', async (req, res) => {
   const admin = requireSuperAdmin(req, res);
   if (!admin) return;
 
   const sinceHours = Math.min(720, Math.max(1, Number(req.query?.hours || 24)));
   const since = Date.now() - sinceHours * 60 * 60 * 1000;
-
-  const rows = db
-    .prepare(
-      `
-        SELECT
-          LOWER(identifier) AS identifier,
-          COUNT(*) AS failedCount,
-          MAX(created_at) AS lastSeen
-        FROM login_attempts
-        WHERE success = 0 AND created_at >= ?
-        GROUP BY LOWER(identifier)
-        ORDER BY failedCount DESC
-        LIMIT 20
-      `
-    )
-    .all(since);
+  const rows = await authRepository.listTopAttacks({ since, limit: 20 });
 
   res.json({ ok: true, rows });
 });
 
-app.get('/api/admin/security/failed-by-ip', (req, res) => {
+app.get('/api/admin/security/failed-by-ip', async (req, res) => {
   const admin = requireSuperAdmin(req, res);
   if (!admin) return;
 
   const sinceHours = Math.min(720, Math.max(1, Number(req.query?.hours || 24)));
   const since = Date.now() - sinceHours * 60 * 60 * 1000;
-
-  const rows = db
-    .prepare(
-      `
-        SELECT
-          ip,
-          COUNT(*) AS failedCount,
-          MAX(created_at) AS lastSeen
-        FROM login_attempts
-        WHERE success = 0 AND created_at >= ? AND ip IS NOT NULL AND ip <> ''
-        GROUP BY ip
-        ORDER BY failedCount DESC
-        LIMIT 50
-      `
-    )
-    .all(since);
+  const rows = await authRepository.listFailedByIp({ since, limit: 50 });
 
   const blocked = db
     .prepare(`SELECT ip, reason, created_at FROM ip_blocklist ORDER BY created_at DESC LIMIT 500`)
@@ -10418,56 +11600,23 @@ app.post('/api/admin/security/ip-unblock', express.json(), (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/admin/security/sessions', (req, res) => {
+app.get('/api/admin/security/sessions', async (req, res) => {
   const admin = requireSuperAdmin(req, res);
   if (!admin) return;
 
   const q = String(req.query?.q || '').trim().toLowerCase();
   const limit = Math.min(100, Math.max(10, Number(req.query?.limit || 50)));
-
-  let rows;
-  if (q) {
-    rows = db
-      .prepare(
-        `
-          SELECT rt.*,
-                 u.email AS email,
-                 u.role AS role,
-                 u.workspace_id AS workspaceId
-          FROM refresh_tokens rt
-          LEFT JOIN users u ON u.id = rt.user_id
-          WHERE lower(COALESCE(u.email,'')) LIKE ?
-          ORDER BY rt.created_at DESC
-          LIMIT ?
-        `
-      )
-      .all(`%${q}%`, limit);
-  } else {
-    rows = db
-      .prepare(
-        `
-          SELECT rt.*,
-                 u.email AS email,
-                 u.role AS role,
-                 u.workspace_id AS workspaceId
-          FROM refresh_tokens rt
-          LEFT JOIN users u ON u.id = rt.user_id
-          ORDER BY rt.created_at DESC
-          LIMIT ?
-        `
-      )
-      .all(limit);
-  }
+  const rows = await authRepository.listSecuritySessions({ query: q, limit });
 
   res.json({ ok: true, rows });
 });
 
-app.post('/api/admin/security/sessions/:id/revoke', express.json(), (req, res) => {
+app.post('/api/admin/security/sessions/:id/revoke', express.json(), async (req, res) => {
   const admin = requireSuperAdmin(req, res);
   if (!admin) return;
 
   const id = String(req.params?.id || '').trim();
-  db.prepare(`UPDATE refresh_tokens SET revoked_at = ? WHERE id = ?`).run(Date.now(), id);
+  await authRepository.revokeRefreshToken(id, Date.now());
 
   logSecurityEvent({
     type: 'security.session_revoked',
@@ -10479,14 +11628,12 @@ app.post('/api/admin/security/sessions/:id/revoke', express.json(), (req, res) =
   res.json({ ok: true });
 });
 
-app.post('/api/admin/security/users/:userId/revoke-all-sessions', express.json(), (req, res) => {
+app.post('/api/admin/security/users/:userId/revoke-all-sessions', express.json(), async (req, res) => {
   const admin = requireSuperAdmin(req, res);
   if (!admin) return;
 
   const userId = String(req.params?.userId || '').trim();
-  db
-    .prepare(`UPDATE refresh_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`)
-    .run(Date.now(), userId);
+  await authRepository.revokeAllRefreshTokensForUser(userId, Date.now());
 
   logSecurityEvent({
     type: 'security.user_sessions_revoked_all',
@@ -10498,7 +11645,7 @@ app.post('/api/admin/security/users/:userId/revoke-all-sessions', express.json()
   res.json({ ok: true });
 });
 
-app.get('/api/admin/security/events', (req, res) => {
+app.get('/api/admin/security/events', async (req, res) => {
   const u = getAuthedUser(req);
   if (!u || !isSuperAdminUser(u)) return res.status(403).json({ error: 'Forbidden' });
 
@@ -10506,54 +11653,15 @@ app.get('/api/admin/security/events', (req, res) => {
   const q = String(req.query.q || '').trim().toLowerCase();
   const type = String(req.query.type || '').trim();
 
-  let rows = [];
-  if (q) {
-    const params = [`%${q}%`, `%${q}%`, `%${q}%`];
-    if (type) params.push(type);
-    params.push(limit);
-    rows = db
-      .prepare(`
-      SELECT e.*,
-             au.email AS actorEmail,
-             tu.email AS targetEmail
-      FROM security_events e
-      LEFT JOIN users au ON au.id = e.actor_user_id
-      LEFT JOIN users tu ON tu.id = e.target_user_id
-      WHERE (lower(e.type) LIKE ? OR lower(COALESCE(au.email,'')) LIKE ? OR lower(COALESCE(tu.email,'')) LIKE ?)
-      ${type ? 'AND e.type = ?' : ''}
-      ORDER BY e.created_at DESC
-      LIMIT ?
-    `)
-      .all(...params);
-  } else {
-    const params = [];
-    if (type) params.push(type);
-    params.push(limit);
-    rows = db
-      .prepare(`
-      SELECT e.*,
-             au.email AS actorEmail,
-             tu.email AS targetEmail
-      FROM security_events e
-      LEFT JOIN users au ON au.id = e.actor_user_id
-      LEFT JOIN users tu ON tu.id = e.target_user_id
-      ${type ? 'WHERE e.type = ?' : ''}
-      ORDER BY e.created_at DESC
-      LIMIT ?
-    `)
-      .all(...params);
-  }
+  const rows = await authRepository.listSecurityEvents({ query: q, type, limit });
 
   res.json({ ok: true, events: rows });
 });
 
-app.get('/api/workspaces/:workspaceId/email-settings', (req, res) => {
-  const user = getAuthedUser(req);
-  if (!canManageWorkspaceSettings(user)) return res.status(403).json({ error: 'Forbidden' });
-
-  const workspaceId = String(req.params.workspaceId || '');
-  const userWs = user.workspaceId || user.workspace_id || 'default';
-  if (workspaceId !== String(userWs)) return res.status(403).json({ error: 'Wrong workspace' });
+app.get('/api/workspaces/:workspaceId/email-settings', authRequired, (req, res) => {
+  const ctx = getManagedWorkspaceRequestContext(req, res);
+  if (!ctx) return;
+  const { user, workspaceId } = ctx;
 
   const workspaceRow = db
     .prepare('SELECT name, logo_url AS logoUrl FROM workspaces WHERE id = ?')
@@ -10591,65 +11699,54 @@ app.get('/api/workspaces/:workspaceId/email-settings', (req, res) => {
   res.json(merged);
 });
 
-app.post('/api/workspaces/:workspaceId/email-settings', (req, res) => {
-  const user = getAuthedUser(req);
-  if (!canManageWorkspaceSettings(user)) return res.status(403).json({ error: 'Forbidden' });
-
-  const workspaceId = String(req.params.workspaceId || '');
-  const userWs = user.workspaceId || user.workspace_id || 'default';
-  if (workspaceId !== String(userWs)) return res.status(403).json({ error: 'Wrong workspace' });
-
-  const body = req.body || {};
-  const enabled = body.enabled ? 1 : 0;
-
-  const brandSchoolName = String(body.brand_school_name || '').trim();
-  const replyTo = String(body.reply_to_email || '').trim();
-  const footerText = String(body.footer_text || '').trim();
-  const subjectPrefix = String(body.subject_prefix || '').trim();
-  const logoUrl = String(body.logo_url || '').trim();
-  const signatureHtml = String(body.signature_html || '').trim();
-  const manualBodyText = String(body.manual_body_text || '').trim();
-
-  db.prepare(`
-    INSERT INTO workspace_email_settings
-      (workspace_id, enabled, brand_school_name, reply_to_email, footer_text, subject_prefix, manual_body_text, logo_url, signature_html, updated_at)
-    VALUES
-      (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    ON CONFLICT(workspace_id) DO UPDATE SET
-      enabled = excluded.enabled,
-      brand_school_name = excluded.brand_school_name,
-      reply_to_email = excluded.reply_to_email,
-      footer_text = excluded.footer_text,
-      subject_prefix = excluded.subject_prefix,
-      manual_body_text = excluded.manual_body_text,
-      logo_url = excluded.logo_url,
-      signature_html = excluded.signature_html,
-      updated_at = datetime('now')
-  `).run(
-    workspaceId,
-    enabled,
-    brandSchoolName,
-    replyTo,
-    footerText,
-    subjectPrefix,
-    manualBodyText,
-    logoUrl,
-    signatureHtml
-  );
-
-  res.json({ ok: true });
+app.post('/api/workspaces/:workspaceId/email-settings', authRequired, express.json(), (req, res) => {
+  const ctx = getManagedWorkspaceRequestContext(req, res);
+  if (!ctx) return;
+  try {
+    const input = sanitizeEmailSettingsInput(req.body || {});
+    db.prepare(`
+      INSERT INTO workspace_email_settings
+        (workspace_id, enabled, brand_school_name, reply_to_email, footer_text, subject_prefix, manual_body_text, logo_url, signature_html, updated_at)
+      VALUES
+        (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(workspace_id) DO UPDATE SET
+        enabled = excluded.enabled,
+        brand_school_name = excluded.brand_school_name,
+        reply_to_email = excluded.reply_to_email,
+        footer_text = excluded.footer_text,
+        subject_prefix = excluded.subject_prefix,
+        manual_body_text = excluded.manual_body_text,
+        logo_url = excluded.logo_url,
+        signature_html = excluded.signature_html,
+        updated_at = datetime('now')
+    `).run(
+      ctx.workspaceId,
+      input.enabled,
+      input.brandSchoolName,
+      input.replyTo,
+      input.footerText,
+      input.subjectPrefix,
+      input.manualBodyText,
+      input.logoUrl,
+      input.signatureHtml
+    );
+    res.json({ ok: true });
+  } catch (error) {
+    handleOnboardingRouteError(res, error, '[Onboarding] Failed to update email settings');
+  }
 });
 
-app.post('/api/workspaces/:workspaceId/email-settings/test', async (req, res) => {
-  const user = getAuthedUser(req);
-  if (!canManageWorkspaceSettings(user)) return res.status(403).json({ error: 'Forbidden' });
-
-  const workspaceId = String(req.params.workspaceId || '');
-  const userWs = user.workspaceId || user.workspace_id || 'default';
-  if (workspaceId !== String(userWs)) return res.status(403).json({ error: 'Wrong workspace' });
-
-  const to = String(req.body?.to || '').trim();
-  if (!to.includes('@')) return res.status(400).json({ error: "Valid 'to' required" });
+app.post('/api/workspaces/:workspaceId/email-settings/test', authRequired, express.json(), async (req, res) => {
+  const ctx = getManagedWorkspaceRequestContext(req, res);
+  if (!ctx) return;
+  const workspaceId = ctx.workspaceId;
+  let to = '';
+  try {
+    to = normalizeOptionalEmail(req.body?.to || '', 'to');
+  } catch (error) {
+    return handleOnboardingRouteError(res, error, '[Onboarding] Failed to send email test');
+  }
+  if (!to) return res.status(400).json({ error: "Valid 'to' required" });
 
   const s = db.prepare('SELECT * FROM workspace_email_settings WHERE workspace_id = ?').get(workspaceId) || {};
   const workspaceRow =
@@ -11339,6 +12436,12 @@ app.get(
     }
     const filePath = resolveAttachmentFilePath(found.attachment.storedName);
     if (!filePath) {
+      logPathTraversalAttempt(req, {
+        route: req.originalUrl || req.url,
+        emailId,
+        attachmentId,
+        reason: 'invalid_attachment_path'
+      });
       return res.status(400).json({ error: 'Invalid attachment path' });
     }
     if (!fs.existsSync(filePath)) {
@@ -11378,6 +12481,12 @@ app.get(
 
     const filePath = resolveAttachmentFilePath(found.attachment.storedName);
     if (!filePath) {
+      logPathTraversalAttempt(req, {
+        route: req.originalUrl || req.url,
+        emailId,
+        attachmentId,
+        reason: 'invalid_attachment_path'
+      });
       return res.status(400).json({ error: 'Invalid attachment path' });
     }
     if (!fs.existsSync(filePath)) {
@@ -11449,6 +12558,9 @@ app.post(
 
       const finalText = `${replyText}${buildQuotedText(row)}`;
       const finalHtml = buildReplyHtml(replyText, row);
+      if (!transporter) {
+        return res.status(500).json({ error: 'SMTP transport not configured' });
+      }
       const info = await transporter.sendMail({
         from: fromHeader,
         to,
@@ -11511,7 +12623,7 @@ app.get('/api/classes/:channelId/students', (req, res) => {
   res.json({ channel: chk.channel, students });
 });
 
-app.get('/api/classes/:channelId/attendance', (req, res) => {
+app.get('/api/classes/:channelId/attendance', async (req, res) => {
   const user = getAuthedUser(req);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -11524,36 +12636,33 @@ app.get('/api/classes/:channelId/attendance', (req, res) => {
   const chk = ensureChannelIsClass(workspaceId, channelId);
   if (!chk.ok) return res.status(chk.code).json({ error: chk.error });
 
-  const session = getOrCreateAttendanceSession(workspaceId, channelId, sessionDate, user.id);
+  try {
+    const session = await getOrCreateAttendanceSession(workspaceId, channelId, sessionDate, user.id);
+    const roster = listClassStudents(workspaceId, channelId);
+    const rows = await attendanceRepository.listAttendanceStatuses({
+      workspaceId,
+      sessionId: session.id
+    });
+    const statusMap = new Map(rows.map((r) => [String(r.student_user_id), String(r.status)]));
+    const records = roster.map((s) => ({
+      student_user_id: s.user_id,
+      name: s.name,
+      email: s.email,
+      status: statusMap.get(String(s.user_id)) || 'absent'
+    }));
+    const locked = Boolean(session.locked_by) && !isAttendanceAdminUser(user);
 
-  const roster = listClassStudents(workspaceId, channelId);
-
-  const rows = db
-    .prepare(
-      `SELECT student_user_id, status
-       FROM attendance_records
-       WHERE workspace_id = ? AND session_id = ?`
-    )
-    .all(workspaceId, session.id);
-
-  const statusMap = new Map(rows.map((r) => [String(r.student_user_id), String(r.status)]));
-
-  const records = roster.map((s) => ({
-    student_user_id: s.user_id,
-    name: s.name,
-    email: s.email,
-    status: statusMap.get(String(s.user_id)) || 'absent'
-  }));
-
-  const locked = Boolean(session.locked_by) && !isAttendanceAdminUser(user);
-
-  res.json({
-    channel: chk.channel,
-    session_id: session.id,
-    session_date: sessionDate,
-    records,
-    locked
-  });
+    res.json({
+      channel: chk.channel,
+      session_id: session.id,
+      session_date: sessionDate,
+      records,
+      locked
+    });
+  } catch (err) {
+    console.error('[Attendance] Load failed', err);
+    res.status(500).json({ error: 'Failed to load attendance' });
+  }
 });
 
 app.post('/api/classes/:channelId/attendance/save', express.json(), async (req, res) => {
@@ -11570,158 +12679,148 @@ app.post('/api/classes/:channelId/attendance/save', express.json(), async (req, 
   const records = Array.isArray(req.body?.records) ? req.body.records : [];
   const sendAbsenceEmails = req.body?.send_absence_emails !== false;
 
-  const session = getOrCreateAttendanceSession(workspaceId, channelId, sessionDate, user.id);
+  try {
+    const session = await getOrCreateAttendanceSession(workspaceId, channelId, sessionDate, user.id);
+    const roster = listClassStudents(workspaceId, channelId);
+    const rosterSet = new Set(roster.map((r) => String(r.user_id)));
 
-  const roster = listClassStudents(workspaceId, channelId);
-  const rosterSet = new Set(roster.map((r) => String(r.user_id)));
+    const normalized = records
+      .map((r) => ({
+        student_user_id: String(r.student_user_id || ''),
+        status: String(r.status || 'absent').toLowerCase() === 'present' ? 'present' : 'absent'
+      }))
+      .filter((r) => r.student_user_id && rosterSet.has(r.student_user_id));
 
-  const normalized = records
-    .map((r) => ({
-      student_user_id: String(r.student_user_id || ''),
-      status: String(r.status || 'absent').toLowerCase() === 'present' ? 'present' : 'absent'
-    }))
-    .filter((r) => r.student_user_id && rosterSet.has(r.student_user_id));
+    // Attendance migration boundary: mark/update writes are routed only through
+    // the attendance repository so PostgreSQL rehearsal preserves API shape.
+    await attendanceRepository.upsertAttendanceRecords({
+      idFactory: uuid,
+      workspaceId,
+      sessionId: session.id,
+      channelId,
+      records: normalized,
+      markedByUserId: user.id
+    });
 
-  const insertStmt = db.prepare(`
-    INSERT INTO attendance_records
-      (id, workspace_id, session_id, channel_id, student_user_id, status, marked_by_user_id, marked_at)
-    VALUES
-      (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    ON CONFLICT(session_id, student_user_id) DO UPDATE SET
-      status = excluded.status,
-      marked_by_user_id = excluded.marked_by_user_id,
-      marked_at = datetime('now')
-  `);
+    const savedRows = await attendanceRepository.listAttendanceStatuses({
+      workspaceId,
+      sessionId: session.id
+    });
+    const presentSet = new Set(
+      savedRows.filter((x) => x.status === 'present').map((x) => String(x.student_user_id))
+    );
+    const absentees = roster
+      .filter((s) => !presentSet.has(String(s.user_id)))
+      .map((s) => ({ user_id: String(s.user_id), name: s.name, email: s.email }));
 
-  db.transaction(() => {
-    for (const r of normalized) {
-      insertStmt.run(
-        uuid('arec'),
-        workspaceId,
-        session.id,
-        channelId,
-        r.student_user_id,
-        r.status,
-        user.id
-      );
-    }
-  })();
+    let emailed = 0;
+    let skipped = 0;
 
-  const savedRows = db.prepare(
-    `SELECT student_user_id, status
-     FROM attendance_records
-     WHERE workspace_id = ? AND session_id = ?`
-  ).all(workspaceId, session.id);
+    const workspaceEmailRow = db.prepare('SELECT name FROM workspaces WHERE id = ?').get(workspaceId) || {};
+    const teacherName = user.full_name || user.name || user.email || 'Teacher';
+    const className = chk.channel?.name || 'Class';
+    const supportEmail = workspaceEmailRow.admin_email || user.email || 'support@school.com';
 
-  const presentSet = new Set(
-    savedRows.filter((x) => x.status === 'present').map((x) => String(x.student_user_id))
-  );
-  const absentees = roster
-    .filter((s) => !presentSet.has(String(s.user_id)))
-    .map((s) => ({ user_id: String(s.user_id), name: s.name, email: s.email }));
+    if (sendAbsenceEmails && absentees.length) {
+      for (const stu of absentees) {
+        if (!stu.email) {
+          skipped++;
+          continue;
+        }
 
-  let emailed = 0;
-  let skipped = 0;
-
-  const workspaceEmailRow = db.prepare('SELECT name FROM workspaces WHERE id = ?').get(workspaceId) || {};
-  const teacherName = user.full_name || user.name || user.email || 'Teacher';
-  const className = chk.channel?.name || 'Class';
-  const supportEmail = workspaceEmailRow.admin_email || user.email || 'support@school.com';
-
-  if (sendAbsenceEmails && absentees.length) {
-    for (const stu of absentees) {
-      if (!stu.email) {
-        skipped++;
-        continue;
-      }
-
-      const already = db
-        .prepare(
-          `SELECT 1 FROM attendance_notifications
-           WHERE session_id = ? AND student_user_id = ? AND type = 'absence_email'
-           LIMIT 1`
-        )
-        .get(session.id, stu.user_id);
-
-      if (already) {
-        skipped++;
-        continue;
-      }
-
-      const vars = {
-        student_name: stu.name || 'Student',
-        class_name: className,
-      class_date: sessionDate,
-        teacher_name: teacherName,
-        school_name: workspaceEmailRow.name || 'School',
-        support_email: supportEmail
-      };
-
-      const rendered = typeof renderWorkspaceTemplate === 'function'
-        ? renderWorkspaceTemplate(workspaceId, 'class_absence', vars)
-        : {
-            subject: `Absence notice: ${className}`,
-            bodyInnerHtml: `<p>Hi ${escapeHtml(vars.student_name)},</p><p>We noticed you were absent for <strong>${escapeHtml(className)}</strong> on ${escapeHtml(date)}.</p>`,
-            bodyText: `Hi ${vars.student_name},\nYou were absent for ${className} on ${sessionDate}.`
-          };
-
-      try {
-        await sendPlatformEmail({
-          to: stu.email,
-          subject: rendered.subject,
-          html: rendered.bodyInnerHtml,
-          text: rendered.bodyText,
-          fromName: buildAutomatedEmailSenderName(workspaceEmailRow.name || 'School', 'class_absence')
+        const already = await attendanceRepository.hasAttendanceNotification({
+          sessionId: session.id,
+          studentUserId: stu.user_id,
+          type: 'absence_email'
         });
 
-        db.prepare(
-          `INSERT INTO attendance_notifications (id, workspace_id, session_id, channel_id, student_user_id, type)
-           VALUES (?, ?, ?, ?, ?, 'absence_email')`
-        ).run(uuid('anotif'), workspaceId, session.id, channelId, stu.user_id);
-
-        if (typeof recordEmailLog === 'function') {
-          recordEmailLog({
-            id: uuid('elog'),
-            workspaceId,
-            sentByUserId: user.id,
-            toEmail: stu.email,
-            toName: stu.name || '',
-            subject: rendered.subject,
-            bodyText: rendered.bodyText,
-            bodyHtml: rendered.bodyInnerHtml,
-            type: 'attendance_absence',
-            status: 'sent'
-          });
+        if (already) {
+          skipped++;
+          continue;
         }
 
-        emailed++;
-      } catch (e) {
-        if (typeof recordEmailLog === 'function') {
-          recordEmailLog({
-            id: uuid('elog'),
-            workspaceId,
-            sentByUserId: user.id,
-            toEmail: stu.email,
-            toName: stu.name || '',
+        const vars = {
+          student_name: stu.name || 'Student',
+          class_name: className,
+          class_date: sessionDate,
+          teacher_name: teacherName,
+          school_name: workspaceEmailRow.name || 'School',
+          support_email: supportEmail
+        };
+
+        const rendered = typeof renderWorkspaceTemplate === 'function'
+          ? renderWorkspaceTemplate(workspaceId, 'class_absence', vars)
+          : {
+              subject: `Absence notice: ${className}`,
+              bodyInnerHtml: `<p>Hi ${escapeHtml(vars.student_name)},</p><p>We noticed you were absent for <strong>${escapeHtml(className)}</strong> on ${escapeHtml(sessionDate)}.</p>`,
+              bodyText: `Hi ${vars.student_name},\nYou were absent for ${className} on ${sessionDate}.`
+            };
+
+        try {
+          await sendPlatformEmail({
+            to: stu.email,
             subject: rendered.subject,
-            bodyText: rendered.bodyText,
-            bodyHtml: rendered.bodyInnerHtml,
-            type: 'attendance_absence',
-            status: 'failed',
-            errorMessage: String(e.message || e)
+            html: rendered.bodyInnerHtml,
+            text: rendered.bodyText,
+            fromName: buildAutomatedEmailSenderName(workspaceEmailRow.name || 'School', 'class_absence')
           });
+
+          await attendanceRepository.createAttendanceNotification({
+            idFactory: uuid,
+            workspaceId,
+            sessionId: session.id,
+            channelId,
+            studentUserId: stu.user_id,
+            type: 'absence_email'
+          });
+
+          if (typeof recordEmailLog === 'function') {
+            recordEmailLog({
+              id: uuid('elog'),
+              workspaceId,
+              sentByUserId: user.id,
+              toEmail: stu.email,
+              toName: stu.name || '',
+              subject: rendered.subject,
+              bodyText: rendered.bodyText,
+              bodyHtml: rendered.bodyInnerHtml,
+              type: 'attendance_absence',
+              status: 'sent'
+            });
+          }
+
+          emailed++;
+        } catch (e) {
+          if (typeof recordEmailLog === 'function') {
+            recordEmailLog({
+              id: uuid('elog'),
+              workspaceId,
+              sentByUserId: user.id,
+              toEmail: stu.email,
+              toName: stu.name || '',
+              subject: rendered.subject,
+              bodyText: rendered.bodyText,
+              bodyHtml: rendered.bodyInnerHtml,
+              type: 'attendance_absence',
+              status: 'failed',
+              errorMessage: String(e.message || e)
+            });
+          }
         }
       }
     }
-  }
 
-  res.json({
-    ok: true,
-    session_id: session.id,
-    session_date: sessionDate,
-    absentees_count: absentees.length,
-    absence_emails: { emailed, skipped }
-  });
+    res.json({
+      ok: true,
+      session_id: session.id,
+      session_date: sessionDate,
+      absentees_count: absentees.length,
+      absence_emails: { emailed, skipped }
+    });
+  } catch (err) {
+    console.error('[Attendance] Save failed', err);
+    res.status(500).json({ error: 'Failed to save attendance' });
+  }
 });
 
 app.get('/api/students/:studentId/attendance', (req, res) => {
@@ -11736,19 +12835,12 @@ app.get('/api/students/:studentId/attendance', (req, res) => {
   const limitParam = parseInt(String(req.query.limit || '50'), 10);
   const limit = Math.min(Number.isFinite(limitParam) ? limitParam : 50, 200);
 
-  const rows = db
-    .prepare(
-      `SELECT ar.status, s.session_date, c.name AS class_name, ar.channel_id
-       FROM attendance_records ar
-       JOIN attendance_sessions s ON s.id = ar.session_id
-       JOIN channels c ON c.id = ar.channel_id
-       WHERE ar.workspace_id = ? AND ar.student_user_id = ?
-       ORDER BY s.session_date DESC
-       LIMIT ?`
-    )
-    .all(workspaceId, studentId, limit);
-
-  res.json({ records: rows });
+  attendanceRepository.listStudentAttendance({ workspaceId, studentId, limit })
+    .then((rows) => res.json({ records: rows }))
+    .catch((err) => {
+      console.error('[Attendance] Student history failed', err);
+      res.status(500).json({ error: 'Failed to load student attendance' });
+    });
 });
 
 app.get('/api/analytics/school-overview', authRequired, (req, res) => {
@@ -11965,13 +13057,10 @@ app.get(
   }
 );
 
-app.get('/api/workspaces/:workspaceId/profile', (req, res) => {
-  const user = getAuthedUser(req);
-  if (!canManageWorkspaceSettings(user)) return res.status(403).json({ error: 'Forbidden' });
-
-  const workspaceId = String(req.params.workspaceId || '');
-  const userWs = user.workspaceId || user.workspace_id || 'default';
-  if (workspaceId !== String(userWs)) return res.status(403).json({ error: 'Wrong workspace' });
+app.get('/api/workspaces/:workspaceId/profile', authRequired, (req, res) => {
+  const ctx = getManagedWorkspaceRequestContext(req, res);
+  if (!ctx) return;
+  const workspaceId = ctx.workspaceId;
 
   const workspaceRow = db
     .prepare('SELECT id, name, admin_email FROM workspaces WHERE id = ?')
@@ -12012,160 +13101,866 @@ app.get('/api/workspaces/:workspaceId/profile', (req, res) => {
   res.json(profile);
 });
 
-app.post('/api/workspaces/:workspaceId/profile/registration', (req, res) => {
-  const user = getAuthedUser(req);
-  if (!canManageWorkspaceSettings(user)) return res.status(403).json({ error: 'Forbidden' });
+app.post('/api/workspaces/:workspaceId/profile/registration', authRequired, express.json(), (req, res) => {
+  const ctx = getManagedWorkspaceRequestContext(req, res);
+  if (!ctx) return;
+  try {
+    const workspaceId = ctx.workspaceId;
 
-  const workspaceId = String(req.params.workspaceId || '');
-  const userWs = user.workspaceId || user.workspace_id || 'default';
-  if (workspaceId !== String(userWs)) return res.status(403).json({ error: 'Wrong workspace' });
+    const registrationDetails = normalizeTrimmedText(
+      req.body?.registrationDetails || '',
+      800,
+      'registrationDetails',
+      { multiline: true }
+    );
+    db.prepare(`
+      INSERT INTO workspace_profile (workspace_id, registration_details, updated_at)
+      VALUES (?, ?, datetime('now'))
+      ON CONFLICT(workspace_id) DO UPDATE SET
+        registration_details = excluded.registration_details,
+        updated_at = datetime('now')
+    `).run(workspaceId, registrationDetails);
 
-  const registrationDetails = String(req.body?.registrationDetails || '').trim();
-  db.prepare(`
-    INSERT INTO workspace_profile (workspace_id, registration_details, updated_at)
-    VALUES (?, ?, datetime('now'))
-    ON CONFLICT(workspace_id) DO UPDATE SET
-      registration_details = excluded.registration_details,
-      updated_at = datetime('now')
-  `).run(workspaceId, registrationDetails);
+    const updatedRow = db
+      .prepare('SELECT registration_details FROM workspace_profile WHERE workspace_id = ?')
+      .get(workspaceId) || {};
 
-  const updatedRow = db
-    .prepare('SELECT registration_details FROM workspace_profile WHERE workspace_id = ?')
-    .get(workspaceId) || {};
-
-  res.json({ ok: true, registrationDetails: updatedRow.registration_details || '' });
+    res.json({ ok: true, registrationDetails: updatedRow.registration_details || '' });
+  } catch (error) {
+    handleOnboardingRouteError(res, error, '[Onboarding] Failed to update registration details');
+  }
 });
 
-app.patch('/api/workspaces/:workspaceId/profile', (req, res) => {
-  const user = getAuthedUser(req);
-  if (!canManageWorkspaceSettings(user)) return res.status(403).json({ error: 'Forbidden' });
-
-  const workspaceId = String(req.params.workspaceId || '');
-  const userWs = user.workspaceId || user.workspace_id || 'default';
-  if (workspaceId !== String(userWs)) return res.status(403).json({ error: 'Wrong workspace' });
-
-  const workspaceRow = db.prepare('SELECT id FROM workspaces WHERE id = ?').get(workspaceId);
-  if (!workspaceRow) {
-    return res.status(404).json({ error: 'Workspace not found' });
-  }
-
-  const body = req.body || {};
-  const street = String(body.street || '').trim();
-  const houseNumber = String(body.houseNumber || body.house_number || '').trim();
-  const postalCode = String(body.postalCode || body.postal_code || '').trim();
-  const city = String(body.city || '').trim();
-  const state = String(body.state || '').trim();
-  const country = String(body.country || '').trim();
-  const phone = String(body.phone || '').trim();
-  const website = String(body.website || '').trim();
-  const openingHoursText = String(body.openingHours || body.opening_hours || '').trim();
-  const openingHoursDetailsPayload = sanitizeOpeningHoursDetails(body.openingHoursDetails);
-  const openingHoursMeta = {};
-  if (openingHoursText) {
-    openingHoursMeta.text = openingHoursText;
-  }
-  if (openingHoursDetailsPayload) {
-    openingHoursMeta.details = openingHoursDetailsPayload;
-  }
-  const openingHoursJson = Object.keys(openingHoursMeta).length
-    ? JSON.stringify(openingHoursMeta)
-    : '';
-  const workspaceName = typeof body.workspaceName === 'string' ? body.workspaceName.trim() : null;
-  const registrationDetails = String(
-    body.registrationDetails || body.registration_details || ''
-  ).trim();
-  const usePlatformContactEmail = body.usePlatformContactEmail ? 1 : 0;
-
-  db.prepare(`
-    INSERT INTO workspace_profile (
-      workspace_id,
-      street,
-      house_number,
-      postal_code,
-      city,
-      state,
-      country,
-      phone,
-      website,
-      opening_hours_json,
-      registration_details,
-      use_platform_contact_email,
-      updated_at
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    ON CONFLICT(workspace_id) DO UPDATE SET
-      street = excluded.street,
-      house_number = excluded.house_number,
-      postal_code = excluded.postal_code,
-      city = excluded.city,
-      state = excluded.state,
-      country = excluded.country,
-      phone = excluded.phone,
-      website = excluded.website,
-      opening_hours_json = excluded.opening_hours_json,
-      registration_details = excluded.registration_details,
-      use_platform_contact_email = excluded.use_platform_contact_email,
-      updated_at = datetime('now')
-  `).run(
-    workspaceId,
-    street,
-    houseNumber,
-    postalCode,
-    city,
-    state,
-    country,
-    phone,
-    website,
-    openingHoursJson,
-    registrationDetails,
-    usePlatformContactEmail
-  );
-
-  if (workspaceName !== null) {
-    db.prepare('UPDATE workspaces SET name = ? WHERE id = ?').run(workspaceName, workspaceId);
-  }
-
-  const updatedWorkspace = db.prepare('SELECT name FROM workspaces WHERE id = ?').get(workspaceId) || {};
-  const updatedRow = db
-    .prepare('SELECT * FROM workspace_profile WHERE workspace_id = ?')
-    .get(workspaceId) || {};
-
-  const profile = {
-    workspaceId,
-    workspaceName: updatedWorkspace.name || '',
-    street: updatedRow.street || '',
-    houseNumber: updatedRow.house_number || '',
-    postalCode: updatedRow.postal_code || '',
-    city: updatedRow.city || '',
-    state: updatedRow.state || '',
-    country: updatedRow.country || '',
-    phone: updatedRow.phone || '',
-    website: updatedRow.website || '',
-    openingHours: parseOpeningHoursJson(updatedRow.opening_hours_json),
-    openingHoursDetails: parseOpeningHoursDetails(updatedRow.opening_hours_json),
-    updatedAt: updatedRow.updated_at || ''
-  };
-  profile.registrationDetails = updatedRow.registration_details || '';
-  profile.adminEmail = (
-    db.prepare('SELECT admin_email FROM workspaces WHERE id = ?').get(workspaceId) || {}
-  ).admin_email || '';
-  profile.usePlatformContactEmail = Number(updatedRow.use_platform_contact_email || 0) === 1;
-  profile.platformContactEmail = getPlatformContactEmail();
-  profile.signatureEmail = resolveWorkspaceContactEmail({
-    profileRow: updatedRow,
-    workspaceRow: {
-      admin_email: profile.adminEmail
-    }
-  });
-
-  // refresh system policy message so it shows updated school name/address
+app.patch('/api/workspaces/:workspaceId/profile', authRequired, express.json(), (req, res) => {
+  const ctx = getManagedWorkspaceRequestContext(req, res);
+  if (!ctx) return;
   try {
-    ensurePrivacyRulesMessage(workspaceId);
-  } catch (e) {
-    console.warn('Failed to refresh privacy rules message:', e);
-  }
+    const workspaceId = ctx.workspaceId;
+    const workspaceRow = db.prepare('SELECT id FROM workspaces WHERE id = ?').get(workspaceId);
+    if (!workspaceRow) {
+      return res.status(404).json({ error: 'Workspace not found' });
+    }
 
-  res.json(profile);
+    const input = sanitizeSchoolProfileInput(req.body || {});
+    const openingHoursMeta = {};
+    if (input.openingHoursText) {
+      openingHoursMeta.text = input.openingHoursText;
+    }
+    if (input.openingHoursDetailsPayload) {
+      openingHoursMeta.details = input.openingHoursDetailsPayload;
+    }
+    if (input.timezone) {
+      openingHoursMeta.timezone = input.timezone;
+    }
+    const openingHoursJson = Object.keys(openingHoursMeta).length
+      ? JSON.stringify(openingHoursMeta)
+      : '';
+
+    const writeProfileTx = db.transaction(() => {
+      db.prepare(`
+        INSERT INTO workspace_profile (
+          workspace_id,
+          street,
+          house_number,
+          postal_code,
+          city,
+          state,
+          country,
+          phone,
+          website,
+          opening_hours_json,
+          registration_details,
+          use_platform_contact_email,
+          updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(workspace_id) DO UPDATE SET
+          street = excluded.street,
+          house_number = excluded.house_number,
+          postal_code = excluded.postal_code,
+          city = excluded.city,
+          state = excluded.state,
+          country = excluded.country,
+          phone = excluded.phone,
+          website = excluded.website,
+          opening_hours_json = excluded.opening_hours_json,
+          registration_details = excluded.registration_details,
+          use_platform_contact_email = excluded.use_platform_contact_email,
+          updated_at = datetime('now')
+      `).run(
+        workspaceId,
+        input.street,
+        input.houseNumber,
+        input.postalCode,
+        input.city,
+        input.state,
+        input.country,
+        input.phone,
+        input.website,
+        openingHoursJson,
+        input.registrationDetails,
+        input.usePlatformContactEmail
+      );
+
+      if (input.workspaceName !== null) {
+        db.prepare('UPDATE workspaces SET name = ? WHERE id = ?').run(input.workspaceName, workspaceId);
+      }
+    });
+    writeProfileTx();
+
+    const updatedWorkspace = db.prepare('SELECT name FROM workspaces WHERE id = ?').get(workspaceId) || {};
+    const updatedRow = db
+      .prepare('SELECT * FROM workspace_profile WHERE workspace_id = ?')
+      .get(workspaceId) || {};
+
+    const profile = {
+      workspaceId,
+      workspaceName: updatedWorkspace.name || '',
+      street: updatedRow.street || '',
+      houseNumber: updatedRow.house_number || '',
+      postalCode: updatedRow.postal_code || '',
+      city: updatedRow.city || '',
+      state: updatedRow.state || '',
+      country: updatedRow.country || '',
+      phone: updatedRow.phone || '',
+      website: updatedRow.website || '',
+      openingHours: parseOpeningHoursJson(updatedRow.opening_hours_json),
+      openingHoursDetails: parseOpeningHoursDetails(updatedRow.opening_hours_json),
+      updatedAt: updatedRow.updated_at || ''
+    };
+    profile.registrationDetails = updatedRow.registration_details || '';
+    profile.adminEmail = (
+      db.prepare('SELECT admin_email FROM workspaces WHERE id = ?').get(workspaceId) || {}
+    ).admin_email || '';
+    profile.usePlatformContactEmail = Number(updatedRow.use_platform_contact_email || 0) === 1;
+    profile.platformContactEmail = getPlatformContactEmail();
+    profile.signatureEmail = resolveWorkspaceContactEmail({
+      profileRow: updatedRow,
+      workspaceRow: {
+        admin_email: profile.adminEmail
+      }
+    });
+
+    // Security/migration boundary: this secondary refresh is intentionally
+    // outside the transactional profile write so message generation failures
+    // do not roll back valid school profile data.
+    try {
+      ensurePrivacyRulesMessage(workspaceId);
+    } catch (e) {
+      console.warn('Failed to refresh privacy rules message:', e);
+    }
+
+    res.json(profile);
+  } catch (error) {
+    handleOnboardingRouteError(res, error, '[Onboarding] Failed to update school profile');
+  }
+});
+
+function getOnboardingRequester(req, res) {
+  const user = req.auth || getAuthedUser(req);
+  if (!user || !canManageWorkspaceSettings(user)) {
+    res.status(403).json({ error: 'Forbidden' });
+    return null;
+  }
+  const workspaceId = String(req.params.workspaceId || workspaceIdFromRequest(req) || '').trim();
+  const userWs = String(user.workspaceId || user.workspace_id || '').trim();
+  const isSuper = !!user.superAdmin || String(user.role || '').toLowerCase() === 'super_admin';
+  if (!workspaceId || (!isSuper && workspaceId !== userWs)) {
+    res.status(403).json({ error: 'Wrong workspace' });
+    return null;
+  }
+  return { user, workspaceId };
+}
+
+function getManagedWorkspaceRequestContext(req, res, options = {}) {
+  const requestedWorkspaceId = String(
+    options.workspaceId ?? req.params.workspaceId ?? req.query.workspaceId ?? req.body?.workspaceId ?? workspaceIdFromRequest(req) ?? ''
+  ).trim();
+  const user = req.auth || getAuthedUser(req);
+  if (!user) {
+    res.status(401).json({ error: 'Not authenticated' });
+    return null;
+  }
+  if (options.requireManager !== false && !canManageWorkspaceSettings(user)) {
+    res.status(403).json({ error: 'Forbidden' });
+    return null;
+  }
+  const userWorkspaceId = String(user.workspaceId || user.workspace_id || '').trim();
+  const isSuper = !!user.superAdmin || String(user.role || '').toLowerCase() === 'super_admin';
+  if (!requestedWorkspaceId) {
+    res.status(400).json({ error: 'workspaceId required' });
+    return null;
+  }
+  if (!isSuper && requestedWorkspaceId !== userWorkspaceId) {
+    res.status(403).json({ error: options.errorMessage || 'Wrong workspace' });
+    return null;
+  }
+  return {
+    user,
+    workspaceId: requestedWorkspaceId,
+    isSuper
+  };
+}
+
+function normalizeTrimmedText(value, maxLength, fieldName, { multiline = false } = {}) {
+  if (value == null) return '';
+  const raw = String(value).trim();
+  if (!multiline && /[\r\n]/.test(raw)) {
+    throw new OnboardingValidationError(`${fieldName} must be a single line`, `invalid_${fieldName.toLowerCase().replace(/\s+/g, '_')}`);
+  }
+  if (raw.length > maxLength) {
+    throw new OnboardingValidationError(`${fieldName} is too long`, `invalid_${fieldName.toLowerCase().replace(/\s+/g, '_')}`);
+  }
+  return raw;
+}
+
+function normalizeOptionalEmail(value, fieldName = 'email') {
+  const normalized = normalizeTrimmedText(value, 200, fieldName).toLowerCase();
+  if (!normalized) return '';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
+    throw new OnboardingValidationError(`${fieldName} must be a valid email address`, `invalid_${fieldName.toLowerCase().replace(/\s+/g, '_')}`);
+  }
+  return normalized;
+}
+
+function normalizeOptionalPhone(value, fieldName = 'phone') {
+  const normalized = normalizeTrimmedText(value, 40, fieldName);
+  if (!normalized) return '';
+  if (!/^[0-9+()\-/.\s]{7,40}$/.test(normalized)) {
+    throw new OnboardingValidationError(`${fieldName} must be a valid phone number`, `invalid_${fieldName.toLowerCase().replace(/\s+/g, '_')}`);
+  }
+  return normalized;
+}
+
+function normalizeOptionalUrl(value, fieldName = 'website') {
+  const normalized = normalizeTrimmedText(value, 300, fieldName);
+  if (!normalized) return '';
+  let url;
+  try {
+    url = new URL(normalized);
+  } catch (_err) {
+    throw new OnboardingValidationError(`${fieldName} must be a valid URL`, `invalid_${fieldName.toLowerCase().replace(/\s+/g, '_')}`);
+  }
+  if (!['http:', 'https:'].includes(url.protocol)) {
+    throw new OnboardingValidationError(`${fieldName} must use http or https`, `invalid_${fieldName.toLowerCase().replace(/\s+/g, '_')}`);
+  }
+  return url.toString();
+}
+
+function normalizeOptionalTimezone(value, fieldName = 'timezone') {
+  const normalized = normalizeTrimmedText(value, 80, fieldName);
+  if (!normalized) return '';
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: normalized }).format(new Date());
+  } catch (_err) {
+    throw new OnboardingValidationError(`${fieldName} must be a valid IANA timezone`, `invalid_${fieldName.toLowerCase().replace(/\s+/g, '_')}`);
+  }
+  return normalized;
+}
+
+function sanitizeSchoolProfileInput(body = {}) {
+  const openingHoursText = normalizeTrimmedText(body.openingHours || body.opening_hours || '', 240, 'openingHours');
+  const openingHoursDetailsPayload = sanitizeOpeningHoursDetails(body.openingHoursDetails);
+  const timezone = normalizeOptionalTimezone(
+    body.timezone || body.timeZone || body.schoolTimezone || body.school_time_zone || '',
+    'timezone'
+  );
+  const contactEmail = normalizeOptionalEmail(
+    body.contactEmail || body.signatureEmail || body.schoolEmail || '',
+    'contactEmail'
+  );
+  return {
+    workspaceName:
+      typeof body.workspaceName === 'string'
+        ? normalizeTrimmedText(body.workspaceName, 120, 'workspaceName')
+        : null,
+    street: normalizeTrimmedText(body.street || '', 120, 'street'),
+    houseNumber: normalizeTrimmedText(body.houseNumber || body.house_number || '', 24, 'houseNumber'),
+    postalCode: normalizeTrimmedText(body.postalCode || body.postal_code || '', 24, 'postalCode'),
+    city: normalizeTrimmedText(body.city || '', 80, 'city'),
+    state: normalizeTrimmedText(body.state || '', 80, 'state'),
+    country: normalizeTrimmedText(body.country || '', 80, 'country'),
+    phone: normalizeOptionalPhone(body.phone || '', 'phone'),
+    website: normalizeOptionalUrl(body.website || '', 'website'),
+    timezone,
+    contactEmail,
+    openingHoursText,
+    openingHoursDetailsPayload,
+    registrationDetails: normalizeTrimmedText(
+      body.registrationDetails || body.registration_details || '',
+      800,
+      'registrationDetails',
+      { multiline: true }
+    ),
+    usePlatformContactEmail: body.usePlatformContactEmail ? 1 : 0
+  };
+}
+
+function sanitizeEmailSettingsInput(body = {}) {
+  return {
+    enabled: body.enabled ? 1 : 0,
+    brandSchoolName: normalizeTrimmedText(body.brand_school_name || '', 160, 'brandSchoolName'),
+    replyTo: normalizeOptionalEmail(body.reply_to_email || '', 'replyToEmail'),
+    footerText: normalizeTrimmedText(body.footer_text || '', 1200, 'footerText', { multiline: true }),
+    subjectPrefix: normalizeTrimmedText(body.subject_prefix || '', 160, 'subjectPrefix'),
+    logoUrl: normalizeOptionalUrl(body.logo_url || '', 'logoUrl'),
+    signatureHtml: normalizeTrimmedText(body.signature_html || '', 12000, 'signatureHtml', { multiline: true }),
+    manualBodyText: normalizeTrimmedText(body.manual_body_text || '', 4000, 'manualBodyText', { multiline: true })
+  };
+}
+
+function extractIdempotencyKey(req) {
+  return normalizeTrimmedText(
+    req.get?.('x-idempotency-key') || req.body?.idempotencyKey || req.body?.onboardingRequestKey || '',
+    120,
+    'idempotencyKey'
+  );
+}
+
+function findExistingIdempotentUser({ workspaceId, email, role }) {
+  if (!workspaceId || !email) return null;
+  return db.prepare(`
+    SELECT
+      id,
+      workspace_id AS workspaceId,
+      first_name AS firstName,
+      last_name AS lastName,
+      name,
+      username,
+      email,
+      avatar_url AS avatarUrl,
+      role,
+      status,
+      course_start AS courseStart,
+      course_end AS courseEnd,
+      course_level AS courseLevel,
+      gender,
+      date_of_birth AS dateOfBirth,
+      phone_country AS phoneCountry,
+      phone_number AS phoneNumber,
+      teaching_languages AS teachingLanguages,
+      employment_type AS employmentType,
+      available_days AS availableDays,
+      emergency_contact_name AS emergencyName,
+      emergency_contact_phone AS emergencyPhone,
+      emergency_contact_relation AS emergencyRelation,
+      native_language AS nativeLanguage,
+      learning_goal AS learningGoal
+    FROM users
+    WHERE workspace_id = ?
+      AND lower(email) = lower(?)
+      AND lower(role) = lower(?)
+    ORDER BY created_at DESC, id DESC
+    LIMIT 1
+  `).get(workspaceId, email, role);
+}
+
+function findExistingIdempotentChannel({ workspaceId, name, category }) {
+  if (!workspaceId || !name) return null;
+  return db.prepare(`
+    SELECT id, name, topic, members, unread, workspace_id AS workspaceId, category
+    FROM channels
+    WHERE workspace_id = ?
+      AND lower(name) = lower(?)
+      AND lower(COALESCE(category, '')) = lower(?)
+    ORDER BY id DESC
+    LIMIT 1
+  `).get(workspaceId, name, category);
+}
+
+function findExistingIdempotentLiveSession({ workspaceId, channelId = null, title, date, startTime, endTime, createdBy }) {
+  if (!workspaceId || !title || !date || !startTime || !endTime || !createdBy) return null;
+  return db.prepare(`
+    SELECT *
+    FROM live_sessions
+    WHERE workspace_id = ?
+      AND COALESCE(channel_id, '') = COALESCE(?, '')
+      AND lower(title) = lower(?)
+      AND date = ?
+      AND start_time = ?
+      AND end_time = ?
+      AND COALESCE(created_by, '') = COALESCE(?, '')
+    ORDER BY created_at DESC, id DESC
+    LIMIT 1
+  `).get(workspaceId, channelId, title, date, startTime, endTime, createdBy);
+}
+
+function findExistingIdempotentHomeworkItem({ workspaceId, classChannelId, title, dueDate = null, createdBy }) {
+  if (!workspaceId || !classChannelId || !title || !createdBy) return null;
+  return db.prepare(`
+    SELECT id
+    FROM homework_items
+    WHERE workspace_id = ?
+      AND class_channel_id = ?
+      AND lower(title) = lower(?)
+      AND COALESCE(due_date, '') = COALESCE(?, '')
+      AND COALESCE(created_by, '') = COALESCE(?, '')
+    ORDER BY created_at DESC, id DESC
+    LIMIT 1
+  `).get(workspaceId, classChannelId, title, dueDate, createdBy);
+}
+
+function sanitizeOnboardingMetaInput(input) {
+  if (input == null) return {};
+  if (typeof input !== 'object' || Array.isArray(input)) {
+    throw new OnboardingValidationError('Onboarding meta must be an object', 'invalid_onboarding_meta');
+  }
+  const serialized = JSON.stringify(input);
+  if (serialized.length > 4000) {
+    throw new OnboardingValidationError('Onboarding meta is too large', 'onboarding_meta_too_large');
+  }
+  return input;
+}
+
+function sanitizeOnboardingCurrentStepInput(input) {
+  if (input == null || input === '') return null;
+  const value = String(input || '').trim();
+  if (!value) return null;
+  if (value.length > 64) {
+    throw new OnboardingValidationError('currentStep is too long', 'invalid_onboarding_current_step');
+  }
+  return value;
+}
+
+function sanitizeBillingProfileInput(body = {}) {
+  const billingEmail = body.billingEmail == null ? undefined : normalizeOptionalEmail(body.billingEmail, 'billingEmail');
+  const invoiceContactName =
+    body.invoiceContactName == null
+      ? undefined
+      : normalizeTrimmedText(body.invoiceContactName || '', 160, 'invoiceContactName');
+  const acknowledgeReadiness = body.acknowledgeReadiness === true;
+  const clearAcknowledgement = body.clearAcknowledgement === true;
+  if (
+    billingEmail === undefined &&
+    invoiceContactName === undefined &&
+    !acknowledgeReadiness &&
+    !clearAcknowledgement
+  ) {
+    throw new OnboardingValidationError('No billing changes were provided', 'empty_billing_update');
+  }
+  return { billingEmail, invoiceContactName, acknowledgeReadiness, clearAcknowledgement };
+}
+
+function handleOnboardingRouteError(res, error, fallbackMessage) {
+  if (error instanceof OnboardingValidationError) {
+    return res.status(error.status || 400).json({
+      error: error.message,
+      code: error.code,
+      details: error.details || null
+    });
+  }
+  console.error(fallbackMessage, error);
+  return res.status(500).json({ error: fallbackMessage.replace(/^\[Onboarding\]\s*/, '') });
+}
+
+app.get('/api/workspaces/:workspaceId/onboarding', authRequired, async (req, res) => {
+  const ctx = getOnboardingRequester(req, res);
+  if (!ctx) return;
+  try {
+    await onboardingRepository.ensureWorkspaceOnboarding({
+      workspaceId: ctx.workspaceId,
+      createdBy: ctx.user.id || ctx.user.sub || null,
+      now: new Date().toISOString()
+    });
+    const onboarding = await onboardingRepository.getWorkspaceOnboarding(ctx.workspaceId);
+    res.json({ onboarding });
+  } catch (error) {
+    handleOnboardingRouteError(res, error, '[Onboarding] Failed to load onboarding');
+  }
+});
+
+app.patch('/api/workspaces/:workspaceId/onboarding', authRequired, express.json(), async (req, res) => {
+  const ctx = getOnboardingRequester(req, res);
+  if (!ctx) return;
+  try {
+    const action = String(req.body?.action || '').trim().toLowerCase();
+    const meta = sanitizeOnboardingMetaInput(req.body?.meta || {});
+    let onboarding = null;
+    if (action === 'resume') {
+      onboarding = await onboardingRepository.resumeWorkspaceOnboarding(
+        ctx.workspaceId,
+        ctx.user.id || ctx.user.sub || null,
+        meta
+      );
+    } else if (action === 'defer') {
+      onboarding = await onboardingRepository.deferWorkspaceOnboarding(
+        ctx.workspaceId,
+        ctx.user.id || ctx.user.sub || null,
+        meta
+      );
+    } else if (action === 'acknowledge_auto_open') {
+      onboarding = await onboardingRepository.acknowledgeAutoOpenSeen(
+        ctx.workspaceId,
+        ctx.user.id || ctx.user.sub || null,
+        meta
+      );
+    } else {
+      return res.status(400).json({ error: 'Invalid onboarding action' });
+    }
+    onboardingGuard.invalidateWorkspace(ctx.workspaceId);
+    legacyAuditLog({
+      workspaceId: ctx.workspaceId,
+      actor: ctx.user.id || ctx.user.sub || 'unknown',
+      action: `workspace_onboarding.${action}`,
+      target: ctx.workspaceId,
+      payload: { status: onboarding?.status || null }
+    });
+    res.json({ onboarding });
+  } catch (error) {
+    handleOnboardingRouteError(res, error, '[Onboarding] Failed to update onboarding visibility');
+  }
+});
+
+app.get('/api/workspaces/:workspaceId/billing-profile', authRequired, async (req, res) => {
+  const ctx = getOnboardingRequester(req, res);
+  if (!ctx) return;
+  try {
+    await billingRepository.ensureWorkspaceBilling({ workspaceId: ctx.workspaceId });
+    const billing = await billingRepository.getWorkspaceBillingProfile(ctx.workspaceId);
+    res.json({ billing });
+  } catch (error) {
+    handleOnboardingRouteError(res, error, '[Onboarding] Failed to load billing profile');
+  }
+});
+
+app.patch('/api/workspaces/:workspaceId/billing-profile', authRequired, express.json(), async (req, res) => {
+  const ctx = getOnboardingRequester(req, res);
+  if (!ctx) return;
+  try {
+    const input = sanitizeBillingProfileInput(req.body || {});
+    const billing = await billingRepository.updateWorkspaceBillingProfile({
+      workspaceId: ctx.workspaceId,
+      billingEmail: input.billingEmail,
+      invoiceContactName: input.invoiceContactName,
+      acknowledgeReadiness: input.acknowledgeReadiness,
+      clearAcknowledgement: input.clearAcknowledgement,
+      userId: ctx.user.id || ctx.user.sub || null
+    });
+    await onboardingRepository.appendOnboardingEvent(
+      ctx.workspaceId,
+      'onboarding_billing_info_updated',
+      'billing_setup',
+      ctx.user.id || ctx.user.sub || null,
+      {
+        billingEmailUpdated: input.billingEmail !== undefined ? 1 : 0,
+        invoiceContactNameUpdated: input.invoiceContactName !== undefined ? 1 : 0,
+        acknowledgeReadiness: input.acknowledgeReadiness ? 1 : 0,
+        clearAcknowledgement: input.clearAcknowledgement ? 1 : 0
+      }
+    );
+    onboardingGuard.invalidateWorkspace(ctx.workspaceId);
+    legacyAuditLog({
+      workspaceId: ctx.workspaceId,
+      actor: ctx.user.id || ctx.user.sub || 'unknown',
+      action: 'workspace_billing.profile_update',
+      target: ctx.workspaceId,
+      payload: {
+        billingEmailUpdated: input.billingEmail !== undefined ? 1 : 0,
+        invoiceContactNameUpdated: input.invoiceContactName !== undefined ? 1 : 0,
+        acknowledgeReadiness: input.acknowledgeReadiness ? 1 : 0,
+        clearAcknowledgement: input.clearAcknowledgement ? 1 : 0
+      }
+    });
+    res.json({ billing });
+  } catch (error) {
+    handleOnboardingRouteError(res, error, '[Onboarding] Failed to update billing profile');
+  }
+});
+
+app.patch('/api/workspaces/:workspaceId/onboarding/steps/:stepId', authRequired, express.json(), async (req, res) => {
+  const ctx = getOnboardingRequester(req, res);
+  if (!ctx) return;
+  const stepId = String(req.params.stepId || '').trim();
+  try {
+    const rawStatus = req.body?.status;
+    const status = rawStatus == null || rawStatus === '' ? null : String(rawStatus || '').trim().toLowerCase();
+    const currentStep = sanitizeOnboardingCurrentStepInput(req.body?.currentStep);
+    const meta = sanitizeOnboardingMetaInput(req.body?.meta || {});
+    if (!stepId || (status && !['completed', 'skipped', 'pending', 'in_progress'].includes(status)) || (!status && !currentStep)) {
+      return res.status(400).json({ error: 'Invalid onboarding step update' });
+    }
+    const onboarding = await onboardingRepository.updateStep({
+      workspaceId: ctx.workspaceId,
+      stepId,
+      status,
+      note: req.body?.note || '',
+      currentStep,
+      userId: ctx.user.id || ctx.user.sub || null,
+      meta,
+      updatedAt: new Date().toISOString()
+    });
+    onboardingGuard.invalidateWorkspace(ctx.workspaceId);
+    legacyAuditLog({
+      workspaceId: ctx.workspaceId,
+      actor: ctx.user.id || ctx.user.sub || 'unknown',
+      action: 'workspace_onboarding.step_update',
+      target: stepId,
+      payload: { status }
+    });
+    res.json({ onboarding });
+  } catch (error) {
+    handleOnboardingRouteError(res, error, '[Onboarding] Failed to update onboarding step');
+  }
+});
+
+app.post('/api/workspaces/:workspaceId/onboarding/activate', authRequired, express.json(), async (req, res) => {
+  const ctx = getOnboardingRequester(req, res);
+  if (!ctx) return;
+  try {
+    const current = await onboardingRepository.getWorkspaceOnboarding(ctx.workspaceId);
+    await onboardingRepository.appendOnboardingEvent(
+      ctx.workspaceId,
+      'onboarding_activation_attempted',
+      'launch_checklist',
+      ctx.user.id || ctx.user.sub || null,
+      {
+        activationReady: !!current.activationReady,
+        requiredRemaining: Number(current?.progress?.requiredTotal || 0) - Number(current?.progress?.requiredCompleted || 0)
+      }
+    );
+    if (!current.activationReady) {
+      await onboardingRepository.appendOnboardingEvent(
+        ctx.workspaceId,
+        'onboarding_activation_blocked',
+        'launch_checklist',
+        ctx.user.id || ctx.user.sub || null,
+        {
+          activationReady: false,
+          activationBlockedBy: Array.isArray(current?.activationBlockedBy) ? current.activationBlockedBy : [],
+          currentStep: current?.currentStep || 'launch_checklist'
+        }
+      );
+      return res.status(400).json({
+        error: 'Workspace is not activation-ready',
+        onboarding: current
+      });
+    }
+    const onboarding = await onboardingRepository.activateWorkspace({
+      workspaceId: ctx.workspaceId,
+      completedAt: new Date().toISOString(),
+      userId: ctx.user.id || ctx.user.sub || null
+    });
+    onboardingGuard.invalidateWorkspace(ctx.workspaceId);
+    legacyAuditLog({
+      workspaceId: ctx.workspaceId,
+      actor: ctx.user.id || ctx.user.sub || 'unknown',
+      action: 'workspace_onboarding.activate',
+      target: ctx.workspaceId,
+      payload: { progress: onboarding.progress }
+    });
+    res.json({ onboarding });
+  } catch (error) {
+    handleOnboardingRouteError(res, error, '[Onboarding] Failed to activate workspace');
+  }
+});
+
+function formatOnboardingApiResponse(onboarding) {
+  const progress = onboarding?.progress || {};
+  const total = Number(progress.total || 0);
+  const completed = Number(progress.completed || 0);
+  return {
+    status: onboarding?.status || 'not_started',
+    currentStep: onboarding?.currentStep || 'welcome',
+    visibility: onboarding?.visibility || null,
+    progressPercent: total ? Math.round((completed / total) * 100) : 0,
+    steps: (Array.isArray(onboarding?.items) ? onboarding.items : []).map((item) => ({
+      key: item.id,
+      status: item.status,
+      completed: !!item.completed,
+      required: !!item.required,
+      evidence: !!item.evidence,
+      completedAt: item.completedAt || null,
+      completedByUserId: item.completedByUserId || null,
+      meta: item.meta || {}
+    })),
+    activation: onboarding?.metrics || {},
+    activationReady: !!onboarding?.activationReady,
+    startedAt: onboarding?.startedAt || null,
+    completedAt: onboarding?.completedAt || null
+  };
+}
+
+app.get('/api/onboarding/:workspaceId', authRequired, async (req, res) => {
+  const ctx = getOnboardingRequester(req, res);
+  if (!ctx) return;
+  try {
+    const onboarding = await onboardingRepository.getWorkspaceOnboarding(ctx.workspaceId);
+    res.json(formatOnboardingApiResponse(onboarding));
+  } catch (error) {
+    handleOnboardingRouteError(res, error, '[Onboarding] Failed to load onboarding');
+  }
+});
+
+app.post('/api/onboarding/:workspaceId/start', authRequired, express.json(), async (req, res) => {
+  const ctx = getOnboardingRequester(req, res);
+  if (!ctx) return;
+  try {
+    const onboarding = await onboardingRepository.startWorkspaceOnboarding(
+      ctx.workspaceId,
+      ctx.user.id || ctx.user.sub || null
+    );
+    onboardingGuard.invalidateWorkspace(ctx.workspaceId);
+    res.json(formatOnboardingApiResponse(onboarding));
+  } catch (error) {
+    handleOnboardingRouteError(res, error, '[Onboarding] Failed to start onboarding');
+  }
+});
+
+app.post('/api/onboarding/:workspaceId/auto-open-seen', authRequired, express.json(), async (req, res) => {
+  const ctx = getOnboardingRequester(req, res);
+  if (!ctx) return;
+  try {
+    const onboarding = await onboardingRepository.acknowledgeAutoOpenSeen(
+      ctx.workspaceId,
+      ctx.user.id || ctx.user.sub || null,
+      sanitizeOnboardingMetaInput(req.body?.meta || req.body || {})
+    );
+    onboardingGuard.invalidateWorkspace(ctx.workspaceId);
+    res.json(formatOnboardingApiResponse(onboarding));
+  } catch (error) {
+    handleOnboardingRouteError(res, error, '[Onboarding] Failed to acknowledge onboarding auto-open');
+  }
+});
+
+app.post('/api/onboarding/:workspaceId/defer', authRequired, express.json(), async (req, res) => {
+  const ctx = getOnboardingRequester(req, res);
+  if (!ctx) return;
+  try {
+    const onboarding = await onboardingRepository.deferWorkspaceOnboarding(
+      ctx.workspaceId,
+      ctx.user.id || ctx.user.sub || null,
+      sanitizeOnboardingMetaInput(req.body?.meta || req.body || {})
+    );
+    onboardingGuard.invalidateWorkspace(ctx.workspaceId);
+    res.json(formatOnboardingApiResponse(onboarding));
+  } catch (error) {
+    handleOnboardingRouteError(res, error, '[Onboarding] Failed to defer onboarding');
+  }
+});
+
+app.post('/api/onboarding/:workspaceId/resume', authRequired, express.json(), async (req, res) => {
+  const ctx = getOnboardingRequester(req, res);
+  if (!ctx) return;
+  try {
+    const onboarding = await onboardingRepository.resumeWorkspaceOnboarding(
+      ctx.workspaceId,
+      ctx.user.id || ctx.user.sub || null,
+      sanitizeOnboardingMetaInput(req.body?.meta || req.body || {})
+    );
+    onboardingGuard.invalidateWorkspace(ctx.workspaceId);
+    res.json(formatOnboardingApiResponse(onboarding));
+  } catch (error) {
+    handleOnboardingRouteError(res, error, '[Onboarding] Failed to resume onboarding');
+  }
+});
+
+app.post('/api/onboarding/:workspaceId/steps/:stepKey', authRequired, express.json(), async (req, res) => {
+  const ctx = getOnboardingRequester(req, res);
+  if (!ctx) return;
+  try {
+    const onboarding = await onboardingRepository.saveOnboardingStep(
+      ctx.workspaceId,
+      String(req.params.stepKey || '').trim(),
+      {
+        ...req.body,
+        currentStep: sanitizeOnboardingCurrentStepInput(req.body?.currentStep),
+        meta: sanitizeOnboardingMetaInput(req.body?.meta !== undefined ? req.body.meta : req.body || {})
+      },
+      ctx.user.id || ctx.user.sub || null
+    );
+    onboardingGuard.invalidateWorkspace(ctx.workspaceId);
+    res.json(formatOnboardingApiResponse(onboarding));
+  } catch (error) {
+    handleOnboardingRouteError(res, error, '[Onboarding] Failed to save onboarding step');
+  }
+});
+
+app.post('/api/onboarding/:workspaceId/steps/:stepKey/complete', authRequired, express.json(), async (req, res) => {
+  const ctx = getOnboardingRequester(req, res);
+  if (!ctx) return;
+  try {
+    const onboarding = await onboardingRepository.completeOnboardingStep(
+      ctx.workspaceId,
+      String(req.params.stepKey || '').trim(),
+      ctx.user.id || ctx.user.sub || null,
+      sanitizeOnboardingMetaInput(req.body?.meta || req.body || {})
+    );
+    onboardingGuard.invalidateWorkspace(ctx.workspaceId);
+    res.json(formatOnboardingApiResponse(onboarding));
+  } catch (error) {
+    handleOnboardingRouteError(res, error, '[Onboarding] Failed to complete onboarding step');
+  }
+});
+
+app.post('/api/onboarding/:workspaceId/steps/:stepKey/skip', authRequired, express.json(), async (req, res) => {
+  const ctx = getOnboardingRequester(req, res);
+  if (!ctx) return;
+  try {
+    const onboarding = await onboardingRepository.skipOnboardingStep(
+      ctx.workspaceId,
+      String(req.params.stepKey || '').trim(),
+      ctx.user.id || ctx.user.sub || null,
+      sanitizeOnboardingMetaInput(req.body?.meta || req.body || {})
+    );
+    onboardingGuard.invalidateWorkspace(ctx.workspaceId);
+    res.json(formatOnboardingApiResponse(onboarding));
+  } catch (error) {
+    handleOnboardingRouteError(res, error, '[Onboarding] Failed to skip onboarding step');
+  }
+});
+
+app.post('/api/onboarding/:workspaceId/complete', authRequired, express.json(), async (req, res) => {
+  const ctx = getOnboardingRequester(req, res);
+  if (!ctx) return;
+  try {
+    const current = await onboardingRepository.getWorkspaceOnboarding(ctx.workspaceId);
+    await onboardingRepository.appendOnboardingEvent(
+      ctx.workspaceId,
+      'onboarding_activation_attempted',
+      'launch_checklist',
+      ctx.user.id || ctx.user.sub || null,
+      {
+        activationReady: !!current.activationReady,
+        requiredRemaining: Number(current?.progress?.requiredTotal || 0) - Number(current?.progress?.requiredCompleted || 0)
+      }
+    );
+    if (!current.activationReady) {
+      await onboardingRepository.appendOnboardingEvent(
+        ctx.workspaceId,
+        'onboarding_activation_blocked',
+        'launch_checklist',
+        ctx.user.id || ctx.user.sub || null,
+        {
+          activationReady: false,
+          activationBlockedBy: Array.isArray(current?.activationBlockedBy) ? current.activationBlockedBy : [],
+          currentStep: current?.currentStep || 'launch_checklist'
+        }
+      );
+      return res.status(400).json({
+        error: 'Workspace is not activation-ready',
+        ...formatOnboardingApiResponse(current)
+      });
+    }
+    const onboarding = await onboardingRepository.completeWorkspaceOnboarding(
+      ctx.workspaceId,
+      ctx.user.id || ctx.user.sub || null
+    );
+    onboardingGuard.invalidateWorkspace(ctx.workspaceId);
+    res.json(formatOnboardingApiResponse(onboarding));
+  } catch (error) {
+    handleOnboardingRouteError(res, error, '[Onboarding] Failed to complete onboarding');
+  }
+});
+
+app.get('/api/onboarding/:workspaceId/activation', authRequired, async (req, res) => {
+  const ctx = getOnboardingRequester(req, res);
+  if (!ctx) return;
+  try {
+    const activation = await onboardingRepository.refreshActivationMetrics(ctx.workspaceId);
+    res.json({ activation });
+  } catch (error) {
+    handleOnboardingRouteError(res, error, '[Onboarding] Failed to load activation metrics');
+  }
 });
 
 /* ---------- USERS / EMPLOYEES API ---------- */
@@ -12226,7 +14021,8 @@ app.post(
   authRequired,
   requirePermission('users:write'),
   requireWorkspaceAccess((req) => String(req.body?.workspaceId || workspaceIdFromRequest(req) || 'default')),
-  (req, res) => {
+  async (req, res) => {
+    try {
     const {
       firstName,
       lastName,
@@ -12243,14 +14039,14 @@ app.post(
       gender,
     } = req.body || {};
   const dateOfBirth = String(req.body?.dateOfBirth || '').trim();
-  const phoneCountry = String(req.body?.phoneCountry || '').trim();
-  const phoneNumber = String(req.body?.phoneNumber || '').trim();
+  const phoneCountry = normalizeTrimmedText(req.body?.phoneCountry || '', 16, 'phoneCountry');
+  const phoneNumber = normalizeOptionalPhone(req.body?.phoneNumber || '', 'phoneNumber');
   const teachingLanguages = String(req.body?.teachingLanguages || '').trim();
   const learningGoal = String(req.body?.learningGoal || '').trim();
   const employmentType = String(req.body?.employmentType || '').trim();
   const availableDays = String(req.body?.availableDays || '').trim();
   const emergencyName = String(req.body?.emergencyName || '').trim();
-  const emergencyPhone = String(req.body?.emergencyPhone || '').trim();
+  const emergencyPhone = normalizeOptionalPhone(req.body?.emergencyPhone || '', 'emergencyPhone');
   const emergencyRelation = String(req.body?.emergencyRelation || '').trim();
 
   if (!firstName || !firstName.trim() || !lastName || !lastName.trim()) {
@@ -12261,6 +14057,19 @@ app.post(
   }
   if (!password || !String(password).trim()) {
     return res.status(400).json({ error: 'Password is required' });
+  }
+  const passwordValidationError = getPasswordValidationError(String(password).trim());
+  if (passwordValidationError) {
+    await logSecurityEvent({
+      workspaceId: workspaceId || 'default',
+      actorUserId: req.auth?.userId || null,
+      type: 'security.weak_password_rejected',
+      severity: 'warn',
+      ip: req.ip || null,
+      userAgent: req.headers['user-agent'] || null,
+      payload: { route: 'users.create' }
+    });
+    return res.status(400).json({ error: passwordValidationError });
   }
 
   // ensure workspace exists
@@ -12275,13 +14084,25 @@ app.post(
   const fullName = `${fn} ${ln}`;
   const username = generateUsername(ws, fn, ln);
   const id = generateId('u');
-  const passwordHash = hashPassword(String(password));
-  const emailTrimmed = String(email).trim().toLowerCase();
+  const passwordHash = await hashPassword(String(password));
+  const emailTrimmed = normalizeOptionalEmail(email, 'email');
   const avatar = (avatarUrl || '').trim() || null;
   const userRole = (role || 'member').trim().toLowerCase();
   const status = 'active';
   const normalizedNativeLanguage = normalizeLanguageCode(nativeLanguage);
   const normalizedGender = String(gender || '').trim();
+  const idempotencyKey = extractIdempotencyKey(req);
+
+  if (idempotencyKey) {
+    const existing = findExistingIdempotentUser({
+      workspaceId: ws,
+      email: emailTrimmed,
+      role: userRole
+    });
+    if (existing) {
+      return res.status(200).json(existing);
+    }
+  }
 
   db.prepare(
     `INSERT INTO users (id, workspace_id, first_name, last_name, name, username, email, password_hash, avatar_url, role, status, course_start, course_end, course_level, gender, date_of_birth, phone, phone_country, phone_number, teaching_languages, employment_type, available_days, emergency_contact_name, emergency_contact_phone, emergency_contact_relation, native_language, learning_goal, native_language_confirmed)
@@ -12360,6 +14181,9 @@ app.post(
     nativeLanguage: normalizedNativeLanguage || null,
     learningGoal: learningGoal || null
   });
+    } catch (error) {
+      handleOnboardingRouteError(res, error, '[Onboarding] Failed to create user');
+    }
 });
 
 app.post(
@@ -12368,7 +14192,7 @@ app.post(
   requirePermission('users:write'),
   requireWorkspaceAccess((req) => String(req.params.workspaceId || '')),
   csvUpload.single('file'),
-  (req, res) => {
+  async (req, res) => {
     const workspaceId = String(req.params.workspaceId || '').trim();
     if (!workspaceId) {
       return res.status(400).json({ error: 'workspaceId required' });
@@ -12456,7 +14280,12 @@ app.post(
       }
 
       const passwordPlain = record.password || crypto.randomBytes(6).toString('hex');
-      const passwordHash = hashPassword(passwordPlain);
+      const passwordValidationError = record.password ? getPasswordValidationError(passwordPlain) : '';
+      if (passwordValidationError) {
+        errors.push({ line: lineNumber, error: passwordValidationError });
+        continue;
+      }
+      const passwordHash = await hashPassword(passwordPlain);
       if (!passwordHash) {
         errors.push({ line: lineNumber, error: 'Failed to hash password' });
         continue;
@@ -12665,24 +14494,16 @@ app.get("/api/users/me/preferences", (req, res) => {
   });
 });
 
-app.post("/api/users/me/preferences", (req, res) => {
+app.post("/api/users/me/preferences", async (req, res) => {
   const user = getAuthedUser(req);
   if (!user) return res.status(401).json({ error: "unauthorized" });
 
   const { cultureReadLang, cultureWriteLang } = req.body || {};
-  db.prepare(
-    `
-    UPDATE users
-    SET
-      culture_read_lang = COALESCE(?, culture_read_lang),
-      culture_write_lang = COALESCE(?, culture_write_lang)
-    WHERE id = ?
-  `
-  ).run(
-    cultureReadLang ? normalizeLanguageCode(cultureReadLang) : null,
-    cultureWriteLang ? normalizeLanguageCode(cultureWriteLang) : null,
-    user.id
-  );
+  // Users migration boundary: persist language preferences through the user repository.
+  await userRepository.updateUserCultureLanguages(user.id, {
+    cultureReadLang: cultureReadLang ? normalizeLanguageCode(cultureReadLang) : null,
+    cultureWriteLang: cultureWriteLang ? normalizeLanguageCode(cultureWriteLang) : null
+  });
 
   res.json({ ok: true });
 });
@@ -12694,7 +14515,7 @@ function isCourseExpired(courseEnd) {
   return Date.now() > end.getTime();
 }
 
-function handleAuthLogin(req, res) {
+async function handleAuthLogin(req, res) {
   try {
     const { email, login, password } = req.body || {};
     const rawIdentifier = (login || email || '').trim();
@@ -12725,19 +14546,18 @@ function handleAuthLogin(req, res) {
         const refreshDecoded = jwt.decode(refresh.token);
         const refreshExpires = refreshDecoded?.exp ? refreshDecoded.exp * 1000 : now + 30 * 86400000;
 
-        db.prepare(`
-          INSERT INTO refresh_tokens (id, user_id, token_hash, created_at, issued_at, expires_at, ip, user_agent)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
-          refresh.jti,
-          bypassUser.id,
-          sha256(refresh.token),
-          now,
-          now,
-          refreshExpires,
-          req.ip || null,
-          req.headers['user-agent'] || null
-        );
+        // Auth/session migration boundary: refresh token persistence now flows
+        // through the auth repository while SQLite remains the default runtime.
+        void authRepository.insertRefreshToken({
+          id: refresh.jti,
+          userId: bypassUser.id,
+          tokenHash: sha256(refresh.token),
+          createdAt: now,
+          issuedAt: now,
+          expiresAt: refreshExpires,
+          ip: req.ip || null,
+          userAgent: req.headers['user-agent'] || null
+        });
 
         setAuthCookies(res, access.token, refresh.token);
         audit('auth.login_success', req, {
@@ -12772,49 +14592,9 @@ function handleAuthLogin(req, res) {
       return res.status(403).json({ error: 'Access blocked. Please contact support.' });
     }
 
-    const userQuery = identifier.includes('@')
-      ? db
-          .prepare(
-            `SELECT id,
-                    workspace_id AS workspaceId,
-                    first_name,
-                    last_name,
-                    name,
-                    username,
-                    avatar_url AS avatarUrl,
-                    password_hash,
-                    role,
-                    status,
-                    course_start AS courseStart,
-                    course_end AS courseEnd,
-                  email,
-                  must_change_password,
-                  temp_login_started_at
-             FROM users
-             WHERE email = ?`
-          )
-          .get(identifier)
-      : db
-          .prepare(
-            `SELECT id,
-                    workspace_id AS workspaceId,
-                    first_name,
-                    last_name,
-                    name,
-                    username,
-                    avatar_url AS avatarUrl,
-                    password_hash,
-                    role,
-                    status,
-                    course_start AS courseStart,
-                    course_end AS courseEnd,
-                    email
-             FROM users
-             WHERE lower(username) = ?`
-          )
-          .get(identifier);
+    const userQuery = await userRepository.findAuthUserByIdentifier(identifier);
 
-    if (!userQuery || !userQuery.password_hash || !verifyPassword(password, userQuery.password_hash)) {
+    if (!userQuery || !userQuery.password_hash || !await verifyPassword(password, userQuery.password_hash)) {
       logLoginAttempt({
         identifier,
         success: false,
@@ -12851,9 +14631,7 @@ function handleAuthLogin(req, res) {
     }
 
     if (userQuery.workspaceId) {
-      const workspace = db
-        .prepare('SELECT status FROM workspaces WHERE id = ?')
-        .get(userQuery.workspaceId);
+      const workspace = await workspaceRepository.getWorkspaceBasic(userQuery.workspaceId);
       const workspaceStatus = String(workspace?.status || 'approved').toLowerCase();
       if (workspaceStatus !== 'approved') {
         return res.status(403).json({ error: 'School is not approved' });
@@ -12886,19 +14664,16 @@ function handleAuthLogin(req, res) {
     const refreshDecoded = jwt.decode(refresh.token);
     const refreshExpires = refreshDecoded?.exp ? refreshDecoded.exp * 1000 : now + 30 * 86400000;
 
-    db.prepare(`
-      INSERT OR IGNORE INTO refresh_tokens (id, user_id, token_hash, created_at, issued_at, expires_at, ip, user_agent)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      refresh.jti,
-      userQuery.id,
-      sha256(refresh.token),
-      now,
-      now,
-      refreshExpires,
-      req.ip || null,
-      req.headers['user-agent'] || null
-    );
+    void authRepository.insertRefreshTokenIfMissing({
+      id: refresh.jti,
+      userId: userQuery.id,
+      tokenHash: sha256(refresh.token),
+      createdAt: now,
+      issuedAt: now,
+      expiresAt: refreshExpires,
+      ip: req.ip || null,
+      userAgent: req.headers['user-agent'] || null
+    });
 
     setAuthCookies(res, access.token, refresh.token);
 
@@ -12955,15 +14730,21 @@ function handleAuthLogin(req, res) {
 app.post('/api/login', authLimiter, handleAuthLogin);
 app.post('/api/auth/login', authLimiter, handleAuthLogin);
 
-app.get('/api/auth/me', requireAccessToken, (req, res) => {
+app.get('/api/auth/me', requireAccessToken, async (req, res) => {
   const userId = req.auth.sub;
-  const user = db
-    .prepare('SELECT id, email, name, role, workspace_id, avatar_url FROM users WHERE id = ?')
-    .get(userId);
+  const user = await userRepository.getUserAuthProfile(userId);
 
   if (!user) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
+
+  const policyGate = buildPolicyGateResponse(
+    await policyGuard.getGateState({
+      workspaceId: user.workspaceId,
+      userId: user.id,
+      user
+    })
+  );
 
   res.json({
     user: {
@@ -12971,8 +14752,9 @@ app.get('/api/auth/me', requireAccessToken, (req, res) => {
       email: user.email,
       name: user.name,
       role: user.role,
-      workspaceId: user.workspace_id,
-      avatarUrl: user.avatar_url || null
+      workspaceId: user.workspaceId,
+      avatarUrl: user.avatarUrl || null,
+      policyGate
     },
   });
 });
@@ -12982,53 +14764,183 @@ app.get('/api/auth/csrf', (req, res) => {
   res.json({ ok: true, csrfToken: token });
 });
 
-app.post('/api/auth/refresh', (req, res) => {
+app.post('/api/auth/forgot-password', async (req, res) => {
+  try {
+    const email = normalizeRegistrationEmail(req.body?.email || req.body?.login);
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    const user = await userRepository.findPasswordResetUserByEmail(email);
+    if (!user || !user.id || !user.email) {
+      return res.json({ ok: true });
+    }
+
+    const token = generatePasswordResetToken();
+    const tokenHash = sha256(token);
+    const createdAt = nowMs();
+    const expiresAt = createdAt + PASSWORD_RESET_EXPIRY_HOURS * 60 * 60 * 1000;
+
+    await authRepository.createPasswordReset({
+      tokenHash,
+      userId: user.id,
+      workspaceId: user.workspaceId || null,
+      createdAt,
+      expiresAt
+    });
+
+    try {
+      await sendPasswordResetEmail(user, token);
+    } catch (emailError) {
+      await authRepository.deletePasswordResetByHash(tokenHash);
+      throw emailError;
+    }
+
+    void logSecurityEvent({
+      workspaceId: user.workspaceId || null,
+      actorUserId: user.id,
+      type: 'auth.password_reset_requested',
+      severity: 'info',
+      ip: req.ip || null,
+      userAgent: req.headers['user-agent'] || null,
+      payload: { email }
+    });
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('forgot-password failed:', err);
+    return res.status(500).json({ error: 'Could not send reset email' });
+  }
+});
+
+app.post('/api/auth/reset-password/complete', async (req, res) => {
+  try {
+    const token = String(req.body?.token || '').trim();
+    const password = String(req.body?.password || '').trim();
+
+    if (!token) {
+      return res.status(400).json({ error: 'Token is required' });
+    }
+    if (!password) {
+      return res.status(400).json({ error: 'Password is required' });
+    }
+    const passwordValidationError = getPasswordValidationError(password);
+    if (passwordValidationError) {
+      await logSecurityEvent({
+        workspaceId: null,
+        actorUserId: null,
+        type: 'security.weak_password_rejected',
+        severity: 'warn',
+        ip: req.ip || null,
+        userAgent: req.headers['user-agent'] || null,
+        payload: { route: 'auth.reset_password.complete' }
+      });
+      return res.status(400).json({ error: passwordValidationError });
+    }
+
+    const resetRow = await getResetToken(token);
+    if (!resetRow) {
+      return res.status(404).json({ error: 'Invalid token' });
+    }
+    if (resetRow.used) {
+      return res.status(400).json({ error: 'This reset link was already used' });
+    }
+    if (Number(resetRow.expiresAt) < nowMs()) {
+      return res.status(400).json({ error: 'Link expired' });
+    }
+
+    const user = await userRepository.getPasswordResetUserById(resetRow.userId);
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const passwordHash = await hashPassword(password);
+    const changedAt = new Date().toISOString();
+    const revokedAt = nowMs();
+
+    await userRepository.updatePasswordAfterReset({
+      userId: user.id,
+      passwordHash,
+      changedAt,
+      historyId: secId('pwh'),
+      historyCreatedAt: revokedAt,
+      tokenHash: resetRow.tokenHash,
+      legacyToken: resetRow.legacyToken || null
+    });
+
+    await authRepository.revokeAllRefreshTokensForUser(user.id, revokedAt);
+
+    void logSecurityEvent({
+      workspaceId: user.workspaceId || null,
+      actorUserId: user.id,
+      type: 'security.password_changed',
+      severity: 'info',
+      ip: req.ip || null,
+      userAgent: req.headers['user-agent'] || null,
+      payload: { viaReset: true }
+    });
+    void logSecurityEvent({
+      workspaceId: user.workspaceId || null,
+      actorUserId: user.id,
+      type: 'auth.password_reset_completed',
+      severity: 'info',
+      ip: req.ip || null,
+      userAgent: req.headers['user-agent'] || null,
+      payload: { viaReset: true }
+    });
+
+    try {
+      await sendPasswordChangedEmail(user);
+    } catch (emailErr) {
+      console.warn('password-changed email failed:', emailErr?.message || emailErr);
+    }
+
+    clearAuthCookies(res);
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('reset-password complete failed:', err);
+    return res.status(500).json({ error: 'Could not update password' });
+  }
+});
+
+app.post('/api/auth/refresh', async (req, res) => {
   const rt = req.cookies?.refresh_token;
-  console.log('[refresh] cookie present', !!rt);
   if (!rt) return res.status(401).json({ error: 'Unauthorized' });
 
   let payload;
   try {
     payload = jwt.verify(rt, JWT_REFRESH_SECRET);
   } catch {
-    console.log('[refresh] jwt verify failed');
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
   const hash = sha256(rt);
-  let row = db
-    .prepare(`
-      SELECT * FROM refresh_tokens
-      WHERE id = ? AND user_id = ? AND token_hash = ? AND revoked_at IS NULL
-    `)
-    .get(payload.jti, payload.sub, hash);
+  let row = await authRepository.getActiveRefreshToken({
+    id: payload.jti,
+    userId: payload.sub,
+    tokenHash: hash
+  });
 
   const nowMs = Date.now();
   if (!row) {
-    console.log('[refresh] no refresh row; inserting fallback entry', payload.jti);
     const expiresAt = nowMs + 30 * 24 * 60 * 60 * 1000;
-    db.prepare(`
-      INSERT OR IGNORE INTO refresh_tokens (id, user_id, token_hash, created_at, issued_at, expires_at, ip, user_agent)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      payload.jti,
-      payload.sub,
-      hash,
-      nowMs,
-      nowMs,
+    await authRepository.insertRefreshTokenIfMissing({
+      id: payload.jti,
+      userId: payload.sub,
+      tokenHash: hash,
+      createdAt: nowMs,
+      issuedAt: nowMs,
       expiresAt,
-      req.ip || null,
-      req.headers['user-agent'] || null
-    );
+      ip: req.ip || null,
+      userAgent: req.headers['user-agent'] || null
+    });
     row = { id: payload.jti };
   } else if (nowMs > Number(row.expires_at)) {
-    console.log('[refresh] refresh expired');
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const user = db
-    .prepare(`SELECT id, email, name, role, workspace_id AS workspaceId FROM users WHERE id = ?`)
-    .get(payload.sub);
+  const user = await userRepository.getUserAuthProfile(payload.sub);
 
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -13044,23 +14956,21 @@ app.post('/api/auth/refresh', (req, res) => {
   const now = Date.now();
   const refreshExpires = Number(refreshDecoded?.exp ? refreshDecoded.exp * 1000 : now + 30 * 86400000);
 
-  db
-    .prepare('UPDATE refresh_tokens SET revoked_at = ?, replaced_by = ? WHERE id = ?')
-    .run(now, refresh.jti, row.id);
-
-  db.prepare(`
-    INSERT INTO refresh_tokens (id, user_id, token_hash, created_at, issued_at, expires_at, ip, user_agent)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    refresh.jti,
-    user.id,
-    sha256(refresh.token),
-    now,
-    now,
-    refreshExpires,
-    ip,
-    userAgent
-  );
+  await authRepository.revokeAndReplaceRefreshToken({
+    existingId: row.id,
+    revokedAt: now,
+    replacedBy: refresh.jti,
+    newToken: {
+      id: refresh.jti,
+      userId: user.id,
+      tokenHash: sha256(refresh.token),
+      createdAt: now,
+      issuedAt: now,
+      expiresAt: refreshExpires,
+      ip,
+      userAgent
+    }
+  });
 
   setAuthCookies(res, access.token, refresh.token);
 
@@ -13074,7 +14984,49 @@ app.post('/api/auth/refresh', (req, res) => {
     payload: { refreshed: true }
   });
 
-  res.json({ accessToken: access.token });
+  return res.json({ accessToken: access.token });
+});
+
+app.post('/api/auth/logout', requireAccessToken, async (req, res) => {
+  const refreshToken = req.cookies?.refresh_token || null;
+  const accessToken = getAccessTokenFromRequest(req);
+  const now = Date.now();
+
+  try {
+    if (refreshToken) {
+      const refreshPayload = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
+      if (refreshPayload?.jti) {
+        await authRepository.revokeRefreshToken(refreshPayload.jti, now);
+      }
+    }
+  } catch (_err) {
+    // best-effort logout; still clear cookies below
+  }
+
+  if (accessToken) {
+    const decoded = verifyAccessToken(accessToken);
+    if (decoded?.jti) {
+      const expiresAt = decoded?.exp ? Number(decoded.exp) * 1000 : now;
+      await authRepository.revokeAccessToken({
+        jti: decoded.jti,
+        userId: decoded.sub || decoded.id || null,
+        revokedAt: now,
+        expiresAt
+      });
+    }
+  }
+
+  clearAuthCookies(res);
+  void logSecurityEvent({
+    workspaceId: req.auth?.workspaceId || req.auth?.workspace_id || null,
+    actorUserId: req.auth?.sub || req.auth?.id || null,
+    type: 'auth.logout',
+    severity: 'info',
+    ip: req.ip || null,
+    userAgent: req.headers['user-agent'] || null,
+    payload: { loggedOut: true }
+  });
+  return res.json({ ok: true });
 });
 
 // =========================
@@ -13129,6 +15081,17 @@ function assertTaskChannelAccess(workspaceId, channelId, role) {
     const row = getTaskScopedChannel(workspaceId, channelId);
     if (!row) return false;
     if (String(row.workspace_id) !== String(workspaceId)) return false;
+    return canAccessTaskChannelByName(role, row.name);
+  } catch (_e) {
+    return false;
+  }
+}
+
+async function assertTaskChannelAccessAsync(workspaceId, channelId, role) {
+  try {
+    const row = await channelRepository.getChannelById(String(channelId || ''));
+    if (!row) return false;
+    if (String(row.workspaceId || row.workspace_id) !== String(workspaceId)) return false;
     return canAccessTaskChannelByName(role, row.name);
   } catch (_e) {
     return false;
@@ -13198,13 +15161,13 @@ function ensurePriority(p) {
   return 'normal';
 }
 
-app.get('/api/tasks', authRequired, (req, res) => {
+app.get('/api/tasks', authRequired, async (req, res) => {
   const ctx = mustAuthTask(req, res);
   if (!ctx) return;
 
   const channelId = String(req.query.channelId || '');
   if (!channelId) return res.status(400).json({ error: 'channelId required' });
-  if (!assertTaskChannelAccess(ctx.workspaceId, channelId, ctx.role)) {
+  if (!await assertTaskChannelAccessAsync(ctx.workspaceId, channelId, ctx.role)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
 
@@ -13212,81 +15175,23 @@ app.get('/api/tasks', authRequired, (req, res) => {
   const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
   const includeDone = String(req.query.includeDone || 'true') === 'true';
 
-  let where = 'workspace_id = ? AND channel_id = ?';
-  const args = [ctx.workspaceId, channelId];
-
-  if (status && ['open', 'doing', 'done'].includes(status)) {
-    where += ' AND status = ?';
-    args.push(status);
-  } else if (!includeDone) {
-    where += " AND status != 'done'";
+  try {
+    const tasks = await tasksRepository.listTasks({
+      workspaceId: ctx.workspaceId,
+      channelId,
+      status,
+      includeDone,
+      limit,
+      userId: ctx.userId
+    });
+    res.json({ tasks });
+  } catch (err) {
+    console.error('[Tasks] List failed', err);
+    res.status(500).json({ error: 'Failed to load tasks' });
   }
-
-  const rows = db
-    .prepare(
-      `
-      SELECT * FROM tasks
-      WHERE ${where}
-      ORDER BY
-        CASE status WHEN 'open' THEN 1 WHEN 'doing' THEN 2 WHEN 'done' THEN 3 ELSE 9 END,
-        COALESCE(due_at, 9223372036854775807) ASC,
-        updated_at DESC
-      LIMIT ?
-    `
-    )
-    .all(...args, limit);
-
-  const taskIds = rows.map((r) => r.id);
-
-  const reacts = taskIds.length
-    ? db
-        .prepare(
-          `
-        SELECT target_id, emoji, COUNT(*) AS count
-        FROM task_reactions
-        WHERE workspace_id = ? AND target_type = 'task' AND target_id IN (${taskIds
-          .map(() => '?')
-          .join(',')})
-        GROUP BY target_id, emoji
-      `
-        )
-        .all(ctx.workspaceId, ...taskIds)
-    : [];
-
-  const mine = taskIds.length
-    ? db
-        .prepare(
-          `
-        SELECT target_id, emoji
-        FROM task_reactions
-        WHERE workspace_id = ? AND target_type = 'task' AND user_id = ? AND target_id IN (${taskIds
-          .map(() => '?')
-          .join(',')})
-      `
-        )
-        .all(ctx.workspaceId, ctx.userId, ...taskIds)
-    : [];
-
-  const reactMap = new Map();
-  reacts.forEach((r) => {
-    if (!reactMap.has(r.target_id)) reactMap.set(r.target_id, {});
-    reactMap.get(r.target_id)[r.emoji] = Number(r.count || 0);
-  });
-
-  const mineSet = new Set(mine.map((r) => `${r.target_id}|${r.emoji}`));
-
-  res.json({
-    tasks: rows.map((t) => ({
-      ...taskToDto(t),
-      reactions: reactMap.get(t.id) || {},
-      myReactions: Array.from(Object.keys(reactMap.get(t.id) || {})).filter((e) =>
-        mineSet.has(`${t.id}|${e}`)
-      )
-    }))
-  });
 });
 
-app.post('/api/tasks', authRequired, express.json(), (req, res) => {
+app.post('/api/tasks', authRequired, express.json(), async (req, res) => {
   const ctx = mustAuthTask(req, res);
   if (!ctx) return;
   const role = ctx.role;
@@ -13302,55 +15207,50 @@ app.post('/api/tasks', authRequired, express.json(), (req, res) => {
 
   if (!channelId) return res.status(400).json({ error: 'channelId required' });
   if (!title) return res.status(400).json({ error: 'title required' });
-  if (!assertTaskChannelAccess(ctx.workspaceId, channelId, ctx.role)) {
+  if (!await assertTaskChannelAccessAsync(ctx.workspaceId, channelId, ctx.role)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
 
-  const id = secId('task');
-  const now = nowMs();
-
-  db.prepare(
-    `
-    INSERT INTO tasks
-    (id, workspace_id, channel_id, title, description, status, priority, due_at, completed_at, created_by, assigned_to, created_at, updated_at)
-    VALUES
-    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `
-  ).run(
-    id,
-    ctx.workspaceId,
-    channelId,
-    title,
-    description || null,
-    status,
-    priority,
-    dueAt || null,
-    status === 'done' ? now : null,
-    ctx.userId,
-    assignedTo,
-    now,
-    now
-  );
-
-  const row = db.prepare(`SELECT * FROM tasks WHERE id = ?`).get(id);
-  res.json({ task: taskToDto(row) });
+  try {
+    const id = secId('task');
+    const now = nowMs();
+    const task = await tasksRepository.createTask({
+      id,
+      workspaceId: ctx.workspaceId,
+      channelId,
+      title,
+      description,
+      status,
+      priority,
+      dueAt: dueAt || null,
+      createdBy: ctx.userId,
+      assignedTo,
+      createdAt: now,
+      updatedAt: now,
+      completedAt: status === 'done' ? now : null
+    });
+    res.json({ task });
+  } catch (err) {
+    console.error('[Tasks] Create failed', err);
+    res.status(500).json({ error: 'Failed to create task' });
+  }
 });
 
-app.patch('/api/tasks/:id', authRequired, express.json(), (req, res) => {
+app.patch('/api/tasks/:id', authRequired, express.json(), async (req, res) => {
   const ctx = mustAuthTask(req, res);
   if (!ctx) return;
 
   const taskId = String(req.params.id || '');
-  const existing = db.prepare(`SELECT * FROM tasks WHERE id = ? AND workspace_id = ?`).get(taskId, ctx.workspaceId);
+  const existing = await tasksRepository.getTaskById({ taskId, workspaceId: ctx.workspaceId });
   if (!existing) return res.status(404).json({ error: 'Not found' });
-  if (!assertTaskChannelAccess(ctx.workspaceId, existing.channel_id, ctx.role)) {
+  if (!await assertTaskChannelAccessAsync(ctx.workspaceId, existing.channelId, ctx.role)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
 
   const role = ctx.role;
   const canManage = canManageTasks(role);
-  const isOwner = String(existing.created_by) === String(ctx.userId);
-  const isAssignee = existing.assigned_to && String(existing.assigned_to) === String(ctx.userId);
+  const isOwner = String(existing.createdBy) === String(ctx.userId);
+  const isAssignee = existing.assignedTo && String(existing.assignedTo) === String(ctx.userId);
 
   if (!canManage && !(isOwner || isAssignee)) {
     return res.status(403).json({ error: 'Forbidden' });
@@ -13376,41 +15276,25 @@ app.patch('/api/tasks/:id', authRequired, express.json(), (req, res) => {
   const now = nowMs();
   const nextStatus = patch.status ?? existing.status;
   const completedAt =
-    nextStatus === 'done' ? (existing.completed_at || now) : null;
+    nextStatus === 'done' ? (existing.completedAt || now) : null;
 
-  db.prepare(
-    `
-    UPDATE tasks SET
-      title = COALESCE(?, title),
-      description = COALESCE(?, description),
-      status = COALESCE(?, status),
-      priority = COALESCE(?, priority),
-      due_at = CASE WHEN ? IS NULL THEN due_at ELSE ? END,
-      assigned_to = CASE WHEN ? IS NULL THEN assigned_to ELSE ? END,
-      completed_at = ?,
-      updated_at = ?
-    WHERE id = ? AND workspace_id = ?
-  `
-  ).run(
-    patch.title,
-    patch.description,
-    patch.status,
-    patch.priority,
-    patch.dueAt === undefined ? null : '__set__',
-    patch.dueAt === undefined ? null : patch.dueAt,
-    patch.assignedTo === undefined ? null : '__set__',
-    patch.assignedTo === undefined ? null : patch.assignedTo,
-    completedAt,
-    now,
-    taskId,
-    ctx.workspaceId
-  );
-
-  const row = db.prepare(`SELECT * FROM tasks WHERE id = ?`).get(taskId);
-  res.json({ task: taskToDto(row) });
+  try {
+    const task = await tasksRepository.updateTask({
+      taskId,
+      workspaceId: ctx.workspaceId,
+      existingTask: existing,
+      patch,
+      updatedAt: now,
+      completedAt
+    });
+    res.json({ task });
+  } catch (err) {
+    console.error('[Tasks] Update failed', err);
+    res.status(500).json({ error: 'Failed to update task' });
+  }
 });
 
-app.post('/api/tasks/:id/comments', authRequired, express.json(), (req, res) => {
+app.post('/api/tasks/:id/comments', authRequired, express.json(), async (req, res) => {
   const ctx = mustAuthTask(req, res);
   if (!ctx) return;
 
@@ -13418,99 +15302,55 @@ app.post('/api/tasks/:id/comments', authRequired, express.json(), (req, res) => 
   const body = String(req.body.body || '').trim();
   if (!body) return res.status(400).json({ error: 'body required' });
 
-  const existing = db.prepare(`SELECT * FROM tasks WHERE id = ? AND workspace_id = ?`).get(taskId, ctx.workspaceId);
+  const existing = await tasksRepository.getTaskById({ taskId, workspaceId: ctx.workspaceId });
   if (!existing) return res.status(404).json({ error: 'Not found' });
-  if (!assertTaskChannelAccess(ctx.workspaceId, existing.channel_id, ctx.role)) {
+  if (!await assertTaskChannelAccessAsync(ctx.workspaceId, existing.channelId, ctx.role)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
 
-  const id = secId('tcom');
-  const now = nowMs();
-
-  db.prepare(
-    `
-    INSERT INTO task_comments (id, workspace_id, task_id, user_id, body, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `
-  ).run(id, ctx.workspaceId, taskId, ctx.userId, body, now);
-
-  db.prepare(`UPDATE tasks SET updated_at = ? WHERE id = ?`).run(now, taskId);
-
-  const row = db.prepare(`SELECT * FROM task_comments WHERE id = ?`).get(id);
-  res.json({ comment: row });
+  try {
+    const id = secId('tcom');
+    const now = nowMs();
+    const comment = await tasksRepository.createTaskComment({
+      id,
+      workspaceId: ctx.workspaceId,
+      taskId,
+      userId: ctx.userId,
+      body,
+      createdAt: now
+    });
+    res.json({ comment });
+  } catch (err) {
+    console.error('[Tasks] Comment create failed', err);
+    res.status(500).json({ error: 'Failed to add comment' });
+  }
 });
 
-app.get('/api/tasks/:id/comments', authRequired, (req, res) => {
+app.get('/api/tasks/:id/comments', authRequired, async (req, res) => {
   const ctx = mustAuthTask(req, res);
   if (!ctx) return;
 
   const taskId = String(req.params.id || '');
-  const existing = db.prepare(`SELECT * FROM tasks WHERE id = ? AND workspace_id = ?`).get(taskId, ctx.workspaceId);
+  const existing = await tasksRepository.getTaskById({ taskId, workspaceId: ctx.workspaceId });
   if (!existing) return res.status(404).json({ error: 'Not found' });
-  if (!assertTaskChannelAccess(ctx.workspaceId, existing.channel_id, ctx.role)) {
+  if (!await assertTaskChannelAccessAsync(ctx.workspaceId, existing.channelId, ctx.role)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
 
-  const rows = db
-    .prepare(
-      `
-      SELECT c.*
-      FROM task_comments c
-      WHERE c.workspace_id = ? AND c.task_id = ?
-      ORDER BY c.created_at ASC
-    `
-    )
-    .all(ctx.workspaceId, taskId);
-
-  const commentIds = rows.map((r) => r.id);
-  const reacts = commentIds.length
-    ? db
-        .prepare(
-          `
-        SELECT target_id, emoji, COUNT(*) AS count
-        FROM task_reactions
-        WHERE workspace_id = ? AND target_type = 'comment' AND target_id IN (${commentIds
-          .map(() => '?')
-          .join(',')})
-        GROUP BY target_id, emoji
-      `
-        )
-        .all(ctx.workspaceId, ...commentIds)
-    : [];
-
-  const mine = commentIds.length
-    ? db
-        .prepare(
-          `
-        SELECT target_id, emoji
-        FROM task_reactions
-        WHERE workspace_id = ? AND target_type = 'comment' AND user_id = ? AND target_id IN (${commentIds
-          .map(() => '?')
-          .join(',')})
-      `
-        )
-        .all(ctx.workspaceId, ctx.userId, ...commentIds)
-    : [];
-
-  const reactMap = new Map();
-  reacts.forEach((r) => {
-    if (!reactMap.has(r.target_id)) reactMap.set(r.target_id, {});
-    reactMap.get(r.target_id)[r.emoji] = Number(r.count || 0);
-  });
-  const mineSet = new Set(mine.map((r) => `${r.target_id}|${r.emoji}`));
-
-  res.json({
-    comments: rows.map((c) => ({
-      ...c,
-      reactions: reactMap.get(c.id) || {},
-      myReactions: Array.from(Object.keys(reactMap.get(c.id) || {})).filter((e) =>
-        mineSet.has(`${c.id}|${e}`)
-      )
-    }))
-  });
+  try {
+    const comments = await tasksRepository.listTaskComments({
+      workspaceId: ctx.workspaceId,
+      taskId,
+      userId: ctx.userId
+    });
+    res.json({ comments });
+  } catch (err) {
+    console.error('[Tasks] Comment list failed', err);
+    res.status(500).json({ error: 'Failed to load comments' });
+  }
 });
 
-app.post('/api/task-reactions/toggle', authRequired, express.json(), (req, res) => {
+app.post('/api/task-reactions/toggle', authRequired, express.json(), async (req, res) => {
   const ctx = mustAuthTask(req, res);
   if (!ctx) return;
 
@@ -13522,44 +15362,31 @@ app.post('/api/task-reactions/toggle', authRequired, express.json(), (req, res) 
   if (!targetId) return res.status(400).json({ error: 'targetId required' });
   if (!emoji) return res.status(400).json({ error: 'emoji required' });
 
-  if (targetType === 'task') {
-    const t = db.prepare(`SELECT id, channel_id FROM tasks WHERE id = ? AND workspace_id = ?`).get(targetId, ctx.workspaceId);
-    if (!t) return res.status(404).json({ error: 'Not found' });
-    if (!assertTaskChannelAccess(ctx.workspaceId, t.channel_id, ctx.role)) {
+  try {
+    const target = await tasksRepository.getTaskReactionTarget({
+      workspaceId: ctx.workspaceId,
+      targetType,
+      targetId
+    });
+    if (!target) return res.status(404).json({ error: 'Not found' });
+    if (!await assertTaskChannelAccessAsync(ctx.workspaceId, target.channelId, ctx.role)) {
       return res.status(403).json({ error: 'Forbidden' });
     }
-  } else {
-    const c = db
-      .prepare(`
-        SELECT c.id, t.channel_id
-        FROM task_comments c
-        JOIN tasks t ON t.id = c.task_id
-        WHERE c.id = ? AND c.workspace_id = ? AND t.workspace_id = ?
-      `)
-      .get(targetId, ctx.workspaceId, ctx.workspaceId);
-    if (!c) return res.status(404).json({ error: 'Not found' });
-    if (!assertTaskChannelAccess(ctx.workspaceId, c.channel_id, ctx.role)) {
-      return res.status(403).json({ error: 'Forbidden' });
-    }
+
+    const result = await tasksRepository.toggleTaskReaction({
+      id: secId('react'),
+      workspaceId: ctx.workspaceId,
+      targetType,
+      targetId,
+      emoji,
+      userId: ctx.userId,
+      createdAt: nowMs()
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('[Tasks] Reaction toggle failed', err);
+    res.status(500).json({ error: 'Failed to toggle reaction' });
   }
-
-  const existing = db.prepare(
-    `SELECT id FROM task_reactions
-     WHERE workspace_id = ? AND target_type = ? AND target_id = ? AND emoji = ? AND user_id = ?`
-  ).get(ctx.workspaceId, targetType, targetId, emoji, ctx.userId);
-
-  if (existing) {
-    db.prepare(`DELETE FROM task_reactions WHERE id = ?`).run(existing.id);
-    return res.json({ on: false });
-  }
-
-  const id = secId('react');
-  db.prepare(
-    `INSERT INTO task_reactions (id, workspace_id, target_type, target_id, emoji, user_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run(id, ctx.workspaceId, targetType, targetId, emoji, ctx.userId, nowMs());
-
-  res.json({ on: true });
 });
 
 function resolveHomeworkRequestContext(req, res, channelId = null) {
@@ -13575,7 +15402,7 @@ function resolveHomeworkRequestContext(req, res, channelId = null) {
     return null;
   }
   if (!canViewHomeworkChannel(user, homeworkChannel)) {
-    res.status(403).json({ error: 'Forbidden' });
+    tenantForbidden(res);
     return null;
   }
   const classChannel = getHomeworkParentClassRow(homeworkChannel);
@@ -13595,6 +15422,81 @@ function canManageChannelMembers(roleValue) {
   const role = String(roleValue || "").trim().toLowerCase();
   return ["teacher", "admin", "school_admin", "super_admin"].includes(role);
 }
+
+app.get('/api/class-memberships', authRequired, (req, res) => {
+  const authUser = req.auth || {};
+  const workspaceId = String(req.query.workspaceId || authUser.workspaceId || authUser.workspace_id || '').trim();
+  if (!workspaceId) {
+    return res.json([]);
+  }
+  const authWorkspaceId = String(authUser.workspaceId || authUser.workspace_id || '').trim();
+  if (!isSuperAdminRole(authUser)) {
+    if (workspaceId !== authWorkspaceId || !canManageChannelMembers(authUser.role || authUser.userRole)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+  }
+  const rows = db
+    .prepare(
+      `
+      SELECT
+        cm.user_id AS userId,
+        c.id AS channelId,
+        c.name AS channelName
+      FROM channel_members cm
+      JOIN channels c ON c.id = cm.channel_id
+      WHERE c.workspace_id = ?
+        AND lower(COALESCE(c.category, '')) IN ('class', 'classes')
+      ORDER BY lower(COALESCE(c.name, c.id)) ASC, lower(COALESCE(cm.user_id, '')) ASC
+    `
+    )
+    .all(workspaceId);
+  res.json(rows);
+});
+
+app.post('/api/class-memberships', authRequired, express.json(), (req, res) => {
+  const authUser = req.auth || {};
+  const workspaceId = String(req.body?.workspaceId || authUser.workspaceId || authUser.workspace_id || '').trim();
+  const userId = String(req.body?.userId || '').trim();
+  const channelId = String(req.body?.channelId || '').trim();
+  if (!workspaceId || !userId || !channelId) {
+    return res.status(400).json({ error: 'workspaceId, userId, and channelId are required' });
+  }
+  const authWorkspaceId = String(authUser.workspaceId || authUser.workspace_id || '').trim();
+  if (!isSuperAdminRole(authUser)) {
+    if (workspaceId !== authWorkspaceId || !canManageChannelMembers(authUser.role || authUser.userRole)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+  }
+  const channel = db
+    .prepare(
+      `
+      SELECT id, name, workspace_id AS workspaceId, category
+      FROM channels
+      WHERE id = ?
+      LIMIT 1
+    `
+    )
+    .get(channelId);
+  if (!channel || String(channel.workspaceId || '').trim() !== workspaceId) {
+    return res.status(404).json({ error: 'Class channel not found' });
+  }
+  if (!['class', 'classes'].includes(String(channel.category || '').trim().toLowerCase())) {
+    return res.status(400).json({ error: 'Only class channels accept class memberships' });
+  }
+  const targetUser = db
+    .prepare('SELECT id, workspace_id AS workspaceId FROM users WHERE id = ? LIMIT 1')
+    .get(userId);
+  if (!targetUser || String(targetUser.workspaceId || '').trim() !== workspaceId) {
+    return res.status(404).json({ error: 'User not found in workspace' });
+  }
+  db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)').run(channelId, userId);
+  res.json({
+    ok: true,
+    userId,
+    channelId,
+    channelName: channel.name || channel.id
+  });
+});
 
 app.get('/api/user-class-memberships', authRequired, (req, res) => {
   const authUser = req.auth || {};
@@ -13626,92 +15528,189 @@ app.get('/api/user-class-memberships', authRequired, (req, res) => {
   res.json(rows);
 });
 
-app.get('/api/policy/acceptance', authRequired, (req, res) => {
+app.get('/api/workspaces/:workspaceId/policy', authRequired, async (req, res) => {
   const authUser = req.auth || {};
-  const workspaceId = String(req.query.workspaceId || authUser.workspaceId || authUser.workspace_id || '').trim();
-  const userId = String(req.headers['x-user-id'] || authUser.id || authUser.sub || '').trim();
+  const workspaceId = String(req.params.workspaceId || authUser.workspaceId || authUser.workspace_id || '').trim();
+  const userId = String(authUser.id || authUser.sub || '').trim();
   if (!workspaceId || !userId) {
-    return res.json({ accepted: false });
+    return res.status(400).json({ error: 'workspaceId is required' });
   }
   if (!isSuperAdminRole(authUser)) {
     const authWorkspaceId = String(authUser.workspaceId || authUser.workspace_id || '').trim();
-    const authUserId = String(authUser.id || authUser.sub || '').trim();
-    if (workspaceId !== authWorkspaceId || userId !== authUserId) {
+    if (workspaceId !== authWorkspaceId) {
       return res.status(403).json({ error: 'Forbidden' });
     }
   }
-  const row = db
-    .prepare(
-      `
-      SELECT version, accepted_at AS acceptedAt
-      FROM policy_acceptances
-      WHERE workspace_id = ? AND user_id = ?
-      ORDER BY datetime(accepted_at) DESC, rowid DESC
-      LIMIT 1
-    `
-    )
-    .get(workspaceId, userId);
+  const document = await policyRepository.getWorkspacePolicyDocument(workspaceId);
+  if (!document) {
+    return res.status(404).json({ error: 'Workspace not found' });
+  }
+  const gate = buildPolicyGateResponse(
+    await policyGuard.getGateState({
+      workspaceId,
+      userId,
+      user: {
+        id: userId,
+        role: authUser.role,
+        workspaceId,
+        superAdmin: !!authUser.superAdmin
+      }
+    })
+  );
   res.json({
-    accepted: !!row,
-    version: row?.version || null,
-    acceptedAt: row?.acceptedAt || null
+    document,
+    policyGate: gate
   });
 });
 
-app.post('/api/policy/accept', authRequired, express.json(), (req, res) => {
+app.get('/api/policy/acceptance', authRequired, async (req, res) => {
   const authUser = req.auth || {};
-  const workspaceId = String(req.body?.workspaceId || authUser.workspaceId || authUser.workspace_id || '').trim();
-  const userId = String(req.headers['x-user-id'] || authUser.id || authUser.sub || '').trim();
-  const version = String(req.body?.version || 'v1').trim() || 'v1';
+  const workspaceId = String(req.query.workspaceId || authUser.workspaceId || authUser.workspace_id || '').trim();
+  const userId = String(authUser.id || authUser.sub || '').trim();
   if (!workspaceId || !userId) {
-    return res.status(400).json({ error: 'workspaceId and userId are required' });
+    return res.json({ accepted: false, required: false, version: null, acceptedAt: null, exempt: false });
   }
   if (!isSuperAdminRole(authUser)) {
     const authWorkspaceId = String(authUser.workspaceId || authUser.workspace_id || '').trim();
-    const authUserId = String(authUser.id || authUser.sub || '').trim();
-    if (workspaceId !== authWorkspaceId || userId !== authUserId) {
+    if (workspaceId !== authWorkspaceId) {
       return res.status(403).json({ error: 'Forbidden' });
     }
   }
-  db.prepare(
-    `
-    INSERT INTO policy_acceptances (workspace_id, user_id, version, accepted_at)
-    VALUES (?, ?, ?, datetime('now'))
-    ON CONFLICT(workspace_id, user_id, version) DO UPDATE SET accepted_at = datetime('now')
-  `
-  ).run(workspaceId, userId, version);
-  res.json({ ok: true, workspaceId, userId, version });
+  const gate = buildPolicyGateResponse(
+    await policyGuard.getGateState({
+      workspaceId,
+      userId,
+      user: {
+        id: userId,
+        role: authUser.role,
+        workspaceId,
+        superAdmin: !!authUser.superAdmin
+      }
+    })
+  );
+  res.json({
+    accepted: !!gate.accepted,
+    required: !!gate.required,
+    exempt: !!gate.exempt,
+    version: gate.version || null,
+    acceptedAt: gate.acceptedAt || null
+  });
 });
 
-app.get('/api/channels/:channelId/members', authRequired, (req, res) => {
-  const channelId = resolveRealChannelId(req.params.channelId);
-  const channel = db
-    .prepare('SELECT id, workspace_id AS workspaceId FROM channels WHERE id = ? LIMIT 1')
-    .get(String(channelId || '').trim());
-  if (!channel) {
-    return res.status(404).json({ error: 'Channel not found' });
-  }
+app.post('/api/workspaces/:workspaceId/policy/accept', authRequired, express.json(), async (req, res) => {
   const authUser = req.auth || {};
-  const authWorkspaceId = String(authUser.workspaceId || authUser.workspace_id || '').trim();
-  if (!isSuperAdminRole(authUser) && authWorkspaceId !== String(channel.workspaceId || '').trim()) {
-    return res.status(403).json({ error: 'Forbidden' });
+  const workspaceId = String(req.params.workspaceId || req.body?.workspaceId || authUser.workspaceId || authUser.workspace_id || '').trim();
+  const userId = String(authUser.id || authUser.sub || '').trim();
+  if (!workspaceId || !userId) {
+    return res.status(400).json({ error: 'workspaceId is required' });
   }
-  const members = db
-    .prepare(
-      `
-      SELECT user_id
-      FROM channel_members
-      WHERE channel_id = ?
-      ORDER BY user_id ASC
-    `
-    )
-    .all(channel.id)
-    .map((row) => String(row.user_id || ''))
-    .filter(Boolean);
+  if (!isSuperAdminRole(authUser)) {
+    const authWorkspaceId = String(authUser.workspaceId || authUser.workspace_id || '').trim();
+    if (workspaceId !== authWorkspaceId) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+  }
+  const currentVersion = await policyRepository.getWorkspacePolicyVersion(workspaceId);
+  const requestedVersion = String(req.body?.version || currentVersion).trim() || currentVersion;
+  if (requestedVersion !== currentVersion) {
+    return res.status(409).json({
+      error: 'Policy version is outdated. Reload the current policy before accepting again.',
+      code: 'policy_version_mismatch',
+      currentVersion
+    });
+  }
+  const acceptance = await policyRepository.saveAcceptance({
+    workspaceId,
+    userId,
+    version: currentVersion,
+    acceptedAt: new Date().toISOString()
+  });
+  policyGuard.invalidate(workspaceId, userId);
+  const gate = buildPolicyGateResponse(
+    await policyGuard.getGateState({
+      workspaceId,
+      userId,
+      user: {
+        id: userId,
+        role: authUser.role,
+        workspaceId,
+        superAdmin: !!authUser.superAdmin
+      }
+    })
+  );
+  res.json({
+    ok: true,
+    workspaceId,
+    userId,
+    version: currentVersion,
+    acceptedAt: acceptance?.acceptedAt || gate.acceptedAt || null,
+    policyGate: gate
+  });
+});
+
+app.post('/api/policy/accept', authRequired, express.json(), async (req, res) => {
+  const authUser = req.auth || {};
+  const workspaceId = String(req.body?.workspaceId || authUser.workspaceId || authUser.workspace_id || '').trim();
+  const userId = String(authUser.id || authUser.sub || '').trim();
+  if (!workspaceId || !userId) {
+    return res.status(400).json({ error: 'workspaceId is required' });
+  }
+  if (!isSuperAdminRole(authUser)) {
+    const authWorkspaceId = String(authUser.workspaceId || authUser.workspace_id || '').trim();
+    if (workspaceId !== authWorkspaceId) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+  }
+  const currentVersion = await policyRepository.getWorkspacePolicyVersion(workspaceId);
+  const requestedVersion = String(req.body?.version || currentVersion).trim() || currentVersion;
+  if (requestedVersion !== currentVersion) {
+    return res.status(409).json({
+      error: 'Policy version is outdated. Reload the current policy before accepting again.',
+      code: 'policy_version_mismatch',
+      currentVersion
+    });
+  }
+  const acceptance = await policyRepository.saveAcceptance({
+    workspaceId,
+    userId,
+    version: currentVersion,
+    acceptedAt: new Date().toISOString()
+  });
+  policyGuard.invalidate(workspaceId, userId);
+  const gate = buildPolicyGateResponse(
+    await policyGuard.getGateState({
+      workspaceId,
+      userId,
+      user: {
+        id: userId,
+        role: authUser.role,
+        workspaceId,
+        superAdmin: !!authUser.superAdmin
+      }
+    })
+  );
+  res.json({
+    ok: true,
+    workspaceId,
+    userId,
+    version: currentVersion,
+    acceptedAt: acceptance?.acceptedAt || gate.acceptedAt || null,
+    policyGate: gate
+  });
+});
+
+app.get('/api/channels/:channelId/members', authRequired, async (req, res) => {
+  const channelId = resolveRealChannelId(req.params.channelId);
+  const access = await assertChannelAccess(req.auth, channelId, req, { requireMembership: true });
+  if (!access.ok) {
+    if (access.status === 404) return res.status(404).json({ error: 'Channel not found' });
+    return tenantForbidden(res);
+  }
+  const members = await channelRepository.getChannelMembers(access.channel.id);
   res.json({ members });
 });
 
-app.post('/api/channels/:channelId/members', authRequired, express.json(), (req, res) => {
+app.post('/api/channels/:channelId/members', authRequired, express.json(), async (req, res) => {
   const channelId = resolveRealChannelId(req.params.channelId);
   const userId = String(req.body?.userId || '').trim();
   const requesterId = String(req.headers['x-user-id'] || req.auth?.id || req.auth?.sub || '').trim();
@@ -13721,26 +15720,24 @@ app.post('/api/channels/:channelId/members', authRequired, express.json(), (req,
   if (!userId) {
     return res.status(400).json({ error: 'userId is required' });
   }
-  const requester = db
-    .prepare('SELECT id, role, workspace_id AS workspaceId FROM users WHERE id = ?')
-    .get(requesterId);
+  const requester = await userRepository.getUserById(requesterId);
   if (!requester) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   if (!canManageChannelMembers(requester.role)) {
     return res.status(403).json({ error: 'Only teachers or admins can manage members' });
   }
-  const user = db
-    .prepare('SELECT id, role, workspace_id AS workspaceId FROM users WHERE id = ?')
-    .get(userId);
+  const user = await userRepository.getUserById(userId);
   if (!user) {
     return res.status(404).json({ error: 'User not found' });
   }
-  const channel = db
-    .prepare('SELECT id, name, workspace_id AS workspaceId, category FROM channels WHERE id = ?')
-    .get(channelId);
+  const channel = await channelRepository.getChannelById(channelId);
   if (!channel) {
     return res.status(404).json({ error: 'Channel not found' });
+  }
+  const channelAccess = await assertChannelAccess(requester, channelId, req, { requireMembership: false });
+  if (!channelAccess.ok) {
+    return tenantForbidden(res);
   }
   if (
     String(channel.workspaceId || '') !== String(requester.workspaceId || '') ||
@@ -13749,30 +15746,24 @@ app.post('/api/channels/:channelId/members', authRequired, express.json(), (req,
     return res.status(400).json({ error: 'Workspace mismatch' });
   }
 
-  db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)').run(
-    channelId,
-    userId
-  );
+  await channelRepository.addChannelMember(channelId, userId);
 
   if (normalizeChannelCategory(channel.category) === 'classes') {
-    const hwId = ensureHomeworkChannelForClass({
+    const hwId = await channelRepository.ensureHomeworkChannelForClass({
       id: channel.id,
       name: channel.name,
       workspaceId: channel.workspaceId,
       category: channel.category
     });
     if (hwId) {
-      db.prepare('INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)').run(
-        hwId,
-        userId
-      );
+      await channelRepository.addChannelMember(hwId, userId);
     }
   }
 
   res.json({ ok: true, channelId, userId });
 });
 
-app.delete('/api/channels/:channelId/members', authRequired, express.json(), (req, res) => {
+app.delete('/api/channels/:channelId/members', authRequired, express.json(), async (req, res) => {
   const channelId = resolveRealChannelId(req.params.channelId);
   const userId = String(req.body?.userId || '').trim();
   const requesterId = String(req.headers['x-user-id'] || req.auth?.id || req.auth?.sub || '').trim();
@@ -13782,26 +15773,24 @@ app.delete('/api/channels/:channelId/members', authRequired, express.json(), (re
   if (!userId) {
     return res.status(400).json({ error: 'userId is required' });
   }
-  const requester = db
-    .prepare('SELECT id, role, workspace_id AS workspaceId FROM users WHERE id = ?')
-    .get(requesterId);
+  const requester = await userRepository.getUserById(requesterId);
   if (!requester) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   if (!canManageChannelMembers(requester.role)) {
     return res.status(403).json({ error: 'Only teachers or admins can manage members' });
   }
-  const user = db
-    .prepare('SELECT id, role, workspace_id AS workspaceId FROM users WHERE id = ?')
-    .get(userId);
+  const user = await userRepository.getUserById(userId);
   if (!user) {
     return res.status(404).json({ error: 'User not found' });
   }
-  const channel = db
-    .prepare('SELECT id, name, workspace_id AS workspaceId, category FROM channels WHERE id = ?')
-    .get(channelId);
+  const channel = await channelRepository.getChannelById(channelId);
   if (!channel) {
     return res.status(404).json({ error: 'Channel not found' });
+  }
+  const channelAccess = await assertChannelAccess(requester, channelId, req, { requireMembership: false });
+  if (!channelAccess.ok) {
+    return tenantForbidden(res);
   }
   if (
     String(channel.workspaceId || '') !== String(requester.workspaceId || '') ||
@@ -13810,50 +15799,42 @@ app.delete('/api/channels/:channelId/members', authRequired, express.json(), (re
     return res.status(400).json({ error: 'Workspace mismatch' });
   }
 
-  db.prepare('DELETE FROM channel_members WHERE channel_id = ? AND user_id = ?').run(
-    channelId,
-    userId
-  );
+  await channelRepository.removeChannelMember(channelId, userId);
 
   if (normalizeChannelCategory(channel.category) === 'classes') {
-    const hw = db
-      .prepare(
-        `SELECT id
-         FROM channels
-         WHERE lower(category) = 'homework'
-           AND topic = ?`
-      )
-      .get(`homework_for:${channelId}`);
+    const hw = await channelRepository.findHomeworkChannelForClass(channelId);
     if (hw?.id) {
-      db.prepare('DELETE FROM channel_members WHERE channel_id = ? AND user_id = ?').run(
-        hw.id,
-        userId
-      );
+      await channelRepository.removeChannelMember(hw.id, userId);
     }
   }
 
   res.json({ ok: true, channelId, userId });
 });
 
-app.get('/api/homework/channels/:channelId/board', authRequired, (req, res) => {
+app.get('/api/homework/channels/:channelId/board', authRequired, async (req, res) => {
   const ctx = resolveHomeworkRequestContext(req, res, req.params.channelId);
   if (!ctx) return;
   const role = getNormalizedUserRole(ctx.user);
-  res.json({
-    channel: {
-      ...ctx.homeworkChannel,
-      classChannelId: getHomeworkClassIdFromChannel(ctx.homeworkChannel),
-      className: ctx.classChannel?.name || ''
-    },
-    permissions: {
-      canManage: canManageHomeworkChannel(ctx.user, ctx.homeworkChannel),
-      canSubmit: role === 'student'
-    },
-    items: listHomeworkBoardForChannel(ctx.homeworkChannel, ctx.user)
-  });
+  try {
+    res.json({
+      channel: {
+        ...ctx.homeworkChannel,
+        classChannelId: getHomeworkClassIdFromChannel(ctx.homeworkChannel),
+        className: ctx.classChannel?.name || ''
+      },
+      permissions: {
+        canManage: canManageHomeworkChannel(ctx.user, ctx.homeworkChannel),
+        canSubmit: role === 'student'
+      },
+      items: await listHomeworkBoardForChannel(ctx.homeworkChannel, ctx.user)
+    });
+  } catch (err) {
+    console.error('[Homework] Board load failed', err);
+    res.status(500).json({ error: 'Failed to load homework board' });
+  }
 });
 
-app.post('/api/homework/channels/:channelId/items', authRequired, express.json(), (req, res) => {
+app.post('/api/homework/channels/:channelId/items', authRequired, express.json(), async (req, res) => {
   const ctx = resolveHomeworkRequestContext(req, res, req.params.channelId);
   if (!ctx) return;
   if (!canManageHomeworkChannel(ctx.user, ctx.homeworkChannel)) {
@@ -13867,78 +15848,75 @@ app.post('/api/homework/channels/:channelId/items', authRequired, express.json()
   const files = Array.isArray(req.body?.files) ? req.body.files : [];
   const solutionFiles = Array.isArray(req.body?.solutionFiles) ? req.body.solutionFiles : [];
   if (!title) return res.status(400).json({ error: 'title required' });
-  const itemHasUpdatedAt = hasColumn('homework_items', 'updated_at');
-
-  const itemId = generateId('hwi');
-  db.prepare(
-    `
-    INSERT INTO homework_items
-    ${itemHasUpdatedAt
-      ? `(id, workspace_id, class_channel_id, title, description, resource_url, due_date, is_locked, is_archived, created_by, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, datetime('now'), datetime('now'))`
-      : `(id, workspace_id, class_channel_id, title, description, resource_url, due_date, is_locked, is_archived, created_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, datetime('now'))`
-    }
-  `
-  ).run(
-    itemId,
-    ctx.homeworkChannel.workspaceId,
-    getHomeworkClassIdFromChannel(ctx.homeworkChannel),
-    title,
-    description,
-    resourceUrl,
-    dueDate,
-    isLocked,
-    ctx.user.id || null
-  );
-
-  const fileStmt = db.prepare(
-    `
-    INSERT INTO homework_item_files
-    (id, item_id, workspace_id, channel_id, file_id, file_name, mime, size_bytes, url, file_role, created_by, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-  `
-  );
-  [...files.map((file) => ({ file, fileRole: 'task' })), ...solutionFiles.map((file) => ({ file, fileRole: 'solution' }))].forEach(({ file, fileRole }) => {
-    const linked = registerHomeworkLinkedFile({
+  const idempotencyKey = extractIdempotencyKey(req);
+  if (idempotencyKey) {
+    const existing = findExistingIdempotentHomeworkItem({
       workspaceId: ctx.homeworkChannel.workspaceId,
-      channelId: ctx.homeworkChannel.id,
-      ownerId: ctx.user.id || null,
-      file,
-      purpose: fileRole === 'solution' ? 'homework_solution' : 'homework',
-      messageId: `homework-item:${itemId}`
+      classChannelId: getHomeworkClassIdFromChannel(ctx.homeworkChannel),
+      title,
+      dueDate,
+      createdBy: ctx.user.id || null
     });
-    if (!linked) return;
-    fileStmt.run(
-      generateId('hwif'),
-      itemId,
-      ctx.homeworkChannel.workspaceId,
-      ctx.homeworkChannel.id,
-      linked.fileId,
-      linked.fileName,
-      linked.mime,
-      linked.sizeBytes,
-      linked.url,
-      fileRole,
-      ctx.user.id || null
-    );
-  });
+    if (existing) {
+      const replay = (await listHomeworkBoardForChannel(ctx.homeworkChannel, ctx.user)).find((item) => String(item.id) === String(existing.id));
+      return res.status(200).json({ item: replay || { id: existing.id } });
+    }
+  }
+  const itemId = generateId('hwi');
+  try {
+    const linkedTaskFiles = [];
+    for (const file of files) {
+      const linked = await registerHomeworkLinkedFile({
+        workspaceId: ctx.homeworkChannel.workspaceId,
+        channelId: ctx.homeworkChannel.id,
+        ownerId: ctx.user.id || null,
+        file,
+        purpose: 'homework',
+        messageId: `homework-item:${itemId}`
+      });
+      if (!linked) continue;
+      linkedTaskFiles.push({ id: generateId('hwif'), channelId: ctx.homeworkChannel.id, fileRole: 'task', ...linked });
+    }
 
-  const created = listHomeworkBoardForChannel(ctx.homeworkChannel, ctx.user).find((item) => String(item.id) === itemId);
-  res.status(201).json({ item: created || { id: itemId } });
+    const linkedSolutionFiles = [];
+    for (const file of solutionFiles) {
+      const linked = await registerHomeworkLinkedFile({
+        workspaceId: ctx.homeworkChannel.workspaceId,
+        channelId: ctx.homeworkChannel.id,
+        ownerId: ctx.user.id || null,
+        file,
+        purpose: 'homework_solution',
+        messageId: `homework-item:${itemId}`
+      });
+      if (!linked) continue;
+      linkedSolutionFiles.push({ id: generateId('hwif'), channelId: ctx.homeworkChannel.id, fileRole: 'solution', ...linked });
+    }
+
+    await tasksRepository.createHomeworkItem({
+      id: itemId,
+      workspaceId: ctx.homeworkChannel.workspaceId,
+      classChannelId: getHomeworkClassIdFromChannel(ctx.homeworkChannel),
+      title,
+      description,
+      resourceUrl,
+      dueDate,
+      isLocked,
+      createdBy: ctx.user.id || null,
+      files: linkedTaskFiles,
+      solutionFiles: linkedSolutionFiles
+    });
+
+    const created = (await listHomeworkBoardForChannel(ctx.homeworkChannel, ctx.user)).find((item) => String(item.id) === itemId);
+    res.status(201).json({ item: created || { id: itemId } });
+  } catch (err) {
+    console.error('[Homework] Create item failed', err);
+    res.status(500).json({ error: 'Failed to create homework item' });
+  }
 });
 
-app.patch('/api/homework/items/:itemId', authRequired, express.json(), (req, res) => {
+app.patch('/api/homework/items/:itemId', authRequired, express.json(), async (req, res) => {
   const itemId = String(req.params.itemId || '').trim();
-  const itemHasUpdatedAt = hasColumn('homework_items', 'updated_at');
-  const item = db
-    .prepare(
-      `SELECT id, workspace_id AS workspaceId, class_channel_id AS classChannelId, title, description, resource_url AS resourceUrl, due_date AS dueDate, is_locked AS isLocked, is_archived AS isArchived, created_by AS createdBy, created_at AS createdAt, ${itemHasUpdatedAt ? 'updated_at' : 'created_at'} AS updatedAt
-       FROM homework_items
-       WHERE id = ?
-       LIMIT 1`
-    )
-    .get(itemId);
+  const item = await tasksRepository.getHomeworkItemById(itemId);
   if (!item) return res.status(404).json({ error: 'Homework item not found' });
   const homeworkChannel = getHomeworkChannelForClass({
     id: item.classChannelId,
@@ -13960,63 +15938,67 @@ app.patch('/api/homework/items/:itemId', authRequired, express.json(), (req, res
   const solutionFiles = Array.isArray(req.body?.solutionFiles) ? req.body.solutionFiles : null;
   if (!title) return res.status(400).json({ error: 'title required' });
 
-  db.prepare(
-    `
-    UPDATE homework_items
-    SET title = ?, description = ?, resource_url = ?, due_date = ?, is_locked = ?, is_archived = ?${itemHasUpdatedAt ? ", updated_at = datetime('now')" : ""}
-    WHERE id = ?
-  `
-  ).run(title, description, resourceUrl, dueDate, isLocked, isArchived, itemId);
+  try {
+    let linkedTaskFiles = null;
+    if (files) {
+      linkedTaskFiles = [];
+      for (const file of files) {
+        const linked = await registerHomeworkLinkedFile({
+          workspaceId: ctx.homeworkChannel.workspaceId,
+          channelId: ctx.homeworkChannel.id,
+          ownerId: ctx.user.id || null,
+          file,
+          purpose: 'homework',
+          messageId: `homework-item:${itemId}`
+        });
+        if (!linked) continue;
+        linkedTaskFiles.push({ id: generateId('hwif'), channelId: ctx.homeworkChannel.id, fileRole: 'task', ...linked });
+      }
+    }
 
-  if (files || solutionFiles) {
-    db.prepare(`DELETE FROM homework_item_files WHERE item_id = ?`).run(itemId);
-    const fileStmt = db.prepare(
-      `
-      INSERT INTO homework_item_files
-      (id, item_id, workspace_id, channel_id, file_id, file_name, mime, size_bytes, url, file_role, created_by, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    `
-    );
-    [...(files || []).map((file) => ({ file, fileRole: 'task' })), ...(solutionFiles || []).map((file) => ({ file, fileRole: 'solution' }))].forEach(({ file, fileRole }) => {
-      const linked = registerHomeworkLinkedFile({
-        workspaceId: ctx.homeworkChannel.workspaceId,
-        channelId: ctx.homeworkChannel.id,
-        ownerId: ctx.user.id || null,
-        file,
-        purpose: fileRole === 'solution' ? 'homework_solution' : 'homework',
-        messageId: `homework-item:${itemId}`
-      });
-      if (!linked) return;
-      fileStmt.run(
-        generateId('hwif'),
-        itemId,
-        ctx.homeworkChannel.workspaceId,
-        ctx.homeworkChannel.id,
-        linked.fileId,
-        linked.fileName,
-        linked.mime,
-        linked.sizeBytes,
-        linked.url,
-        fileRole,
-        ctx.user.id || null
-      );
+    let linkedSolutionFiles = null;
+    if (solutionFiles) {
+      linkedSolutionFiles = [];
+      for (const file of solutionFiles) {
+        const linked = await registerHomeworkLinkedFile({
+          workspaceId: ctx.homeworkChannel.workspaceId,
+          channelId: ctx.homeworkChannel.id,
+          ownerId: ctx.user.id || null,
+          file,
+          purpose: 'homework_solution',
+          messageId: `homework-item:${itemId}`
+        });
+        if (!linked) continue;
+        linkedSolutionFiles.push({ id: generateId('hwif'), channelId: ctx.homeworkChannel.id, fileRole: 'solution', ...linked });
+      }
+    }
+
+    await tasksRepository.updateHomeworkItem({
+      itemId,
+      title,
+      description,
+      resourceUrl,
+      dueDate,
+      isLocked,
+      isArchived,
+      files: linkedTaskFiles,
+      solutionFiles: linkedSolutionFiles,
+      workspaceId: ctx.homeworkChannel.workspaceId,
+      channelId: ctx.homeworkChannel.id,
+      userId: ctx.user.id || null
     });
-  }
 
-  const updated = listHomeworkBoardForChannel(ctx.homeworkChannel, ctx.user).find((row) => String(row.id) === itemId);
-  res.json({ item: updated || { ...item, title, description, resourceUrl, dueDate, isLocked, isArchived } });
+    const updated = (await listHomeworkBoardForChannel(ctx.homeworkChannel, ctx.user)).find((row) => String(row.id) === itemId);
+    res.json({ item: updated || { ...item, title, description, resourceUrl, dueDate, isLocked, isArchived } });
+  } catch (err) {
+    console.error('[Homework] Update item failed', err);
+    res.status(500).json({ error: 'Failed to update homework item' });
+  }
 });
 
-app.delete('/api/homework/items/:itemId', authRequired, (req, res) => {
+app.delete('/api/homework/items/:itemId', authRequired, async (req, res) => {
   const itemId = String(req.params.itemId || '').trim();
-  const item = db
-    .prepare(
-      `SELECT id, workspace_id AS workspaceId, class_channel_id AS classChannelId
-       FROM homework_items
-       WHERE id = ?
-       LIMIT 1`
-    )
-    .get(itemId);
+  const item = await tasksRepository.getHomeworkItemById(itemId);
   if (!item) return res.status(404).json({ error: 'Homework item not found' });
   const homeworkChannel = getHomeworkChannelForClass({
     id: item.classChannelId,
@@ -14028,29 +16010,22 @@ app.delete('/api/homework/items/:itemId', authRequired, (req, res) => {
     return res.status(403).json({ error: 'Forbidden' });
   }
 
-  const submissionStudentRows = db
-    .prepare(`SELECT student_id AS studentId, status FROM homework_submissions WHERE homework_item_id = ?`)
-    .all(itemId);
-  submissionStudentRows.forEach((row) => syncHomeworkCompletion(itemId, row.studentId, 'draft'));
-  db.prepare(`DELETE FROM homework_submission_files WHERE submission_id IN (SELECT id FROM homework_submissions WHERE homework_item_id = ?)`).run(itemId);
-  db.prepare(`DELETE FROM homework_submission_comments WHERE submission_id IN (SELECT id FROM homework_submissions WHERE homework_item_id = ?)`).run(itemId);
-  db.prepare(`DELETE FROM homework_submissions WHERE homework_item_id = ?`).run(itemId);
-  db.prepare(`DELETE FROM homework_item_files WHERE item_id = ?`).run(itemId);
-  db.prepare(`DELETE FROM homework_items WHERE id = ?`).run(itemId);
-  db.prepare(`DELETE FROM homework_completions WHERE homework_id = ?`).run(itemId);
-  res.json({ ok: true, itemId });
+  try {
+    const submissionStudentRows = await tasksRepository.listHomeworkSubmissionStudents(itemId);
+    for (const row of submissionStudentRows) {
+      await syncHomeworkCompletion(itemId, row.studentId, 'draft');
+    }
+    await tasksRepository.deleteHomeworkItemCascade(itemId);
+    res.json({ ok: true, itemId });
+  } catch (err) {
+    console.error('[Homework] Delete item failed', err);
+    res.status(500).json({ error: 'Failed to delete homework item' });
+  }
 });
 
-app.post('/api/homework/items/:itemId/submissions', authRequired, express.json(), (req, res) => {
+app.post('/api/homework/items/:itemId/submissions', authRequired, express.json(), async (req, res) => {
   const itemId = String(req.params.itemId || '').trim();
-  const item = db
-    .prepare(
-      `SELECT id, workspace_id AS workspaceId, class_channel_id AS classChannelId, due_date AS dueDate, is_locked AS isLocked
-       FROM homework_items
-       WHERE id = ?
-       LIMIT 1`
-    )
-    .get(itemId);
+  const item = await tasksRepository.getHomeworkItemById(itemId);
   if (!item) return res.status(404).json({ error: 'Homework item not found' });
   const homeworkChannel = getHomeworkChannelForClass({
     id: item.classChannelId,
@@ -14075,15 +16050,7 @@ app.post('/api/homework/items/:itemId/submissions', authRequired, express.json()
   const submissionText = String(req.body?.submissionText || '').trim();
   const files = Array.isArray(req.body?.files) ? req.body.files : [];
   const studentId = String(ctx.user.id || ctx.user.sub || '').trim();
-  const existing = db
-    .prepare(
-      `SELECT id
-            , status
-       FROM homework_submissions
-       WHERE homework_item_id = ? AND student_id = ?
-       LIMIT 1`
-    )
-    .get(itemId, studentId);
+  const existing = await tasksRepository.getHomeworkSubmissionForStudent(itemId, studentId);
   const existingStatus = String(existing?.status || '').trim().toLowerCase();
   if (existing && existingStatus && existingStatus !== 'draft') {
     return res.status(403).json({ error: 'Submitted homework can no longer be modified.' });
@@ -14092,91 +16059,50 @@ app.post('/api/homework/items/:itemId/submissions', authRequired, express.json()
   const submittedAt = HOMEWORK_SUBMISSION_ACTIVE_STATUSES.has(status) ? nowISOString() : null;
   const isLate = status === 'late' ? 1 : 0;
 
-  if (existing) {
-    db.prepare(
-      `
-      UPDATE homework_submissions
-      SET status = ?, submission_text = ?, is_late = ?, submitted_at = COALESCE(?, submitted_at), updated_at = datetime('now')
-      WHERE id = ?
-    `
-    ).run(status, submissionText, isLate, submittedAt, submissionId);
-  } else {
-    db.prepare(
-      `
-      INSERT INTO homework_submissions
-      (id, homework_item_id, workspace_id, channel_id, student_id, status, submission_text, is_late, submitted_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-    `
-    ).run(
+  try {
+    const linkedFiles = [];
+    for (const file of files) {
+      const linked = await registerHomeworkLinkedFile({
+        workspaceId: ctx.homeworkChannel.workspaceId,
+        channelId: ctx.homeworkChannel.id,
+        ownerId: studentId,
+        file,
+        purpose: 'homework_submission',
+        messageId: `homework-submission:${submissionId}`
+      });
+      if (!linked) continue;
+      linkedFiles.push({ id: generateId('hwsf'), ...linked });
+    }
+
+    await tasksRepository.upsertHomeworkSubmission({
       submissionId,
+      existingSubmissionId: existing?.id || null,
       itemId,
-      ctx.homeworkChannel.workspaceId,
-      ctx.homeworkChannel.id,
+      workspaceId: ctx.homeworkChannel.workspaceId,
+      channelId: ctx.homeworkChannel.id,
       studentId,
       status,
       submissionText,
       isLate,
-      submittedAt
-    );
-  }
-
-  const fileStmt = db.prepare(
-    `
-    INSERT INTO homework_submission_files
-    (id, submission_id, workspace_id, channel_id, file_id, file_name, mime, size_bytes, url, created_by, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-  `
-  );
-  files.forEach((file) => {
-    const linked = registerHomeworkLinkedFile({
-      workspaceId: ctx.homeworkChannel.workspaceId,
-      channelId: ctx.homeworkChannel.id,
-      ownerId: studentId,
-      file,
-      purpose: 'homework_submission',
-      messageId: `homework-submission:${submissionId}`
+      submittedAt,
+      files: linkedFiles
     });
-    if (!linked) return;
-    fileStmt.run(
-      generateId('hwsf'),
-      submissionId,
-      ctx.homeworkChannel.workspaceId,
-      ctx.homeworkChannel.id,
-      linked.fileId,
-      linked.fileName,
-      linked.mime,
-      linked.sizeBytes,
-      linked.url,
-      studentId
-    );
-  });
 
-  syncHomeworkCompletion(itemId, studentId, status);
-  const boardItem = listHomeworkBoardForChannel(ctx.homeworkChannel, ctx.user).find((row) => String(row.id) === itemId);
-  res.json({
-    submission: boardItem?.mySubmission || null,
-    item: boardItem || null
-  });
+    await syncHomeworkCompletion(itemId, studentId, status);
+    const boardItem = (await listHomeworkBoardForChannel(ctx.homeworkChannel, ctx.user)).find((row) => String(row.id) === itemId);
+    res.json({
+      submission: boardItem?.mySubmission || null,
+      item: boardItem || null
+    });
+  } catch (err) {
+    console.error('[Homework] Submission upsert failed', err);
+    res.status(500).json({ error: 'Failed to save submission' });
+  }
 });
 
-app.post('/api/homework/submissions/:submissionId/review', authRequired, express.json(), (req, res) => {
+app.post('/api/homework/submissions/:submissionId/review', authRequired, express.json(), async (req, res) => {
   const submissionId = String(req.params.submissionId || '').trim();
-  const submission = db
-    .prepare(
-      `SELECT
-         hs.id,
-         hs.homework_item_id AS homeworkItemId,
-         hs.student_id AS studentId,
-         hs.status,
-         hi.workspace_id AS workspaceId,
-         hi.class_channel_id AS classChannelId,
-         hi.due_date AS dueDate
-       FROM homework_submissions hs
-       JOIN homework_items hi ON hi.id = hs.homework_item_id
-       WHERE hs.id = ?
-       LIMIT 1`
-    )
-    .get(submissionId);
+  const submission = await tasksRepository.getHomeworkSubmissionById(submissionId);
   if (!submission) return res.status(404).json({ error: 'Submission not found' });
   const homeworkChannel = getHomeworkChannelForClass({
     id: submission.classChannelId,
@@ -14194,40 +16120,30 @@ app.post('/api/homework/submissions/:submissionId/review', authRequired, express
   }
   const feedbackText = String(req.body?.feedbackText || '').trim();
   const gradeValue = String(req.body?.gradeValue || '').trim();
-  db.prepare(
-    `
-    UPDATE homework_submissions
-    SET status = ?, feedback_text = ?, grade_value = ?, reviewed_at = datetime('now'), reviewed_by = ?, returned_at = CASE WHEN ? = 'returned' THEN datetime('now') ELSE returned_at END, updated_at = datetime('now')
-    WHERE id = ?
-  `
-  ).run(nextStatus, feedbackText, gradeValue, ctx.user.id || ctx.user.sub || null, nextStatus, submissionId);
+  try {
+    await tasksRepository.reviewHomeworkSubmission({
+      submissionId,
+      status: nextStatus,
+      feedbackText,
+      gradeValue,
+      reviewedBy: ctx.user.id || ctx.user.sub || null
+    });
 
-  syncHomeworkCompletion(submission.homeworkItemId, submission.studentId, nextStatus);
-  const teacherViewItem = listHomeworkBoardForChannel(ctx.homeworkChannel, ctx.user).find((row) => String(row.id) === String(submission.homeworkItemId));
-  res.json({
-    submission: teacherViewItem?.submissions?.find((row) => String(row.id) === submissionId) || null,
-    item: teacherViewItem || null
-  });
+    await syncHomeworkCompletion(submission.homeworkItemId, submission.studentId, nextStatus);
+    const teacherViewItem = (await listHomeworkBoardForChannel(ctx.homeworkChannel, ctx.user)).find((row) => String(row.id) === String(submission.homeworkItemId));
+    res.json({
+      submission: teacherViewItem?.submissions?.find((row) => String(row.id) === submissionId) || null,
+      item: teacherViewItem || null
+    });
+  } catch (err) {
+    console.error('[Homework] Review failed', err);
+    res.status(500).json({ error: 'Failed to review submission' });
+  }
 });
 
-app.post('/api/homework/submissions/:submissionId/comments', authRequired, express.json(), (req, res) => {
+app.post('/api/homework/submissions/:submissionId/comments', authRequired, express.json(), async (req, res) => {
   const submissionId = String(req.params.submissionId || '').trim();
-  const submission = db
-    .prepare(
-      `SELECT
-         hs.id,
-         hs.homework_item_id AS homeworkItemId,
-         hs.workspace_id AS workspaceId,
-         hs.channel_id AS channelId,
-         hs.student_id AS studentId,
-         hs.status,
-         hi.class_channel_id AS classChannelId
-       FROM homework_submissions hs
-       JOIN homework_items hi ON hi.id = hs.homework_item_id
-       WHERE hs.id = ?
-       LIMIT 1`
-    )
-    .get(submissionId);
+  const submission = await tasksRepository.getHomeworkSubmissionById(submissionId);
   if (!submission) return res.status(404).json({ error: 'Submission not found' });
   const homeworkChannel = getHomeworkChannelForClass({
     id: submission.classChannelId,
@@ -14246,31 +16162,32 @@ app.post('/api/homework/submissions/:submissionId/comments', authRequired, expre
   const commentText = String(req.body?.commentText || '').trim();
   if (!commentText) return res.status(400).json({ error: 'Comment is required.' });
 
-  db.prepare(
-    `INSERT INTO homework_submission_comments
-     (id, submission_id, workspace_id, channel_id, author_id, comment_text, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
-  ).run(
-    generateId('hwsc'),
-    submissionId,
-    ctx.homeworkChannel.workspaceId,
-    ctx.homeworkChannel.id,
-    requesterId,
-    commentText
-  );
+  try {
+    await tasksRepository.createHomeworkSubmissionComment({
+      id: generateId('hwsc'),
+      submissionId,
+      workspaceId: ctx.homeworkChannel.workspaceId,
+      channelId: ctx.homeworkChannel.id,
+      authorId: requesterId,
+      commentText
+    });
 
-  const boardItem = listHomeworkBoardForChannel(ctx.homeworkChannel, ctx.user).find((row) => String(row.id) === String(submission.homeworkItemId));
-  res.status(201).json({
-    submission: boardItem?.mySubmission || null,
-    item: boardItem || null
-  });
+    const boardItem = (await listHomeworkBoardForChannel(ctx.homeworkChannel, ctx.user)).find((row) => String(row.id) === String(submission.homeworkItemId));
+    res.status(201).json({
+      submission: boardItem?.mySubmission || null,
+      item: boardItem || null
+    });
+  } catch (err) {
+    console.error('[Homework] Submission comment failed', err);
+    res.status(500).json({ error: 'Failed to add submission comment' });
+  }
 });
 
 app.delete(
   '/api/channels/:channelId/members/:userId',
   authRequired,
   requirePermission('channels:write'),
-  (req, res) => {
+  async (req, res) => {
     const { channelId, userId } = req.params;
     const requesterId = String(req.auth?.sub || req.auth?.id || '').trim();
 
@@ -14281,9 +16198,7 @@ app.delete(
     return res.status(400).json({ error: 'userId is required' });
   }
 
-  const requester = db
-    .prepare('SELECT id, role, workspace_id AS workspaceId FROM users WHERE id = ?')
-    .get(requesterId);
+  const requester = await userRepository.getUserById(requesterId);
   if (!requester) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
@@ -14291,9 +16206,7 @@ app.delete(
     return res.status(403).json({ error: 'Only teachers or admins can manage members' });
   }
 
-  const user = db
-    .prepare('SELECT id, role, workspace_id AS workspaceId FROM users WHERE id = ?')
-    .get(userId);
+  const user = await userRepository.getUserById(userId);
   if (!user) {
     return res.status(404).json({ error: 'User not found' });
   }
@@ -14302,9 +16215,7 @@ app.delete(
     return res.status(400).json({ error: 'Only students or teachers can be removed here' });
   }
 
-  const channel = db
-    .prepare('SELECT id, name, workspace_id AS workspaceId, category FROM channels WHERE id = ?')
-    .get(channelId);
+  const channel = await channelRepository.getChannelById(channelId);
   if (!channel) {
     return res.status(404).json({ error: 'Channel not found' });
   }
@@ -14315,25 +16226,12 @@ app.delete(
     return res.status(400).json({ error: 'Workspace mismatch' });
   }
 
-  db.prepare('DELETE FROM channel_members WHERE channel_id = ? AND user_id = ?').run(
-    channelId,
-    userId
-  );
+  await channelRepository.removeChannelMember(channelId, userId);
 
   if (normalizeChannelCategory(channel.category) === 'classes') {
-    const hw = db
-      .prepare(
-        `SELECT id
-         FROM channels
-         WHERE lower(category) = 'homework'
-           AND topic = ?`
-      )
-      .get(`homework_for:${channelId}`);
+    const hw = await channelRepository.findHomeworkChannelForClass(channelId);
     if (hw?.id) {
-      db.prepare('DELETE FROM channel_members WHERE channel_id = ? AND user_id = ?').run(
-        hw.id,
-        userId
-      );
+      await channelRepository.removeChannelMember(hw.id, userId);
     }
   }
 
@@ -14347,10 +16245,19 @@ app.get(
   authRequired,
   requirePermission('channels:read'),
   requireWorkspaceAccess((req) => resolveRequestedWorkspaceId(req)),
-  (req, res) => {
+  async (req, res) => {
     const requestedWorkspaceId = String(req.query.workspaceId || '').trim();
     const workspaceId = resolveRequestedWorkspaceId(req);
-    const includeGlobal = req.get('x-super-admin') === '1' || !!req.auth?.superAdmin;
+    const sameWorkspace = await assertSameWorkspace(req.auth, workspaceId, req, {
+      targetType: 'channel',
+      targetId: workspaceId,
+      privateContent: false
+    });
+    if (!sameWorkspace.ok) {
+      if (sameWorkspace.status === 401) return res.status(401).json({ error: 'Not authenticated' });
+      return tenantForbidden(res);
+    }
+    const includeGlobal = false;
     ensureTeachersChannel(workspaceId);
     if (workspaceId && workspaceId !== 'all') {
       ensureClubChannels(workspaceId);
@@ -14360,53 +16267,11 @@ app.get(
       ensureDefaultChannelMemberships(workspaceId);
       ensureHomeworkChannels(workspaceId);
     }
-    let query = `
-    SELECT
-      c.id,
-      c.name,
-      c.topic,
-      c.members,
-      c.unread,
-      c.category,
-      c.workspace_id AS workspaceId,
-      MAX(
-        COALESCE(cm.cnt, 0),
-        COALESCE(wm.cnt, 0),
-        COALESCE(uw.cnt, 0),
-        COALESCE(c.members, 0)
-      ) AS memberCount
-    FROM channels c
-    LEFT JOIN (
-      SELECT channel_id, COUNT(*) AS cnt
-      FROM channel_members
-      GROUP BY channel_id
-    ) cm ON cm.channel_id = c.id
-    LEFT JOIN (
-      SELECT workspace_id, COUNT(*) AS cnt
-      FROM workspace_members
-      GROUP BY workspace_id
-    ) wm ON wm.workspace_id = c.workspace_id
-    LEFT JOIN (
-      SELECT workspace_id, COUNT(*) AS cnt
-      FROM users
-      GROUP BY workspace_id
-    ) uw ON uw.workspace_id = c.workspace_id`;
-    const params = [];
-    if (requestedWorkspaceId) {
-      if (includeGlobal) {
-        query += " WHERE c.workspace_id IN (?, 'all')";
-        params.push(workspaceId);
-      } else {
-        query += ' WHERE c.workspace_id = ?';
-        params.push(workspaceId);
-      }
-    } else {
-      query += ' WHERE c.workspace_id = ?';
-      params.push(workspaceId);
-    }
-  query += ' ORDER BY name';
-
-  const channels = db.prepare(query).all(...params);
+  const channels = await channelRepository.listChannels({
+    workspaceId,
+    requestedWorkspaceId,
+    includeGlobal
+  });
   res.json(channels);
 });
 
@@ -14415,7 +16280,8 @@ app.post(
   authRequired,
   requirePermission('channels:write'),
   requireWorkspaceAccess((req) => String(req.body?.workspaceId || workspaceIdFromRequest(req) || 'default')),
-  (req, res) => {
+  async (req, res) => {
+    try {
     const { name, topic, workspaceId = 'default', memberIds, category } = req.body || {};
     console.log('POST /api/channels payload', req.body);
   if (!name || !name.trim()) {
@@ -14423,17 +16289,27 @@ app.post(
   }
 
   const wsTarget = (workspaceId || 'default').trim();
-  if (wsTarget !== 'all') {
-    const wsExists = db.prepare('SELECT 1 FROM workspaces WHERE id = ?').get(wsTarget);
-    if (!wsExists) {
+  if (!(await channelRepository.workspaceExists(wsTarget))) {
       return res.status(404).json({ error: 'Workspace not found' });
+  }
+
+  const normalizedCategory = normalizeChannelCategory(category);
+  const idempotencyKey = extractIdempotencyKey(req);
+  if (idempotencyKey) {
+    const existing = findExistingIdempotentChannel({
+      workspaceId: wsTarget,
+      name: name.trim(),
+      category: normalizedCategory
+    });
+    if (existing) {
+      return res.status(200).json(existing);
     }
   }
 
   const baseId = slugify(name.trim());
   let id = baseId;
   let suffix = 1;
-  while (db.prepare('SELECT 1 FROM channels WHERE id = ?').get(id)) {
+  while (await channelRepository.channelIdExists(id)) {
     id = `${baseId}-${suffix++}`;
   }
 
@@ -14446,37 +16322,22 @@ app.post(
     members: memberList.length || 1,
     unread: 0,
     workspaceId: wsTarget,
-    category: normalizeChannelCategory(category)
+    category: normalizedCategory
   };
 
-  const tx = db.transaction(() => {
-    db.prepare(
-      `
-      INSERT INTO channels (id, name, topic, members, unread, workspace_id, category)
-      VALUES (@id, @name, @topic, @members, @unread, @workspace_id, @category)
-    `
-    ).run({
-      id,
-      name: name.trim(),
-      topic: channel.topic,
-      members: channel.members,
-      unread: 0,
-      workspace_id: wsTarget,
-      category: channel.category
-    });
-
-    if (memberList.length) {
-      const insertMember = db.prepare(
-        'INSERT OR IGNORE INTO channel_members (channel_id, user_id) VALUES (?, ?)'
-      );
-      memberList.forEach((uid) => insertMember.run(id, uid));
-    }
+  await channelRepository.createChannel({
+    id,
+    name: name.trim(),
+    topic: channel.topic,
+    members: channel.members,
+    unread: 0,
+    workspaceId: wsTarget,
+    category: channel.category,
+    memberIds: memberList
   });
 
-  tx();
-
   if (channel.category === 'classes') {
-    ensureHomeworkChannelForClass({
+    await channelRepository.ensureHomeworkChannelForClass({
       id: channel.id,
       name: channel.name,
       workspaceId: channel.workspaceId,
@@ -14486,6 +16347,9 @@ app.post(
   ensureAdminsInWorkspaceChannels(wsTarget, channel.id);
 
   res.status(201).json(channel);
+    } catch (error) {
+      handleOnboardingRouteError(res, error, '[Onboarding] Failed to create channel');
+    }
 });
 
 // UPDATE channel (name/topic/members/unread)
@@ -14493,15 +16357,11 @@ app.patch(
   '/api/channels/:channelId',
   authRequired,
   requirePermission('channels:write'),
-  (req, res) => {
+  async (req, res) => {
     const { channelId } = req.params;
     const { name, topic, members, unread, category } = req.body || {};
 
-    const channel = db
-      .prepare(
-        'SELECT id, name, topic, members, unread, category, workspace_id as workspaceId FROM channels WHERE id = ?'
-      )
-      .get(channelId);
+    const channel = await channelRepository.getChannelById(channelId);
 
     if (!channel) {
       return res.status(404).json({ error: 'Channel not found' });
@@ -14521,15 +16381,7 @@ app.patch(
       category: category ? normalizeChannelCategory(category) : channel.category,
     };
 
-    db.prepare(
-      `UPDATE channels
-       SET name = @name,
-           topic = @topic,
-           members = @members,
-           unread = @unread,
-           category = @category
-       WHERE id = @id`
-    ).run(updated);
+    await channelRepository.updateChannel(updated);
 
     res.json(updated);
   }
@@ -14539,12 +16391,10 @@ app.delete(
   '/api/channels/:channelId',
   authRequired,
   requirePermission('channels:write'),
-  (req, res) => {
+  async (req, res) => {
     const { channelId } = req.params;
 
-    const channel = db
-      .prepare('SELECT id, workspace_id AS workspaceId FROM channels WHERE id = ?')
-      .get(channelId);
+    const channel = await channelRepository.getChannelById(channelId);
     if (!channel) {
       return res.status(404).json({ error: 'Channel not found' });
     }
@@ -14553,27 +16403,18 @@ app.delete(
       return res.status(403).json({ error: 'Workspace mismatch' });
     }
 
-    // Explicitly remove class-attendance rows before deleting the channel so
-    // channel deletion cannot leave stale attendance references behind.
-    db.prepare('DELETE FROM attendance_notifications WHERE channel_id = ?').run(channelId);
-    db.prepare('DELETE FROM attendance_records WHERE channel_id = ?').run(channelId);
-    db.prepare('DELETE FROM attendance_sessions WHERE channel_id = ?').run(channelId);
-    db.prepare('DELETE FROM channels WHERE id = ?').run(channelId);
+    // Attendance migration boundary: channel deletion cleans up attendance only
+    // through the repository so rehearsal data does not drift on PostgreSQL.
+    await attendanceRepository.deleteChannelAttendanceData(channelId);
+    await channelRepository.deleteChannel(channelId);
     audit('channel.delete', req, {
       target: channelId,
       workspaceId: channel.workspaceId,
       meta: { category: channel.category }
     });
-    const hw = db
-      .prepare(
-        `SELECT id
-         FROM channels
-         WHERE lower(category) = 'homework'
-           AND topic = ?`
-      )
-      .get(`homework_for:${channelId}`);
+    const hw = await channelRepository.findHomeworkChannelForClass(channelId);
     if (hw?.id) {
-      db.prepare('DELETE FROM channels WHERE id = ?').run(hw.id);
+      await channelRepository.deleteChannel(hw.id);
     }
 
     // send JSON so fetchJSON() doesn't break
@@ -14584,127 +16425,16 @@ app.delete(
 
 /* ---------- MESSAGES + REPLIES (with reactions) ---------- */
 
-function getMessagesForChannel(channelId) {
+async function getMessagesForChannel(channelId) {
   const avatarCache = new Map();
-  const msgs = db
-    .prepare(
-      `SELECT id, channel_id, author, initials, avatar_url, time, created_at, text, alt, original_language
-       FROM messages
-       WHERE channel_id = ?
-       ORDER BY rowid`
-    )
-    .all(channelId);
-
-  if (!msgs.length) return [];
-
-  const msgIds = msgs.map((m) => m.id);
-  const msgPlaceholders = msgIds.map(() => '?').join(',');
-
-  // replies for all messages
-  const replySelect = repliesHasCreatedAt
-    ? `SELECT id, message_id, author, initials, avatar_url, time, text, created_at
-       FROM replies
-       WHERE message_id IN (${msgPlaceholders})
-       ORDER BY rowid`
-    : `SELECT id, message_id, author, initials, avatar_url, time, text, NULL AS created_at
-       FROM replies
-       WHERE message_id IN (${msgPlaceholders})
-       ORDER BY rowid`;
-  const replyRows = db.prepare(replySelect).all(...msgIds);
-
-  // reactions on messages
-  const msgReactionRows = db
-    .prepare(
-      `SELECT message_id, emoji, count
-       FROM message_reactions
-       WHERE message_id IN (${msgPlaceholders})`
-    )
-    .all(...msgIds);
-  const attachmentRows = db
-    .prepare(
-      `SELECT message_id, file_name, mime, size_bytes, url
-       FROM files_registry
-       WHERE channel_id = ?
-         AND deleted = 0
-         AND message_id IN (${msgPlaceholders})
-       ORDER BY created_at ASC, rowid ASC`
-    )
-    .all(channelId, ...msgIds);
-
-  const repliesByMsg = {};
-  const replyById = {};
-  const replyIds = [];
-
-  for (const r of replyRows) {
-    const fallbackAvatar = !r.avatar_url ? resolveAvatarForAuthor(r.author, r.initials, avatarCache) : null;
-      const replyObj = {
-        id: r.id,
-        author: r.author,
-        initials: r.initials,
-        avatarUrl: r.avatar_url || fallbackAvatar || null,
-        time: r.time,
-        createdAt: r.created_at || null,
-        text: r.text,
-        reactions: []
-      };
-    replyById[r.id] = replyObj;
-    replyIds.push(r.id);
-    if (!repliesByMsg[r.message_id]) repliesByMsg[r.message_id] = [];
-    repliesByMsg[r.message_id].push(replyObj);
-  }
-
-  // reactions on replies
-  if (replyIds.length) {
-    const repPlaceholders = replyIds.map(() => '?').join(',');
-    const replyReactionRows = db
-      .prepare(
-        `SELECT reply_id, emoji, count
-         FROM reply_reactions
-         WHERE reply_id IN (${repPlaceholders})`
-      )
-      .all(...replyIds);
-
-    for (const rr of replyReactionRows) {
-      const replyObj = replyById[rr.reply_id];
-      if (!replyObj) continue;
-      if (!replyObj.reactions) replyObj.reactions = [];
-      replyObj.reactions.push({ emoji: rr.emoji, count: rr.count });
-    }
-  }
-
-  const msgReactionsById = {};
-  for (const mr of msgReactionRows) {
-    if (!msgReactionsById[mr.message_id]) msgReactionsById[mr.message_id] = [];
-    msgReactionsById[mr.message_id].push({
-      emoji: mr.emoji,
-      count: mr.count
-    });
-  }
-
-  const attachmentsByMsg = {};
-  for (const row of attachmentRows) {
-    if (!attachmentsByMsg[row.message_id]) attachmentsByMsg[row.message_id] = [];
-    attachmentsByMsg[row.message_id].push({
-      url: row.url,
-      originalName: row.file_name || 'attachment',
-      mimeType: row.mime || 'application/octet-stream',
-      size: Number(row.size_bytes || 0) || 0
-    });
-  }
-
-  return msgs.map((m) => ({
-    id: m.id,
-    author: m.author,
-    initials: m.initials,
-    avatarUrl: m.avatar_url || resolveAvatarForAuthor(m.author, m.initials, avatarCache) || null,
-    time: m.time,
-    createdAt: messagesHasCreatedAt ? m.created_at || null : null,
-    text: m.text,
-    originalLanguage: m.original_language || 'en',
-    alt: !!m.alt,
-    attachments: attachmentsByMsg[m.id] || [],
-    reactions: msgReactionsById[m.id] || [],
-    replies: repliesByMsg[m.id] || []
+  const messages = await messageRepository.listChannelMessages(channelId);
+  return messages.map((message) => ({
+    ...message,
+    avatarUrl: message.avatarUrl || resolveAvatarForAuthor(message.author, message.initials, avatarCache) || null,
+    replies: (Array.isArray(message.replies) ? message.replies : []).map((reply) => ({
+      ...reply,
+      avatarUrl: reply.avatarUrl || resolveAvatarForAuthor(reply.author, reply.initials, avatarCache) || null
+    }))
   }));
 }
 
@@ -14803,16 +16533,17 @@ function getMessagesForDm(dmId) {
 app.get('/api/channels/:channelId/messages', async (req, res) => {
   const { channelId } = req.params;
   if (!enforceTaskChannelRouteAccess(req, res, channelId)) return;
-  const channel = db
-    .prepare('SELECT id, workspace_id AS workspaceId, name, topic FROM channels WHERE id = ?')
-    .get(channelId);
-  if (!channel) {
-    return res.status(404).json({ error: 'Channel not found' });
+  const access = await assertChannelAccess(getTenantAccessUser(req), channelId, req, { requireMembership: true });
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Channel not found' });
+    return tenantForbidden(res);
   }
+  const channel = access.channel;
 
   const viewerId = getRequesterId(req) || String(req.query.userId || '').trim();
-  const viewerLang = getUserNativeLanguage(viewerId);
-  const messages = getMessagesForChannel(channelId);
+  const viewerLang = await getUserNativeLanguage(viewerId);
+  const messages = await getMessagesForChannel(channelId);
   const baseResponse = messages.map((m) => ({
     ...m,
     displayText: m.text,
@@ -14857,7 +16588,7 @@ app.get('/api/channels/:channelId/messages', async (req, res) => {
       continue;
     }
 
-    const cached = getCachedTranslation(msg.id, viewerLang, viewerId);
+    const cached = await getCachedTranslation(msg.id, viewerLang, viewerId);
     if (cached?.status === 'ready' && cached.translated_text) {
       translationMemoryCache.set(memoryKey, cached.translated_text);
       out.push({
@@ -14869,13 +16600,13 @@ app.get('/api/channels/:channelId/messages', async (req, res) => {
       continue;
     }
 
-    upsertPendingTranslation(msg.id, viewerLang, viewerId, providerDefault);
+    await upsertPendingTranslation(msg.id, viewerLang, viewerId, providerDefault);
     try {
       const translated = await translateViaHub(msg.text, sourceLang, viewerLang);
     if (translated) {
       const sanitizedTranslated = normalizeTranslatedText(translated);
       const finalTranslated = sanitizedTranslated || translated;
-      saveReadyTranslation(msg.id, viewerLang, finalTranslated, viewerId);
+      await saveReadyTranslation(msg.id, viewerLang, finalTranslated, viewerId);
       translationMemoryCache.set(memoryKey, finalTranslated);
       out.push({
         ...base,
@@ -14890,7 +16621,7 @@ app.get('/api/channels/:channelId/messages', async (req, res) => {
         });
       }
     } catch (err) {
-      markTranslationFailed(msg.id, viewerLang, err?.message || String(err), viewerId);
+      await markTranslationFailed(msg.id, viewerLang, err?.message || String(err), viewerId);
       out.push({
         ...base,
         translationStatus: 'failed'
@@ -14901,9 +16632,14 @@ app.get('/api/channels/:channelId/messages', async (req, res) => {
   res.json(out);
 });
 
-app.delete('/api/channels/:channelId/messages/clear', (req, res) => {
+app.delete('/api/channels/:channelId/messages/clear', async (req, res) => {
   const { channelId } = req.params;
   if (!enforceTaskChannelRouteAccess(req, res, channelId)) return;
+  const channelAccess = await assertChannelAccess(getTenantAccessUser(req), channelId, req, { requireMembership: false });
+  if (!channelAccess.ok) {
+    if (channelAccess.status === 404) return res.status(404).json({ error: 'Channel not found' });
+    return tenantForbidden(res);
+  }
   const user = getAuthedUser(req);
   if (!user) {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -14911,13 +16647,11 @@ app.delete('/api/channels/:channelId/messages/clear', (req, res) => {
   if (!isWorkspaceAdmin(user)) {
     return res.status(403).json({ error: 'Only admins can clear messages' });
   }
-  const channel = db
-    .prepare('SELECT id FROM channels WHERE id = ?')
-    .get(channelId);
+  const channel = await channelRepository.getChannelById(channelId);
   if (!channel) {
     return res.status(404).json({ error: 'Channel not found' });
   }
-  db.prepare('DELETE FROM messages WHERE channel_id = ?').run(channelId);
+  await messageRepository.clearChannelMessages(channelId);
   audit('channel.messages_cleared', req, {
     user,
     target: channelId,
@@ -14928,20 +16662,14 @@ app.delete('/api/channels/:channelId/messages/clear', (req, res) => {
   res.json({ ok: true, channelId });
 });
 
-app.get('/api/culture/prefs', (req, res) => {
+app.get('/api/culture/prefs', async (req, res) => {
   const authed = getAuthedUser(req);
   if (!authed) return res.status(401).json({ error: 'unauthorized' });
 
   const channelId = String(req.query.channelId || '').trim();
   if (!channelId) return res.status(400).json({ error: 'channelId required' });
 
-  const row = db
-    .prepare(`
-      SELECT culture_read_language, culture_write_language
-      FROM user_channel_prefs
-      WHERE user_id = ? AND channel_id = ?
-    `)
-    .get(String(authed.id), channelId);
+  const row = await messageRepository.getUserChannelPrefs(String(authed.id), channelId);
 
   res.json({
     channelId,
@@ -14950,7 +16678,7 @@ app.get('/api/culture/prefs', (req, res) => {
   });
 });
 
-app.post('/api/culture/prefs', (req, res) => {
+app.post('/api/culture/prefs', async (req, res) => {
   const authed = getAuthedUser(req);
   if (!authed) return res.status(401).json({ error: 'unauthorized' });
 
@@ -14961,14 +16689,14 @@ app.post('/api/culture/prefs', (req, res) => {
 
   if (!channelId) return res.status(400).json({ error: 'channelId required' });
 
-  db.prepare(`
-    INSERT INTO user_channel_prefs (user_id, channel_id, culture_read_language, culture_write_language, updated_at)
-    VALUES (?, ?, ?, ?, datetime('now'))
-    ON CONFLICT(user_id, channel_id)
-    DO UPDATE SET culture_read_language = excluded.culture_read_language,
-                  culture_write_language = excluded.culture_write_language,
-                  updated_at = datetime('now')
-  `).run(String(authed.id), channelId, readLanguage, writeLanguage);
+  // Channels/messages migration boundary: channel culture prefs now flow
+  // through the message repository instead of direct SQL.
+  await messageRepository.saveUserChannelPrefs({
+    userId: String(authed.id),
+    channelId,
+    readLanguage,
+    writeLanguage
+  });
 
   res.json({ ok: true, channelId, readLanguage, writeLanguage });
 });
@@ -15005,7 +16733,7 @@ app.post('/api/translate', async (req, res) => {
     targetLang ||
       authed.native_language ||
       authed.nativeLanguage ||
-      getUserNativeLanguage(authed.id)
+      await getUserNativeLanguage(authed.id)
   );
 
   if (!msgId || !cleanText) {
@@ -15034,7 +16762,7 @@ app.post('/api/translate', async (req, res) => {
   }
 
   // If message is not in DB, translate but don't cache (avoids FK issues)
-  const msgExists = db.prepare('SELECT 1 FROM messages WHERE id = ?').get(msgId);
+  const msgExists = await messageRepository.getMessageById(msgId);
   if (!msgExists) {
     try {
       const { provider, translatedText } = await translateSmart({
@@ -15061,7 +16789,7 @@ app.post('/api/translate', async (req, res) => {
   }
 
   // Check cache
-  const cached = getCachedTranslation(msgId, to, viewerId);
+  const cached = await getCachedTranslation(msgId, to, viewerId);
 
   if (cached?.status === 'ready' && cached.translated_text) {
     return res.json({
@@ -15075,7 +16803,7 @@ app.post('/api/translate', async (req, res) => {
   // Insert pending row (provider should reflect current provider, not hardcoded argos)
   const providerDefault = String(process.env.TRANSLATION_PROVIDER || 'google').toLowerCase();
 
-  upsertPendingTranslation(msgId, to, viewerId, providerDefault);
+  await upsertPendingTranslation(msgId, to, viewerId, providerDefault);
 
     try {
       const { provider, translatedText } = await translateSmart({
@@ -15088,7 +16816,7 @@ app.post('/api/translate', async (req, res) => {
       const sanitizedTranslated = normalizeTranslatedText(translatedText);
       const finalTranslated = sanitizedTranslated || translatedText;
 
-      saveReadyTranslation(msgId, to, finalTranslated, viewerId, providerUsed);
+      await saveReadyTranslation(msgId, to, finalTranslated, viewerId, providerUsed);
 
       return res.json({
         translatedText: finalTranslated,
@@ -15099,7 +16827,7 @@ app.post('/api/translate', async (req, res) => {
     } catch (e) {
       const errorMsg = String(e?.message || e);
 
-      markTranslationFailed(msgId, to, errorMsg, viewerId, providerDefault);
+      await markTranslationFailed(msgId, to, errorMsg, viewerId, providerDefault);
 
       return res.json({
         translatedText: rawText,
@@ -15112,17 +16840,41 @@ app.post('/api/translate', async (req, res) => {
 
 
 // search messages across channels
-app.get('/api/search', (req, res) => {
+app.get('/api/search', async (req, res) => {
   const q = (req.query.q || '').trim();
-  const workspaceIdRaw = (req.query.workspaceId || '').trim();
-  const requester = getRequesterId(req);
+  const requestedWorkspaceId = String(req.query.workspaceId || '').trim();
   if (!q) {
     return res.json([]);
   }
 
+  const requester = await attachAccessTokenIfPresent(req);
+  if (!requester) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+
+  const requesterId = String(requester.id || requester.sub || '').trim();
+  const requesterWorkspaceId = userWorkspaceId(requester);
+  if (!requesterId || !requesterWorkspaceId) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+
+  if (
+    requestedWorkspaceId &&
+    requestedWorkspaceId.toLowerCase() !== 'all' &&
+    requestedWorkspaceId !== requesterWorkspaceId
+  ) {
+    return denyTenantAccess(req, res, {
+      workspaceId: requestedWorkspaceId,
+      targetType: 'workspace',
+      targetId: requestedWorkspaceId,
+      reason: isSuperAdminRole(requester)
+        ? 'super_admin_private_content_denied'
+        : 'workspace_mismatch'
+    });
+  }
+
   const like = `%${q.toLowerCase()}%`;
-  const workspaceFilter =
-    workspaceIdRaw && workspaceIdRaw.toLowerCase() !== 'all' ? workspaceIdRaw : null;
+  const workspaceFilter = requesterWorkspaceId;
 
   // prevent caching so we never get 304
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
@@ -15152,42 +16904,51 @@ app.get('/api/search', (req, res) => {
     workspaceId: workspaceFilter
   });
 
-  // fallback to all workspaces if none found
-  if (!channelRows.length && workspaceFilter) {
-    channelRows = db.prepare(channelQuery).all({
-      like,
-      workspaceId: null
-    });
+  const allowedChannelRows = [];
+  for (const row of channelRows) {
+    const access = await assertMessageAccess(requester, row.id, req);
+    if (access.ok) {
+      allowedChannelRows.push(row);
+    }
   }
 
-  // DM results (filter to membership/creator)
-  let dmRows = [];
-  if (requester) {
-    dmRows = db
-      .prepare(
-        `
-        SELECT dm.id as dmId,
-               dm.name as dmName,
-               m.id,
-               m.author,
-               m.initials,
-               NULL as avatarUrl,
-               m.time,
-               m.text
-        FROM dm_messages m
-        JOIN dms dm ON dm.id = m.dm_id
-        LEFT JOIN dm_members mm ON mm.dm_id = dm.id
-        WHERE (lower(m.text) LIKE @like OR lower(m.author) LIKE @like)
-          AND (mm.user_id = @requester OR dm.created_by = @requester)
-        ORDER BY m.rowid DESC
-        LIMIT 50
+  const dmRows = db
+    .prepare(
       `
-      )
-      .all({ like, requester });
+      SELECT dm.id as dmId,
+             dm.name as dmName,
+             m.id,
+             m.author,
+             m.initials,
+             NULL as avatarUrl,
+             m.time,
+             m.text
+      FROM dm_messages m
+      JOIN dms dm ON dm.id = m.dm_id
+      LEFT JOIN dm_members mm ON mm.dm_id = dm.id
+      WHERE (lower(m.text) LIKE @like OR lower(m.author) LIKE @like)
+        AND (mm.user_id = @requester OR dm.created_by = @requester)
+      ORDER BY m.rowid DESC
+      LIMIT 50
+    `
+    )
+    .all({ like, requester: requesterId });
+
+  const visibleDmIds = new Set();
+  const allowedDmRows = [];
+  for (const row of dmRows) {
+    if (!visibleDmIds.has(row.dmId)) {
+      const access = await assertDmAccess(requester, row.dmId, req);
+      if (!access.ok) {
+        continue;
+      }
+      visibleDmIds.add(row.dmId);
+    }
+    allowedDmRows.push(row);
   }
 
   const avatarCache = new Map();
-  const results = channelRows.map((r) => ({
+  const results = allowedChannelRows.map((r) => ({
     id: r.id,
     channelId: r.channelId,
     channelName: r.channelName,
@@ -15199,7 +16960,7 @@ app.get('/api/search', (req, res) => {
     text: r.text
   }));
 
-  dmRows.forEach((r) => {
+  allowedDmRows.forEach((r) => {
     results.push({
       id: r.id,
       channelId: `dm:${r.dmId}`,
@@ -15212,16 +16973,28 @@ app.get('/api/search', (req, res) => {
     });
   });
 
-  res.json(results);
+  results.sort((a, b) => {
+    const aTime = new Date(a.time || 0).getTime();
+    const bTime = new Date(b.time || 0).getTime();
+    return bTime - aTime;
+  });
+
+  res.json(results.slice(0, 50));
 });
 
 // create a new message in a channel
 app.post('/api/channels/:channelId/messages', async (req, res) => {
   const { channelId } = req.params;
   if (!enforceTaskChannelRouteAccess(req, res, channelId)) return;
+  const access = await assertChannelAccess(getTenantAccessUser(req), channelId, req, { requireMembership: true });
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Channel not found' });
+    return tenantForbidden(res);
+  }
   const { author = 'You', initials = 'YOU', text, avatarUrl, attachments = [] } = req.body || {};
   const requesterId = getRequesterId(req);
-  const userLang = requesterId ? getUserNativeLanguage(requesterId) : 'en';
+  const userLang = requesterId ? await getUserNativeLanguage(requesterId) : 'en';
 
   const attachmentHtml = Array.isArray(attachments)
     ? attachments
@@ -15310,14 +17083,7 @@ app.post('/api/channels/:channelId/messages', async (req, res) => {
     return res.status(400).json({ error: 'Text or attachment is required' });
   }
 
-  const channel = db
-    .prepare(
-      'SELECT id, name, topic, category, workspace_id AS workspaceId FROM channels WHERE id = ?'
-    )
-    .get(channelId);
-  if (!channel) {
-    return res.status(404).json({ error: 'Channel not found' });
-  }
+  const channel = access.channel;
 
   const cleanPlain = String(cleanText || '')
     .replace(/<[^>]+>/g, ' ')
@@ -15344,65 +17110,35 @@ app.post('/api/channels/:channelId/messages', async (req, res) => {
   const fallbackAvatar = avatarUrl || resolveAvatarForAuthor(author, initials);
   const createdAt = nowISOString();
 
-  db.prepare(
-    `INSERT INTO messages (id, channel_id, author, initials, avatar_url, time, text, alt, created_at, original_language)
-     VALUES (@id, @channel_id, @author, @initials, @avatar_url, @time, @text, @alt, @created_at, @original_language)`
-  ).run({
-    id,
-    channel_id: channelId,
-    author,
-    initials,
-    avatar_url: fallbackAvatar || null,
-    time,
-    text: finalText,
-    alt,
-    created_at: createdAt,
-    original_language: originalLanguage
-  });
-
-  // Register attachments into files registry
   const workspaceId = channel.workspaceId || 'default';
   const purpose = inferPurposeFromChannel(channel.name, channel.topic);
   const uploaderId = getRequesterId(req) || author || 'anon';
-  if (Array.isArray(attachments) && attachments.length) {
-    const ins = db.prepare(`
-      INSERT OR IGNORE INTO files_registry
-      (file_id, workspace_id, channel_id, message_id, uploader_id, purpose, file_name, mime, size_bytes, url, pinned, deleted, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, datetime('now'), datetime('now'))
-    `);
-
-    for (const att of attachments) {
-      const url = att?.url ? String(att.url) : '';
-      if (!url) continue;
-      const name = att?.originalName ? String(att.originalName) : 'attachment';
-      const mime = att?.mimeType ? String(att.mimeType) : 'application/octet-stream';
-      const sizeBytes = Number(att?.size || 0) || 0;
-      const fileId = computeFileIdFromMeta({ url, channelId, messageId: id, name });
-      ins.run(fileId, workspaceId, channelId, id, uploaderId, purpose, name, mime, sizeBytes, url);
-    }
-  }
-
-  const message = {
+  const message = await messageRepository.createChannelMessage({
     id,
+    channelId,
     author,
     initials,
     avatarUrl: fallbackAvatar || null,
     time,
     text: finalText,
-    originalLanguage: originalLanguage,
-    alt: !!alt,
+    alt,
     createdAt,
+    originalLanguage,
     attachments: Array.isArray(attachments) ? attachments : [],
-    reactions: [],
-    replies: []
-  };
+    workspaceId,
+    uploaderId,
+    purpose,
+    computeFileId: computeFileIdFromMeta
+  });
 
   broadcastEvent('channel_message_created', { channelId, message });
 
   res.status(201).json(message);
 });
 
-app.get('/api/channels/:channelId/announcements', (req, res) => {
+// Phase B migration boundary: announcement CRUD now flows through the
+// announcement repository while channel authorization stays in server.js.
+app.get('/api/channels/:channelId/announcements', async (req, res) => {
   const { channelId } = req.params;
   const channel = db
     .prepare(
@@ -15420,47 +17156,15 @@ app.get('/api/channels/:channelId/announcements', (req, res) => {
     return res.status(401).json({ error: 'Not authenticated' });
   }
   const userId = String(user.id || user.userId || user.user_id || '');
-  const rows = db
-    .prepare(
-      `
-      SELECT
-        a.id,
-        a.title,
-        a.status,
-        a.priority,
-        a.content,
-        a.author,
-        a.created_at,
-        a.read_count,
-        EXISTS (
-          SELECT 1
-          FROM announcement_reads ar
-          WHERE ar.announcement_id = a.id
-            AND ar.user_id = ?
-        ) AS read_by_user
-      FROM announcements a
-      WHERE channel_id = ?
-      ORDER BY created_at ASC
-    `
-    )
-    .all(userId, channelId);
-  const results = rows.map((row) => ({
-    id: row.id,
+  const results = await announcementRepository.listAnnouncements({
     channelId,
     workspaceId: channel.workspaceId || 'default',
-    title: row.title,
-    status: row.status,
-    priority: row.priority,
-    content: row.content,
-    author: row.author,
-    createdAt: row.created_at,
-    readCount: Number(row.read_count || 0),
-    readByUser: !!row.read_by_user
-  }));
+    userId
+  });
   res.json(results);
 });
 
-app.post('/api/channels/:channelId/announcements', (req, res) => {
+app.post('/api/channels/:channelId/announcements', async (req, res) => {
   const { channelId } = req.params;
   const channel = db
     .prepare(
@@ -15489,25 +17193,7 @@ app.post('/api/channels/:channelId/announcements', (req, res) => {
   const author =
     String(user.name || user.username || user.email || 'School Administration').trim() ||
     'School Administration';
-  db.prepare(
-    `
-    INSERT INTO announcements
-    (id, channel_id, workspace_id, title, status, priority, content, author, created_at, read_count)
-    VALUES (@id, @channel_id, @workspace_id, @title, @status, @priority, @content, @author, @created_at, @read_count)
-  `
-  ).run({
-    id,
-    channel_id: channelId,
-    workspace_id: channel.workspaceId || 'default',
-    title,
-    status,
-    priority,
-    content,
-    author,
-    created_at: createdAt,
-    read_count: 0
-  });
-  const announcement = {
+  const announcement = await announcementRepository.createAnnouncement({
     id,
     channelId,
     workspaceId: channel.workspaceId || 'default',
@@ -15516,64 +17202,54 @@ app.post('/api/channels/:channelId/announcements', (req, res) => {
     priority,
     content,
     author,
-    createdAt,
-    readByUser: false
-  };
+    createdAt
+  });
   broadcastEvent('channel_announcement_created', { channelId, announcement });
   res.status(201).json(announcement);
 });
 
-app.post('/api/announcements/:announcementId/read', (req, res) => {
+app.post('/api/announcements/:announcementId/read', async (req, res) => {
   const { announcementId } = req.params;
   const user = getAuthedUser(req);
   if (!user) {
     return res.status(401).json({ error: 'Not authenticated' });
   }
 
-  const existing = db
-    .prepare('SELECT id, channel_id, read_count FROM announcements WHERE id = ?')
-    .get(announcementId);
+  const existing = await announcementRepository.getAnnouncementMeta(announcementId);
   if (!existing) {
     return res.status(404).json({ error: 'Announcement not found' });
   }
 
   const userId = String(user.id || user.userId || user.user_id || 'unknown');
-  const readNow = nowISOString();
-  const insertResult = db
-    .prepare(
-      `
-      INSERT OR IGNORE INTO announcement_reads (announcement_id, user_id, created_at)
-      VALUES (?, ?, ?)
-    `
-    )
-    .run(announcementId, userId, readNow);
+  const result = await announcementRepository.markAnnouncementRead({
+    announcementId,
+    userId,
+    createdAt: nowISOString()
+  });
 
-  if (insertResult.changes === 0) {
+  if (!result.inserted) {
     const payload = {
       id: existing.id,
-      channelId: existing.channel_id,
-      readCount: Number(existing.read_count || 0)
+      channelId: existing.channelId,
+      readCount: Number(existing.readCount || 0)
     };
     return res.json(payload);
   }
 
-  db.prepare('UPDATE announcements SET read_count = read_count + 1 WHERE id = ?').run(announcementId);
-  const updated = db
-    .prepare('SELECT id, channel_id, read_count FROM announcements WHERE id = ?')
-    .get(announcementId);
+  const updated = result.announcement;
   if (!updated) {
     return res.status(500).json({ error: 'Could not update announcement' });
   }
   const payload = {
     id: updated.id,
-    channelId: updated.channel_id,
-    readCount: Number(updated.read_count || 0)
+    channelId: updated.channelId,
+    readCount: Number(updated.readCount || 0)
   };
-  broadcastEvent('channel_announcement_updated', { channelId: updated.channel_id, announcement: payload });
+  broadcastEvent('channel_announcement_updated', { channelId: updated.channelId, announcement: payload });
   res.json(payload);
 });
 
-app.delete('/api/channels/:channelId/announcements/:announcementId', (req, res) => {
+app.delete('/api/channels/:channelId/announcements/:announcementId', async (req, res) => {
     const { channelId, announcementId } = req.params;
     const channel = db
       .prepare('SELECT id, name, topic, workspace_id AS workspaceId FROM channels WHERE id = ?')
@@ -15590,17 +17266,14 @@ app.delete('/api/channels/:channelId/announcements/:announcementId', (req, res) 
     if (!['super_admin', 'admin', 'school_admin'].includes(normalizedRole)) {
       return res.status(403).json({ error: 'Admin access required' });
     }
-    const existing = db
-      .prepare('SELECT id, channel_id FROM announcements WHERE id = ?')
-      .get(announcementId);
-    if (!existing) {
+    const result = await announcementRepository.deleteAnnouncement({ announcementId, channelId });
+    if (!result.found) {
       return res.status(404).json({ error: 'Announcement not found' });
     }
-    if (String(existing.channel_id) !== String(channelId)) {
+    if (result.channelMismatch) {
       return res.status(400).json({ error: 'Announcement does not belong to this channel' });
     }
-    const result = db.prepare('DELETE FROM announcements WHERE id = ?').run(announcementId);
-    if (!result || !result.changes) {
+    if (!result.deleted) {
       return res.status(500).json({ error: 'Could not delete announcement' });
     }
     broadcastEvent('channel_announcement_deleted', {
@@ -15611,74 +17284,58 @@ app.delete('/api/channels/:channelId/announcements/:announcementId', (req, res) 
   }
 );
 
-app.get('/api/channels/:channelId/culture-pref', (req, res) => {
+app.get('/api/channels/:channelId/culture-pref', async (req, res) => {
   const authed = getAuthedUser(req);
   if (!authed) return res.status(401).json({ error: 'unauthorized' });
 
   const { channelId } = req.params;
 
-  const row = db
-    .prepare(`
-      SELECT culture_read_language AS readLang
-      FROM user_channel_prefs
-      WHERE user_id = ? AND channel_id = ?
-    `)
-    .get(authed.id, channelId);
+  const row = await messageRepository.getUserChannelPrefs(authed.id, channelId);
 
-  res.json({ channelId, readLang: row?.readLang || authed.native_language || 'en' });
+  res.json({ channelId, readLang: row?.culture_read_language || authed.native_language || 'en' });
 });
 
-app.post('/api/channels/:channelId/culture-pref', (req, res) => {
+app.post('/api/channels/:channelId/culture-pref', async (req, res) => {
   const authed = getAuthedUser(req);
   if (!authed) return res.status(401).json({ error: 'unauthorized' });
 
   const { channelId } = req.params;
   const readLang = normalizeLanguageCode(req.body?.readLang || 'en');
 
-  db.prepare(`
-    INSERT INTO user_channel_prefs (user_id, channel_id, culture_read_language, updated_at)
-    VALUES (?, ?, ?, datetime('now'))
-    ON CONFLICT(user_id, channel_id)
-    DO UPDATE SET culture_read_language = excluded.culture_read_language,
-                  updated_at = datetime('now')
-  `).run(authed.id, channelId, readLang);
+  await messageRepository.saveUserChannelPrefs({
+    userId: authed.id,
+    channelId,
+    readLanguage: readLang,
+    writeLanguage: null
+  });
 
   res.json({ ok: true, channelId, readLang });
 });
 
 // update message text (author-only)
-app.patch('/api/messages/:messageId', (req, res) => {
+app.patch('/api/messages/:messageId', async (req, res) => {
   const { messageId } = req.params;
   const { text, author } = req.body || {};
   if (!text || !String(text).trim()) {
     return res.status(400).json({ error: 'Text is required' });
   }
-  const msg = db
-    .prepare(
-      'SELECT id, channel_id AS channelId, author, initials, avatar_url AS avatarUrl, time, text AS oldText, alt FROM messages WHERE id = ?'
-    )
-    .get(messageId);
-  if (!msg) {
-    return res.status(404).json({ error: 'Message not found' });
+  const access = await assertMessageAccess(getTenantAccessUser(req), messageId, req);
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Message not found' });
+    return tenantForbidden(res);
   }
+  const msg = await messageRepository.getMessageById(messageId);
   if (author && msg.author && msg.author !== author) {
     return res.status(403).json({ error: 'Only the author can edit this message' });
   }
 
-  const replyCount = db.prepare('SELECT COUNT(*) AS c FROM replies WHERE message_id = ?').get(messageId).c;
-  const reactionCount = db
-    .prepare('SELECT SUM(count) AS c FROM message_reactions WHERE message_id = ?')
-    .get(messageId).c;
+  const { replyCount, reactionCount } = await messageRepository.getMessageInteractionCounts(messageId);
   if (replyCount > 0 || (reactionCount || 0) > 0) {
     return res.status(400).json({ error: 'Cannot edit a message with replies or reactions' });
   }
 
-  db.prepare('UPDATE messages SET text = ? WHERE id = ?').run(String(text).trim(), messageId);
-
-  const updated = {
-    ...msg,
-    text: String(text).trim()
-  };
+  const updated = await messageRepository.updateMessageText(String(messageId), String(text).trim());
 
   broadcastEvent('message_updated', { channelId: msg.channelId, message: updated });
 
@@ -15732,18 +17389,18 @@ function getWorkspaceScopedUser(workspaceId, userId) {
   const normalizedWorkspaceId = String(workspaceId || "").trim();
   const normalizedUserId = String(userId || "").trim();
   if (!normalizedWorkspaceId || !normalizedUserId) return null;
-  return (
-    db
-      .prepare(
-        `
-        SELECT id, name, email, username, role, status, course_level AS courseLevel, workspace_id AS workspaceId
-        FROM users
-        WHERE workspace_id = ? AND id = ?
-        LIMIT 1
-      `
-      )
-      .get(normalizedWorkspaceId, normalizedUserId) || null
-  );
+  const repositoryValue = userRepository.getWorkspaceScopedUser(normalizedWorkspaceId, normalizedUserId);
+  if (!isPromiseLike(repositoryValue)) {
+    return repositoryValue || null;
+  }
+  return db
+    .prepare(`
+      SELECT id, name, email, username, role, status, course_level AS courseLevel, workspace_id AS workspaceId
+      FROM users
+      WHERE workspace_id = ? AND id = ?
+      LIMIT 1
+    `)
+    .get(normalizedWorkspaceId, normalizedUserId) || null;
 }
 
 function buildTeacherAnalyticsOverview(workspaceId, teacherUserId) {
@@ -15903,30 +17560,30 @@ function getAssignedStudentRowsForTeacher(workspaceId, teacherUserId) {
   const normalizedWorkspaceId = String(workspaceId || "").trim();
   const normalizedTeacherUserId = String(teacherUserId || "").trim();
   if (!normalizedWorkspaceId || !normalizedTeacherUserId) return [];
-  return db
-    .prepare(
-      `
-      SELECT DISTINCT
-        u.id,
-        u.name,
-        u.email,
-        u.username,
-        u.role,
-        u.status,
-        u.course_level AS courseLevel
-      FROM channel_members teacher_cm
-      JOIN channels c ON c.id = teacher_cm.channel_id
-      JOIN channel_members student_cm ON student_cm.channel_id = c.id
-      JOIN users u ON u.id = student_cm.user_id
-      WHERE teacher_cm.user_id = ?
-        AND c.workspace_id = ?
-        AND lower(COALESCE(c.category, '')) IN ('class', 'classes')
-        AND u.workspace_id = ?
-        AND lower(COALESCE(u.role, '')) = 'student'
-      ORDER BY lower(COALESCE(u.name, u.username, u.email, u.id)) ASC
-    `
-    )
-    .all(normalizedTeacherUserId, normalizedWorkspaceId, normalizedWorkspaceId);
+  const repositoryValue = userRepository.getAssignedStudentRowsForTeacher(normalizedWorkspaceId, normalizedTeacherUserId);
+  if (!isPromiseLike(repositoryValue)) {
+    return repositoryValue;
+  }
+  return db.prepare(`
+    SELECT DISTINCT
+      u.id,
+      u.name,
+      u.email,
+      u.username,
+      u.role,
+      u.status,
+      u.course_level AS courseLevel
+    FROM channel_members teacher_cm
+    JOIN channels c ON c.id = teacher_cm.channel_id
+    JOIN channel_members student_cm ON student_cm.channel_id = c.id
+    JOIN users u ON u.id = student_cm.user_id
+    WHERE teacher_cm.user_id = ?
+      AND c.workspace_id = ?
+      AND u.workspace_id = ?
+      AND lower(COALESCE(c.category, '')) IN ('class', 'classes')
+      AND lower(COALESCE(u.role, '')) = 'student'
+    ORDER BY lower(COALESCE(u.name, u.username, u.email, u.id)) ASC
+  `).all(normalizedTeacherUserId, normalizedWorkspaceId, normalizedWorkspaceId);
 }
 
 function getAssignedStudentIdsForTeacher(workspaceId, teacherUserId) {
@@ -16001,6 +17658,12 @@ function getStudentAttendanceSummary(workspaceId, studentId, classIds = null) {
   const normalizedWorkspaceId = String(workspaceId || "").trim();
   const normalizedStudentId = String(studentId || "").trim();
   if (!normalizedWorkspaceId || !normalizedStudentId) {
+    return { total: 0, present: 0, absent: 0, attendanceRate: 0, recent: [] };
+  }
+  if (attendanceRepository.engine !== 'sqlite') {
+    // Attendance migration boundary: broader analytics still remain SQLite-owned
+    // during rehearsal because they are synchronous; only runtime attendance
+    // routes are moved to the adapter in this stage.
     return { total: 0, present: 0, absent: 0, attendanceRate: 0, recent: [] };
   }
   const filters = ["ar.workspace_id = ?", "ar.student_user_id = ?"];
@@ -16665,8 +18328,29 @@ function parseOpeningHoursJson(value) {
 
 function sanitizeOpeningHoursDay(entry) {
   if (!entry || typeof entry !== "object") return null;
-  const dayKey = String(entry.day || "").toLowerCase();
+  const dayKey = String(entry.day || entry.key || "").toLowerCase();
   if (!dayKey) return null;
+  const validDays = new Set([
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday"
+  ]);
+  if (!validDays.has(dayKey)) return null;
+  const normalizeClock = (value) => {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(raw)) {
+      throw new OnboardingValidationError(
+        "Opening hours must use HH:MM values",
+        "invalid_opening_hours_time"
+      );
+    }
+    return raw;
+  };
   const normalizedStatus = (() => {
     const candidate = String(entry.status || "open").toLowerCase();
     if (["open", "half-open", "closed"].includes(candidate)) {
@@ -16676,11 +18360,14 @@ function sanitizeOpeningHoursDay(entry) {
   })();
   return {
     day: dayKey,
+    label: typeof entry.label === "string" ? entry.label.trim().slice(0, 40) : "",
     status: normalizedStatus,
-    openTime: typeof entry.openTime === "string" ? entry.openTime.trim() : "",
-    closeTime: typeof entry.closeTime === "string" ? entry.closeTime.trim() : "",
-    breakStart: typeof entry.breakStart === "string" ? entry.breakStart.trim() : "",
-    breakEnd: typeof entry.breakEnd === "string" ? entry.breakEnd.trim() : ""
+    closed: normalizedStatus === "closed",
+    openTime: normalizeClock(entry.openTime || entry.open || entry.from),
+    closeTime: normalizeClock(entry.closeTime || entry.close || entry.to),
+    breakStart: normalizeClock(entry.breakStart),
+    breakEnd: normalizeClock(entry.breakEnd),
+    text: typeof entry.text === "string" ? entry.text.trim().slice(0, 120) : ""
   };
 }
 
@@ -16892,6 +18579,7 @@ const LIVE_SLIDE_MANAGER_ROLES = new Set(["teacher", "admin", "school_admin", "s
 
 function canManageLiveSessions(user) {
   if (!user) return false;
+  if (isSuperAdminRole(user)) return false;
   return isTeacherRole(user) || isWorkspaceAdmin(user);
 }
 
@@ -17015,12 +18703,16 @@ function canTeacherManageLiveSession(user, session) {
 
 function canUserManageSpecificLiveSession(user, session) {
   if (!user || !session) return false;
+  if (isSuperAdminRole(user)) return false;
+  if (userWorkspaceId(user) !== String(session.workspace_id || session.workspaceId || '').trim()) return false;
   if (isWorkspaceAdmin(user)) return true;
   return canTeacherManageLiveSession(user, session);
 }
 
 function canUserViewLiveSession(user, session) {
   if (!user || !session) return false;
+  if (isSuperAdminRole(user)) return false;
+  if (userWorkspaceId(user) !== String(session.workspace_id || session.workspaceId || '').trim()) return false;
   if (isWorkspaceAdmin(user)) return true;
   if (String(session.created_by || "") === String(user.id || "")) return true;
   if (isUserInvitedToLiveSession(user.id, session)) return true;
@@ -17535,30 +19227,28 @@ async function sendLiveSessionEmails({ workspaceId, channelId, session }) {
   return { sent, total: recipients.length };
 }
 
-app.delete('/api/messages/:messageId', (req, res) => {
+app.delete('/api/messages/:messageId', async (req, res) => {
   const { messageId } = req.params;
   const { author } = req.body || {};
-  const msg = db
-    .prepare('SELECT id, channel_id AS channelId, author FROM messages WHERE id = ?')
-    .get(messageId);
-  if (!msg) {
-    return res.status(404).json({ error: 'Message not found' });
+  const access = await assertMessageAccess(getTenantAccessUser(req), messageId, req);
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Message not found' });
+    return tenantForbidden(res);
   }
+  const msg = await messageRepository.getMessageById(messageId);
   const user = getAuthedUser(req);
   const canBypass = isWorkspaceAdmin(user) || isTeacherRole(user);
   if (!canBypass && author && msg.author && msg.author !== author) {
     return res.status(403).json({ error: 'Only the author can delete this message' });
   }
 
-  const replyCount = db.prepare('SELECT COUNT(*) AS c FROM replies WHERE message_id = ?').get(messageId).c;
-  const reactionCount = db
-    .prepare('SELECT SUM(count) AS c FROM message_reactions WHERE message_id = ?')
-    .get(messageId).c;
+  const { replyCount, reactionCount } = await messageRepository.getMessageInteractionCounts(messageId);
   if (!canBypass && (replyCount > 0 || (reactionCount || 0) > 0)) {
     return res.status(400).json({ error: 'Cannot delete a message with replies or reactions' });
   }
 
-  db.prepare('DELETE FROM messages WHERE id = ?').run(messageId);
+  await messageRepository.deleteMessage(messageId);
   if (isWorkspaceAdmin(user)) {
     audit('message.delete', req, {
       user,
@@ -17574,17 +19264,21 @@ app.delete('/api/messages/:messageId', (req, res) => {
 });
 
 // create a reply in a thread
-app.post('/api/channels/:channelId/messages/:messageId/replies', (req, res) => {
+app.post('/api/channels/:channelId/messages/:messageId/replies', async (req, res) => {
   const { channelId, messageId } = req.params;
   const { author = 'You', initials = 'YOU', text, avatarUrl } = req.body || {};
+  const channelAccess = await assertChannelAccess(getTenantAccessUser(req), channelId, req, { requireMembership: true });
+  if (!channelAccess.ok) {
+    if (channelAccess.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (channelAccess.status === 404) return res.status(404).json({ error: 'Channel not found' });
+    return tenantForbidden(res);
+  }
 
   if (!text || !String(text).trim()) {
     return res.status(400).json({ error: 'Text is required' });
   }
 
-  const parent = db
-    .prepare('SELECT id FROM messages WHERE id = ? AND channel_id = ?')
-    .get(messageId, channelId);
+  const parent = await messageRepository.getMessageParent(messageId, channelId);
   if (!parent) {
     return res.status(404).json({ error: 'Message not found' });
   }
@@ -17594,58 +19288,80 @@ app.post('/api/channels/:channelId/messages/:messageId/replies', (req, res) => {
   const createdAt = nowIso();
   const fallbackAvatar = avatarUrl || resolveAvatarForAuthor(author, initials);
 
-  if (repliesHasCreatedAt) {
-    db.prepare(
-      `INSERT INTO replies (id, message_id, author, initials, avatar_url, time, text, created_at)
-       VALUES (@id, @message_id, @author, @initials, @avatar_url, @time, @text, @created_at)`
-    ).run({
-      id,
-      message_id: messageId,
-      author,
-      initials,
-      avatar_url: fallbackAvatar || null,
-      time,
-      text,
-      created_at: createdAt
-    });
-  } else {
-    db.prepare(
-      `INSERT INTO replies (id, message_id, author, initials, avatar_url, time, text)
-       VALUES (@id, @message_id, @author, @initials, @avatar_url, @time, @text)`
-    ).run({
-      id,
-      message_id: messageId,
-      author,
-      initials,
-      avatar_url: fallbackAvatar || null,
-      time,
-      text
-    });
-  }
-
-  const reply = {
+  const reply = await messageRepository.createReply({
     id,
+    messageId,
     author,
     initials,
     avatarUrl: fallbackAvatar || null,
     time,
-    createdAt: repliesHasCreatedAt ? createdAt : null,
     text,
-    reactions: []
-  };
+    createdAt
+  });
 
   broadcastEvent('thread_reply_created', { channelId, messageId, reply });
 
   res.status(201).json(reply);
 });
 
+/* ---------- NEW: REACTIONS API ---------- */
+
+app.post('/api/messages/:messageId/reactions', async (req, res) => {
+  const { messageId } = req.params;
+  const { emoji, userId: rawUserId } = req.body || {};
+  if (!emoji) {
+    return res.status(400).json({ error: 'emoji is required' });
+  }
+
+  const userId = String(rawUserId || 'anonymous').trim() || 'anonymous';
+
+  const access = await assertMessageAccess(getTenantAccessUser(req), messageId, req);
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Message not found' });
+    return tenantForbidden(res);
+  }
+
+  const reactions = await messageRepository.toggleMessageReaction({ messageId, emoji, userId });
+  const payload = { messageId, reactions };
+  broadcastEvent('message_reactions_updated', payload);
+
+  res.json(payload);
+});
+
+app.post('/api/replies/:replyId/reactions', async (req, res) => {
+  const { replyId } = req.params;
+  const { emoji, userId: rawUserId } = req.body || {};
+  if (!emoji) {
+    return res.status(400).json({ error: 'emoji is required' });
+  }
+
+  const userId = String(rawUserId || 'anonymous').trim() || 'anonymous';
+
+  const replyAccess = resolveReplyAccessRow(replyId);
+  if (!replyAccess) {
+    return res.status(404).json({ error: 'Reply not found' });
+  }
+  const channelAccess = await assertChannelAccess(getTenantAccessUser(req), replyAccess.channelId, req, { requireMembership: true });
+  if (!channelAccess.ok) {
+    if (channelAccess.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    return tenantForbidden(res);
+  }
+
+  const reactions = await messageRepository.toggleReplyReaction({ replyId, emoji, userId });
+  const payload = { replyId, reactions };
+  broadcastEvent('reply_reactions_updated', payload);
+
+  res.json(payload);
+});
+
 /* ---------- Live Class Hub APIs ---------- */
 
-app.get('/api/live-sessions', (req, res) => {
+app.get('/api/live-sessions', authRequired, (req, res) => {
   const scopeParam = String(req.query.scope || 'today');
   const { start, end } = determineLiveScopeRange(scopeParam);
-  const user = getAuthedUser(req);
-  const workspaceId = workspaceIdFromRequest(req);
+  const user = req.auth || getAuthedUser(req);
+  const workspaceId = resolveRequestedWorkspaceId(req);
   const conditions = ['ls.workspace_id = ?'];
   const params = [workspaceId];
   if (start) {
@@ -17658,7 +19374,20 @@ app.get('/api/live-sessions', (req, res) => {
   }
 
   if (!user) {
-    return res.json([]);
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (isSuperAdminRole(user)) {
+    void logTenantIsolationEvent(req, {
+      workspaceId,
+      targetType: 'liveSession',
+      targetId: 'list',
+      reason: 'super_admin_private_content_denied',
+      type: 'security.super_admin_private_content_denied'
+    });
+    return tenantForbidden(res);
+  }
+  if (String(workspaceId || '').trim() !== String(user.workspaceId || user.workspace_id || '').trim()) {
+    return tenantForbidden(res);
   }
 
   const rows = db
@@ -17676,8 +19405,8 @@ app.get('/api/live-sessions', (req, res) => {
   res.json(visibleRows.map((row) => hydrateLiveSession(row)));
 });
 
-app.post('/api/live-sessions', async (req, res) => {
-  const user = getAuthedUser(req);
+app.post('/api/live-sessions', authRequired, express.json(), async (req, res) => {
+  const user = req.auth || getAuthedUser(req);
   const canManage = canManageLiveSessions(user);
   const canStudentHost = canStudentHostLiveMeeting(user);
   if (!canManage && !canStudentHost) {
@@ -17700,7 +19429,10 @@ app.post('/api/live-sessions', async (req, res) => {
   } = payload;
   const notifyEmail = !!payload.notify_email;
   const normalizedAudience = normalizeAudience(audience);
-  const workspaceId = workspaceIdFromRequest(req);
+  const workspaceId = resolveRequestedWorkspaceId(req);
+  if (!isSuperAdminRole(user) && String(workspaceId || '').trim() !== String(user.workspaceId || user.workspace_id || '').trim()) {
+    return res.status(403).json({ error: 'Workspace isolation: denied' });
+  }
   const studentHostedMeeting = !canManage && canStudentHost;
   const normalizedInvitedUserIds = normalizeLiveInvitedUserIds(invitedUserIdsRaw);
   const invitedValidation = normalizedInvitedUserIds.length
@@ -17748,6 +19480,24 @@ app.post('/api/live-sessions', async (req, res) => {
       .get(channelIdValue);
     if (!channelRow) {
       return res.status(404).json({ error: 'Channel not found' });
+    }
+    if (String(channelRow.workspace_id || '').trim() !== String(workspaceId || '').trim()) {
+      return res.status(400).json({ error: 'Workspace mismatch' });
+    }
+  }
+  const idempotencyKey = extractIdempotencyKey(req);
+  if (idempotencyKey) {
+    const existing = findExistingIdempotentLiveSession({
+      workspaceId: (channelRow && channelRow.workspace_id) || workspaceId,
+      channelId: requiresChannel ? channelIdValue : null,
+      title: String(title || 'Live Class'),
+      date,
+      startTime,
+      endTime,
+      createdBy: user?.id || null
+    });
+    if (existing) {
+      return res.status(200).json(hydrateLiveSession(existing));
     }
   }
   const sessionId = generateId('ls');
@@ -17941,7 +19691,7 @@ app.post('/api/live-sessions/:sessionId/join', (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   if (!canUserViewLiveSession(user, session)) {
-    return res.status(403).json({ error: 'Forbidden' });
+    return tenantForbidden(res);
   }
   const hydratedSession = hydrateLiveSession(session);
   const now = nowIso();
@@ -17987,7 +19737,7 @@ app.get('/api/live-sessions/:sessionId/attendance', (req, res) => {
     return res.status(404).json({ error: 'Session not found' });
   }
   if (!canUserManageSpecificLiveSession(user, session)) {
-    return res.status(403).json({ error: 'Forbidden' });
+    return tenantForbidden(res);
   }
   const rows = db
     .prepare(
@@ -18012,7 +19762,7 @@ app.post('/api/live-sessions/:sessionId/attendance', (req, res) => {
     return res.status(404).json({ error: 'Session not found' });
   }
   if (!canUserManageSpecificLiveSession(user, session)) {
-    return res.status(403).json({ error: 'Forbidden' });
+    return tenantForbidden(res);
   }
   const records = Array.isArray(req.body?.records) ? req.body.records : [];
   if (!records.length) {
@@ -18053,7 +19803,7 @@ app.get("/api/live-sessions/:sessionId/slides/stream", (req, res) => {
   const session = db.prepare("SELECT * FROM live_sessions WHERE id = ?").get(sessionId);
   if (!session) return res.status(404).json({ error: "Session not found" });
   if (!canUserViewLiveSession(user, session)) {
-    return res.status(403).json({ error: "Forbidden" });
+    return tenantForbidden(res);
   }
 
   res.setHeader("Content-Type", "text/event-stream");
@@ -18085,7 +19835,7 @@ app.get("/api/live-sessions/:sessionId/slides/state", (req, res) => {
   const session = db.prepare("SELECT * FROM live_sessions WHERE id = ?").get(sessionId);
   if (!session) return res.status(404).json({ error: "Session not found" });
   if (!canUserViewLiveSession(user, session)) {
-    return res.status(403).json({ error: "Forbidden" });
+    return tenantForbidden(res);
   }
   const row = db.prepare("SELECT * FROM slide_state WHERE live_session_id=?").get(sessionId);
 
@@ -18108,7 +19858,7 @@ app.post("/api/live-sessions/:sessionId/slides/page", (req, res) => {
   const session = db.prepare("SELECT * FROM live_sessions WHERE id = ?").get(sessionId);
   if (!session) return res.status(404).json({ error: "Session not found" });
   if (!canUserManageLiveSlides(user, session)) {
-    return res.status(403).json({ error: "Forbidden" });
+    return tenantForbidden(res);
   }
 
   const page = Math.max(1, Number(req.body?.page || 1));
@@ -18146,7 +19896,7 @@ app.post("/api/live-sessions/:sessionId/slides/deck", (req, res) => {
   if (!user) return res.status(401).json({ error: "Unauthorized" });
   const session = db.prepare("SELECT * FROM live_sessions WHERE id = ?").get(sessionId);
   if (!session) return res.status(404).json({ error: "Session not found" });
-  if (!canUserManageLiveSlides(user, session)) return res.status(403).json({ error: "Forbidden" });
+  if (!canUserManageLiveSlides(user, session)) return tenantForbidden(res);
 
   const deckUrl = String(req.body?.deck_url || "").trim();
   const pageCount = Math.max(1, Number(req.body?.page_count || 1));
@@ -18175,7 +19925,7 @@ app.post("/api/live-sessions/:sessionId/end", (req, res) => {
   const sessionId = String(req.params.sessionId);
   const session = db.prepare("SELECT * FROM live_sessions WHERE id = ?").get(sessionId);
   if (!session) return res.status(404).json({ error: "Session not found" });
-  if (!canUserManageSpecificLiveSession(user, session)) return res.status(403).json({ error: "Forbidden" });
+  if (!canUserManageSpecificLiveSession(user, session)) return tenantForbidden(res);
   broadcastSse(sessionId, "session", { type: "ended", sessionId, at: Date.now() });
   res.json({ ok: true, sessionId });
 });
@@ -18184,259 +19934,106 @@ app.post("/api/live-sessions/:sessionId/end", (req, res) => {
 app.post('/api/dms/:dmId/messages/:messageId/replies', (req, res) => {
   const { dmId, messageId } = req.params;
   const { author = 'You', initials = 'YOU', text, avatarUrl } = req.body || {};
-  const requester = getRequesterId(req);
+  const requesterUser = getTenantAccessUser(req);
+  const requester = String(requesterUser?.id || requesterUser?.sub || getRequesterId(req) || '').trim();
 
   if (!text || !String(text).trim()) {
     return res.status(400).json({ error: 'Text is required' });
   }
 
-  const dm = db.prepare('SELECT id, created_by FROM dms WHERE id = ?').get(dmId);
-  if (!dm) return res.status(404).json({ error: 'DM not found' });
-
-  if (requester) {
-    const allowed = db
-      .prepare('SELECT 1 FROM dm_members WHERE dm_id = ? AND user_id = ?')
-      .get(dmId, requester);
-    if (!allowed && dm.created_by !== requester) {
-      return res.status(403).json({ error: 'Not a member of this DM' });
+  if (!requesterUser) return res.status(401).json({ error: 'Unauthorized' });
+  const dmAccess = assertDmAccess(requesterUser, dmId, req);
+  Promise.resolve(dmAccess).then((result) => {
+    if (!result.ok) {
+      if (result.status === 404) return res.status(404).json({ error: 'DM not found' });
+      return tenantForbidden(res);
     }
-  }
 
-  const parent = db
-    .prepare('SELECT id FROM dm_messages WHERE id = ? AND dm_id = ?')
-    .get(messageId, dmId);
-  if (!parent) {
-    return res.status(404).json({ error: 'Message not found' });
-  }
+    const parent = db
+      .prepare('SELECT id FROM dm_messages WHERE id = ? AND dm_id = ?')
+      .get(messageId, dmId);
+    if (!parent) {
+      return res.status(404).json({ error: 'Message not found' });
+    }
 
-  const id = generateId('dr');
-  const time = timeHHMM();
-  const createdAt = nowIso();
-  const fallbackAvatar = avatarUrl || resolveAvatarForAuthor(author, initials);
+    const id = generateId('dr');
+    const time = timeHHMM();
+    const createdAt = nowIso();
+    const fallbackAvatar = avatarUrl || resolveAvatarForAuthor(author, initials);
 
-  if (dmRepliesHasCreatedAt) {
-    db.prepare(
-      `INSERT INTO dm_replies (id, dm_message_id, author, initials, avatar_url, time, text, created_at)
-       VALUES (@id, @dm_message_id, @author, @initials, @avatar_url, @time, @text, @created_at)`
-    ).run({
+    if (dmRepliesHasCreatedAt) {
+      db.prepare(
+        `INSERT INTO dm_replies (id, dm_message_id, author, initials, avatar_url, time, text, created_at)
+         VALUES (@id, @dm_message_id, @author, @initials, @avatar_url, @time, @text, @created_at)`
+      ).run({
+        id,
+        dm_message_id: messageId,
+        author,
+        initials,
+        avatar_url: fallbackAvatar || null,
+        time,
+        text,
+        created_at: createdAt
+      });
+    } else {
+      db.prepare(
+        `INSERT INTO dm_replies (id, dm_message_id, author, initials, avatar_url, time, text)
+         VALUES (@id, @dm_message_id, @author, @initials, @avatar_url, @time, @text)`
+      ).run({
+        id,
+        dm_message_id: messageId,
+        author,
+        initials,
+        avatar_url: fallbackAvatar || null,
+        time,
+        text
+      });
+    }
+
+    const reply = {
       id,
-      dm_message_id: messageId,
       author,
       initials,
-      avatar_url: fallbackAvatar || null,
+      avatarUrl: fallbackAvatar || null,
       time,
+      createdAt: dmRepliesHasCreatedAt ? createdAt : null,
       text,
-      created_at: createdAt
-    });
-  } else {
-    db.prepare(
-      `INSERT INTO dm_replies (id, dm_message_id, author, initials, avatar_url, time, text)
-       VALUES (@id, @dm_message_id, @author, @initials, @avatar_url, @time, @text)`
-    ).run({
-      id,
-      dm_message_id: messageId,
-      author,
-      initials,
-      avatar_url: fallbackAvatar || null,
-      time,
-      text
-    });
-  }
+      reactions: []
+    };
 
-  const reply = {
-    id,
-    author,
-    initials,
-    avatarUrl: fallbackAvatar || null,
-    time,
-    createdAt: dmRepliesHasCreatedAt ? createdAt : null,
-    text,
-    reactions: []
-  };
+    broadcastEvent('dm_reply_created', { dmId, messageId, reply });
 
-  broadcastEvent('dm_reply_created', { dmId, messageId, reply });
-
-  res.status(201).json(reply);
-});
-
-/* ---------- NEW: REACTIONS API ---------- */
-
-/**
- * Add / increment a reaction on a message.
- * POST /api/messages/:messageId/reactions  body: { emoji }
- * returns: { messageId, reactions: [{emoji,count}, ...] }
- */
-app.post('/api/messages/:messageId/reactions', (req, res) => {
-  const { messageId } = req.params;
-  const { emoji, userId: rawUserId } = req.body || {};
-  if (!emoji) {
-    return res.status(400).json({ error: 'emoji is required' });
-  }
-
-  const userId = String(rawUserId || 'anonymous').trim() || 'anonymous';
-
-  const msg = db.prepare('SELECT id FROM messages WHERE id = ?').get(messageId);
-  if (!msg) {
-    return res.status(404).json({ error: 'Message not found' });
-  }
-
-  const toggleReaction = db.transaction(() => {
-    const exists = db
-      .prepare(
-        `
-        SELECT 1 FROM message_reaction_users
-        WHERE message_id = ? AND emoji = ? AND user_id = ?
-      `
-      )
-      .get(messageId, emoji, userId);
-
-    if (exists) {
-      // remove user reaction and decrement count
-      db.prepare(
-        `DELETE FROM message_reaction_users
-         WHERE message_id = ? AND emoji = ? AND user_id = ?`
-      ).run(messageId, emoji, userId);
-
-      db.prepare(
-        `
-        UPDATE message_reactions
-        SET count = count - 1
-        WHERE message_id = ? AND emoji = ? AND count > 0
-      `
-      ).run(messageId, emoji);
-
-      db.prepare(
-        `DELETE FROM message_reactions WHERE message_id = ? AND emoji = ? AND count <= 0`
-      ).run(messageId, emoji);
-    } else {
-      // add user reaction and increment count
-      db.prepare(
-        `INSERT OR IGNORE INTO message_reaction_users (message_id, emoji, user_id)
-         VALUES (?, ?, ?)`
-      ).run(messageId, emoji, userId);
-
-      const updated = db.prepare(
-        `
-        UPDATE message_reactions
-        SET count = count + 1
-        WHERE message_id = ? AND emoji = ?
-      `
-      ).run(messageId, emoji);
-      if (!updated.changes) {
-        db.prepare(
-          `INSERT INTO message_reactions (message_id, emoji, count)
-           VALUES (?, ?, 1)`
-        ).run(messageId, emoji);
-      }
-    }
+    return res.status(201).json(reply);
+  }).catch((err) => {
+    console.error('[DM] Reply create failed', err);
+    return res.status(500).json({ error: 'Failed to create DM reply' });
   });
-
-  toggleReaction();
-
-  const reactions = db
-    .prepare('SELECT emoji, count FROM message_reactions WHERE message_id = ? ORDER BY emoji')
-    .all(messageId);
-
-  const payload = { messageId, reactions };
-  broadcastEvent('message_reactions_updated', payload);
-
-  res.json(payload);
-});
-
-/**
- * Add / increment a reaction on a reply.
- * POST /api/replies/:replyId/reactions  body: { emoji }
- * returns: { replyId, reactions: [{emoji,count}, ...] }
- */
-app.post('/api/replies/:replyId/reactions', (req, res) => {
-  const { replyId } = req.params;
-  const { emoji, userId: rawUserId } = req.body || {};
-  if (!emoji) {
-    return res.status(400).json({ error: 'emoji is required' });
-  }
-
-  const userId = String(rawUserId || 'anonymous').trim() || 'anonymous';
-
-  const rep = db.prepare('SELECT id FROM replies WHERE id = ?').get(replyId);
-  if (!rep) {
-    return res.status(404).json({ error: 'Reply not found' });
-  }
-
-  const toggleReaction = db.transaction(() => {
-    const exists = db
-      .prepare(
-        `
-        SELECT 1 FROM reply_reaction_users
-        WHERE reply_id = ? AND emoji = ? AND user_id = ?
-      `
-      )
-      .get(replyId, emoji, userId);
-
-    if (exists) {
-      db.prepare(
-        `DELETE FROM reply_reaction_users
-         WHERE reply_id = ? AND emoji = ? AND user_id = ?`
-      ).run(replyId, emoji, userId);
-
-      db.prepare(
-        `
-        UPDATE reply_reactions
-        SET count = count - 1
-        WHERE reply_id = ? AND emoji = ? AND count > 0
-      `
-      ).run(replyId, emoji);
-
-      db.prepare(
-        `DELETE FROM reply_reactions WHERE reply_id = ? AND emoji = ? AND count <= 0`
-      ).run(replyId, emoji);
-    } else {
-      db.prepare(
-        `INSERT OR IGNORE INTO reply_reaction_users (reply_id, emoji, user_id)
-         VALUES (?, ?, ?)`
-      ).run(replyId, emoji, userId);
-
-      const updated = db.prepare(
-        `
-        UPDATE reply_reactions
-        SET count = count + 1
-        WHERE reply_id = ? AND emoji = ?
-      `
-      ).run(replyId, emoji);
-      if (!updated.changes) {
-        db.prepare(
-          `INSERT INTO reply_reactions (reply_id, emoji, count)
-           VALUES (?, ?, 1)`
-        ).run(replyId, emoji);
-      }
-    }
-  });
-
-  toggleReaction();
-
-  const reactions = db
-    .prepare('SELECT emoji, count FROM reply_reactions WHERE reply_id = ? ORDER BY emoji')
-    .all(replyId);
-
-  const payload = { replyId, reactions };
-  broadcastEvent('reply_reactions_updated', payload);
-
-  res.json(payload);
 });
 
 // DM reply reactions
-app.post('/api/dm-replies/:replyId/reactions', (req, res) => {
+app.post('/api/dm-replies/:replyId/reactions', async (req, res) => {
   const { replyId } = req.params;
   const { emoji, userId: rawUserId } = req.body || {};
   if (!emoji) {
     return res.status(400).json({ error: 'emoji is required' });
   }
-
-  const userId = String(rawUserId || 'anonymous').trim() || 'anonymous';
-
-  const rep = db.prepare('SELECT id FROM dm_replies WHERE id = ?').get(replyId);
-  if (!rep) {
+  const replyRow = db.prepare(`
+    SELECT dr.id, dm.id AS dmId
+    FROM dm_replies dr
+    JOIN dm_messages dm_msg ON dm_msg.id = dr.dm_message_id
+    JOIN dms dm ON dm.id = dm_msg.dm_id
+    WHERE dr.id = ?
+    LIMIT 1
+  `).get(replyId);
+  if (!replyRow) {
     return res.status(404).json({ error: 'Reply not found' });
   }
+  const requesterUser = getTenantAccessUser(req);
+  if (!requesterUser) return res.status(401).json({ error: 'Unauthorized' });
+  const dmAccess = await assertDmAccess(requesterUser, replyRow.dmId, req);
+  if (!dmAccess.ok) return tenantForbidden(res);
+
+  const userId = String(rawUserId || 'anonymous').trim() || 'anonymous';
 
   const toggleReaction = db.transaction(() => {
     const exists = db
@@ -18493,8 +20090,19 @@ app.post('/api/dm-replies/:replyId/reactions', (req, res) => {
 /* ---------- DMs (unchanged, no reactions yet) ---------- */
 
 app.get('/api/dms', (req, res) => {
-  const requester = getRequesterId(req);
+  const requesterUser = getTenantAccessUser(req);
+  const requester = String(requesterUser?.id || requesterUser?.sub || getRequesterId(req) || '').trim();
   let list;
+  if (requesterUser && isSuperAdminRole(requesterUser)) {
+    void logTenantIsolationEvent(req, {
+      workspaceId: userWorkspaceId(requesterUser) || null,
+      targetType: 'dm',
+      targetId: 'list',
+      reason: 'super_admin_private_content_denied',
+      type: 'security.super_admin_private_content_denied'
+    });
+    return tenantForbidden(res);
+  }
   if (requester) {
     list = db
       .prepare(
@@ -18520,7 +20128,10 @@ app.get('/api/dms', (req, res) => {
 // create a DM entry (simple user-like record)
 app.post('/api/dms', (req, res) => {
   const { name, initials, online = false } = req.body || {};
-  const requester = getRequesterId(req);
+  const requesterUser = getTenantAccessUser(req);
+  const requester = String(requesterUser?.id || requesterUser?.sub || getRequesterId(req) || '').trim();
+  if (!requesterUser || !requester) return res.status(401).json({ error: 'Unauthorized' });
+  if (isSuperAdminRole(requesterUser)) return tenantForbidden(res);
   if (!name || !name.trim()) {
     return res.status(400).json({ error: 'Name is required' });
   }
@@ -18554,14 +20165,16 @@ app.post('/api/dms', (req, res) => {
 });
 
 // delete a DM (and its messages)
-app.delete('/api/dms/:dmId', (req, res) => {
+app.delete('/api/dms/:dmId', async (req, res) => {
   const { dmId } = req.params;
-  const requester = getRequesterId(req);
-  const dm = db.prepare('SELECT id FROM dms WHERE id = ?').get(dmId);
-  if (!dm) {
-    return res.status(404).json({ error: 'DM not found' });
-  }
+  const requesterUser = getTenantAccessUser(req);
+  const requester = String(requesterUser?.id || requesterUser?.sub || getRequesterId(req) || '').trim();
+  if (!requesterUser) return res.status(401).json({ error: 'Unauthorized' });
   const creatorRow = db.prepare('SELECT created_by FROM dms WHERE id = ?').get(dmId);
+  const dm = db.prepare('SELECT id FROM dms WHERE id = ?').get(dmId);
+  if (!dm) return res.status(404).json({ error: 'DM not found' });
+  const dmAccess = await assertDmAccess(requesterUser, dmId, req);
+  if (!dmAccess.ok) return tenantForbidden(res);
   const creator = creatorRow ? (creatorRow.created_by || '') : '';
   if (!requester) {
     return res.status(403).json({ error: 'Not authorized to delete this DM' });
@@ -18575,23 +20188,18 @@ app.delete('/api/dms/:dmId', (req, res) => {
   db.prepare('DELETE FROM dm_messages WHERE dm_id = ?').run(dmId);
   db.prepare('DELETE FROM dm_members WHERE dm_id = ?').run(dmId);
   db.prepare('DELETE FROM dms WHERE id = ?').run(dmId);
-  res.json({ ok: true });
+  return res.json({ ok: true });
 });
 
 // list DM members
-app.get('/api/dms/:dmId/members', (req, res) => {
+app.get('/api/dms/:dmId/members', async (req, res) => {
   const { dmId } = req.params;
-  const requester = getRequesterId(req);
-  const dm = db.prepare('SELECT id, created_by FROM dms WHERE id = ?').get(dmId);
-  if (!dm) return res.status(404).json({ error: 'DM not found' });
-
-  if (requester) {
-    const allowed = db
-      .prepare('SELECT 1 FROM dm_members WHERE dm_id = ? AND user_id = ?')
-      .get(dmId, requester);
-    if (!allowed && dm.created_by !== requester) {
-      return res.status(403).json({ error: 'Not a member of this DM' });
-    }
+  const requesterUser = getTenantAccessUser(req);
+  if (!requesterUser) return res.status(401).json({ error: 'Unauthorized' });
+  const dmAccess = await assertDmAccess(requesterUser, dmId, req);
+  if (!dmAccess.ok) {
+    if (dmAccess.status === 404) return res.status(404).json({ error: 'DM not found' });
+    return tenantForbidden(res);
   }
 
   const members = db
@@ -18603,21 +20211,32 @@ app.get('/api/dms/:dmId/members', (req, res) => {
     )
     .all(dmId);
 
-  res.json(members);
+  return res.json(members);
 });
 
 // add DM members (creator only)
-app.post('/api/dms/:dmId/members', (req, res) => {
+app.post('/api/dms/:dmId/members', async (req, res) => {
   const { dmId } = req.params;
   const { userIds = [] } = req.body || {};
-  const requester = getRequesterId(req);
+  const requesterUser = getTenantAccessUser(req);
+  const requester = String(requesterUser?.id || requesterUser?.sub || getRequesterId(req) || '').trim();
+  if (!requesterUser) return res.status(401).json({ error: 'Unauthorized' });
   if (!Array.isArray(userIds) || !userIds.length) {
     return res.status(400).json({ error: 'userIds required' });
   }
   const dm = db.prepare('SELECT id, created_by FROM dms WHERE id = ?').get(dmId);
   if (!dm) return res.status(404).json({ error: 'DM not found' });
+  const dmAccess = await assertDmAccess(requesterUser, dmId, req);
+  if (!dmAccess.ok) return tenantForbidden(res);
   if (!requester || dm.created_by !== requester) {
     return res.status(403).json({ error: 'Only the creator can add members' });
+  }
+  const allowedWorkspaceId = resolveDmWorkspaceId(dmId);
+  for (const uid of userIds) {
+    const targetUser = getUserById(uid);
+    if (!targetUser || String(targetUser.workspaceId || '').trim() !== allowedWorkspaceId) {
+      return tenantForbidden(res);
+    }
   }
 
   const insertMember = db.prepare('INSERT OR IGNORE INTO dm_members (dm_id, user_id) VALUES (?, ?)');
@@ -18632,15 +20251,19 @@ app.post('/api/dms/:dmId/members', (req, res) => {
 });
 
 // remove DM members (creator only)
-app.delete('/api/dms/:dmId/members', (req, res) => {
+app.delete('/api/dms/:dmId/members', async (req, res) => {
   const { dmId } = req.params;
   const { userIds = [] } = req.body || {};
-  const requester = getRequesterId(req);
+  const requesterUser = getTenantAccessUser(req);
+  const requester = String(requesterUser?.id || requesterUser?.sub || getRequesterId(req) || '').trim();
+  if (!requesterUser) return res.status(401).json({ error: 'Unauthorized' });
   if (!Array.isArray(userIds) || !userIds.length) {
     return res.status(400).json({ error: 'userIds required' });
   }
   const dm = db.prepare('SELECT id, created_by FROM dms WHERE id = ?').get(dmId);
   if (!dm) return res.status(404).json({ error: 'DM not found' });
+  const dmAccess = await assertDmAccess(requesterUser, dmId, req);
+  if (!dmAccess.ok) return tenantForbidden(res);
   if (!requester || dm.created_by !== requester) {
     return res.status(403).json({ error: 'Only the creator can remove members' });
   }
@@ -18656,21 +20279,14 @@ app.delete('/api/dms/:dmId/members', (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/dms/:dmId/messages', (req, res) => {
+app.get('/api/dms/:dmId/messages', async (req, res) => {
   const { dmId } = req.params;
-  const requester = getRequesterId(req);
-  const dm = db.prepare('SELECT id, created_by FROM dms WHERE id = ?').get(dmId);
-  if (!dm) {
-    return res.status(404).json({ error: 'DM not found' });
-  }
-
-  if (requester) {
-    const allowed = db
-      .prepare('SELECT 1 FROM dm_members WHERE dm_id = ? AND user_id = ?')
-      .get(dmId, requester);
-    if (!allowed && dm.created_by !== requester) {
-      return res.status(403).json({ error: 'Not a member of this DM' });
-    }
+  const requesterUser = getTenantAccessUser(req);
+  if (!requesterUser) return res.status(401).json({ error: 'Unauthorized' });
+  const dmAccess = await assertDmAccess(requesterUser, dmId, req);
+  if (!dmAccess.ok) {
+    if (dmAccess.status === 404) return res.status(404).json({ error: 'DM not found' });
+    return tenantForbidden(res);
   }
 
   const msgs = db
@@ -18678,13 +20294,15 @@ app.get('/api/dms/:dmId/messages', (req, res) => {
     .all(dmId);
 
   const enriched = getMessagesForDm(dmId);
-  res.json(enriched);
+  return res.json(enriched);
 });
 
-app.post('/api/dms/:dmId/messages', (req, res) => {
+app.post('/api/dms/:dmId/messages', async (req, res) => {
   const { dmId } = req.params;
   const { author = 'You', initials = 'YOU', text } = req.body || {};
-  const requester = getRequesterId(req);
+  const requesterUser = getTenantAccessUser(req);
+  const requester = String(requesterUser?.id || requesterUser?.sub || getRequesterId(req) || '').trim();
+  if (!requesterUser) return res.status(401).json({ error: 'Unauthorized' });
   if (!text || !text.trim()) {
     return res.status(400).json({ error: 'Text is required' });
   }
@@ -18702,23 +20320,8 @@ app.post('/api/dms/:dmId/messages', (req, res) => {
     dm = { id: dmId, created_by: requester || null };
   }
 
-  if (requester) {
-    const allowed = db
-      .prepare('SELECT 1 FROM dm_members WHERE dm_id = ? AND user_id = ?')
-      .get(dmId, requester);
-    if (!allowed && dm.created_by !== requester) {
-      return res.status(403).json({ error: 'Not a member of this DM' });
-    }
-  }
-
-  if (requester) {
-    const allowed = db
-      .prepare('SELECT 1 FROM dm_members WHERE dm_id = ? AND user_id = ?')
-      .get(dmId, requester);
-    if (!allowed && dm.created_by !== requester) {
-      return res.status(403).json({ error: 'Not a member of this DM' });
-    }
-  }
+  const dmAccess = await assertDmAccess(requesterUser, dmId, req);
+  if (!dmAccess.ok) return tenantForbidden(res);
 
   const id = generateId('dm');
   const time = timeHHMM();
@@ -18758,12 +20361,16 @@ app.post('/api/dms/:dmId/messages', (req, res) => {
 });
 
 // add / toggle reaction on DM message
-app.post('/api/dms/:dmId/messages/:messageId/reactions', (req, res) => {
+app.post('/api/dms/:dmId/messages/:messageId/reactions', async (req, res) => {
   const { dmId, messageId } = req.params;
   const { emoji, userId: rawUserId } = req.body || {};
   if (!emoji) {
     return res.status(400).json({ error: 'emoji is required' });
   }
+  const requesterUser = getTenantAccessUser(req);
+  if (!requesterUser) return res.status(401).json({ error: 'Unauthorized' });
+  const dmAccess = await assertDmAccess(requesterUser, dmId, req);
+  if (!dmAccess.ok) return tenantForbidden(res);
   const userId = String(rawUserId || 'anonymous').trim() || 'anonymous';
 
   const dm = db.prepare('SELECT id, created_by FROM dms WHERE id = ?').get(dmId);
@@ -20348,7 +21955,7 @@ function buildOllamaPrompt({ userText, mode = "assistant", role = "student", con
       : "ROLE_POLICY: When USER_ROLE is school_admin/admin, you may use schoolwide data present in CONTEXT, but only for the current workspace.";
 
   const systemCommon = [
-    "You are WorkNest AI for a school planner used by teachers and students.",
+    "You are StudiesTalk AI for a school planner used by teachers and students.",
     "Be accurate and do NOT invent dates/times.",
     "Use provided context as the only source of truth for schedule facts.",
     "Use only compact filtered context prepared by the backend. Do not assume hidden database access.",
@@ -20617,9 +22224,6 @@ app.post("/api/ai/chat", async (req, res) => {
 app.post("/api/ai/chat_stream", async (req, res) => {
   const { message, mode, context: clientContext } = req.body || {};
   const userText = (message || "").trim();
-
-  console.log("✅ HIT /api/ai/chat_stream");
-  console.log("RAW message:", userText);
 
   if (!userText) return res.status(400).end("message is required");
 
@@ -21333,33 +22937,19 @@ app.post('/api/admin/workspace-email-settings/:workspaceId/test', async (req, re
   }
 });
 
-app.get('/api/admin/workspaces', (req, res) => {
+app.get('/api/admin/workspaces', async (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
-
-  const rows = db.prepare(`
-    SELECT id, name, school_code AS schoolCode, status, admin_email AS adminEmail
-    FROM workspaces
-    ORDER BY name
-  `).all();
-
-  return res.json(rows);
+  return res.json(await workspaceRepository.listAdminWorkspaces());
 });
 
-app.get('/api/admin/approved-requests-missing-workspace', (req, res) => {
+app.get('/api/admin/approved-requests-missing-workspace', async (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
 
-  const reqs = db.prepare(`
-    SELECT id, email, payload, created_at AS createdAt, reviewed_at AS reviewedAt
-    FROM registration_review_requests
-    WHERE status = 'approved'
-    ORDER BY reviewed_at DESC
-    LIMIT 300
-  `).all();
+  const reqs = await schoolRequestRepository.listApprovedRegistrationReviewRequests(300);
 
-  const workspaces = db.prepare(`SELECT id FROM workspaces`).all();
-  const workspaceIds = new Set(workspaces.map((w) => String(w.id)));
+  const workspaceIds = new Set(await workspaceRepository.listWorkspaceIds());
 
   const filtered = reqs
     .map((r) => {
@@ -21387,7 +22977,7 @@ app.get('/api/admin/approved-requests-missing-workspace', (req, res) => {
   res.json(filtered);
 });
 
-app.post('/api/admin/workspaces/upsert', (req, res) => {
+app.post('/api/admin/workspaces/upsert', async (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
 
@@ -21398,46 +22988,45 @@ app.post('/api/admin/workspaces/upsert', (req, res) => {
   const wsId = String(id || '').trim() || generateAdminId('ws');
   const wsStatus = String(status || 'active').trim() || 'active';
 
-  const existing = db.prepare('SELECT id FROM workspaces WHERE id = ?').get(wsId);
-
-  if (existing) {
-    db.prepare(`
-      UPDATE workspaces
-      SET name = ?, school_code = COALESCE(?, school_code), status = ?
-      WHERE id = ?
-    `).run(wsName, schoolCode || null, wsStatus, wsId);
-
-    legacyAuditLog({ workspaceId: wsId, actor: user.id, action: 'workspace.update', target: wsId, payload: { name: wsName, schoolCode, status: wsStatus } });
-  } else {
-    db.prepare(`
-      INSERT INTO workspaces (id, name, school_code, status)
-      VALUES (?, ?, ?, ?)
-    `).run(wsId, wsName, schoolCode || null, wsStatus);
-
-    legacyAuditLog({ workspaceId: wsId, actor: user.id, action: 'workspace.create', target: wsId, payload: { name: wsName, schoolCode, status: wsStatus } });
-  }
-
   try {
+    const result = await workspaceRepository.upsertWorkspace({
+      id: wsId,
+      name: wsName,
+      schoolCode: schoolCode || null,
+      status: wsStatus
+    });
+    if (result.existed) {
+    legacyAuditLog({ workspaceId: wsId, actor: user.id, action: 'workspace.update', target: wsId, payload: { name: wsName, schoolCode, status: wsStatus } });
+    } else {
+      legacyAuditLog({ workspaceId: wsId, actor: user.id, action: 'workspace.create', target: wsId, payload: { name: wsName, schoolCode, status: wsStatus } });
+    }
+
     ensurePrivacyRulesMessage(wsId);
   } catch (e) {
     console.warn('Failed to refresh privacy rules message for workspace update:', e);
   }
 
-  // ensure billing row exists
-  db.prepare(`
-    INSERT OR IGNORE INTO workspace_billing (workspace_id, plan, status, currency, monthly_price_cents, billing_email, updated_at)
-    VALUES (?, 'free', 'active', 'EUR', 0, NULL, ?)
-  `).run(wsId, nowMs());
-
-  return res.json({ ok: true, id: wsId });
+  try {
+    // Billing migration boundary: initialize billing through the adapter.
+    await billingRepository.ensureWorkspaceBilling({ workspaceId: wsId });
+    await onboardingRepository.ensureWorkspaceOnboarding({
+      workspaceId: wsId,
+      createdBy: user.id,
+      now: new Date().toISOString()
+    });
+    return res.json({ ok: true, id: wsId });
+  } catch (err) {
+    console.error('[Workspace] Upsert failed', err);
+    return res.status(500).json({ error: 'Workspace saved, but billing initialization failed' });
+  }
 });
 
-app.delete('/api/admin/workspaces/:workspaceId', (req, res) => {
+app.delete('/api/admin/workspaces/:workspaceId', async (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
 
   const { workspaceId } = req.params;
-  const workspace = db.prepare('SELECT id FROM workspaces WHERE id = ?').get(workspaceId);
+  const workspace = await workspaceRepository.getWorkspaceBasic(workspaceId);
   if (!workspace) {
     return res.status(404).json({ error: 'Workspace not found' });
   }
@@ -21445,7 +23034,7 @@ app.delete('/api/admin/workspaces/:workspaceId', (req, res) => {
     return res.status(400).json({ error: 'Default workspace cannot be deleted' });
   }
 
-  deleteWorkspaceCascade(workspaceId);
+  await workspaceRepository.deleteWorkspaceCascade(workspaceId);
   legacyAuditLog({
     workspaceId,
     actor: user.id,
@@ -21455,21 +23044,14 @@ app.delete('/api/admin/workspaces/:workspaceId', (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/admin/users', (req, res) => {
+// Phase C migration boundary: core admin user management now routes through
+// the user repository, while broader analytics helpers remain to be migrated.
+app.get('/api/admin/users', async (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
 
   const ws = String(req.query.workspaceId || 'all');
-  const rows = db.prepare(`
-    SELECT
-      id, name, email, username,
-      role, status,
-      workspace_id AS workspaceId
-    FROM users
-    ${ws === 'all' ? '' : 'WHERE workspace_id = ?'}
-    ORDER BY name
-    LIMIT 2000
-  `).all(...(ws === 'all' ? [] : [ws]));
+  const rows = await userRepository.listAdminUsers(ws);
 
   if (allowAdminLoginBypass && devSuperAdminBypassEntries.length) {
     for (const entry of devSuperAdminBypassEntries) {
@@ -21493,20 +23075,20 @@ app.get('/api/admin/users', (req, res) => {
   return res.json(rows);
 });
 
-app.patch('/api/admin/users/:id', (req, res) => {
+app.patch('/api/admin/users/:id', async (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
 
   const userId = req.params.id;
   const { role, status } = req.body || {};
 
-  const existing = db.prepare('SELECT id, workspace_id AS workspaceId, role, status FROM users WHERE id = ?').get(userId);
+  const existing = await userRepository.getUserById(userId);
   if (!existing) return res.status(404).json({ error: 'User not found' });
 
   const newRole = role !== undefined ? String(role).trim().toLowerCase() : existing.role;
   const newStatus = status !== undefined ? String(status).trim().toLowerCase() : existing.status;
 
-  db.prepare('UPDATE users SET role = ?, status = ? WHERE id = ?').run(newRole, newStatus, userId);
+  await userRepository.updateUserRoleStatus(userId, newRole, newStatus);
 
   legacyAuditLog({
     workspaceId: existing.workspaceId,
@@ -21525,12 +23107,12 @@ app.patch('/api/admin/users/:id', (req, res) => {
   return res.json({ ok: true });
 });
 
-app.delete('/api/admin/users/:id', (req, res) => {
+app.delete('/api/admin/users/:id', async (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
 
   const userId = req.params.id;
-  const workspaceId = deleteUserCascade(userId);
+  const workspaceId = await deleteUserCascade(userId);
   if (!workspaceId) {
     return res.status(404).json({ error: 'User not found' });
   }
@@ -21545,80 +23127,43 @@ app.delete('/api/admin/users/:id', (req, res) => {
   res.json({ ok: true, userId });
 });
 
-app.get('/api/admin/overview', (req, res) => {
+app.get('/api/admin/overview', async (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
 
-  const schools = db.prepare('SELECT COUNT(*) AS c FROM workspaces').get().c || 0;
-  const users = db.prepare('SELECT COUNT(*) AS c FROM users').get().c || 0;
+  try {
+    const schools = await workspaceRepository.countWorkspaces();
+    const users = await userRepository.countUsers();
 
-  const activeSubscriptions = db.prepare(`
-    SELECT COUNT(*) AS c
-    FROM workspace_billing
-    WHERE status = 'active' AND plan <> 'free'
-  `).get().c || 0;
+    // Billing migration boundary: billing counters come from the billing adapter.
+    const { activeSubscriptions, openInvoices } = await billingRepository.getBillingSummary('all');
 
-  const openInvoices = db.prepare(`
-    SELECT COUNT(*) AS c
-    FROM invoices
-    WHERE status = 'open'
-  `).get().c || 0;
+    const recentAudit = await auditRepository.listRecentLegacyAudit(15);
 
-  const recentAudit = db.prepare(`
-    SELECT workspace_id AS workspaceId, actor, action, target, created_at AS createdAt
-    FROM audit_log
-    ORDER BY created_at DESC
-    LIMIT 15
-  `).all();
-
-  return res.json({ schools, users, activeSubscriptions, openInvoices, recentAudit });
+    return res.json({ schools, users, activeSubscriptions, openInvoices, recentAudit });
+  } catch (err) {
+    console.error('[Billing] Overview billing stats failed', err);
+    return res.status(500).json({ error: 'Failed to load overview' });
+  }
 });
 
-app.get('/api/admin/billing/:workspaceId', (req, res) => {
+app.get('/api/admin/billing/:workspaceId', async (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
 
-  const ws = String(req.params.workspaceId || 'all');
-
-  const invoices = db.prepare(`
-    SELECT
-      id,
-      workspace_id AS workspaceId,
-      student_user_id AS studentUserId,
-      amount_cents AS amountCents,
-      currency,
-      description,
-      status,
-      due_date AS dueDate,
-      created_at AS createdAt,
-      paid_at AS paidAt
-    FROM invoices
-    ${ws === 'all' ? '' : 'WHERE workspace_id = ?'}
-    ORDER BY created_at DESC
-    LIMIT 500
-  `).all(...(ws === 'all' ? [] : [ws]));
-
-  const payments = db.prepare(`
-    SELECT
-      id,
-      invoice_id AS invoiceId,
-      workspace_id AS workspaceId,
-      student_user_id AS studentUserId,
-      amount_cents AS amountCents,
-      currency,
-      provider,
-      provider_ref AS providerRef,
-      created_at AS createdAt
-    FROM payments
-    ${ws === 'all' ? '' : 'WHERE workspace_id = ?'}
-    ORDER BY created_at DESC
-    LIMIT 500
-  `).all(...(ws === 'all' ? [] : [ws]));
-
-  return res.json({ invoices, payments });
+  try {
+    const ws = String(req.params.workspaceId || 'all');
+    // Billing migration boundary: list invoices/payments through adapter only.
+    const invoices = await billingRepository.listInvoices(ws);
+    const payments = await billingRepository.listPayments(ws);
+    return res.json({ invoices, payments });
+  } catch (err) {
+    console.error('[Billing] List failed', err);
+    return res.status(500).json({ error: 'Failed to load billing' });
+  }
 });
 
-app.post('/api/admin/invoices', (req, res) => {
+app.post('/api/admin/invoices', async (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
 
@@ -21627,7 +23172,7 @@ app.post('/api/admin/invoices', (req, res) => {
   if (!ws) return res.status(400).json({ error: 'workspaceId is required' });
   const normalizedStudentUserId = String(studentUserId || '').trim() || null;
   if (normalizedStudentUserId) {
-    const student = getWorkspaceScopedUser(ws, normalizedStudentUserId);
+    const student = await userRepository.getWorkspaceScopedUser(ws, normalizedStudentUserId);
     if (!student || getNormalizedUserRole(student) !== 'student') {
       return res.status(400).json({ error: 'studentUserId must reference a student in the workspace' });
     }
@@ -21638,50 +23183,51 @@ app.post('/api/admin/invoices', (req, res) => {
 
   const invId = generateAdminId('inv');
 
-  db.prepare(`
-    INSERT INTO invoices (id, workspace_id, student_user_id, amount_cents, currency, description, status, due_date, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)
-  `).run(invId, ws, normalizedStudentUserId, Math.floor(amount), String(currency || 'EUR'), description || null, dueDate || null, nowMs());
+  try {
+    // Billing migration boundary: invoice writes go through adapter only.
+    await billingRepository.createInvoice({
+      id: invId,
+      workspaceId: ws,
+      studentUserId: normalizedStudentUserId,
+      amountCents: amount,
+      currency: String(currency || 'EUR'),
+      description: description || null,
+      dueDate: dueDate || null
+    });
 
-  legacyAuditLog({ workspaceId: ws, actor: user.id, action: 'invoice.create', target: invId, payload: { amountCents: amount, currency, description, dueDate, studentUserId: normalizedStudentUserId } });
+    legacyAuditLog({ workspaceId: ws, actor: user.id, action: 'invoice.create', target: invId, payload: { amountCents: amount, currency, description, dueDate, studentUserId: normalizedStudentUserId } });
 
-  return res.json({ ok: true, id: invId });
+    return res.json({ ok: true, id: invId });
+  } catch (err) {
+    console.error('[Billing] Create invoice failed', err);
+    return res.status(500).json({ error: 'Failed to create invoice' });
+  }
 });
 
-app.post('/api/admin/invoices/:invoiceId/mark-paid', (req, res) => {
+app.post('/api/admin/invoices/:invoiceId/mark-paid', async (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
 
   const invoiceId = String(req.params.invoiceId || '').trim();
-  const invoice = db.prepare(`
-    SELECT id, workspace_id AS workspaceId, student_user_id AS studentUserId, amount_cents AS amountCents, currency, status
-    FROM invoices
-    WHERE id = ?
-  `).get(invoiceId);
+  try {
+    // Billing migration boundary: invoice payment flow goes through adapter only.
+    const invoice = await billingRepository.getInvoiceById(invoiceId);
+    if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+    if (invoice.status === 'paid') return res.json({ ok: true });
 
-  if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
-  if (invoice.status === 'paid') return res.json({ ok: true });
+    const paymentId = generateAdminId('pay');
+    await billingRepository.markInvoicePaid({ invoiceId, invoice, paymentId });
 
-  const paymentId = generateAdminId('pay');
+    legacyAuditLog({ workspaceId: invoice.workspaceId, actor: user.id, action: 'invoice.mark_paid', target: invoiceId, payload: { paymentId } });
 
-  const tx = db.transaction(() => {
-    db.prepare('UPDATE invoices SET status = ?, paid_at = ? WHERE id = ?')
-      .run('paid', nowMs(), invoiceId);
-
-    db.prepare(`
-      INSERT INTO payments (id, invoice_id, workspace_id, student_user_id, amount_cents, currency, provider, provider_ref, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, 'manual', NULL, ?)
-    `).run(paymentId, invoiceId, invoice.workspaceId, invoice.studentUserId || null, invoice.amountCents, invoice.currency, nowMs());
-  });
-
-  tx();
-
-  legacyAuditLog({ workspaceId: invoice.workspaceId, actor: user.id, action: 'invoice.mark_paid', target: invoiceId, payload: { paymentId } });
-
-  return res.json({ ok: true, paymentId });
+    return res.json({ ok: true, paymentId });
+  } catch (err) {
+    console.error('[Billing] Mark invoice paid failed', err);
+    return res.status(500).json({ error: 'Failed to mark invoice paid' });
+  }
 });
 
-app.get('/api/admin/workspace-settings/:workspaceId', (req, res) => {
+app.get('/api/admin/workspace-settings/:workspaceId', async (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
 
@@ -21689,15 +23235,10 @@ app.get('/api/admin/workspace-settings/:workspaceId', (req, res) => {
   if (!ws) return res.status(400).json({ error: 'workspaceId required' });
   if (ws === 'all') return res.status(400).json({ error: 'Select a specific workspace first' });
 
-  const row = db.prepare(`
-    SELECT settings_json AS settingsJson
-    FROM workspace_settings_admin
-    WHERE workspace_id = ?
-  `).get(ws);
-
   let settings = {};
   try {
-    settings = row?.settingsJson ? JSON.parse(row.settingsJson) : {};
+    // Phase B migration boundary: workspace settings reads now flow through the repository.
+    settings = await workspaceRepository.getWorkspaceSettings(ws);
   } catch (err) {
     console.error('[Admin] Invalid workspace settings JSON', { workspaceId: ws, error: err?.message || err });
     return res.status(500).json({ error: 'Stored workspace settings JSON is invalid' });
@@ -21705,7 +23246,7 @@ app.get('/api/admin/workspace-settings/:workspaceId', (req, res) => {
   return res.json({ workspaceId: ws, settings });
 });
 
-app.put('/api/admin/workspace-settings/:workspaceId', (req, res) => {
+app.put('/api/admin/workspace-settings/:workspaceId', async (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
 
@@ -21713,44 +23254,93 @@ app.put('/api/admin/workspace-settings/:workspaceId', (req, res) => {
   if (!ws) return res.status(400).json({ error: 'workspaceId required' });
   if (ws === 'all') return res.status(400).json({ error: 'Select a specific workspace first' });
   const settings = req.body?.settings ?? {};
-  const json = JSON.stringify(settings || {});
-
-  db.prepare(`
-    INSERT INTO workspace_settings_admin (workspace_id, settings_json, updated_at)
-    VALUES (?, ?, ?)
-    ON CONFLICT(workspace_id) DO UPDATE SET
-      settings_json = excluded.settings_json,
-      updated_at = excluded.updated_at
-  `).run(ws, json, nowMs());
+  await workspaceRepository.saveWorkspaceSettings({
+    workspaceId: ws,
+    settings,
+    updatedAt: nowMs()
+  });
 
   legacyAuditLog({ workspaceId: ws, actor: user.id, action: 'workspace.settings.update', target: ws, payload: settings });
 
   return res.json({ ok: true });
 });
 
-app.get('/api/admin/audit', (req, res) => {
+app.get('/api/admin/audit', async (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
 
   const ws = String(req.query.workspaceId || 'all');
-
-  const rows = db.prepare(`
-    SELECT
-      id,
-      workspace_id AS workspaceId,
-      actor,
-      action,
-      target,
-      payload_json AS payloadJson,
-      created_at AS createdAt
-    FROM audit_log
-    ${ws === 'all' ? '' : 'WHERE workspace_id = ?'}
-    ORDER BY created_at DESC
-    LIMIT 500
-  `).all(...(ws === 'all' ? [] : [ws]));
-
-  return res.json(rows);
+  return res.json(await auditRepository.listLegacyAudit({ workspaceId: ws, limit: 500 }));
 });
+
+function checkWritableDirectory(dirPath) {
+  const result = { path: dirPath, ok: false };
+  try {
+    ensureDir(dirPath);
+    fs.accessSync(dirPath, fs.constants.W_OK);
+    result.ok = true;
+  } catch (err) {
+    result.error = err?.message || String(err);
+  }
+  return result;
+}
+
+function runDeepHealthCheck() {
+  const details = {
+    ok: true,
+    timestamp: new Date().toISOString(),
+    uptimeSeconds: Math.round(process.uptime()),
+    runtime: {
+      nodeEnv: ENV.NODE_ENV,
+      dbEngine: ENV.DB_ENGINE,
+      appBaseUrlConfigured: Boolean(ENV.BASE_URL),
+      cookieSecure: !!ENV.COOKIE_SECURE
+    },
+    env: {
+      ok: !(ENV.ENV_VALIDATION?.hasErrors),
+      warnings: ENV.ENV_VALIDATION?.warnings || [],
+      summary: ENV.ENV_VALIDATION?.summary || {}
+    },
+    db: {
+      ok: false,
+      path: DB_PATH
+    },
+    storage: {
+      dbDir: checkWritableDirectory(path.dirname(DB_PATH)),
+      uploadsDir: checkWritableDirectory(UPLOADS_DIR),
+      backupDir: checkWritableDirectory(BACKUP_DIR),
+      attachmentsDir: checkWritableDirectory(ATTACHMENTS_DIR)
+    }
+  };
+
+  try {
+    const row = db.prepare('SELECT 1 AS ok').get();
+    details.db.ok = Number(row?.ok || 0) === 1;
+  } catch (err) {
+    details.db.error = err?.message || String(err);
+  }
+
+  if (!details.db.ok) details.ok = false;
+  if (!details.storage.dbDir.ok || !details.storage.uploadsDir.ok || !details.storage.backupDir.ok || !details.storage.attachmentsDir.ok) {
+    details.ok = false;
+  }
+
+  return details;
+}
+
+app.get('/health', (_req, res) => {
+  res.json({
+    ok: true,
+    timestamp: new Date().toISOString(),
+    uptimeSeconds: Math.round(process.uptime())
+  });
+});
+
+app.get('/health/deep', (_req, res) => {
+  const details = runDeepHealthCheck();
+  res.status(details.ok ? 200 : 503).json(details);
+});
+
 app.get("/api/ai/health", async (_req, res) => {
   try {
     const r = await fetch(`${OLLAMA_URL}/api/tags`);
@@ -21763,19 +23353,26 @@ app.get("/api/ai/health", async (_req, res) => {
 scheduleIdleRuntimeCleanup();
 
 app.use((err, req, res, next) => {
-  console.error('[ERROR]', {
+  logEvent('error', '[ERROR]', {
+    requestId: req.id || null,
     path: req.path,
     method: req.method,
-    message: err?.message,
-    stack: ENV.IS_PROD ? undefined : err?.stack
+    error: safeSerializeError(err, { includeStack: !ENV.IS_PROD })
   });
   if (res.headersSent) return next(err);
-  res.status(500).json({ error: 'Internal server error' });
+  res.status(500).json({ error: 'Internal server error', requestId: req.id || null });
 });
 
 /* ---------- START SERVER ---------- */
 app.listen(PORT, () => {
-  console.log(`WorkNest server (SQLite + reactions) at http://localhost:${PORT}`);
+  logEvent('info', `StudiesTalk server (SQLite + reactions) listening on port ${PORT}`, {
+    nodeEnv: ENV.NODE_ENV,
+    appBaseUrl: ENV.BASE_URL || `http://localhost:${PORT}`,
+    dbPath: DB_PATH,
+    uploadsDir: UPLOADS_DIR,
+    backupDir: BACKUP_DIR,
+    env: summarizeEnvValidation().summary
+  });
   warmOllama();
 });
 function canTakeClassAttendance(user) {
@@ -21839,52 +23436,19 @@ function ensureClassChannel(workspaceId, channelId, { allowAllWorkspaces = false
 }
 
 function getClassMeta(workspaceId, channelId) {
-  return db.prepare(
-    `SELECT * FROM workspace_class_meta WHERE workspace_id = ? AND channel_id = ? LIMIT 1`
-  ).get(workspaceId, channelId);
+  // Phase B migration boundary: class metadata now flows through the workspace repository.
+  return workspaceRepository.getClassMeta(workspaceId, channelId);
 }
 
 function upsertClassMeta(workspaceId, channelId, payload) {
-  db.prepare(
-    `INSERT INTO workspace_class_meta (workspace_id, channel_id, start_date, end_date, status, capacity, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-     ON CONFLICT(workspace_id, channel_id) DO UPDATE SET
-       start_date = excluded.start_date,
-       end_date = excluded.end_date,
-       status = excluded.status,
-       capacity = excluded.capacity,
-       updated_at = datetime('now')`
-  ).run(
-    workspaceId,
-    channelId,
-    payload.start_date || null,
-    payload.end_date || null,
-    payload.status || 'private',
-    payload.capacity != null ? Number(payload.capacity) : 0
-  );
+  return workspaceRepository.upsertClassMeta(workspaceId, channelId, payload);
 }
 
 function countChannelMembers(channelId) {
-  const rows = db.prepare(
-    `SELECT u.role,
-            COALESCE(u.name, u.username, u.email, '') AS display_name
-     FROM channel_members cm
-     LEFT JOIN users u ON u.id = cm.user_id
-     WHERE cm.channel_id = ?`
-  ).all(channelId);
-  const students = rows.filter((u) => String(u.role || '').toLowerCase().includes('student'));
-  const teacherRows = rows.filter((u) => String(u.role || '').toLowerCase().includes('teacher'));
-  const teacherNames = teacherRows
-    .map((u) => String(u.display_name || '').trim())
-    .filter((name) => name);
-  return {
-    totalStudents: students.length,
-    totalTeachers: teacherRows.length,
-    teacherNames
-  };
+  return workspaceRepository.countChannelMembers(channelId);
 }
 
-app.get('/api/classes/:channelId/meta', (req, res) => {
+app.get('/api/classes/:channelId/meta', async (req, res) => {
   const user = getAuthedUser(req);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
   const requestedWorkspaceId = getWorkspaceIdFromUser(user);
@@ -21897,8 +23461,8 @@ app.get('/api/classes/:channelId/meta', (req, res) => {
   );
   if (!check.ok) return res.status(check.code).json({ error: check.error });
   const metaWorkspaceId = check.channel.workspaceId || requestedWorkspaceId;
-  const meta = getClassMeta(metaWorkspaceId, channelId) || { status: 'private' };
-  const counts = countChannelMembers(channelId);
+  const meta = (await getClassMeta(metaWorkspaceId, channelId)) || { status: 'private' };
+  const counts = await countChannelMembers(channelId);
   res.json({
     start_date: meta.start_date || '',
     end_date: meta.end_date || '',
@@ -21910,7 +23474,7 @@ app.get('/api/classes/:channelId/meta', (req, res) => {
   });
 });
 
-app.put('/api/classes/:channelId/meta', express.json(), (req, res) => {
+app.put('/api/classes/:channelId/meta', express.json(), async (req, res) => {
   const user = getAuthedUser(req);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
   if (!canManageClassSettings(user)) return res.status(403).json({ error: 'Forbidden' });
@@ -21922,7 +23486,7 @@ app.put('/api/classes/:channelId/meta', express.json(), (req, res) => {
   const validStatus = ['public', 'private'];
   const status = validStatus.includes(String(body.status || '').toLowerCase()) ? String(body.status).toLowerCase() : 'private';
   const capacity = Number(body.capacity || 0);
-  upsertClassMeta(workspaceId, channelId, {
+  await upsertClassMeta(workspaceId, channelId, {
     start_date: String(body.start_date || '').trim() || null,
     end_date: String(body.end_date || '').trim() || null,
     status,

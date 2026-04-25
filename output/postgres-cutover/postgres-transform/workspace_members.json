@@ -1,0 +1,22 @@
+[
+  {
+    "workspace_id": "default",
+    "user_id": "u-you",
+    "role": "owner"
+  },
+  {
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "role": "owner"
+  },
+  {
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "role": "student"
+  },
+  {
+    "workspace_id": "lens",
+    "user_id": "uzkzzyy6q",
+    "role": "student"
+  }
+]

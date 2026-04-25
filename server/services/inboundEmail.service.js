@@ -27,10 +27,46 @@ const IMAP_CONFIG = {
     pass: process.env.IONOS_IMAP_PASS,
   }
 };
-console.log('[InboundEmail] IMAP credentials', {
-  user: IMAP_CONFIG.auth.user,
-  passLen: String(IMAP_CONFIG.auth.pass || '').length
-});
+
+function createImapClient(contextLabel) {
+  const clientConfig = { ...IMAP_CONFIG, logger: IMAP_LOGGER };
+  console.log('[InboundEmail] IMAP client config', {
+    host: clientConfig.host,
+    port: clientConfig.port,
+    secure: clientConfig.secure,
+    disableAuthMethods: clientConfig.disableAuthMethods,
+    authConfigured: Boolean(clientConfig.auth?.user && clientConfig.auth?.pass)
+  });
+
+  const client = new ImapFlow(clientConfig);
+  const handleError = (err) => {
+    console.warn(
+      `[InboundEmail] IMAP client error during ${contextLabel}`,
+      err?.code || '',
+      err?.message || err
+    );
+  };
+  client.on('error', handleError);
+
+  return { client, handleError };
+}
+
+async function closeImapClient(client, handleError) {
+  if (!client) return;
+  try {
+    if (client.usable) {
+      await client.logout();
+    } else {
+      client.close();
+    }
+  } catch (err) {
+    client.close();
+  } finally {
+    if (handleError) {
+      client.off('error', handleError);
+    }
+  }
+}
 
 function validateInboundConfig() {
   if (!IMAP_CONFIG.host || !IMAP_CONFIG.auth.user || !IMAP_CONFIG.auth.pass) {
@@ -329,22 +365,14 @@ async function fetchLatestMessages(limit) {
   validateInboundConfig();
 
   const finalLimit = resolveLimit(limit);
-  console.log('[InboundEmail] IMAP_CONFIG', {
+  console.log('[InboundEmail] IMAP config', {
     host: IMAP_CONFIG.host,
     port: IMAP_CONFIG.port,
     secure: IMAP_CONFIG.secure,
     disableAuthMethods: IMAP_CONFIG.disableAuthMethods,
-    user: IMAP_CONFIG.auth?.user
+    authConfigured: Boolean(IMAP_CONFIG.auth?.user && IMAP_CONFIG.auth?.pass)
   });
-  const clientConfig = { ...IMAP_CONFIG, logger: IMAP_LOGGER };
-  console.log('[InboundEmail] IMAP_CONFIG', {
-    host: clientConfig.host,
-    port: clientConfig.port,
-    secure: clientConfig.secure,
-    disableAuthMethods: clientConfig.disableAuthMethods,
-    user: clientConfig.auth?.user
-  });
-  const client = new ImapFlow(clientConfig);
+  const { client, handleError } = createImapClient('fetchLatestMessages');
   let lock = null;
 
   try {
@@ -395,11 +423,7 @@ async function fetchLatestMessages(limit) {
         console.warn('[InboundEmail] Failed to release mailbox lock', err?.message || err);
       }
     }
-    try {
-      await client.logout();
-    } catch (err) {
-      // ignore logout errors
-    }
+    await closeImapClient(client, handleError);
   }
 }
 
@@ -410,22 +434,14 @@ async function syncInboundEmails(dbInstance, limit) {
 
   validateInboundConfig();
   const finalLimit = resolveLimit(limit);
-  console.log('[InboundEmail] IMAP_CONFIG', {
+  console.log('[InboundEmail] IMAP config', {
     host: IMAP_CONFIG.host,
     port: IMAP_CONFIG.port,
     secure: IMAP_CONFIG.secure,
     disableAuthMethods: IMAP_CONFIG.disableAuthMethods,
-    user: IMAP_CONFIG.auth?.user
+    authConfigured: Boolean(IMAP_CONFIG.auth?.user && IMAP_CONFIG.auth?.pass)
   });
-  const clientConfig = { ...IMAP_CONFIG, logger: IMAP_LOGGER };
-  console.log('[InboundEmail] IMAP_CONFIG', {
-    host: clientConfig.host,
-    port: clientConfig.port,
-    secure: clientConfig.secure,
-    disableAuthMethods: clientConfig.disableAuthMethods,
-    user: clientConfig.auth?.user
-  });
-  const client = new ImapFlow(clientConfig);
+  const { client, handleError } = createImapClient('syncInboundEmails');
   let lock = null;
   const insertStmt = dbInstance.prepare(`
       INSERT OR IGNORE INTO inbound_emails (
@@ -554,11 +570,7 @@ async function syncInboundEmails(dbInstance, limit) {
         console.warn('[InboundEmail] Failed to release mailbox lock', err?.message || err);
       }
     }
-    try {
-      await client.logout();
-    } catch (err) {
-      // ignore logout errors
-    }
+    await closeImapClient(client, handleError);
   }
 }
 

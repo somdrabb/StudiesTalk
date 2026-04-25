@@ -1,0 +1,90 @@
+[
+  {
+    "session_id": "lschmdlg5h",
+    "student_id": "uyshv0srx",
+    "joined_at": "2026-02-27T16:15:47.325Z",
+    "status": "present",
+    "note": null,
+    "updated_at": "2026-02-27T16:15:47.325Z"
+  },
+  {
+    "session_id": "lsl809fy6g",
+    "student_id": "uyshv0srx",
+    "joined_at": "2026-02-27T23:47:16.613Z",
+    "status": "present",
+    "note": null,
+    "updated_at": "2026-02-27T23:47:16.613Z"
+  },
+  {
+    "session_id": "ls4411xuo7",
+    "student_id": "uyshv0srx",
+    "joined_at": "2026-03-01T02:20:15.765Z",
+    "status": "present",
+    "note": null,
+    "updated_at": "2026-03-01T02:20:15.765Z"
+  },
+  {
+    "session_id": "ls2e6o4grz",
+    "student_id": "uyshv0srx",
+    "joined_at": "2026-03-13T01:02:13.075Z",
+    "status": "present",
+    "note": null,
+    "updated_at": "2026-03-13T01:02:13.075Z"
+  },
+  {
+    "session_id": "lsomx937fi",
+    "student_id": "uyshv0srx",
+    "joined_at": "2026-03-20T10:58:42.739Z",
+    "status": "present",
+    "note": null,
+    "updated_at": "2026-03-20T10:58:42.739Z"
+  },
+  {
+    "session_id": "lsm4r3ibhj",
+    "student_id": "uyshv0srx",
+    "joined_at": "2026-03-21T16:49:07.416Z",
+    "status": "present",
+    "note": null,
+    "updated_at": "2026-03-21T16:49:07.416Z"
+  },
+  {
+    "session_id": "ls0kti2ykc",
+    "student_id": "uyshv0srx",
+    "joined_at": "2026-03-21T17:04:18.649Z",
+    "status": "present",
+    "note": null,
+    "updated_at": "2026-03-21T17:04:18.649Z"
+  },
+  {
+    "session_id": "lsgsjeho3l",
+    "student_id": "uyshv0srx",
+    "joined_at": "2026-03-23T19:56:13.421Z",
+    "status": "present",
+    "note": null,
+    "updated_at": "2026-03-23T19:56:13.421Z"
+  },
+  {
+    "session_id": "lszu9c2nkh",
+    "student_id": "uyshv0srx",
+    "joined_at": "2026-03-23T20:17:17.608Z",
+    "status": "present",
+    "note": null,
+    "updated_at": "2026-03-23T20:17:17.608Z"
+  },
+  {
+    "session_id": "lsrjcfnj5q",
+    "student_id": "uyshv0srx",
+    "joined_at": "2026-03-23T20:30:59.159Z",
+    "status": "present",
+    "note": null,
+    "updated_at": "2026-03-23T20:30:59.159Z"
+  },
+  {
+    "session_id": "lsrjcfnj5q",
+    "student_id": "ubmz6ih1e",
+    "joined_at": "2026-03-23T21:21:10.376Z",
+    "status": "present",
+    "note": null,
+    "updated_at": "2026-03-23T21:21:10.376Z"
+  }
+]

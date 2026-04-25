@@ -545,6 +545,22 @@ let workspaceRetryInterval = null;
 const CALENDAR_WORKSPACE_READY_EVENT = "worknestWorkspaceReady";
 const CALENDAR_PANEL_OPEN_EVENT = "calendarPanelOpened";
 
+function isCalendarPolicyBlocked() {
+  if (typeof window === "undefined") return false;
+  if (typeof window.shouldBlockForPolicyGate !== "function") return false;
+  try {
+    return !!window.shouldBlockForPolicyGate();
+  } catch (_err) {
+    return false;
+  }
+}
+
+function reopenCalendarPolicyGate() {
+  if (typeof window === "undefined") return;
+  if (typeof window.openPolicyGatePanel !== "function") return;
+  window.openPolicyGatePanel({ refresh: true, force: true }).catch(() => null);
+}
+
 function clearWorkspaceWatcher() {
   if (workspaceRetryInterval) {
     clearInterval(workspaceRetryInterval);
@@ -575,6 +591,11 @@ if (typeof window !== "undefined" && window.__calendarWorkspaceReady) {
 }
 
 async function fetchCalendarEvents(from, to) {
+  if (isCalendarPolicyBlocked()) {
+    reopenCalendarPolicyGate();
+    calEventsCache = [];
+    return [];
+  }
   const ws = getWorkspaceSafe();
   if (!ws) {
     watchWorkspaceReady();
@@ -1265,6 +1286,10 @@ async function renderCalendar() {
 
 async function initCalendarIfNeeded() {
   if (calInitDone) return;
+  if (isCalendarPolicyBlocked()) {
+    reopenCalendarPolicyGate();
+    return;
+  }
   calInitDone = true;
 
   initCalModalControls();
@@ -1408,6 +1433,10 @@ async function initCalendarIfNeeded() {
 
 document.addEventListener("DOMContentLoaded", initCalendarIfNeeded);
 document.addEventListener(CALENDAR_PANEL_OPEN_EVENT, () => {
+  if (isCalendarPolicyBlocked()) {
+    reopenCalendarPolicyGate();
+    return;
+  }
   if (calInitDone) {
     renderCalendar();
   } else {

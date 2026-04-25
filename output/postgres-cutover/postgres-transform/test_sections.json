@@ -1,0 +1,46 @@
+[
+  {
+    "id": "placement-test-9:section-hoeren",
+    "test_channel_id": "placement-test-9",
+    "section_key": "hoeren",
+    "title": "Hören",
+    "description": "Three-part listening practice with multiple choice and richtig/falsch decisions.",
+    "sort_order": 1,
+    "duration_minutes": 20,
+    "metadata_json": "{\"icon\":\"fa-headphones\",\"estTasks\":7,\"examLabel\":\"Approx. 20 min\"}",
+    "created_at": "2026-04-15 19:58:07"
+  },
+  {
+    "id": "placement-test-9:section-lesen",
+    "test_channel_id": "placement-test-9",
+    "section_key": "lesen",
+    "title": "Lesen",
+    "description": "Read short authentic notices, online entries, and practical messages.",
+    "sort_order": 2,
+    "duration_minutes": 25,
+    "metadata_json": "{\"icon\":\"fa-book-open-reader\",\"estTasks\":7,\"examLabel\":\"Approx. 25 min\"}",
+    "created_at": "2026-04-15 19:58:07"
+  },
+  {
+    "id": "placement-test-9:section-schreiben",
+    "test_channel_id": "placement-test-9",
+    "section_key": "schreiben",
+    "title": "Schreiben",
+    "description": "Complete a practical form and write a short personal message.",
+    "sort_order": 3,
+    "duration_minutes": 20,
+    "metadata_json": "{\"icon\":\"fa-pen-nib\",\"estTasks\":2,\"examLabel\":\"Approx. 20 min\"}",
+    "created_at": "2026-04-15 19:58:07"
+  },
+  {
+    "id": "placement-test-9:section-sprechen",
+    "test_channel_id": "placement-test-9",
+    "section_key": "sprechen",
+    "title": "Sprechen",
+    "description": "Card-based speaking tasks for self-introduction, requests, and reactions.",
+    "sort_order": 4,
+    "duration_minutes": 15,
+    "metadata_json": "{\"icon\":\"fa-microphone-lines\",\"estTasks\":5,\"examLabel\":\"Approx. 15 min\"}",
+    "created_at": "2026-04-15 19:58:07"
+  }
+]

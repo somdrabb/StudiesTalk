@@ -5,7 +5,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <base href="/" />
-  <title>WorkNest – Team Workspace</title>
+  <title>StudiesTalk – Team Workspace</title>
 
   <!-- Icons -->
 <link rel="icon" href="assets/logo.png" sizes="512x512" />
@@ -1051,7 +1051,7 @@
 
       <div class="channel-header-bottom">
         <div class="channel-header-description channel-line-2">
-          <span id="headerChannelTopic">Welcome to WorkNest</span>
+          <span id="headerChannelTopic">Welcome to StudiesTalk</span>
         </div>
 
         <div class="channel-header-meta">
@@ -1622,7 +1622,7 @@
             </div>
           </div>
           <div class="hidden" id="sesInboxPanel">
-            <!-- Gmail-ish Inbox (WorkNest) -->
+            <!-- Gmail-ish Inbox (StudiesTalk) -->
   <section class="mailbox" id="wnMailbox">
     <header class="mbx-topbar">
       <label class="chk mbx-header-select">
@@ -2810,7 +2810,99 @@
 
   <!-- Admin -->
   <section id="adminPanel" class="main-panel hidden">
-    <div class="admin-panel-empty" id="adminPanelContent" aria-label="Admin panel"></div>
+    <div class="admin-panel-shell">
+      <div id="dashboardChecklistMount" class="dashboard-checklist-mount hidden" aria-live="polite"></div>
+      <div class="admin-panel-empty" id="adminPanelContent" aria-label="Admin panel"></div>
+    </div>
+  </section>
+
+  <!-- Workspace Onboarding -->
+  <section id="onboardingPanel" class="main-panel hidden">
+    <div class="onboarding-shell" id="onboardingRoot" aria-live="polite">
+      <div class="onboarding-mode-bar">
+        <div class="onboarding-mode-copy">
+          <span id="onboardingModeLabel" class="onboarding-mode-label">Guided setup</span>
+          <strong id="onboardingModeStepCounter" class="onboarding-mode-step">Step 1 of 11</strong>
+        </div>
+        <div class="onboarding-mode-progress" aria-hidden="true">
+          <span id="onboardingModeProgressBar"></span>
+        </div>
+        <button type="button" id="onboardingModeToggleBtn" class="onboarding-ghost-btn">View setup checklist</button>
+      </div>
+      <section class="onboarding-hero">
+        <div>
+          <p class="onboarding-kicker">Workspace onboarding</p>
+          <div id="onboardingWorkspaceContext" class="onboarding-context-line">Current workspace</div>
+          <h1>Prepare your school before launch</h1>
+          <p class="onboarding-copy">
+            Follow the guided setup from welcome through launch checklist so the workspace is activation-ready before students arrive.
+          </p>
+          <div id="onboardingGuardNotice" class="onboarding-notice hidden"></div>
+        </div>
+        <div class="onboarding-progress-card" id="onboardingProgress">
+          <span id="onboardingStatusLabel">In progress</span>
+          <strong id="onboardingProgressValue">0/11</strong>
+          <div class="onboarding-progress-track">
+            <span id="onboardingProgressBar"></span>
+          </div>
+          <div class="onboarding-progress-meta">
+            <span id="onboardingActivationScoreLabel">Activation score</span>
+            <strong id="onboardingActivationScoreValue">0%</strong>
+          </div>
+        </div>
+      </section>
+      <section id="onboardingSummarySection" class="onboarding-summary-section" aria-live="polite"></section>
+      <div class="onboarding-layout">
+        <aside class="onboarding-wizard-card onboarding-sidebar-card" id="onboardingSidebar">
+          <div class="onboarding-sidebar-head">
+            <div>
+              <p class="onboarding-sidebar-kicker">Setup journey</p>
+              <h2>Progress rail</h2>
+            </div>
+            <button type="button" id="onboardingResumeBtn" class="onboarding-ghost-btn">Resume setup</button>
+          </div>
+          <div id="onboardingStepList" class="onboarding-step-list"></div>
+        </aside>
+        <section class="onboarding-wizard-card onboarding-step-card">
+          <div class="onboarding-step-header">
+            <div>
+              <p id="onboardingStepEyebrow" class="onboarding-step-eyebrow">Current step</p>
+              <h2 id="onboardingStepTitle">Loading onboarding…</h2>
+              <p id="onboardingStepHelp" class="onboarding-step-help">We are preparing your school setup tasks.</p>
+            </div>
+            <span id="onboardingStepBadge" class="onboarding-step-badge">Pending</span>
+          </div>
+          <div id="onboardingStepAlert" class="onboarding-step-alert hidden"></div>
+          <div id="onboardingStepBody" class="onboarding-step-body"></div>
+          <div class="onboarding-step-footer">
+            <button type="button" id="onboardingBackBtn" class="onboarding-ghost-btn">Back</button>
+            <div class="onboarding-step-footer-actions">
+              <button type="button" id="onboardingSkipBtn" class="onboarding-ghost-btn">Skip for now</button>
+              <button type="button" id="onboardingSaveBtn" class="onboarding-primary-btn">Continue</button>
+            </div>
+          </div>
+        </section>
+        <aside class="onboarding-side-card" id="onboardingChecklistCard">
+          <h2>Activation checklist</h2>
+          <p id="onboardingChecklistSummary">Loading checklist...</p>
+          <div id="onboardingChecklist" class="onboarding-checklist"></div>
+          <button type="button" id="onboardingActivateBtn" class="onboarding-primary-btn" disabled>
+            Activate workspace
+          </button>
+        </aside>
+      </div>
+    </div>
+  </section>
+
+  <!-- Workspace Policy Gate -->
+  <section id="policyGatePanel" class="main-panel hidden" aria-hidden="true">
+    <div class="policy-gate-shell" id="policyGateRoot" aria-live="polite">
+      <div class="policy-gate-loading">
+        <div class="policy-gate-loading-badge">Workspace entry checkpoint</div>
+        <h1>Loading workspace policy…</h1>
+        <p>Preparing the current privacy, terms, and communication rules for review.</p>
+      </div>
+    </div>
   </section>
 
   <!-- Profile -->
@@ -3224,6 +3316,13 @@
                   </div>
                   <button id="adminThemeToggle" class="admin-secondary-btn">Toggle theme</button>
                 </div>
+                <div class="admin-setting-row">
+                  <div>
+                    <strong>Workspace setup</strong>
+                    <div class="muted">Resume the school onboarding checklist after deferring it or leaving it incomplete.</div>
+                  </div>
+                  <button id="adminResumeSetupBtn" class="admin-secondary-btn" hidden>Resume setup</button>
+                </div>
               </div>
             </section>
             <section class="admin-section hidden" data-admin-panel="school-requests">
@@ -3421,10 +3520,10 @@
   <!-- ========== LOGIN GATE ========== -->
 <div class="login-overlay" id="loginOverlay">
   <!-- Branding -->
-  <div class="login-branding" aria-label="WorkNest">
+  <div class="login-branding" aria-label="StudiesTalk">
     <img src="assets/logo.png" alt="" class="login-logo" />
     <div>
-      <p class="login-branding-name">WorkNest</p>
+      <p class="login-branding-name">StudiesTalk</p>
     </div>
   </div>
 

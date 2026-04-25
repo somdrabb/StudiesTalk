@@ -1,0 +1,15 @@
+[
+  {
+    "id": "placement-test-9:placement-test-9:attempt-reviewed-ubmz6ih1e:speaking-review",
+    "attempt_id": "placement-test-9:attempt-reviewed-ubmz6ih1e",
+    "task_id": "placement-test-9:sprechen-p1-self",
+    "recording_url": "",
+    "score": 12,
+    "comment": "Natural pace and complete self-introduction. Practice clearer sentence endings.",
+    "rubric_json": "[{\"key\":\"coverage\",\"score\":4,\"max\":5},{\"key\":\"pronunciation\",\"score\":4,\"max\":5},{\"key\":\"language_control\",\"score\":4,\"max\":5}]",
+    "reviewed_by": "ubmz6ih1e",
+    "reviewed_at": "2026-04-10 19:58:07",
+    "created_at": "2026-04-10 19:58:07",
+    "updated_at": "2026-04-10 19:58:07"
+  }
+]

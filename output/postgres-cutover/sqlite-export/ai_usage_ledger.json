@@ -1,0 +1,245 @@
+[
+  {
+    "id": "aiu_041ca5212f5f4e904fc2734e506fe975",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "cost_eur": 0.00083,
+    "tokens_input": null,
+    "tokens_output": null,
+    "created_at": "1774306993492.0"
+  },
+  {
+    "id": "aiu_2489eaa27c71735d5aae19784dce0016",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "cost_eur": 0.01245,
+    "tokens_input": null,
+    "tokens_output": null,
+    "created_at": "1774306997230.0"
+  },
+  {
+    "id": "aiu_e01d3098c7f5e87c778f02b91eafe893",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "cost_eur": 0.00996,
+    "tokens_input": null,
+    "tokens_output": null,
+    "created_at": "1774306997234.0"
+  },
+  {
+    "id": "aiu_1aca7ec51d95bfcccec29d356c7d3d42",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "cost_eur": 0.008466,
+    "tokens_input": null,
+    "tokens_output": null,
+    "created_at": "1774306997235.0"
+  },
+  {
+    "id": "aiu_3f60507bbd2d3c7650ad83a0334783dd",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "cost_eur": 0.011786,
+    "tokens_input": null,
+    "tokens_output": null,
+    "created_at": "1774307027232.0"
+  },
+  {
+    "id": "aiu_0a9c19a1f6bfacd2058bbdc9bad0b251",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "cost_eur": 0.00996,
+    "tokens_input": null,
+    "tokens_output": null,
+    "created_at": "1774307057233.0"
+  },
+  {
+    "id": "aiu_4df87f7421e174d5f9751bb4a32c4f2c",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "cost_eur": 0.0076359999999999996,
+    "tokens_input": null,
+    "tokens_output": null,
+    "created_at": "1774307540800.0"
+  },
+  {
+    "id": "aiu_cf09be17d59a8d1de3252e3d3b299723",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "cost_eur": 0.023903999999999998,
+    "tokens_input": null,
+    "tokens_output": null,
+    "created_at": "1774307668340.0"
+  },
+  {
+    "id": "aiu_ec54e2ef3e2aed35874c3124752396a5",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "cost_eur": 0.045649999999999996,
+    "tokens_input": null,
+    "tokens_output": null,
+    "created_at": "1774307901687.0"
+  },
+  {
+    "id": "aiu_2e104dce80b0aa7ffe7a85e251b6dca1",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "cost_eur": 0.004648,
+    "tokens_input": null,
+    "tokens_output": null,
+    "created_at": "1774308193109.0"
+  },
+  {
+    "id": "aiu_c461d46c720351dc96f759f404cfafc8",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "cost_eur": 0.057602,
+    "tokens_input": null,
+    "tokens_output": null,
+    "created_at": "1774308209456.0"
+  },
+  {
+    "id": "aiu_77520821ba4564af290b65cc05faef22",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "cost_eur": 0.14690999999999999,
+    "tokens_input": null,
+    "tokens_output": null,
+    "created_at": "1774309109486.0"
+  },
+  {
+    "id": "aiu_84906acbc37df380162f86d67031eee6",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "cost_eur": 0.039508,
+    "tokens_input": null,
+    "tokens_output": null,
+    "created_at": "1774309442311.0"
+  },
+  {
+    "id": "aiu_ae91af5d269cfbcd91c9c002716f973f",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "cost_eur": 0.018592,
+    "tokens_input": null,
+    "tokens_output": null,
+    "created_at": "1774309502316.0"
+  },
+  {
+    "id": "aiu_a960b83198d60d2072fbd3c7c37b1492",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "cost_eur": 0.006972,
+    "tokens_input": null,
+    "tokens_output": null,
+    "created_at": "1774309863693.0"
+  },
+  {
+    "id": "aiu_0f72a5704bc866af25c34c64b2310210",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "cost_eur": 0.025065999999999998,
+    "tokens_input": null,
+    "tokens_output": null,
+    "created_at": "1774310041913.0"
+  },
+  {
+    "id": "aiu_0d723056f24f6e14de7af6ef79fdd2ac",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "cost_eur": 0.02573,
+    "tokens_input": null,
+    "tokens_output": null,
+    "created_at": "1774311395409.0"
+  },
+  {
+    "id": "aiu_1e2773087e989940ed5952f8131d9031",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "cost_eur": 0.01328,
+    "tokens_input": null,
+    "tokens_output": null,
+    "created_at": "1774311495537.0"
+  },
+  {
+    "id": "aiu_31b0db76a639007b5299bd0a906d1982",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "cost_eur": 0.00166,
+    "tokens_input": null,
+    "tokens_output": null,
+    "created_at": "1774311835790.0"
+  },
+  {
+    "id": "aiu_6eadce31c0a05e2f48a741899f7b8af8",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "cost_eur": 0.026726,
+    "tokens_input": null,
+    "tokens_output": null,
+    "created_at": "1774312016293.0"
+  },
+  {
+    "id": "aiu_af0eb56a8594d85139425338f90d4de7",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "cost_eur": 0.029216,
+    "tokens_input": null,
+    "tokens_output": null,
+    "created_at": "1774312196299.0"
+  },
+  {
+    "id": "aiu_5ae096393fa55fb214c0696007d86b60",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "cost_eur": 0.075696,
+    "tokens_input": null,
+    "tokens_output": null,
+    "created_at": "1774312676341.0"
+  },
+  {
+    "id": "aiu_18ef753f24aaf90a71714a727b8661aa",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "cost_eur": 0.026394,
+    "tokens_input": null,
+    "tokens_output": null,
+    "created_at": "1774312791257.0"
+  },
+  {
+    "id": "aiu_5978d16da119245d1dd720a931b5a75b",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "cost_eur": 0.013944,
+    "tokens_input": null,
+    "tokens_output": null,
+    "created_at": "1774312931204.0"
+  },
+  {
+    "id": "aiu_6e4aa4313218c6f544dad7c06470ac95",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "cost_eur": 0.022078,
+    "tokens_input": null,
+    "tokens_output": null,
+    "created_at": "1774313711261.0"
+  },
+  {
+    "id": "aiu_27dd97edec53f87e3694e15227cddf79",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "ubmz6ih1e",
+    "cost_eur": 0.019754,
+    "tokens_input": null,
+    "tokens_output": null,
+    "created_at": "1774314101117.0"
+  },
+  {
+    "id": "aiu_b487b27e73d6ad40b456de9986942362",
+    "workspace_id": "sprachschule-duisburg",
+    "user_id": "uyshv0srx",
+    "cost_eur": 0.002324,
+    "tokens_input": null,
+    "tokens_output": null,
+    "created_at": "1775317429735.0"
+  }
+]

@@ -1,0 +1,13 @@
+[
+  {
+    "workspace_id": "sprachschule-duisburg",
+    "template_key": "invite_student_set_password",
+    "subject": "Set your password for {{school_name}}",
+    "body_html": "<p>Hi {{student_name}},</p>\n       <p>You have been invited to {{school_name}}.</p>\n       <p><a href=\"{{set_password_link}}\">Set your password</a></p>\n       <p>This link expires in {{link_expiry_hours}} hours.</p>",
+    "body_text": "Hi {{student_name}},\n\n       You have been invited to {{school_name}}.\n\n       Set your password\n\n       This link expires in {{link_expiry_hours}} hours.",
+    "required_tokens_json": "[\"student_name\",\"school_name\",\"set_password_link\"]",
+    "enabled": 1,
+    "updated_by_user_id": "uyshv0srx",
+    "updated_at": "2026-03-13 14:32:39"
+  }
+]

@@ -141,6 +141,31 @@ html[data-theme="dark"] .message-text.message-text-announcement .announcement-ca
     background:rgba(15,23,42,.5);
     box-shadow:inset 0 0 0 1px rgba(255,255,255,.07),0 4px 10px rgba(0,0,0,.6)
   }
+  html[data-theme="dark"] .announcement-panel{
+    background:linear-gradient(180deg, rgba(15,23,42,.82), rgba(17,24,39,.78));
+    border:1px solid rgba(71,85,105,.28);
+    box-shadow:0 14px 28px rgba(2,6,23,.24);
+  }
+  html[data-theme="dark"] .announcement-header{
+    color:rgba(241,245,249,.96);
+  }
+  html[data-theme="dark"] .announcement-title{
+    color:rgba(241,245,249,.96);
+    text-shadow:none;
+  }
+  html[data-theme="dark"] .announcement-meta{
+    color:rgba(226,232,240,.9);
+    border-bottom-color:rgba(71,85,105,.28);
+  }
+  html[data-theme="dark"] .announcement-body{
+    color:rgba(226,232,240,.94);
+  }
+  html[data-theme="dark"] .announcement-read-count{
+    background:rgba(30,41,59,.82);
+    border-color:rgba(71,85,105,.3);
+    color:rgba(241,245,249,.94);
+    box-shadow:0 8px 18px rgba(2,6,23,.28);
+  }
   .announcement-body{font-size:16px;line-height:1.7;font-family:"Avenir Next","Segoe UI",sans-serif}
   .announcement-body ul{margin:10px 0 10px 20px}
   .announcement-footer{margin-top:18px;display:flex;justify-content:center}

@@ -1,0 +1,72 @@
+[
+  {
+    "id": 1,
+    "email": "mgrms98@gmail.com",
+    "payload": "{\"form\":{\"schoolName\":\"SS\",\"schoolEmail\":\"mgrms98@gmail.com\",\"countryCode\":\"+49\",\"phone\":\"17664069892\",\"schoolType\":\"Language school\",\"website\":\"\",\"license\":\"\",\"street\":\"Mercatorstraße\",\"houseNumber\":\"166\",\"postalCode\":\"47051\",\"city\":\"Duisburg\",\"state\":\"North Rhine-Westphalia\",\"country\":\"Germany\",\"workspaceName\":\"SS\",\"workspaceSlug\":\"SS-DU\",\"timezone\":\"Europe/Berlin\",\"language\":\"English\",\"email\":\"mgrms98@gmail.com\"},\"submittedAt\":1771258152122}",
+    "status": "rejected",
+    "created_at": 1771258152124,
+    "reviewed_by": "19972002",
+    "reviewed_at": 1771353389831,
+    "review_note": null
+  },
+  {
+    "id": 2,
+    "email": "mgrms98@gmail.com",
+    "payload": "{\"form\":{\"schoolName\":\"SS\",\"schoolEmail\":\"mgrms98@gmail.com\",\"countryCode\":\"+49\",\"phone\":\"17664069892\",\"schoolType\":\"Language school\",\"website\":\"\",\"license\":\"\",\"street\":\"Mercatorstraße\",\"houseNumber\":\"66\",\"postalCode\":\"50769\",\"city\":\"Cologne\",\"state\":\"North Rhine-Westphalia\",\"country\":\"Germany\",\"workspaceName\":\"SS\",\"workspaceSlug\":\"SS-DU\",\"timezone\":\"Europe/Berlin\",\"language\":\"English\",\"email\":\"mgrms98@gmail.com\"},\"submittedAt\":1771262424053}",
+    "status": "rejected",
+    "created_at": 1771262424053,
+    "reviewed_by": "19972002",
+    "reviewed_at": 1771353385845,
+    "review_note": null
+  },
+  {
+    "id": 3,
+    "email": "mgrms98@gmail.com",
+    "payload": "{\"form\":{\"schoolName\":\"ss\",\"schoolEmail\":\"mgrms98@gmail.com\",\"countryCode\":\"+49\",\"phone\":\"17664069892\",\"schoolType\":\"Language school\",\"website\":\"\",\"license\":\"\",\"street\":\"Mercatorstraße\",\"houseNumber\":\"4\",\"postalCode\":\"50769\",\"city\":\"Cologne\",\"state\":\"North Rhine-Westphalia\",\"country\":\"Germany\",\"workspaceName\":\"ss\",\"workspaceSlug\":\"ss-de\",\"timezone\":\"Europe/Berlin\",\"language\":\"English\",\"email\":\"mgrms98@gmail.com\"},\"submittedAt\":1771285661620}",
+    "status": "rejected",
+    "created_at": 1771285661620,
+    "reviewed_by": "19972002",
+    "reviewed_at": 1771353382215,
+    "review_note": null
+  },
+  {
+    "id": 4,
+    "email": "rafsan1997ahmed@gmail.com",
+    "payload": "{\"form\":{\"schoolName\":\"Sprachschule Düsseldorf\",\"schoolEmail\":\"rafsan1997ahmed@gmail.com\",\"countryCode\":\"+49\",\"phone\":\"17664069892\",\"schoolType\":\"Language school\",\"website\":\"\",\"license\":\"\",\"street\":\"Mercatorstraße\",\"houseNumber\":\"166\",\"postalCode\":\"50765\",\"city\":\"Cologne\",\"state\":\"North Rhine-Westphalia\",\"country\":\"Germany\",\"workspaceName\":\"Sprachschule Düsseldorf\",\"workspaceSlug\":\"Spraschule-Düsseldorf\",\"timezone\":\"Europe/Berlin\",\"language\":\"English\",\"email\":\"rafsan1997ahmed@gmail.com\"},\"submittedAt\":1771348134859}",
+    "status": "approved",
+    "created_at": 1771348134859,
+    "reviewed_by": "19972002",
+    "reviewed_at": 1771353394218,
+    "review_note": null
+  },
+  {
+    "id": 5,
+    "email": "mgrms98@gmail.com",
+    "payload": "{\"form\":{\"schoolName\":\"Sprachschule Düsseldorf\",\"schoolEmail\":\"mgrms98@gmail.com\",\"countryCode\":\"+49\",\"phone\":\"17664069892\",\"schoolType\":\"Language school\",\"website\":\"\",\"license\":\"\",\"street\":\"Mercatorstraße\",\"houseNumber\":\"166\",\"postalCode\":\"50765\",\"city\":\"Cologne\",\"state\":\"North Rhine-Westphalia\",\"country\":\"Germany\",\"workspaceName\":\"Sprachschule Düsseldorf\",\"workspaceSlug\":\"Spraschule-Düsseldorf\",\"timezone\":\"Europe/Berlin\",\"language\":\"English\",\"email\":\"mgrms98@gmail.com\"},\"submittedAt\":1771348519135}",
+    "status": "rejected",
+    "created_at": 1771348519135,
+    "reviewed_by": "19972002",
+    "reviewed_at": 1771353376501,
+    "review_note": null
+  },
+  {
+    "id": 6,
+    "email": "mgrms98@gmail.com",
+    "payload": "{\"form\":{\"schoolName\":\"Sprachschule Düsseldorf\",\"schoolEmail\":\"mgrms98@gmail.com\",\"countryCode\":\"+49\",\"phone\":\"17664069892\",\"schoolType\":\"Language school\",\"website\":\"\",\"license\":\"\",\"street\":\"Mercatorstraße\",\"houseNumber\":\"166\",\"postalCode\":\"50765\",\"city\":\"Cologne\",\"state\":\"North Rhine-Westphalia\",\"country\":\"Germany\",\"workspaceName\":\"Sprachschule Düsseldorf\",\"workspaceSlug\":\"Spraschule-Düsseldorf\",\"timezone\":\"Europe/Berlin\",\"language\":\"English\",\"email\":\"mgrms98@gmail.com\"},\"submittedAt\":1771349221085}",
+    "status": "flagged",
+    "created_at": 1771349221090,
+    "reviewed_by": "19972002",
+    "reviewed_at": 1771354858249,
+    "review_note": "will be reviwed"
+  },
+  {
+    "id": 7,
+    "email": "ajmariadnisk@gmail.com",
+    "payload": "{\"form\":{\"schoolName\":\"Lens\",\"schoolEmail\":\"ajmariadnisk@gmail.com\",\"countryCode\":\"+49\",\"phone\":\"17664069892\",\"schoolType\":\"Language school\",\"website\":\"\",\"license\":\"\",\"street\":\"Mercatorstr.\",\"houseNumber\":\"166\",\"postalCode\":\"47051\",\"city\":\"Duisburg\",\"state\":\"NRW\",\"country\":\"Germany\",\"workspaceName\":\"Lens\",\"workspaceSlug\":\"Lens\",\"timezone\":\"Europe/Berlin\",\"language\":\"English\",\"email\":\"ajmariadnisk@gmail.com\"},\"submittedAt\":1771364258087}",
+    "status": "approved",
+    "created_at": 1771364258087,
+    "reviewed_by": "19972002",
+    "reviewed_at": 1771364294239,
+    "review_note": null
+  }
+]

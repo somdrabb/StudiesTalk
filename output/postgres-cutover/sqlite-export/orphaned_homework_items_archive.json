@@ -1,0 +1,32 @@
+[
+  {
+    "id": "hwi6tupkbkj",
+    "workspace_id": "sprachschule-duisburg",
+    "class_channel_id": "a1-nood",
+    "title": "New Assignment",
+    "description": "",
+    "resource_url": null,
+    "due_date": "2026-03-25T22:51:00.000Z",
+    "is_archived": 0,
+    "created_by": "uyshv0srx",
+    "created_at": "2026-03-25 22:52:01",
+    "is_locked": 0,
+    "archive_reason": "missing_channel",
+    "archived_at": "2026-04-17 22:56:23"
+  },
+  {
+    "id": "hwi5y1jzho2",
+    "workspace_id": "sprachschule-duisburg",
+    "class_channel_id": "a1-nood",
+    "title": "New Assignment",
+    "description": "",
+    "resource_url": null,
+    "due_date": "2026-03-26T12:53:00.000Z",
+    "is_archived": 0,
+    "created_by": "uyshv0srx",
+    "created_at": "2026-03-26 12:53:56",
+    "is_locked": 0,
+    "archive_reason": "missing_channel",
+    "archived_at": "2026-04-17 22:56:23"
+  }
+]

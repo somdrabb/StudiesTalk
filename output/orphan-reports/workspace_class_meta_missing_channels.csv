@@ -1,0 +1,7 @@
+workspace_id,channel_id,start_date,end_date,status,capacity,updated_at
+sprachschule-duisburg,a1-nood,2026-02-02,2026-04-28,public,1,2026-03-30 20:42:53
+sprachschule-duisburg,a2-evening-1,2026-02-12,2026-04-05,public,50,2026-03-31 19:38:31
+sprachschule-duisburg,b1-morning-1,2026-02-12,2026-02-28,private,60,2026-02-12 00:25:13
+sprachschule-duisburg,b2-morning-1,2026-02-12,2026-02-28,private,30,2026-02-12 12:49:17
+sprachschule-duisburg,c1-evening,2026-02-12,2026-03-08,public,20,2026-03-01 18:39:13
+sprachschule-duisburg,c2-morning-1,2026-02-12,2026-02-28,private,30,2026-02-12 12:49:04

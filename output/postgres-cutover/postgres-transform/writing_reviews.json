@@ -1,0 +1,14 @@
+[
+  {
+    "id": "placement-test-9:placement-test-9:attempt-reviewed-ubmz6ih1e:writing-review",
+    "attempt_id": "placement-test-9:attempt-reviewed-ubmz6ih1e",
+    "task_id": "placement-test-9:schreiben-p2-message",
+    "rubric_json": "[{\"key\":\"task_completion\",\"score\":4,\"max\":5},{\"key\":\"clarity\",\"score\":4,\"max\":5},{\"key\":\"language_control\",\"score\":3,\"max\":5}]",
+    "score": 11,
+    "comment": "Good task coverage. Keep article endings more consistent.",
+    "reviewed_by": "ubmz6ih1e",
+    "reviewed_at": "2026-04-10 19:58:07",
+    "created_at": "2026-04-10 19:58:07",
+    "updated_at": "2026-04-10 19:58:07"
+  }
+]

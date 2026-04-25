@@ -1,4 +1,4 @@
-# WorkNest Design Tokens (Aurora)
+# StudiesTalk Design Tokens (Aurora)
 
 ## Brand
 - Primary: `#6D5BFF` (Aurora Purple)

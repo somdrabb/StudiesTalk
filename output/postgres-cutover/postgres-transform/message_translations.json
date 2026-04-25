@@ -1,0 +1,50 @@
+[
+  {
+    "id": "tr_mfnqives8_bn_utm5n61xv",
+    "message_id": "mfnqives8",
+    "target_language": "bn",
+    "viewer_user_id": "utm5n61xv",
+    "translated_text": "হাই",
+    "provider": "google",
+    "status": "ready",
+    "error_message": null,
+    "created_at": "2026-03-14 16:32:31",
+    "updated_at": "2026-03-14 16:32:31"
+  },
+  {
+    "id": "tr_m7rio8vsu_bn_utm5n61xv",
+    "message_id": "m7rio8vsu",
+    "target_language": "bn",
+    "viewer_user_id": "utm5n61xv",
+    "translated_text": "তুমি কেমন আছো?",
+    "provider": "google",
+    "status": "ready",
+    "error_message": null,
+    "created_at": "2026-03-14 16:32:34",
+    "updated_at": "2026-03-14 16:32:34"
+  },
+  {
+    "id": "tr_mfnqives8_de_uzkzzyy6q",
+    "message_id": "mfnqives8",
+    "target_language": "de",
+    "viewer_user_id": "uzkzzyy6q",
+    "translated_text": null,
+    "provider": "argos",
+    "status": "failed",
+    "error_message": "fetch failed",
+    "created_at": "2026-03-15 01:24:41",
+    "updated_at": "2026-03-15 01:24:41"
+  },
+  {
+    "id": "tr_m7rio8vsu_de_uzkzzyy6q",
+    "message_id": "m7rio8vsu",
+    "target_language": "de",
+    "viewer_user_id": "uzkzzyy6q",
+    "translated_text": null,
+    "provider": "argos",
+    "status": "failed",
+    "error_message": "fetch failed",
+    "created_at": "2026-03-15 01:24:41",
+    "updated_at": "2026-03-15 01:24:41"
+  }
+]

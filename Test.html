@@ -1,0 +1,2658 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Goethe Premium Suite</title>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap"
+    rel="stylesheet"
+  />
+  <link
+    rel="stylesheet"
+    href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"
+  />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg: #eef2f7;
+      --panel: #ffffff;
+      --line: #d7e3ec;
+      --line-strong: #b8cad8;
+      --text: #1f3343;
+      --muted: #658096;
+      --accent: #1f6e98;
+      --accent-2: #2b7ca5;
+      --disabled: #a6b2bc;
+    }
+
+    body {
+      background: radial-gradient(circle at 10% 30%, #f4f8fe, var(--bg));
+      font-family: 'Inter', system-ui, sans-serif;
+      color: var(--text);
+    }
+
+    h1, h2, h3, .serif-headline {
+      font-family: 'Cormorant Garamond', serif;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .page {
+      display: none;
+      min-height: 100vh;
+      padding: 56px 32px;
+      animation: fadeSlideUp 0.35s ease;
+    }
+
+    .page.active { display: block; }
+
+    #realExamPage {
+      padding-top: 8px;
+    }
+
+    @keyframes fadeSlideUp {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .container {
+      max-width: 1280px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .badge-light {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 14px;
+      padding: 6px 14px;
+      border-radius: 40px;
+      background: #e9f1f8;
+      color: #1d6f97;
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+    }
+
+    .page-title {
+      margin-bottom: 18px;
+      font-size: 3.2rem;
+      line-height: 1.05;
+      background: linear-gradient(125deg, #1a4e6e, #2f789b);
+      background-clip: text;
+      -webkit-background-clip: text;
+      color: transparent;
+    }
+
+    .page-sub {
+      margin-bottom: 36px;
+      padding-left: 24px;
+      border-left: 4px solid #86bfdc;
+      color: #617b92;
+      font-size: 1.02rem;
+      font-weight: 500;
+    }
+
+    .level-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+      gap: 32px;
+      margin-top: 48px;
+    }
+
+    .level-card {
+      min-height: 235px;
+      display: flex;
+      flex-direction: column;
+      padding: 30px 28px;
+      border-radius: 2rem;
+      background: #ffffff;
+      border: 1px solid #e2edf6;
+      cursor: pointer;
+      box-shadow: 0 6px 14px rgba(0,0,0,0.03), 0 14px 28px rgba(0,0,0,0.04);
+      transition: all 0.25s ease;
+    }
+
+    .level-card:hover {
+      transform: translateY(-6px);
+      box-shadow: 0 12px 22px rgba(0,0,0,0.06), 0 22px 40px rgba(0,0,0,0.08);
+    }
+
+    .level-icon {
+      width: 46px;
+      height: 46px;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 14px;
+      background: rgba(34, 197, 94, 0.08);
+      color: #15803d;
+      font-size: 1.35rem;
+    }
+
+    .level-card h2 {
+      margin-bottom: 14px;
+      font-size: 2.5rem;
+      line-height: 1;
+      background: linear-gradient(125deg, #1f4f6e, #327e9e);
+      background-clip: text;
+      -webkit-background-clip: text;
+      color: transparent;
+    }
+
+    .level-card p {
+      color: #5b7288;
+      font-size: 1rem;
+      line-height: 1.55;
+      font-weight: 430;
+    }
+
+    .back-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 22px;
+      border-radius: 60px;
+      border: 1px solid #cde0ec;
+      background: rgba(255,255,255,0.85);
+      color: #2f5f7e;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      white-space: nowrap;
+      flex: 0 0 auto;
+    }
+
+    .back-btn:hover {
+      background: #fff;
+      border-color: #9abbd2;
+      box-shadow: 0 6px 14px -8px rgba(0,0,0,0.12);
+      transform: translateX(-4px);
+    }
+
+    .exam-topbar {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 16px;
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      margin-bottom: 24px;
+      padding: 12px 0 10px;
+      background: rgba(238, 242, 247, 0.94);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border-bottom: 1px solid rgba(183, 202, 216, 0.75);
+      overflow-x: auto;
+      padding-bottom: 10px;
+    }
+
+    .exam-topbar > .back-btn {
+      position: static;
+      justify-self: start;
+    }
+
+    .exam-topbar > .back-btn:hover {
+      transform: translateX(-4px);
+    }
+
+    .exam-timer-chip {
+      position: static;
+      justify-self: end;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 132px;
+      padding: 10px 16px;
+      border: 1px solid #8fa8ba;
+      border-radius: 999px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(242,247,250,0.96));
+      color: #1f3a4c;
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 0.95rem;
+      font-weight: 700;
+      box-shadow: 0 10px 22px -14px rgba(20, 41, 59, 0.22);
+      white-space: nowrap;
+    }
+
+    .exam-timer-chip i {
+      color: #2a7ca5;
+    }
+
+    .exam-start-timer-row {
+      display: flex;
+      justify-content: flex-end;
+      margin: 8px 0 18px;
+    }
+
+    .exam-topbar::-webkit-scrollbar {
+      height: 6px;
+    }
+
+    .exam-topbar::-webkit-scrollbar-thumb {
+      background: #c1d3df;
+      border-radius: 999px;
+    }
+
+    .next-btn,
+    .primary-btn,
+    .start-exam-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 32px;
+      border: none;
+      border-radius: 48px;
+      cursor: pointer;
+      font-size: 1rem;
+      font-weight: 600;
+      background: linear-gradient(105deg, #22658b, #3282aa);
+      color: #fff;
+      box-shadow: 0 8px 18px -8px rgba(34, 101, 139, 0.4);
+      transition: all 0.25s ease;
+    }
+
+    .next-btn:hover,
+    .primary-btn:hover,
+    .start-exam-btn:hover {
+      transform: translateY(-2px);
+    }
+
+    .primary-btn.hidden { display: none; }
+
+    .inhalt-wrapper,
+    .text-content,
+    .exam-container {
+      background: #ffffff;
+      border-radius: 2rem;
+      padding: 36px 40px;
+      border: 1px solid #e4eef6;
+      box-shadow: 0 28px 44px -18px rgba(0,0,0,0.08);
+    }
+
+    .inhalt-title {
+      margin-bottom: 16px;
+      font-size: 2.2rem;
+      color: #1d5d80;
+    }
+
+    .divider {
+      height: 2px;
+      margin: 18px 0 24px;
+      background: linear-gradient(90deg, #d2e4f0, #aac7dd, #d2e4f0);
+    }
+
+    .row-inhalt {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 10px 0;
+      border-bottom: 1px solid #edf4fa;
+      color: #2a5777;
+      font-size: 1rem;
+      font-weight: 470;
+    }
+
+    .section-sub {
+      margin-top: 24px;
+      margin-bottom: 8px;
+      color: #145c7e;
+      font-size: 1.2rem;
+      font-weight: 700;
+    }
+
+    .indent { padding-left: 32px; }
+
+    .text-content p,
+    .text-content ul {
+      color: #2b4f6b;
+      font-size: 1rem;
+      line-height: 1.6;
+    }
+
+    .text-content strong { color: #176b94; font-weight: 600; }
+
+    .text-content ul {
+      margin: 12px 0 18px 0;
+      padding-left: 0;
+      list-style: none;
+    }
+
+    .text-content li {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    .consent-box {
+      margin-top: 34px;
+      padding: 22px 28px;
+      border-radius: 1.5rem;
+      background: #fafdff;
+      border: 1px solid #dfecf5;
+    }
+
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      font-weight: 500;
+    }
+
+    .checkbox-row input {
+      width: 20px;
+      height: 20px;
+      accent-color: #2c7da0;
+    }
+
+    .exam-header h1 {
+      margin-bottom: 10px;
+      font-size: 2.5rem;
+      background: linear-gradient(125deg, #1d6288, #3583ab);
+      background-clip: text;
+      -webkit-background-clip: text;
+      color: transparent;
+    }
+
+    .exam-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 18px;
+      width: fit-content;
+      margin: 22px 0 28px;
+      padding: 12px 24px;
+      border-radius: 60px;
+      background: #f1f7fd;
+    }
+
+    .exam-sections {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 20px;
+      margin: 28px 0;
+    }
+
+    .exam-card {
+      display: flex;
+      align-items: flex-start;
+      gap: 18px;
+      padding: 22px;
+      border-radius: 1.5rem;
+      background: #fbfeff;
+      border: 1px solid #e0eef8;
+      transition: all 0.2s ease;
+    }
+
+    .exam-card:hover {
+      transform: translateY(-3px);
+      background: #fff;
+      border-color: #c2dcee;
+      box-shadow: 0 12px 24px -12px rgba(0,0,0,0.08);
+    }
+
+    .exam-icon {
+      width: 48px;
+      text-align: center;
+      color: #3682a8;
+      font-size: 2rem;
+    }
+
+    .exam-card h3 {
+      margin-bottom: 6px;
+      color: #1d5d80;
+      font-size: 1.25rem;
+    }
+
+    .exam-card p {
+      color: #5b7b97;
+      font-size: 0.85rem;
+      line-height: 1.4;
+    }
+
+    .flex-end {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 32px;
+    }
+
+    .exam-workspace {
+      padding: 0;
+      background: transparent;
+      border: none;
+      box-shadow: none;
+    }
+
+    .exam-part-tabs {
+      display: flex;
+      flex-wrap: nowrap;
+      gap: 14px;
+      margin-top: 0;
+      min-width: 0;
+      justify-content: center;
+      justify-self: center;
+    }
+
+    .exam-part-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 20px;
+      border-radius: 999px;
+      border: 1px solid #d7e6f1;
+      background: #f8fbfe;
+      color: #2c617f;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.22s ease;
+    }
+
+    .exam-part-btn.active {
+      background: linear-gradient(105deg, #22658b, #3282aa);
+      color: #fff;
+      border-color: transparent;
+      box-shadow: 0 10px 22px -12px rgba(34,101,139,0.45);
+    }
+
+    .exam-part-btn.disabled {
+      background: #eef2f5;
+      color: #9aa8b5;
+      border-color: #dde5ec;
+      cursor: not-allowed;
+      pointer-events: none;
+      box-shadow: none;
+    }
+
+    #examPartPanel {
+      margin-top: 30px;
+      display: flex;
+      justify-content: center;
+    }
+
+    .a1-reading-wrap {
+      width: min(100%, 940px);
+      margin: 0 auto;
+      background: transparent;
+      border: none;
+      border-radius: 0;
+      padding: 42px 50px 54px;
+      min-height: 1050px;
+      box-shadow: none;
+    }
+
+    .a1-reading-header {
+      display: grid;
+      grid-template-columns: 120px 1fr;
+      gap: 26px;
+      margin-bottom: 52px;
+      align-items: start;
+    }
+
+    .a1-reading-header .left {
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 32px;
+      font-weight: 800;
+      color: #172737;
+    }
+
+    .a1-reading-header .right {
+      font-family: 'Times New Roman', Times, serif;
+      color: #22384a;
+      font-size: 25px;
+      line-height: 1.34;
+    }
+
+    .rf-chip {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 56px;
+      height: 32px;
+      margin: 0 4px;
+      padding: 0 12px;
+      border: 1px solid #8ba0b0;
+      background: linear-gradient(180deg, #ffffff, #f2f5f8);
+      border-radius: 9px;
+      color: #203344;
+      font-size: 18px;
+      font-style: italic;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.9);
+    }
+
+    .rf-chip.roman {
+      font-style: normal;
+    }
+
+    .a1-example-title {
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 32px;
+      font-weight: 800;
+      color: #182938;
+      margin-bottom: 30px;
+    }
+
+    .reading-question {
+      display: grid;
+      grid-template-columns: 56px minmax(0, 1fr) auto;
+      gap: 24px;
+      align-items: center;
+      margin-bottom: 26px;
+      padding: 8px 0;
+      font-family: 'Times New Roman', Times, serif;
+      color: #202d38;
+    }
+
+    .reading-question .num {
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 34px;
+      font-weight: 800;
+      text-align: left;
+      color: #152737;
+    }
+
+    .reading-question .statement {
+      font-size: 24px;
+      line-height: 1.3;
+    }
+
+    .reading-question .choices {
+      display: flex;
+      justify-content: flex-end;
+      gap: 14px;
+      flex-wrap: nowrap;
+    }
+
+    .reading-question button,
+    .part3-answer-row button,
+    .sample-choice {
+      position: relative;
+      min-width: 92px;
+      height: 38px;
+      padding: 0 16px;
+      border: 1px solid #8ea2b0;
+      border-radius: 10px;
+      background: linear-gradient(180deg, #ffffff, #f0f4f7);
+      color: #213545;
+      font-family: 'Times New Roman', Times, serif;
+      font-size: 21px;
+      line-height: 1;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 12px rgba(29, 53, 71, 0.07);
+      transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+    }
+
+    .reading-question button:hover,
+    .part3-answer-row button:hover,
+    .ab-choice:hover {
+      border-color: #6f8ca0;
+      box-shadow: 0 8px 18px rgba(29, 53, 71, 0.12);
+      transform: translateY(-1px);
+    }
+
+    .reading-question button.selected::after,
+    .part3-answer-row button.selected::after,
+    .sample-choice.checked::after {
+      content: "✕";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -54%);
+      font-size: 30px;
+      font-weight: 700;
+      color: #0a0a0a;
+      font-family: Arial, Helvetica, sans-serif;
+      text-shadow: 0 0 0.4px #0a0a0a, 0 0 0.4px #0a0a0a;
+      -webkit-text-stroke: 0.4px #0a0a0a;
+      pointer-events: none;
+    }
+
+    .mail-frame {
+      width: 100%;
+      max-width: 602px;
+      margin: 24px auto 48px 76px;
+      border: 1px solid #8b98a1;
+      border-radius: 16px;
+      background: #dcdcdc;
+      box-shadow: 0 14px 30px rgba(18, 39, 54, 0.10), 0 0 0 2px #bcbcbc inset;
+      font-family: Arial, Helvetica, sans-serif;
+      overflow: hidden;
+    }
+
+    .mail-toolbar {
+      display: flex;
+      align-items: stretch;
+      gap: 0;
+      padding: 6px 10px 4px;
+      border-bottom: 2px solid #7f7f7f;
+      background: #d7d7d7;
+      overflow: hidden;
+    }
+
+    .tool-item {
+      width: 56px;
+      text-align: center;
+      color: #202020;
+      font-size: 10px;
+      line-height: 1.1;
+      margin-right: 4px;
+    }
+
+    .tool-icon {
+      width: 22px;
+      height: 20px;
+      margin: 0 auto 4px;
+      border: 1px solid #6f6f6f;
+      background: linear-gradient(#f8f8f8, #d7d7d7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+    }
+
+    .mail-subjectbar {
+      display: grid;
+      grid-template-columns: 64px 1fr;
+      gap: 8px;
+      align-items: center;
+      padding: 8px 12px;
+      border-bottom: 2px solid #7b7b7b;
+      background: #d9d9d9;
+    }
+
+    .mail-subjectbar .label {
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .subject-input {
+      height: 30px;
+      background: #fff;
+      border: 2px solid #4e4e4e;
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      font-family: 'Times New Roman', Times, serif;
+      font-size: 24px;
+    }
+
+    .mail-body-wrap {
+      display: grid;
+      grid-template-columns: 1fr 16px;
+      min-height: 286px;
+      background: #efefef;
+    }
+
+    .mail-body {
+      background: #fff;
+      margin: 14px 0 14px 14px;
+      border: 2px solid #5b5b5b;
+      padding: 28px 28px 24px;
+      font-family: 'Times New Roman', Times, serif;
+      font-size: 24px;
+      line-height: 1.42;
+      color: #222;
+    }
+
+    .mail-scroll {
+      margin: 14px 12px 14px 0;
+      border: 2px solid #707070;
+      background: linear-gradient(#dcdcdc, #c9c9c9);
+      position: relative;
+    }
+
+    .mail-scroll::before,
+    .mail-scroll::after {
+      content: '';
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 8px;
+      height: 8px;
+      border-left: 2px solid #333;
+      border-bottom: 2px solid #333;
+    }
+
+    .mail-scroll::before {
+      top: 6px;
+      transform: translateX(-50%) rotate(135deg);
+    }
+
+    .mail-scroll::after {
+      bottom: 6px;
+      transform: translateX(-50%) rotate(-45deg);
+    }
+
+    .mail-scroll .thumb {
+      position: absolute;
+      top: 24px;
+      left: 1px;
+      right: 1px;
+      height: 38px;
+      background: #b9b9b9;
+      border: 1px solid #7a7a7a;
+    }
+
+    .mail-bottom-bar {
+      height: 18px;
+      margin: 0 12px 10px 12px;
+      border: 2px solid #7e7e7e;
+      background: #dbdbdb;
+      position: relative;
+    }
+
+    .mail-bottom-bar::after {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0;
+      height: 100%;
+      width: 82%;
+      background: #c8c8c8;
+      border-right: 2px solid #8d8d8d;
+    }
+
+    .invite-note {
+      width: 100%;
+      max-width: 760px;
+      margin: 38px auto 56px;
+      padding: 26px 34px 28px;
+      background: #fff;
+      border: 1px solid #d8e0e7;
+      border-radius: 24px;
+      box-shadow: 0 18px 40px rgba(20, 41, 59, 0.10);
+      font-family: 'Times New Roman', Times, serif;
+      color: #222d38;
+    }
+
+    .invite-note p {
+      margin: 0 0 10px;
+      font-size: 22px;
+      line-height: 1.28;
+    }
+
+    .invite-note .invite-gap {
+      margin-bottom: 18px;
+    }
+
+    .invite-note .signoff {
+      margin-top: 22px;
+    }
+
+    .invite-note .signoff p {
+      margin-bottom: 4px;
+    }
+
+    .reading-part-break {
+      display: grid;
+      grid-template-columns: 120px 1fr;
+      gap: 24px;
+      align-items: start;
+      margin: 86px 0 42px;
+      padding-top: 30px;
+      border-top: 1px solid rgba(156, 176, 191, 0.55);
+      color: #1e3141;
+    }
+
+    .reading-part-break .left {
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 54px;
+      font-weight: 800;
+      line-height: 0.95;
+    }
+
+    .reading-part-break .right {
+      font-family: 'Times New Roman', Times, serif;
+      font-size: 26px;
+      line-height: 1.35;
+    }
+
+    .reading-part-break .rf-chip {
+      min-width: 34px;
+      height: 34px;
+      margin: 0 6px;
+      padding: 0 9px;
+      font-size: 20px;
+    }
+
+    .part2-example-title {
+      margin: 42px 0 30px;
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 42px;
+      font-weight: 800;
+      color: #182b3a;
+    }
+
+    .info-browser-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 28px;
+      margin: 24px 0 30px 76px;
+    }
+
+    .info-browser {
+      border: 1px solid #9aa7b0;
+      border-radius: 14px;
+      background: #dcdcdc;
+      box-shadow: 0 14px 28px rgba(20, 41, 59, 0.10), inset 0 0 0 2px #bcbcbc;
+      font-family: Arial, Helvetica, sans-serif;
+      overflow: hidden;
+    }
+
+    .info-browser-top {
+      height: 18px;
+      border-bottom: 2px solid #8f8f8f;
+      background: linear-gradient(#d9d9d9, #c9c9c9);
+      position: relative;
+    }
+
+    .info-browser-top::before,
+    .info-browser-top::after {
+      content: '';
+      position: absolute;
+      top: 4px;
+      width: 6px;
+      height: 6px;
+      border: 1px solid #888;
+      background: #efefef;
+    }
+
+    .info-browser-top::before {
+      left: 6px;
+    }
+
+    .info-browser-top::after {
+      left: 16px;
+    }
+
+    .info-browser-address {
+      display: grid;
+      grid-template-columns: 48px 1fr;
+      gap: 10px;
+      align-items: center;
+      padding: 8px 10px;
+      border-bottom: 2px solid #858585;
+      background: #dbdbdb;
+    }
+
+    .info-browser-label {
+      font-size: 10px;
+      font-weight: 700;
+      color: #353535;
+    }
+
+    .info-browser-url {
+      min-height: 30px;
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      border: 2px solid #565656;
+      background: #fff;
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .info-browser-body {
+      display: grid;
+      grid-template-columns: 1fr 14px;
+      min-height: 204px;
+      background: #efefef;
+    }
+
+    .info-browser-content {
+      margin: 12px 0 12px 12px;
+      padding: 16px 18px;
+      border: 2px solid #575757;
+      background: #fff;
+      font-family: 'Times New Roman', Times, serif;
+      color: #222;
+      font-size: 18px;
+      line-height: 1.28;
+      text-align: center;
+    }
+
+    .info-browser-content .headline {
+      display: block;
+      margin-bottom: 10px;
+      font-family: Arial, Helvetica, sans-serif;
+      font-weight: 700;
+      font-size: 16px;
+      line-height: 1.15;
+    }
+
+    .info-browser-content p {
+      margin: 0 0 6px;
+    }
+
+    .info-browser-content .links {
+      margin-top: 16px;
+      display: flex;
+      justify-content: center;
+      gap: 22px;
+      flex-wrap: wrap;
+      font-family: Arial, Helvetica, sans-serif;
+      font-weight: 700;
+      text-decoration: underline;
+    }
+
+    .info-browser-content .weather-list {
+      margin-top: 12px;
+      text-align: left;
+      padding-left: 76px;
+      font-size: 17px;
+      line-height: 1.35;
+      list-style: none;
+    }
+
+    .info-browser-content .weather-list li::before {
+      content: "►";
+      margin-right: 10px;
+      font-size: 13px;
+      color: #777;
+    }
+
+    .info-browser-scroll {
+      margin: 12px 10px 12px 0;
+      border: 2px solid #747474;
+      background: linear-gradient(#dcdcdc, #c9c9c9);
+      position: relative;
+    }
+
+    .info-browser-scroll::before,
+    .info-browser-scroll::after {
+      content: '';
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 7px;
+      height: 7px;
+      border-left: 2px solid #333;
+      border-bottom: 2px solid #333;
+    }
+
+    .info-browser-scroll::before {
+      top: 5px;
+      transform: translateX(-50%) rotate(135deg);
+    }
+
+    .info-browser-scroll::after {
+      bottom: 5px;
+      transform: translateX(-50%) rotate(-45deg);
+    }
+
+    .info-browser-scroll .thumb {
+      position: absolute;
+      top: 24px;
+      left: 1px;
+      right: 1px;
+      height: 34px;
+      border: 1px solid #7a7a7a;
+      background: #b9b9b9;
+    }
+
+    .ab-option-list {
+      width: fit-content;
+      margin: 8px auto 62px;
+      display: grid;
+      gap: 12px;
+      padding: 18px 24px;
+      border-radius: 18px;
+      background: rgba(255,255,255,0.72);
+      box-shadow: 0 10px 24px rgba(20, 41, 59, 0.06);
+    }
+
+    .ab-option-row {
+      display: grid;
+      grid-template-columns: 52px 1fr;
+      gap: 18px;
+      align-items: center;
+      font-family: 'Times New Roman', Times, serif;
+      font-size: 24px;
+      color: #203444;
+    }
+
+    .ab-choice,
+    .ab-choice-static {
+      position: relative;
+      width: 34px;
+      height: 34px;
+      border: 1px solid #8ea2b0;
+      border-radius: 9px;
+      background: linear-gradient(180deg, #ffffff, #f0f4f7);
+      color: #203444;
+      font-family: 'Times New Roman', Times, serif;
+      font-size: 22px;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      box-shadow: 0 4px 10px rgba(29, 53, 71, 0.07);
+    }
+
+    .ab-choice-static {
+      cursor: default;
+    }
+
+    .ab-choice.selected::after,
+    .ab-choice-static.checked::after {
+      content: "✕";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -53%);
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 30px;
+      font-weight: 700;
+      color: #0a0a0a;
+      text-shadow: 0 0 0.4px #0a0a0a, 0 0 0.4px #0a0a0a;
+      -webkit-text-stroke: 0.4px #0a0a0a;
+      pointer-events: none;
+    }
+
+    .train-choice-list {
+      display: grid;
+      gap: 26px;
+      margin: 18px 0 40px 76px;
+      padding: 24px 26px;
+      border-radius: 22px;
+      background: rgba(255,255,255,0.70);
+      box-shadow: 0 14px 28px rgba(20, 41, 59, 0.06);
+    }
+
+    .train-choice-card {
+      display: grid;
+      grid-template-columns: 38px 1fr;
+      gap: 16px;
+      align-items: start;
+    }
+
+    .train-choice-label {
+      width: 34px;
+      height: 34px;
+      border: 2px solid #787878;
+      background: #fafafa;
+      color: #222;
+      font-family: 'Times New Roman', Times, serif;
+      font-size: 22px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .train-choice-content {
+      font-family: Arial, Helvetica, sans-serif;
+      color: #222;
+    }
+
+    .train-choice-url {
+      display: inline-block;
+      margin-bottom: 8px;
+      font-size: 16px;
+      font-weight: 700;
+    }
+
+    .train-table {
+      border-collapse: collapse;
+      font-family: 'Times New Roman', Times, serif;
+      font-size: 15px;
+      background: #fff;
+      box-shadow: 0 4px 10px rgba(29, 53, 71, 0.06);
+    }
+
+    .train-table th,
+    .train-table td {
+      border: 1px solid #7f7f7f;
+      padding: 3px 8px;
+      text-align: center;
+      white-space: nowrap;
+    }
+
+    .train-table th:first-child,
+    .train-table td:first-child {
+      padding-left: 10px;
+      padding-right: 10px;
+    }
+
+    .train-table th {
+      font-weight: 400;
+      background: #fbfbfb;
+    }
+
+    .train-answer-list {
+      width: fit-content;
+      margin: 12px auto 58px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .part3-example-row {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 18px;
+      align-items: baseline;
+      margin: 44px 0 28px;
+      color: #203344;
+    }
+
+    .part3-example-row .example-label {
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 24px;
+      font-weight: 700;
+    }
+
+    .part3-example-row .example-context {
+      font-family: 'Times New Roman', Times, serif;
+      font-size: 20px;
+      line-height: 1.3;
+    }
+
+    .part3-example-row .example-context strong {
+      font-family: Arial, Helvetica, sans-serif;
+      font-weight: 700;
+      font-style: italic;
+    }
+
+    .part3-sign {
+      width: 100%;
+      max-width: 360px;
+      margin: 24px 0 56px 76px;
+      padding: 26px 30px;
+      border: 2px solid #3f4f5c;
+      border-radius: 8px;
+      background: #fff;
+      color: #222;
+      text-align: center;
+      transform: rotate(-4deg);
+      box-shadow: 10px 16px 26px rgba(20, 41, 59, 0.16);
+    }
+
+    .part3-sign .sign-title {
+      display: block;
+      margin-bottom: 12px;
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 24px;
+      font-weight: 900;
+      letter-spacing: 0.02em;
+    }
+
+    .part3-sign p {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 18px;
+      font-weight: 700;
+      line-height: 1.34;
+    }
+
+    .part3-note-box {
+      width: 100%;
+      max-width: 280px;
+      margin: 4px auto 30px;
+      padding: 14px 18px 10px;
+      border: 1px solid #8e9eaa;
+      border-radius: 16px;
+      background: #fff;
+      color: #222;
+      text-align: center;
+      box-shadow: 0 12px 26px rgba(20, 41, 59, 0.08);
+    }
+
+    .part3-note-box p {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 17px;
+      font-weight: 700;
+      line-height: 1.28;
+    }
+
+    .part3-note-box.wide {
+      max-width: 360px;
+      padding: 16px 22px 12px;
+    }
+
+    .part3-note-box.wide p {
+      font-size: 18px;
+    }
+
+    .part3-note-box.large {
+      max-width: 520px;
+      padding: 22px 30px 18px;
+    }
+
+    .part3-note-box.large p {
+      font-size: 20px;
+      line-height: 1.34;
+    }
+
+    .part3-answer-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 18px;
+      align-items: center;
+      margin: 0 0 42px 48px;
+      font-family: 'Times New Roman', Times, serif;
+      font-size: 20px;
+      color: #203444;
+    }
+
+    .part3-answer-row .statement {
+      line-height: 1.3;
+    }
+
+    .part3-answer-row .choices {
+      display: flex;
+      gap: 12px;
+    }
+
+    .reading-actions {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 36px;
+    }
+
+    .reading-submit {
+      padding: 15px 30px;
+      border: none;
+      border-radius: 999px;
+      background: linear-gradient(105deg, #22658b, #3282aa);
+      color: #fff;
+      font-size: 1rem;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      cursor: pointer;
+      box-shadow: 0 14px 28px -14px rgba(34,101,139,0.45);
+    }
+
+    @media (max-width: 980px) {
+      .exam-topbar {
+        display: flex;
+        justify-content: flex-start;
+      }
+
+      .exam-topbar > .back-btn {
+        position: static;
+        transform: none;
+      }
+
+      .exam-topbar > .back-btn:hover {
+        transform: translateX(-4px);
+      }
+
+      .exam-timer-chip {
+        position: static;
+        transform: none;
+        min-width: auto;
+      }
+
+      #realExamPage {
+        padding-top: 14px;
+      }
+
+      .a1-reading-wrap {
+        width: 100%;
+        padding: 28px 20px 36px;
+        border-radius: 22px;
+      }
+
+      .reading-part-break {
+        grid-template-columns: 1fr;
+        gap: 12px;
+        margin-top: 58px;
+        padding-top: 22px;
+      }
+
+      .reading-part-break .left,
+      .part2-example-title {
+        font-size: 40px;
+      }
+
+      .info-browser-grid {
+        grid-template-columns: 1fr;
+        margin-left: 0;
+      }
+
+      .ab-option-list {
+        margin-bottom: 46px;
+        width: 100%;
+        padding: 16px;
+      }
+
+      .train-choice-list {
+        margin-left: 0;
+        padding: 16px;
+      }
+
+      .part3-sign {
+        margin-left: 0;
+      }
+
+      .part3-answer-row {
+        margin-left: 0;
+      }
+
+      .part3-answer-row {
+        grid-template-columns: 1fr;
+        gap: 12px;
+      }
+
+      .a1-reading-header {
+        grid-template-columns: 1fr;
+        gap: 12px;
+      }
+
+      .reading-question {
+        grid-template-columns: 44px 1fr;
+        gap: 14px;
+        align-items: start;
+      }
+
+      .reading-question .choices {
+        grid-column: 2 / 3;
+        justify-content: flex-start;
+        flex-wrap: wrap;
+      }
+
+      .mail-frame {
+        margin: 22px 0 40px;
+      }
+
+      .exam-sections,
+      .level-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page active" id="levelPage">
+    <div class="container">
+      <div class="badge-light"><i class="fas fa-certificate"></i><span>Sprachschule · Deutschtest</span></div>
+      <h1 class="page-title">Wählen Sie Ihr Niveau</h1>
+      <p class="page-sub"><i class="fas fa-graduation-cap"></i><span>Modellprüfungen für die Niveaustufen A1 bis C2</span></p>
+      <div class="level-grid" id="levelGrid"></div>
+    </div>
+  </div>
+
+  <div class="page" id="inhaltPage">
+    <div class="container">
+      <button class="back-btn" type="button" onclick="goBackToLevels()"><i class="fas fa-arrow-left"></i><span>Zurück zur Übersicht</span></button>
+      <div class="inhalt-wrapper">
+        <div class="inhalt-title" id="inhaltTitle"></div>
+        <div class="divider"></div>
+        <div id="inhaltRows"></div>
+        <div class="flex-end">
+          <button class="next-btn" type="button" onclick="openDescription()"><span>Weiter zur Beschreibung</span><i class="fas fa-arrow-right"></i></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="page" id="descPage">
+    <div class="container">
+      <button class="back-btn" type="button" onclick="backToInhalt()"><i class="fas fa-arrow-left"></i><span>Inhaltsverzeichnis</span></button>
+      <div class="text-content">
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:24px;">
+          <i class="fas fa-university" style="font-size:2.2rem;color:#2b7a9e;"></i>
+          <span class="badge-light" id="providerBadge"></span>
+        </div>
+        <div id="descContent"></div>
+        <div class="exam-start-timer-row">
+          <div class="exam-timer-chip"><i class="fas fa-hourglass-half"></i><span data-exam-duration-text>--:--</span></div>
+        </div>
+        <div class="consent-box">
+          <label class="checkbox-row">
+            <input type="checkbox" id="consentCheckbox" />
+            <span><i class="far fa-check-circle"></i> Ich habe die Prüfungsbeschreibung gelesen und bin einverstanden.</span>
+          </label>
+          <div class="flex-end" style="margin-top:20px;">
+            <button class="primary-btn hidden" id="startTestBtn" type="button" onclick="openExamStart()"><i class="fas fa-play"></i><span>Jetzt Test starten</span></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="page" id="examStartPage">
+    <div class="container">
+      <button class="back-btn" type="button" onclick="backToDescription()"><i class="fas fa-arrow-left"></i><span>Zurück zur Beschreibung</span></button>
+      <div class="exam-container">
+        <div class="exam-header">
+          <h1 id="examTitle"></h1>
+          <p class="page-sub" id="examSub" style="margin-top:8px;border-left-color:#89c2dc;"></p>
+          <div class="exam-meta" id="examMeta"></div>
+        </div>
+        <div class="exam-sections" id="examSections"></div>
+        <div style="background:#f1f9fe;border-radius:1.5rem;padding:16px 22px;margin:12px 0 20px;">
+          <p id="examHint" style="font-size:0.85rem;margin:0;color:#416b86;"></p>
+        </div>
+        <div class="flex-end" style="margin-top:0;">
+          <button class="start-exam-btn" id="finalExamStartBtn" type="button"><i class="fas fa-rocket"></i><span>Prüfung starten</span></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="page" id="realExamPage">
+    <div class="container">
+      <div class="exam-workspace">
+        <div class="exam-topbar">
+          <button class="back-btn" type="button" onclick="backToExamStart()"><i class="fas fa-arrow-left"></i><span>Zurück zum Prüfungsstart</span></button>
+          <div class="exam-part-tabs">
+            <button class="exam-part-btn active" id="tabLesen" type="button" onclick="openExamPart('lesen')"><i class="fas fa-book-open"></i><span>Lesen</span></button>
+            <button class="exam-part-btn" id="tabHoeren" type="button" onclick="openExamPart('hoeren')"><i class="fas fa-headphones"></i><span>Hören</span></button>
+            <button class="exam-part-btn" id="tabSchreiben" type="button" onclick="openExamPart('schreiben')"><i class="fas fa-pen-fancy"></i><span>Schreiben</span></button>
+            <button class="exam-part-btn disabled" id="tabSprechen" type="button" onclick="openExamPart('sprechen')"><i class="fas fa-microphone-alt"></i><span>Sprechen</span></button>
+          </div>
+          <div class="exam-timer-chip" id="examTimerChip"><i class="fas fa-hourglass-half"></i><span data-exam-timer-text>--:--</span></div>
+        </div>
+        <div id="examPartPanel"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const APP_STATE_KEY = 'goethePremiumSuiteState';
+
+    const levels = {
+      A1: {
+        icon: 'fa-solid fa-award',
+        short: 'Grundlegende Deutschkenntnisse für erste Alltagssituationen und einfache Kommunikation.',
+        inhaltTitle: 'Prüfungsinhalte · A1 Start Deutsch 1',
+        inhalt: [
+          { type: 'row', left: 'Vorwort & Einführung', right: '5', icon: 'fa-scroll' },
+          { type: 'section', title: 'Kandidatenblätter', icon: 'fa-user-check' },
+          { type: 'row', left: 'Hören (Alltag, kurze Dialoge)', right: '7', icon: 'fa-headphones', indent: true },
+          { type: 'row', left: 'Lesen, Schreiben (Formulare, Notizen)', right: '15', icon: 'fa-book', indent: true },
+          { type: 'row', left: 'Sprechen (Vorstellung, einfache Fragen)', right: '27', icon: 'fa-comments', indent: true },
+          { type: 'section', title: 'Prüferblätter & Bewertung', icon: 'fa-clipboard-list' },
+          { type: 'row', left: 'Transkriptionen zum Tonträger', right: '34', icon: 'fa-file-audio', indent: true },
+          { type: 'row', left: 'Lösungen zu Hören, Lesen, Schreiben', right: '38', icon: 'fa-check-double', indent: true },
+          { type: 'row', left: 'Bewertung Schreiben & Sprechen', right: '39–43', icon: 'fa-pen-fancy', indent: true },
+          { type: 'row', left: 'Antwortbogen', right: '44', icon: 'fa-edit', indent: true }
+        ],
+        descIntro: 'Goethe-Zertifikat A1: Start Deutsch 1 – die offizielle Einstiegsprüfung für elementare Deutschkenntnisse.',
+        descBullets: [
+          'Kurze Fragen, Anweisungen und Mitteilungen verstehen',
+          'Formulare ausfüllen und persönliche Notizen schreiben',
+          'Uhrzeiten, Preise und Mengen sicher erfassen',
+          'Sich vorstellen und einfache Gespräche führen'
+        ],
+        descFooter: 'Die Prüfung besteht aus Hören, Lesen, Schreiben und einer mündlichen Gruppenprüfung.',
+        duration: '65 min',
+        modules: '4 Bereiche',
+        updated: 'gültig ab 2025',
+        examHint: 'Offizielle Prüfungssimulation · A1-Einstiegsniveau · Musteraufgaben und Modulübersicht',
+        sections: [
+          { icon: 'fa-headphones', title: 'Hören', text: 'Kurze Gespräche, Ansagen und Alltagsinformationen – ca. 20 Min.' },
+          { icon: 'fa-book-open', title: 'Lesen', text: 'Schilder, Mitteilungen und einfache Texte verstehen.' },
+          { icon: 'fa-pen-fancy', title: 'Schreiben', text: 'Formulare ausfüllen und kurze persönliche Texte verfassen.' },
+          { icon: 'fa-microphone-alt', title: 'Sprechen', text: 'Sich vorstellen, Fragen beantworten und reagieren.' }
+        ]
+      },
+      A2: {
+        icon: 'fa-solid fa-award',
+        short: 'Elementare Sprachverwendung für vertraute Themen und typische Alltagssituationen.',
+        inhaltTitle: 'Prüfungsinhalte · A2',
+        inhalt: [],
+        descIntro: 'A2 bestätigt grundlegende Deutschkenntnisse für vertraute Situationen im Alltag, in der Freizeit und im Beruf.',
+        descBullets: ['Einfache Gespräche zu vertrauten Themen führen', 'Kurze Texte und Anzeigen verstehen', 'Persönliche Informationen schriftlich mitteilen', 'Auf einfache Fragen sicher reagieren'],
+        descFooter: 'Die Prüfung umfasst Hören, Lesen, Schreiben und Sprechen auf elementarem Niveau.',
+        duration: '80 min',
+        modules: '4 Bereiche',
+        updated: 'aktuelle Fassung',
+        examHint: 'A2-Training',
+        sections: []
+      },
+      B1: { icon: 'fa-solid fa-award', short: 'Selbstständige Sprachverwendung für Alltag, Reisen und erste berufliche Kontexte.', inhaltTitle: 'Prüfungsinhalte · B1', inhalt: [], descIntro: 'B1.', descBullets: [], descFooter: '', duration: '150 min', modules: '4 Bereiche', updated: 'aktuelle Version', examHint: 'B1', sections: [] },
+      B2: { icon: 'fa-solid fa-award', short: 'Fortgeschrittenes Niveau für komplexere Texte, Diskussionen und klare Argumentation.', inhaltTitle: 'Prüfungsinhalte · B2', inhalt: [], descIntro: 'B2.', descBullets: [], descFooter: '', duration: '190 min', modules: '4 Bereiche', updated: 'aktuelle Version', examHint: 'B2', sections: [] },
+      C1: { icon: 'fa-solid fa-award', short: 'Fortgeschrittene Sprachkompetenz für Studium, Beruf und anspruchsvolle Kommunikation.', inhaltTitle: 'Prüfungsinhalte · C1', inhalt: [], descIntro: 'C1.', descBullets: [], descFooter: '', duration: '210 min', modules: '4 Bereiche', updated: 'aktuelle Version', examHint: 'C1', sections: [] },
+      C2: { icon: 'fa-solid fa-award', short: 'Nahezu muttersprachliche Sprachbeherrschung mit höchster Präzision und Ausdrucksstärke.', inhaltTitle: 'Prüfungsinhalte · C2', inhalt: [], descIntro: 'C2.', descBullets: [], descFooter: '', duration: '230 min', modules: '4 Bereiche', updated: 'aktuelle Version', examHint: 'C2', sections: [] }
+    };
+
+    let currentLevel = 'A1';
+    let currentExamPart = 'lesen';
+    let examTimerEndAt = null;
+    let examTimerIntervalId = null;
+    let examInProgress = false;
+
+    const examProgress = { lesen: false, hoeren: false, schreiben: false };
+    const examAnswers = {};
+
+    const levelGrid = document.getElementById('levelGrid');
+    const inhaltTitle = document.getElementById('inhaltTitle');
+    const inhaltRows = document.getElementById('inhaltRows');
+    const descContent = document.getElementById('descContent');
+    const providerBadge = document.getElementById('providerBadge');
+    const examTitle = document.getElementById('examTitle');
+    const examSub = document.getElementById('examSub');
+    const examMeta = document.getElementById('examMeta');
+    const examSections = document.getElementById('examSections');
+    const examHint = document.getElementById('examHint');
+    const consentCheckbox = document.getElementById('consentCheckbox');
+    const startTestBtn = document.getElementById('startTestBtn');
+    const finalExamStartBtn = document.getElementById('finalExamStartBtn');
+    const tabLesen = document.getElementById('tabLesen');
+    const tabHoeren = document.getElementById('tabHoeren');
+    const tabSchreiben = document.getElementById('tabSchreiben');
+    const tabSprechen = document.getElementById('tabSprechen');
+    const examPartPanel = document.getElementById('examPartPanel');
+
+    function getActivePageId() {
+      return document.querySelector('.page.active')?.id || 'levelPage';
+    }
+
+    function saveAppState() {
+      const state = {
+        currentLevel,
+        currentExamPart,
+        currentPage: getActivePageId(),
+        examProgress: { ...examProgress },
+        examAnswers: { ...examAnswers },
+        consentChecked: consentCheckbox.checked,
+        examInProgress,
+        examTimerEndAt,
+        scrollY: window.scrollY
+      };
+
+      localStorage.setItem(APP_STATE_KEY, JSON.stringify(state));
+    }
+
+    function loadAppState() {
+      try {
+        const raw = localStorage.getItem(APP_STATE_KEY);
+        return raw ? JSON.parse(raw) : null;
+      } catch (error) {
+        console.error('State restore failed:', error);
+        return null;
+      }
+    }
+
+    function findAnswerContainer(questionId) {
+      return document.querySelector(`[data-question="${questionId}"]`);
+    }
+
+    function parseDurationMinutes(durationLabel) {
+      const match = String(durationLabel || '').match(/(\d+)/);
+      return match ? Number(match[1]) : 0;
+    }
+
+    function formatTimerDisplay(totalSeconds) {
+      const safeSeconds = Math.max(0, totalSeconds);
+      const hours = Math.floor(safeSeconds / 3600);
+      const minutes = Math.floor((safeSeconds % 3600) / 60);
+      const seconds = safeSeconds % 60;
+      if (hours > 0) {
+        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+      }
+      return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    }
+
+    function formatDurationLabel(levelKey) {
+      const durationMinutes = parseDurationMinutes(levels[levelKey]?.duration);
+      return durationMinutes ? formatTimerDisplay(durationMinutes * 60) : '--:--';
+    }
+
+    function updateDurationDisplay() {
+      const durationText = formatDurationLabel(currentLevel);
+      document.querySelectorAll('[data-exam-duration-text]').forEach((node) => {
+        node.textContent = durationText;
+      });
+    }
+
+    function updateExamTimerDisplay() {
+      const timerTexts = document.querySelectorAll('[data-exam-timer-text]');
+      if (!timerTexts.length) return;
+      if (!examInProgress || !examTimerEndAt) {
+        timerTexts.forEach((node) => { node.textContent = '--:--'; });
+        return;
+      }
+
+      const remainingSeconds = Math.max(0, Math.ceil((examTimerEndAt - Date.now()) / 1000));
+      const formatted = formatTimerDisplay(remainingSeconds);
+      timerTexts.forEach((node) => { node.textContent = formatted; });
+
+      if (remainingSeconds === 0 && examTimerIntervalId) {
+        clearInterval(examTimerIntervalId);
+        examTimerIntervalId = null;
+      }
+    }
+
+    function ensureExamTimerRunning() {
+      updateExamTimerDisplay();
+      if (!examInProgress || !examTimerEndAt || examTimerIntervalId) return;
+      examTimerIntervalId = window.setInterval(updateExamTimerDisplay, 1000);
+    }
+
+    function startExamTimer() {
+      if (examInProgress && examTimerEndAt) {
+        ensureExamTimerRunning();
+        return;
+      }
+
+      const durationMinutes = parseDurationMinutes(levels[currentLevel]?.duration);
+      if (!durationMinutes) return;
+
+      examInProgress = true;
+      examTimerEndAt = Date.now() + durationMinutes * 60 * 1000;
+      ensureExamTimerRunning();
+      saveAppState();
+    }
+
+    function resetExamTimer() {
+      examInProgress = false;
+      examTimerEndAt = null;
+      if (examTimerIntervalId) {
+        clearInterval(examTimerIntervalId);
+        examTimerIntervalId = null;
+      }
+      updateExamTimerDisplay();
+    }
+
+    function applySavedAnswers() {
+      Object.entries(examAnswers).forEach(([questionId, value]) => {
+        const row = findAnswerContainer(questionId);
+        if (!row) return;
+        row.dataset.answer = value;
+        const button = Array.from(row.querySelectorAll('button')).find((item) => item.textContent.trim().toLowerCase() === value);
+        if (button) button.classList.add('selected');
+      });
+    }
+
+    function buildLevelCards() {
+      levelGrid.innerHTML = Object.keys(levels).map((levelKey) => {
+        const item = levels[levelKey];
+        return `
+          <div class="level-card" onclick="selectLevel('${levelKey}')">
+            <div class="level-icon"><i class="${item.icon}"></i></div>
+            <h2>${levelKey}</h2>
+            <p>${item.short}</p>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderInhalt(levelKey) {
+      const data = levels[levelKey];
+      inhaltTitle.innerHTML = `<i class="fas fa-table-of-contents"></i> <span>${data.inhaltTitle}</span>`;
+      inhaltRows.innerHTML = data.inhalt.map((row) => {
+        if (row.type === 'section') {
+          return `<div class="section-sub"><i class="fas ${row.icon}"></i> <span>${row.title}</span></div>`;
+        }
+        return `<div class="row-inhalt ${row.indent ? 'indent' : ''}"><span><i class="fas ${row.icon}"></i> ${row.left}</span><span>${row.right}</span></div>`;
+      }).join('');
+    }
+
+    function renderDescription(levelKey, options = {}) {
+      const { preserveConsent = false } = options;
+      const data = levels[levelKey];
+      providerBadge.innerHTML = `<i class="fas fa-globe-europe"></i><span>Goethe-Institut · ${levelKey}</span>`;
+      descContent.innerHTML = `
+        <p><strong>${levelKey}</strong> – ${data.descIntro}</p>
+        <p><strong>Sie können:</strong></p>
+        <ul>
+          ${data.descBullets.map((item) => `<li><i class="fas fa-check-circle" style="color:#2d8fbb; margin-top:3px;"></i><span>${item}</span></li>`).join('')}
+        </ul>
+        <p>${data.descFooter}</p>
+      `;
+
+      const savedConsent = preserveConsent ? loadAppState()?.consentChecked : false;
+      consentCheckbox.checked = Boolean(savedConsent);
+      startTestBtn.classList.toggle('hidden', !consentCheckbox.checked);
+      updateDurationDisplay();
+    }
+
+    function renderExamStart(levelKey) {
+      const data = levels[levelKey];
+      examTitle.innerHTML = `<i class="fas fa-clipboard-list"></i><span>${levelKey} Prüfung</span>`;
+      examSub.innerHTML = `<i class="fas fa-hourglass-half"></i><span>${data.duration} · Offizieller Stil · ${levelKey}-Simulation</span>`;
+      examMeta.innerHTML = `
+        <span><i class="far fa-clock"></i> Dauer: <strong>${data.duration}</strong></span>
+        <span><i class="fas fa-layer-group"></i> Module: <strong>${data.modules}</strong></span>
+        <span><i class="fas fa-chart-simple"></i> Niveau: <strong>${levelKey}</strong></span>
+        <span><i class="fas fa-calendar-alt"></i> ${data.updated}</span>
+      `;
+      examSections.innerHTML = data.sections.map((section) => `
+        <div class="exam-card">
+          <div class="exam-icon"><i class="fas ${section.icon}"></i></div>
+          <div><h3>${section.title}</h3><p>${section.text}</p></div>
+        </div>
+      `).join('');
+      examHint.textContent = data.examHint;
+    }
+
+    function switchPage(id, options = {}) {
+      const { resetScroll = true, smoothScroll = true } = options;
+      document.querySelectorAll('.page').forEach((page) => page.classList.remove('active'));
+      document.getElementById(id).classList.add('active');
+      if (resetScroll) {
+        window.scrollTo({ top: 0, behavior: smoothScroll ? 'smooth' : 'auto' });
+      }
+      saveAppState();
+    }
+
+    function selectLevel(levelKey) {
+      currentLevel = levelKey;
+      resetExamTimer();
+      renderInhalt(levelKey);
+      renderDescription(levelKey, { preserveConsent: false });
+      renderExamStart(levelKey);
+      switchPage('inhaltPage');
+    }
+
+    function openDescription() { switchPage('descPage'); }
+    function openExamStart() {
+      switchPage('examStartPage');
+    }
+    function goBackToLevels() { switchPage('levelPage'); }
+    function backToInhalt() { switchPage('inhaltPage'); }
+    function backToDescription() { switchPage('descPage'); }
+    function finalizeExamAndReturn() {
+      showEndExamModal();
+    }
+    function backToExamStart() {
+      if (examInProgress) {
+        finalizeExamAndReturn();
+        return;
+      }
+      switchPage('examStartPage');
+    }
+
+    function resetExamProgress() {
+      examProgress.lesen = false;
+      examProgress.hoeren = false;
+      examProgress.schreiben = false;
+      currentExamPart = 'lesen';
+      Object.keys(examAnswers).forEach((key) => delete examAnswers[key]);
+      saveAppState();
+    }
+
+    function updateSprechenLock() {
+      const unlocked = examProgress.lesen && examProgress.hoeren && examProgress.schreiben;
+      tabSprechen.classList.toggle('disabled', !unlocked);
+    }
+
+    function updatePartTabState() {
+      [tabLesen, tabHoeren, tabSchreiben, tabSprechen].forEach((btn) => btn.classList.remove('active'));
+      if (currentExamPart === 'lesen') tabLesen.classList.add('active');
+      if (currentExamPart === 'hoeren') tabHoeren.classList.add('active');
+      if (currentExamPart === 'schreiben') tabSchreiben.classList.add('active');
+      if (currentExamPart === 'sprechen') tabSprechen.classList.add('active');
+    }
+
+    function renderA1LesenPart1() {
+      examPartPanel.innerHTML = `
+        <div class="a1-reading-wrap">
+          <div class="a1-reading-header">
+            <div class="left">Teil 1</div>
+            <div class="right">
+              Lesen Sie die beiden Texte und die Aufgaben 1 bis 5.<br>
+              Kreuzen Sie an: <span class="rf-chip roman">Richtig</span> oder <span class="rf-chip">Falsch</span>.
+            </div>
+          </div>
+
+          <div class="a1-example-title">Beispiel</div>
+
+          <div class="reading-question">
+            <div class="num">0</div>
+            <div class="statement">Lis Zug kommt aus Hannover.</div>
+            <div class="choices">
+              <span class="sample-choice">Richtig</span>
+              <span class="sample-choice checked">Falsch</span>
+            </div>
+          </div>
+
+          <div class="mail-frame">
+            <div class="mail-toolbar">
+              <div class="tool-item"><div class="tool-icon">◀</div>Zurück</div>
+              <div class="tool-item"><div class="tool-icon">▶</div>Vorwärts</div>
+              <div class="tool-item"><div class="tool-icon">⌂</div>Startseite</div>
+              <div class="tool-item"><div class="tool-icon">⌕</div>Suchen</div>
+              <div class="tool-item"><div class="tool-icon">▣</div>Bilder</div>
+              <div class="tool-item"><div class="tool-icon">🖨</div>Drucken</div>
+              <div class="tool-item"><div class="tool-icon">⦿</div>Stop</div>
+            </div>
+
+            <div class="mail-subjectbar">
+              <div class="label">Betreff</div>
+              <div class="subject-input">Hallo Li,</div>
+            </div>
+
+            <div class="mail-body-wrap">
+              <div class="mail-body">
+                danke für deine Mail. Dein Zug kommt hier in Hannover um<br>
+                12.36 Uhr an. Ich bin ab 12.15 Uhr im Hauptbahnhof und<br>
+                warte auf dich vor der Auskunft.<br>
+                Du kannst mich den ganzen Vormittag auf meinem Handy<br>
+                (++49 173 62 205 59) erreichen.<br>
+                Deine<br>
+                Karin
+              </div>
+              <div class="mail-scroll"><div class="thumb"></div></div>
+            </div>
+
+            <div class="mail-bottom-bar"></div>
+          </div>
+
+          <div class="reading-question" data-question="1">
+            <div class="num">1</div>
+            <div class="statement">Lis Zug kommt nach halb eins an.</div>
+            <div class="choices">
+              <button type="button" onclick="chooseAnswer(1, 'richtig', this)">Richtig</button>
+              <button type="button" onclick="chooseAnswer(1, 'falsch', this)">Falsch</button>
+            </div>
+          </div>
+
+          <div class="reading-question" data-question="2">
+            <div class="num">2</div>
+            <div class="statement">Karin wartet den ganzen Vormittag vor der Auskunft.</div>
+            <div class="choices">
+              <button type="button" onclick="chooseAnswer(2, 'richtig', this)">Richtig</button>
+              <button type="button" onclick="chooseAnswer(2, 'falsch', this)">Falsch</button>
+            </div>
+          </div>
+
+          <div class="invite-note">
+            <p class="invite-gap">Liebe Carmen,</p>
+            <p>am kommenden Sonntag habe ich Geburtstag.</p>
+            <p>Ich möchte gerne mit dir feiern und lade dich herzlich zu meiner Party am Samstagabend ein.</p>
+            <p>Wir fangen um 21 Uhr an. Ist das okay für dich?</p>
+            <p>Es werden viele Leute da sein, die du auch kennst.</p>
+            <p>Kannst du vielleicht einen Salat mitbringen? Und vergiss bitte nicht einen Pullover oder eine Jacke!</p>
+            <p>Wir wollen nämlich draußen im Garten feiern.</p>
+            <p>Ich freue mich sehr auf dich!</p>
+            <div class="signoff">
+              <p>Bis zum Wochenende</p>
+              <p>Ralf</p>
+            </div>
+          </div>
+
+          <div class="reading-question" data-question="3">
+            <div class="num">3</div>
+            <div class="statement">Ralf hatte am letzten Wochenende Geburtstag.</div>
+            <div class="choices">
+              <button type="button" onclick="chooseAnswer(3, 'richtig', this)">Richtig</button>
+              <button type="button" onclick="chooseAnswer(3, 'falsch', this)">Falsch</button>
+            </div>
+          </div>
+
+          <div class="reading-question" data-question="4">
+            <div class="num">4</div>
+            <div class="statement">Ralf hat nur zwei oder drei Leute eingeladen.</div>
+            <div class="choices">
+              <button type="button" onclick="chooseAnswer(4, 'richtig', this)">Richtig</button>
+              <button type="button" onclick="chooseAnswer(4, 'falsch', this)">Falsch</button>
+            </div>
+          </div>
+
+          <div class="reading-question" data-question="5">
+            <div class="num">5</div>
+            <div class="statement">Die Party findet draußen statt.</div>
+            <div class="choices">
+              <button type="button" onclick="chooseAnswer(5, 'richtig', this)">Richtig</button>
+              <button type="button" onclick="chooseAnswer(5, 'falsch', this)">Falsch</button>
+            </div>
+          </div>
+
+          <div class="reading-part-break">
+            <div class="left">Teil 2</div>
+            <div class="right">
+              Lesen Sie die Texte und die Aufgaben 6 bis 10.<br>
+              Wo finden Sie Informationen? Kreuzen Sie an:
+              <span class="rf-chip roman">a</span> oder <span class="rf-chip roman">b</span>.
+            </div>
+          </div>
+
+          <div class="part2-example-title">Beispiel</div>
+
+          <div class="reading-question">
+            <div class="num">0</div>
+            <div class="statement">Sie wollen wissen: Regnet es in Deutschland?</div>
+          </div>
+
+          <div class="info-browser-grid">
+            <div class="info-browser">
+              <div class="info-browser-top"></div>
+              <div class="info-browser-address">
+                <div class="info-browser-label">Betreff</div>
+                <div class="info-browser-url">www.openair.de</div>
+              </div>
+              <div class="info-browser-body">
+                <div class="info-browser-content">
+                  <p>Open-Air-Konzert</p>
+                  <p>am 30.5. findet bei Regen</p>
+                  <p>in der Stadthalle statt.</p>
+                </div>
+                <div class="info-browser-scroll"><div class="thumb"></div></div>
+              </div>
+            </div>
+
+            <div class="info-browser">
+              <div class="info-browser-top"></div>
+              <div class="info-browser-address">
+                <div class="info-browser-label">Betreff</div>
+                <div class="info-browser-url">www.dwd.de</div>
+              </div>
+              <div class="info-browser-body">
+                <div class="info-browser-content">
+                  <span class="headline">Deutscher Wetterdienst<br>Wetter und Klima</span>
+                  <ul class="weather-list">
+                    <li>Wetter aktuell</li>
+                    <li>Warnungen</li>
+                    <li>Umweltinfos</li>
+                    <li>Klimadaten</li>
+                  </ul>
+                </div>
+                <div class="info-browser-scroll"><div class="thumb"></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="ab-option-list">
+            <div class="ab-option-row">
+              <span class="ab-choice-static">a</span>
+              <span>www.openair.de</span>
+            </div>
+            <div class="ab-option-row">
+              <span class="ab-choice-static checked">b</span>
+              <span>www.dwd.de</span>
+            </div>
+          </div>
+
+          <div class="reading-question">
+            <div class="num">6</div>
+            <div class="statement">Sie möchten mit dem Schiff auf dem Rhein fahren.</div>
+          </div>
+
+          <div class="info-browser-grid">
+            <div class="info-browser">
+              <div class="info-browser-top"></div>
+              <div class="info-browser-address">
+                <div class="info-browser-label">Betreff</div>
+                <div class="info-browser-url">www.schiff-ruedesheim.de</div>
+              </div>
+              <div class="info-browser-body">
+                <div class="info-browser-content">
+                  <span class="headline">Hotel - Pension „Schiff“</span>
+                  <p>Einzel- und Doppelzimmer mit</p>
+                  <p>Dusche / WC</p>
+                  <p>Restaurant mit Rhein-Terrasse</p>
+                  <div class="links">
+                    <span>Preise</span>
+                    <span>über uns</span>
+                    <span>Buchung</span>
+                  </div>
+                </div>
+                <div class="info-browser-scroll"><div class="thumb"></div></div>
+              </div>
+            </div>
+
+            <div class="info-browser">
+              <div class="info-browser-top"></div>
+              <div class="info-browser-address">
+                <div class="info-browser-label">Betreff</div>
+                <div class="info-browser-url">www.bingen-ruedesheimer.de</div>
+              </div>
+              <div class="info-browser-body">
+                <div class="info-browser-content">
+                  <span class="headline">Bingen-Rüdesheimer Rheinschiffe</span>
+                  <p>täglich von Rüdesheim nach Koblenz</p>
+                  <p>alle Abfahrtszeiten und Preise</p>
+                  <p style="margin-top:16px; font-family:Arial, Helvetica, sans-serif; font-weight:700; text-decoration:underline;">hier</p>
+                </div>
+                <div class="info-browser-scroll"><div class="thumb"></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="ab-option-list" data-question="6">
+            <div class="ab-option-row">
+              <button class="ab-choice" type="button" onclick="chooseAnswer(6, 'a', this)">a</button>
+              <span>www.schiff-ruedesheim.de</span>
+            </div>
+            <div class="ab-option-row">
+              <button class="ab-choice" type="button" onclick="chooseAnswer(6, 'b', this)">b</button>
+              <span>www.bingen-ruedesheimer.de</span>
+            </div>
+          </div>
+
+          <div class="reading-question">
+            <div class="num">7</div>
+            <div class="statement">Sie möchten Deutsch in Deutschland lernen.</div>
+          </div>
+
+          <div class="info-browser-grid">
+            <div class="info-browser">
+              <div class="info-browser-top"></div>
+              <div class="info-browser-address">
+                <div class="info-browser-label">Betreff</div>
+                <div class="info-browser-url">www.sprachenfuchs.de</div>
+              </div>
+              <div class="info-browser-body">
+                <div class="info-browser-content">
+                  <span class="headline">Sprachinstitut Fuchs</span>
+                  <p>Dresden, Prager Str. 4</p>
+                  <p>Deutsch · Englisch · Französisch · Russisch</p>
+                  <div class="links">
+                    <span>Die Schule</span>
+                    <span>Die Preise</span>
+                    <span>Die Kurse</span>
+                    <span>Kontakt</span>
+                  </div>
+                </div>
+                <div class="info-browser-scroll"><div class="thumb"></div></div>
+              </div>
+            </div>
+
+            <div class="info-browser">
+              <div class="info-browser-top"></div>
+              <div class="info-browser-address">
+                <div class="info-browser-label">Betreff</div>
+                <div class="info-browser-url">www.eviva.com</div>
+              </div>
+              <div class="info-browser-body">
+                <div class="info-browser-content">
+                  <span class="headline">Eviva-Idiomas</span>
+                  <p>Sprachkurse für Deutsche</p>
+                  <p>Spanisch auf Mallorca</p>
+                  <p>Englisch auf Malta</p>
+                  <div class="links">
+                    <span>Unsere Preise</span>
+                    <span>Unser Unterricht</span>
+                    <span>Buchungen</span>
+                  </div>
+                </div>
+                <div class="info-browser-scroll"><div class="thumb"></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="ab-option-list" data-question="7">
+            <div class="ab-option-row">
+              <button class="ab-choice" type="button" onclick="chooseAnswer(7, 'a', this)">a</button>
+              <span>www.sprachenfuchs.de</span>
+            </div>
+            <div class="ab-option-row">
+              <button class="ab-choice" type="button" onclick="chooseAnswer(7, 'b', this)">b</button>
+              <span>www.eviva.com</span>
+            </div>
+          </div>
+
+          <div class="reading-question">
+            <div class="num">8</div>
+            <div class="statement">Sie möchten ein Zugticket im Internet kaufen.</div>
+          </div>
+
+          <div class="info-browser-grid">
+            <div class="info-browser">
+              <div class="info-browser-top"></div>
+              <div class="info-browser-address">
+                <div class="info-browser-label">Betreff</div>
+                <div class="info-browser-url">www.DER.com</div>
+              </div>
+              <div class="info-browser-body">
+                <div class="info-browser-content">
+                  <span class="headline">Deutsches Reisebüro</span>
+                  <p>Ticketbestellungen und Reservierungen</p>
+                  <p>für Flüge weltweit, Deutsche Bahn,</p>
+                  <p>Eurobus, 24-Stunden-Service</p>
+                  <div class="links">
+                    <span>E-Mail</span>
+                    <span>Ticketbestellung</span>
+                  </div>
+                </div>
+                <div class="info-browser-scroll"><div class="thumb"></div></div>
+              </div>
+            </div>
+
+            <div class="info-browser">
+              <div class="info-browser-top"></div>
+              <div class="info-browser-address">
+                <div class="info-browser-label">Betreff</div>
+                <div class="info-browser-url">www.RED.com</div>
+              </div>
+              <div class="info-browser-body">
+                <div class="info-browser-content">
+                  <span class="headline">Reisedienst GmbH</span>
+                  <p>Ticketservice für Theater, Konzerte,</p>
+                  <p>Busreisen in Deutschland und nach</p>
+                  <p>Polen, Tschechien und Ungarn</p>
+                  <div class="links">
+                    <span>Konzertservice</span>
+                    <span>Theater</span>
+                    <span>Busreisen</span>
+                  </div>
+                </div>
+                <div class="info-browser-scroll"><div class="thumb"></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="ab-option-list" data-question="8">
+            <div class="ab-option-row">
+              <button class="ab-choice" type="button" onclick="chooseAnswer(8, 'a', this)">a</button>
+              <span>www.DER.com</span>
+            </div>
+            <div class="ab-option-row">
+              <button class="ab-choice" type="button" onclick="chooseAnswer(8, 'b', this)">b</button>
+              <span>www.RED.com</span>
+            </div>
+          </div>
+
+          <div class="reading-question">
+            <div class="num">9</div>
+            <div class="statement">Sie möchten Informationen über den Bodensee.</div>
+          </div>
+
+          <div class="info-browser-grid">
+            <div class="info-browser">
+              <div class="info-browser-top"></div>
+              <div class="info-browser-address">
+                <div class="info-browser-label">Betreff</div>
+                <div class="info-browser-url">www.bodensee.de</div>
+              </div>
+              <div class="info-browser-body">
+                <div class="info-browser-content">
+                  <p>Touristeninformation</p>
+                  <span class="headline" style="font-size:22px; margin-top:2px;">Bodensee</span>
+                  <div class="links" style="margin-top:12px; gap:26px; font-family:'Times New Roman', Times, serif; font-weight:400; text-decoration:none;">
+                    <span>Urlaubsorte</span>
+                    <span>Hotelservice</span>
+                    <span>Ferienwohnungen</span>
+                    <span>Rundreisen</span>
+                  </div>
+                </div>
+                <div class="info-browser-scroll"><div class="thumb"></div></div>
+              </div>
+            </div>
+
+            <div class="info-browser">
+              <div class="info-browser-top"></div>
+              <div class="info-browser-address">
+                <div class="info-browser-label">Betreff</div>
+                <div class="info-browser-url">www.rottenmeier.de</div>
+              </div>
+              <div class="info-browser-body">
+                <div class="info-browser-content">
+                  <p>Hans Rottenmeier</p>
+                  <p>Ferienwohnungen am Bodensee</p>
+                  <div class="links" style="margin-top:16px; display:grid; gap:8px;">
+                    <span>Häuser</span>
+                    <span>Preise</span>
+                    <span>Kontakt</span>
+                  </div>
+                </div>
+                <div class="info-browser-scroll"><div class="thumb"></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="ab-option-list" data-question="9">
+            <div class="ab-option-row">
+              <button class="ab-choice" type="button" onclick="chooseAnswer(9, 'a', this)">a</button>
+              <span>www.bodensee.de</span>
+            </div>
+            <div class="ab-option-row">
+              <button class="ab-choice" type="button" onclick="chooseAnswer(9, 'b', this)">b</button>
+              <span>www.rottenmeier.de</span>
+            </div>
+          </div>
+
+          <div class="reading-question">
+            <div class="num">10</div>
+            <div class="statement">Sie sind in Wiesbaden und möchten mit dem Zug am Mittag in Hamburg sein.</div>
+          </div>
+
+          <div class="train-choice-list">
+            <div class="train-choice-card">
+              <div class="train-choice-label">a</div>
+              <div class="train-choice-content">
+                <div class="train-choice-url">www.reiseauskunft.bahn.de</div>
+                <table class="train-table">
+                  <thead>
+                    <tr>
+                      <th></th>
+                      <th>Bahnhof</th>
+                      <th>Datum</th>
+                      <th>Zeit</th>
+                      <th>Dauer</th>
+                      <th>Umsteigen</th>
+                      <th>Angebot</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>ab</td>
+                      <td>Hamburg</td>
+                      <td>17.02.</td>
+                      <td>12.18</td>
+                      <td>4:34</td>
+                      <td>1</td>
+                      <td>ICE, S</td>
+                    </tr>
+                    <tr>
+                      <td>an</td>
+                      <td>Wiesbaden</td>
+                      <td>17.02.</td>
+                      <td>16.52</td>
+                      <td></td>
+                      <td></td>
+                      <td></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="train-choice-card">
+              <div class="train-choice-label">b</div>
+              <div class="train-choice-content">
+                <div class="train-choice-url">www.reiseauskunft.bahn.de</div>
+                <table class="train-table">
+                  <thead>
+                    <tr>
+                      <th></th>
+                      <th>Bahnhof</th>
+                      <th>Datum</th>
+                      <th>Zeit</th>
+                      <th>Dauer</th>
+                      <th>Umsteigen</th>
+                      <th>Angebot</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>ab</td>
+                      <td>Wiesbaden</td>
+                      <td>17.02.</td>
+                      <td>08.09</td>
+                      <td>4:31</td>
+                      <td>1</td>
+                      <td>S, ICE</td>
+                    </tr>
+                    <tr>
+                      <td>an</td>
+                      <td>Hamburg</td>
+                      <td>17.02.</td>
+                      <td>12.40</td>
+                      <td></td>
+                      <td></td>
+                      <td></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div class="train-answer-list ab-option-list" data-question="10">
+            <div class="ab-option-row">
+              <button class="ab-choice" type="button" onclick="chooseAnswer(10, 'a', this)">a</button>
+              <span>www.reiseauskunft.bahn.de</span>
+            </div>
+            <div class="ab-option-row">
+              <button class="ab-choice" type="button" onclick="chooseAnswer(10, 'b', this)">b</button>
+              <span>www.reiseauskunft.bahn.de</span>
+            </div>
+          </div>
+
+          <div class="reading-part-break">
+            <div class="left">Teil 3</div>
+            <div class="right">
+              Lesen Sie die Texte und die Aufgaben 11 bis 15.<br>
+              Kreuzen Sie an:
+              <span class="rf-chip roman">Richtig</span> oder <span class="rf-chip">Falsch</span>.
+            </div>
+          </div>
+
+          <div class="part3-example-row">
+            <div class="example-label">Beispiel</div>
+            <div class="example-context">An der Tür der <strong>Sprachschule</strong></div>
+          </div>
+
+          <div class="reading-question">
+            <div class="num">0</div>
+            <div class="statement">Zum Deutsch Lernen gehen Sie in die Beethovenstraße 23.</div>
+            <div class="choices">
+              <span class="sample-choice checked">Richtig</span>
+              <span class="sample-choice">Falsch</span>
+            </div>
+          </div>
+
+          <div class="part3-sign">
+            <span class="sign-title">SPRACHZENTRUM</span>
+            <p>Das Sprachzentrum ist umgezogen.</p>
+            <p>Sie finden uns jetzt in der</p>
+            <p>Beethovenstr. 23</p>
+          </div>
+
+          <div class="reading-question">
+            <div class="num">11</div>
+            <div class="statement">In der <strong style="font-family: Arial, Helvetica, sans-serif; font-style: italic; font-weight: 700;">Sprachschule</strong></div>
+          </div>
+
+          <div class="part3-note-box">
+            <p>In der 10-Uhr-Pause</p>
+            <p>bekommen Sie an der</p>
+            <p>Rezeption ein</p>
+            <p>Frühstückspaket:</p>
+            <p>Belegte Brötchen und Getränke für</p>
+            <p>2 Euro.</p>
+          </div>
+
+          <div class="part3-answer-row" data-question="11">
+            <div class="statement">In der Sprachschule können Sie etwas zu essen kaufen.</div>
+            <div class="choices">
+              <button type="button" onclick="chooseAnswer(11, 'richtig', this)">Richtig</button>
+              <button type="button" onclick="chooseAnswer(11, 'falsch', this)">Falsch</button>
+            </div>
+          </div>
+
+          <div class="reading-question">
+            <div class="num">12</div>
+            <div class="statement">An der <strong style="font-family: Arial, Helvetica, sans-serif; font-style: italic; font-weight: 700;">Post</strong></div>
+          </div>
+
+          <div class="part3-note-box wide">
+            <p style="font-size:20px; margin-bottom:6px;">Öffnungszeiten:</p>
+            <p>montags - freitags</p>
+            <p>8.00 - 12.00 und 13.00 - 18.00</p>
+            <p>samstags</p>
+            <p>8.00 - 12.00</p>
+          </div>
+
+          <div class="part3-answer-row" data-question="12">
+            <div class="statement">Es ist Samstagnachmittag. Sie können auf der Post Briefmarken kaufen.</div>
+            <div class="choices">
+              <button type="button" onclick="chooseAnswer(12, 'richtig', this)">Richtig</button>
+              <button type="button" onclick="chooseAnswer(12, 'falsch', this)">Falsch</button>
+            </div>
+          </div>
+
+          <div class="reading-question">
+            <div class="num">13</div>
+            <div class="statement">Am <strong style="font-family: Arial, Helvetica, sans-serif; font-style: italic; font-weight: 700;">Bahnhof</strong></div>
+          </div>
+
+          <div class="part3-note-box">
+            <p>Auf dem gesamten</p>
+            <p>Bahnhof ist das</p>
+            <p>Rauchen verboten.</p>
+          </div>
+
+          <div class="part3-answer-row" data-question="13">
+            <div class="statement">Sie können hier Zigaretten rauchen.</div>
+            <div class="choices">
+              <button type="button" onclick="chooseAnswer(13, 'richtig', this)">Richtig</button>
+              <button type="button" onclick="chooseAnswer(13, 'falsch', this)">Falsch</button>
+            </div>
+          </div>
+
+          <div class="reading-question">
+            <div class="num">14</div>
+            <div class="statement">Eingang <strong style="font-family: Arial, Helvetica, sans-serif; font-style: italic; font-weight: 700;">Restaurant</strong></div>
+          </div>
+
+          <div class="part3-note-box large">
+            <p style="font-size:24px; margin-bottom:12px;">Heute im Bavaria:</p>
+            <p>Bayerischer Abend</p>
+            <p>Brezeln, Weißwürste, Sauerkraut</p>
+            <p>Volksmusik, ab 20 Uhr Tanz</p>
+          </div>
+
+          <div class="part3-answer-row" data-question="14">
+            <div class="statement">Heute Abend können Sie in diesem Restaurant tanzen.</div>
+            <div class="choices">
+              <button type="button" onclick="chooseAnswer(14, 'richtig', this)">Richtig</button>
+              <button type="button" onclick="chooseAnswer(14, 'falsch', this)">Falsch</button>
+            </div>
+          </div>
+
+          <div class="reading-question">
+            <div class="num">15</div>
+            <div class="statement">An der <strong style="font-family: Arial, Helvetica, sans-serif; font-style: italic; font-weight: 700;">Haltestelle</strong></div>
+          </div>
+
+          <div class="part3-note-box large">
+            <p style="font-size:24px; margin-bottom:12px;">In der Neujahrsnacht</p>
+            <p>Busverkehr bis 23.00 Uhr</p>
+            <p>und</p>
+            <p>von 1.00 Uhr bis 5.00 Uhr</p>
+            <p>alle 30 Minuten</p>
+          </div>
+
+          <div class="part3-answer-row" data-question="15">
+            <div class="statement">Von 23 Uhr bis 1 Uhr fährt kein Bus.</div>
+            <div class="choices">
+              <button type="button" onclick="chooseAnswer(15, 'richtig', this)">Richtig</button>
+              <button type="button" onclick="chooseAnswer(15, 'falsch', this)">Falsch</button>
+            </div>
+          </div>
+
+          <div class="reading-actions">
+            <button class="reading-submit" type="button" onclick="markLesenDone()">Lesen abschließen</button>
+          </div>
+        </div>
+      `;
+
+      bindDoubleClickUnselect();
+      applySavedAnswers();
+    }
+
+    function renderComingSoonPart(part) {
+      const labels = {
+        hoeren: 'Hören',
+        schreiben: 'Schreiben',
+        sprechen: 'Sprechen'
+      };
+
+      examPartPanel.innerHTML = `
+        <div class="exam-container" style="max-width:760px; margin-top:8px;">
+          <h2 style="font-size:2.1rem; color:#1d5d80; margin-bottom:12px;">${labels[part]}</h2>
+          <p style="color:#56728a; line-height:1.7; font-size:1rem;">
+            Dieser Bereich ist vorbereitet. Du kannst hier als Nächstes die gleiche exakte Prüfungsvorlage einbauen wie bei <strong>A1 Lesen</strong>.
+          </p>
+        </div>
+      `;
+    }
+
+    function openExamPart(part) {
+      const sprechenUnlocked = examProgress.lesen && examProgress.hoeren && examProgress.schreiben;
+      if (part === 'sprechen' && !sprechenUnlocked) return;
+      currentExamPart = part;
+      updatePartTabState();
+      saveAppState();
+
+      if (currentLevel === 'A1' && part === 'lesen') {
+        renderA1LesenPart1();
+        return;
+      }
+
+      renderComingSoonPart(part);
+    }
+
+    function chooseAnswer(questionId, value, btn) {
+      const row = findAnswerContainer(questionId);
+      if (!row) return;
+
+      if (btn.classList.contains('selected')) {
+        clearAnswer(questionId, btn);
+        return;
+      }
+
+      row.querySelectorAll('button').forEach((button) => button.classList.remove('selected'));
+      btn.classList.add('selected');
+      row.dataset.answer = value;
+      examAnswers[questionId] = value;
+      saveAppState();
+    }
+
+    function clearAnswer(questionId, btn) {
+      const row = findAnswerContainer(questionId);
+      if (!row || !btn.classList.contains('selected')) return;
+
+      btn.classList.remove('selected');
+      delete row.dataset.answer;
+      delete examAnswers[questionId];
+      saveAppState();
+    }
+
+    function bindDoubleClickUnselect() {
+      document.querySelectorAll('.reading-question button, .ab-choice, .part3-answer-row button').forEach((button) => {
+        button.ondblclick = function (event) {
+          event.preventDefault();
+          const row = this.closest('[data-question]');
+          if (!row) return;
+          clearAnswer(Number(row.dataset.question), this);
+        };
+      });
+    }
+
+    function markLesenDone() {
+      examProgress.lesen = true;
+      updateSprechenLock();
+      saveAppState();
+      alert('Lesen Teil 1 gespeichert.');
+    }
+
+    function startRealExam() {
+      resetExamProgress();
+      updateSprechenLock();
+      startExamTimer();
+      updateExamTimerDisplay();
+      openExamPart('lesen');
+      switchPage('realExamPage');
+    }
+
+    function showStartModal() {
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(12,38,54,0.8);backdrop-filter:blur(10px);z-index:1000;display:flex;align-items:center;justify-content:center;font-family:Inter,sans-serif;';
+      const modal = document.createElement('div');
+      modal.style.cssText = 'background:#fff;width:90%;max-width:460px;padding:32px 28px;border-radius:2rem;text-align:center;box-shadow:0 40px 60px -20px rgba(0,0,0,0.4);';
+      modal.innerHTML = `
+        <i class="fas fa-check-circle" style="font-size:3.2rem;color:#2c7da0;margin-bottom:16px;"></i>
+        <h2 style="font-size:1.9rem;font-weight:700;color:#1d5d80;font-family:Cormorant Garamond, serif;">${currentLevel} Prüfung bereit</h2>
+        <p style="margin:16px 0 24px;color:#2f647f;">Die Simulation für ${currentLevel} wird gestartet. Sie können im nächsten Schritt das echte Modul öffnen.</p>
+        <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
+          <button id="closeModalBtn" style="background:#eef2f8;border:none;padding:10px 24px;border-radius:40px;font-weight:500;cursor:pointer;">Schließen</button>
+          <button id="confirmStartBtn" style="background:linear-gradient(105deg,#22658b,#3282aa);color:white;border:none;padding:10px 28px;border-radius:40px;font-weight:600;cursor:pointer;">Jetzt beginnen</button>
+        </div>
+      `;
+      overlay.appendChild(modal);
+      document.body.appendChild(overlay);
+      document.getElementById('closeModalBtn').addEventListener('click', () => overlay.remove());
+      document.getElementById('confirmStartBtn').addEventListener('click', () => {
+        overlay.remove();
+        startRealExam();
+      });
+    }
+
+    function showEndExamModal() {
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;inset:0;background:radial-gradient(circle at top, rgba(40,76,99,0.24), rgba(10,24,35,0.76));backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);z-index:1000;display:flex;align-items:center;justify-content:center;padding:28px;font-family:Inter,sans-serif;';
+      const modal = document.createElement('div');
+      modal.style.cssText = 'position:relative;background:linear-gradient(180deg,rgba(252,254,255,0.98),rgba(241,249,253,0.98));width:min(760px,100%);padding:42px 44px 34px;border-radius:34px;border:1px solid rgba(173,203,220,0.72);box-shadow:0 42px 90px -34px rgba(4,20,31,0.58), inset 0 1px 0 rgba(255,255,255,0.9);overflow:hidden;';
+      modal.innerHTML = `
+        <div style="position:absolute;inset:0 auto auto 0;width:100%;height:1px;background:linear-gradient(90deg,rgba(74,172,186,0),rgba(74,172,186,0.78),rgba(74,172,186,0));"></div>
+        <div style="position:absolute;right:-100px;top:-110px;width:240px;height:240px;border-radius:999px;background:radial-gradient(circle, rgba(144,230,230,0.24), rgba(144,230,230,0));pointer-events:none;"></div>
+        <div style="position:relative;display:flex;align-items:flex-start;gap:20px;margin-bottom:24px;">
+          <div style="width:70px;height:70px;border-radius:22px;background:linear-gradient(135deg,#dff9f8,#acece6);display:flex;align-items:center;justify-content:center;color:#0f7f79;font-size:1.8rem;box-shadow:inset 0 1px 0 rgba(255,255,255,0.88), 0 18px 34px -24px rgba(15,127,121,0.48);flex:0 0 auto;">
+            <i class="fas fa-hourglass-end"></i>
+          </div>
+          <div style="padding-top:2px;">
+            <div style="display:inline-flex;align-items:center;padding:6px 12px;border-radius:999px;background:rgba(224,241,248,0.9);color:#537487;font-size:0.73rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">Prüfungsstatus</div>
+            <h2 style="margin:12px 0 0;font-size:3.05rem;line-height:0.92;font-weight:700;color:#183341;font-family:Cormorant Garamond, serif;letter-spacing:-0.035em;">Test wirklich beenden?</h2>
+            <p style="margin:12px 0 0;color:#567486;font-size:1.08rem;line-height:1.5;font-weight:500;max-width:510px;">Der aktuelle Versuch wird abgegeben und die verbleibende Zeit wird vollständig zurückgesetzt.</p>
+          </div>
+        </div>
+        <div style="position:relative;padding:24px 26px;border-radius:24px;background:linear-gradient(180deg,rgba(255,255,255,0.88),rgba(247,252,254,0.82));border:1px solid rgba(196,220,230,0.72);color:#1d2e38;font-size:1.14rem;line-height:1.62;box-shadow:inset 0 1px 0 rgba(255,255,255,0.8);">
+          <div style="position:absolute;left:0;top:22px;bottom:22px;width:4px;border-radius:999px;background:linear-gradient(180deg,#8de4df,#3caea7);"></div>
+          <div style="padding-left:18px;">
+            Wenn Sie jetzt zurückgehen, wird der laufende Test sofort beendet. Danach gelangen Sie zurück zur Startseite des Prüfungsmoduls und können einen neuen Versuch beginnen.
+          </div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:14px;flex-wrap:wrap;margin-top:30px;">
+          <button id="cancelEndExamBtn" style="min-width:168px;background:rgba(255,255,255,0.75);color:#284657;border:1px solid rgba(174,202,217,0.95);padding:15px 30px;border-radius:999px;font-size:0.98rem;font-weight:700;letter-spacing:0.01em;cursor:pointer;box-shadow:0 14px 30px -24px rgba(34,71,92,0.3);">Weiter im Test</button>
+          <button id="confirmEndExamBtn" style="min-width:168px;background:linear-gradient(135deg,#0d7c73,#0b6861);color:#fff;border:none;padding:15px 30px;border-radius:999px;font-size:0.98rem;font-weight:700;letter-spacing:0.01em;cursor:pointer;box-shadow:0 22px 36px -20px rgba(11,104,97,0.62);">Test beenden</button>
+        </div>
+      `;
+      overlay.appendChild(modal);
+      document.body.appendChild(overlay);
+
+      const closeModal = () => overlay.remove();
+      overlay.addEventListener('click', (event) => {
+        if (event.target === overlay) closeModal();
+      });
+      document.getElementById('cancelEndExamBtn').addEventListener('click', closeModal);
+      document.getElementById('confirmEndExamBtn').addEventListener('click', () => {
+        closeModal();
+        resetExamProgress();
+        resetExamTimer();
+        renderDescription(currentLevel, { preserveConsent: true });
+        renderExamStart(currentLevel);
+        switchPage('examStartPage');
+      });
+    }
+
+    consentCheckbox.addEventListener('change', (event) => {
+      startTestBtn.classList.toggle('hidden', !event.target.checked);
+      saveAppState();
+    });
+
+    finalExamStartBtn.addEventListener('click', showStartModal);
+    buildLevelCards();
+
+    function restoreAppState() {
+      const savedState = loadAppState();
+      if (!savedState) {
+        updateExamTimerDisplay();
+        return;
+      }
+
+      if (savedState.currentLevel && levels[savedState.currentLevel]) {
+        currentLevel = savedState.currentLevel;
+      }
+
+      renderInhalt(currentLevel);
+      renderDescription(currentLevel, { preserveConsent: true });
+      renderExamStart(currentLevel);
+
+      Object.assign(examProgress, { lesen: false, hoeren: false, schreiben: false }, savedState.examProgress || {});
+      Object.keys(examAnswers).forEach((key) => delete examAnswers[key]);
+      Object.assign(examAnswers, savedState.examAnswers || {});
+      examInProgress = Boolean(savedState.examInProgress);
+      examTimerEndAt = typeof savedState.examTimerEndAt === 'number' ? savedState.examTimerEndAt : null;
+
+      currentExamPart = savedState.currentExamPart || 'lesen';
+      updateSprechenLock();
+      ensureExamTimerRunning();
+
+      const targetPage = savedState.currentPage && document.getElementById(savedState.currentPage)
+        ? savedState.currentPage
+        : 'levelPage';
+
+      if (targetPage === 'realExamPage') {
+        openExamPart(currentExamPart);
+      } else if (!examInProgress) {
+        resetExamTimer();
+      }
+
+      switchPage(targetPage, { resetScroll: false });
+      requestAnimationFrame(() => {
+        window.scrollTo({ top: Number(savedState.scrollY) || 0, behavior: 'auto' });
+      });
+    }
+
+    window.addEventListener('scroll', saveAppState, { passive: true });
+    restoreAppState();
+  </script>
+</body>
+</html>

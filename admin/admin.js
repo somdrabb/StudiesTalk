@@ -3705,4 +3705,3 @@ function wireOverviewActions() {
     await refreshActiveTab().catch((e) => setError($("globalError"), e.message));
   });
 }
-/* ========================================= OVERVIEW HELPERS - END Hier ========================================= */

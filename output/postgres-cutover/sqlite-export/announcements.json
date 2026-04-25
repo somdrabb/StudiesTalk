@@ -1,0 +1,122 @@
+[
+  {
+    "id": "annbrwvgs2q",
+    "channel_id": "announcements-1",
+    "workspace_id": "sprachschule-duisburg",
+    "title": "Instructor Absence – Replacement Assigned",
+    "status": "Emergency",
+    "priority": "Critical",
+    "content": "Role-based system (admin / teacher / student)\nSecure auth + reset + OTP\nWorkspace per school\nChannels (class, tasks, grammar, exams, etc.)\nHomework distribution\nNotifications\nAttendance system\nAI assistant\nGoogle Cloud translation\nGrammar practice module\nSpeaking practice\nCultural exchange\nPlacement test\nExam registration\nLive session\nEmail support\nTask/to-do channel for staff",
+    "author": "School Administration",
+    "created_at": "2026-02-26T02:10:38.765Z",
+    "read_count": 1
+  },
+  {
+    "id": "anniuxte39x",
+    "channel_id": "announcements-1",
+    "workspace_id": "sprachschule-duisburg",
+    "title": "Certificate Distribution – Pick-up Schedule",
+    "status": "Holiday",
+    "priority": "High",
+    "content": "Role-based system (admin / teacher / student)\nSecure auth + reset + OTP\nWorkspace per school\nChannels (class, tasks, grammar, exams, etc.)\nHomework distribution\nNotifications\nAttendance system\nAI assistant\nGoogle Cloud translation\nGrammar practice module\nSpeaking practice\nCultural exchange\nPlacement test\nExam registration\nLive session\nEmail support\nTask/to-do channel for staff",
+    "author": "School Administration",
+    "created_at": "2026-02-26T02:10:49.143Z",
+    "read_count": 1
+  },
+  {
+    "id": "annco6uxsw0",
+    "channel_id": "announcements-1",
+    "workspace_id": "sprachschule-duisburg",
+    "title": "Class Rescheduled – New Date",
+    "status": "Class Update",
+    "priority": "High",
+    "content": "Role-based system (admin / teacher / student)\nSecure auth + reset + OTP\nWorkspace per school\nChannels (class, tasks, grammar, exams, etc.)\nHomework distribution\nNotifications\nAttendance system\nAI assistant\nGoogle Cloud translation\nGrammar practice module\nSpeaking practice\nCultural exchange\nPlacement test\nExam registration\nLive session\nEmail support\nTask/to-do channel for staff",
+    "author": "School Administration",
+    "created_at": "2026-02-26T02:11:07.760Z",
+    "read_count": 1
+  },
+  {
+    "id": "annhwv9cdzk",
+    "channel_id": "announcements-1",
+    "workspace_id": "sprachschule-duisburg",
+    "title": "Exam Week – Official Timetable",
+    "status": "Holiday",
+    "priority": "Critical",
+    "content": "Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet.",
+    "author": "School Administration",
+    "created_at": "2026-02-26T16:23:42.968Z",
+    "read_count": 1
+  },
+  {
+    "id": "ann4ry6s00k",
+    "channel_id": "announcements-1",
+    "workspace_id": "sprachschule-duisburg",
+    "title": "Exam Registration – Application Information",
+    "status": "Examination",
+    "priority": "Critical",
+    "content": "Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet.",
+    "author": "School Administration",
+    "created_at": "2026-02-26T16:27:00.768Z",
+    "read_count": 1
+  },
+  {
+    "id": "annqugtoruo",
+    "channel_id": "announcements-1",
+    "workspace_id": "sprachschule-duisburg",
+    "title": "Final Exam – Important Instructions",
+    "status": "Examination",
+    "priority": "High",
+    "content": "Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet.",
+    "author": "School Administration",
+    "created_at": "2026-02-26T16:30:26.367Z",
+    "read_count": 1
+  },
+  {
+    "id": "ann68oan34i",
+    "channel_id": "announcements-5",
+    "workspace_id": "lens",
+    "title": "Exam Week – Official Timetable",
+    "status": "Important",
+    "priority": "High",
+    "content": "Under the law\nGerman Residence Act §19c\n\nGermany allows companies to hire experienced workers even if the job is not directly related to the degree, if certain conditions are met.\n\nThis rule became more flexible after the Skilled Immigration Act reform (2023–2024).",
+    "author": "School Administration",
+    "created_at": "2026-03-14T11:42:21.298Z",
+    "read_count": 1
+  },
+  {
+    "id": "annri88iy29",
+    "channel_id": "announcements-5",
+    "workspace_id": "lens",
+    "title": "Course End Date – Final Session",
+    "status": "Emergency",
+    "priority": "Critical",
+    "content": "Qualification OR experience\n\nYou must have one of these:\n\n• recognized qualification\n• OR relevant professional experience.\n\nYour situation:\n\nMarine Engineering diploma\n\nIT background\n\nlogistics experience.\n\nThis combination can help.",
+    "author": "School Administration",
+    "created_at": "2026-03-14T11:42:47.182Z",
+    "read_count": 1
+  },
+  {
+    "id": "annzkn27789",
+    "channel_id": "announcements-5",
+    "workspace_id": "lens",
+    "title": "Mock Test – New Students",
+    "status": "Examination",
+    "priority": "High",
+    "content": "Under the law German Residence Act §19c\n\nGermany allows companies to hire experienced workers even if the job is not directly related to the degree, if certain conditions are met.\n\nThis rule became more flexible after the Skilled Immigration Act reform (2023–2024).",
+    "author": "School Administration",
+    "created_at": "2026-03-14T14:36:02.066Z",
+    "read_count": 0
+  },
+  {
+    "id": "anna6m878qe",
+    "channel_id": "announcements-1",
+    "workspace_id": "sprachschule-duisburg",
+    "title": "Mock Test – New Students",
+    "status": "General",
+    "priority": "Normal",
+    "content": "Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet.",
+    "author": "School Administration",
+    "created_at": "2026-03-15T01:19:53.845Z",
+    "read_count": 2
+  }
+]
