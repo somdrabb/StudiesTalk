@@ -27,5 +27,6 @@ Audit events:
 - `attendance.certificate_uploaded`
 
 Operational note:
-- the current teacher UI renders a code-first check-in panel and a local QR-style matrix preview
-- production QR image generation can be upgraded later without changing attendance ownership or storage rules
+- the teacher UI now exposes a real QR deep link and manual fallback code
+- deep-link check-in preserves the code through login and resumes only for authenticated student accounts
+- teacher/admin and `super_admin` accounts do not gain student check-in capability through the deep link

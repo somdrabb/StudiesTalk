@@ -417,6 +417,7 @@ async function bootstrapAfterAuth(user, options = {}) {
     await loadUsers?.(authWorkspaceId);
     await loadChannels?.();
     await refreshAll?.();
+    await maybeHandleAttendanceDeepLink({ afterAuth: true });
   } else if (onboardingRequired) {
     await openOnboardingPanel({ autoOpen: true });
   } else {
@@ -25226,8 +25227,15 @@ let attendanceState = {
   autosaveTimer: null,
   saveSeq: 0,
   saveInFlight: false,
-  lastMutation: null
+  lastMutation: null,
+  qrValue: "",
+  qrDataUrl: "",
+  qrCountdownTimer: null,
+  pendingDeepLinkCode: null
 };
+
+const ATTENDANCE_DEEP_LINK_STORAGE_KEY = "studiestalk_attendance_deep_link";
+const ATTENDANCE_QR_CACHE_STORAGE_KEY = "studiestalk_attendance_qr_cache";
 
 function isoDateOnlyLocal(date = new Date()) {
   const x = new Date(date);
@@ -25246,6 +25254,118 @@ function getActiveChannelIdSafe() {
   const header = document.getElementById("chatHeader");
   const domId = header?.dataset?.channelId || header?.getAttribute("data-channel-id");
   return domId ? String(domId) : null;
+}
+
+function getAttendanceDeepLinkTarget() {
+  try {
+    const url = new URL(window.location.href);
+    if (url.pathname !== "/attendance/check-in") return null;
+    const code = String(url.searchParams.get("code") || "").trim().toUpperCase();
+    const channelId = String(url.searchParams.get("channelId") || "").trim();
+    const sessionId = String(url.searchParams.get("sessionId") || "").trim();
+    if (!code) return null;
+    return { code, channelId, sessionId };
+  } catch (_err) {
+    return null;
+  }
+}
+
+function storeAttendanceDeepLinkTarget(target) {
+  try {
+    if (!target?.code) {
+      sessionStorage.removeItem(ATTENDANCE_DEEP_LINK_STORAGE_KEY);
+      return;
+    }
+    sessionStorage.setItem(ATTENDANCE_DEEP_LINK_STORAGE_KEY, JSON.stringify(target));
+  } catch (_err) {}
+}
+
+function loadStoredAttendanceDeepLinkTarget() {
+  try {
+    const raw = sessionStorage.getItem(ATTENDANCE_DEEP_LINK_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.code) return null;
+    return {
+      code: String(parsed.code || "").trim().toUpperCase(),
+      channelId: String(parsed.channelId || "").trim(),
+      sessionId: String(parsed.sessionId || "").trim()
+    };
+  } catch (_err) {
+    return null;
+  }
+}
+
+function clearAttendanceDeepLinkRoute() {
+  try {
+    const url = new URL(window.location.href);
+    if (url.pathname !== "/attendance/check-in") return;
+    window.history.replaceState({}, "", "/");
+  } catch (_err) {}
+}
+
+function buildAttendanceDeepLink({ code, channelId, sessionId }) {
+  if (!code) return "";
+  const params = new URLSearchParams();
+  params.set("code", String(code).trim().toUpperCase());
+  if (channelId) params.set("channelId", String(channelId).trim());
+  if (sessionId) params.set("sessionId", String(sessionId).trim());
+  return `${window.location.origin}/attendance/check-in?${params.toString()}`;
+}
+
+function mapAttendanceCheckInError(error, fallback = "Unable to check in.") {
+  const message = String(error?.message || error?.error || fallback || "").trim().toLowerCase();
+  if (message.includes("expired")) return "This code has expired. Ask your teacher for a new code.";
+  if (message.includes("already checked")) return "You are already checked in.";
+  if (message.includes("not found") || message.includes("invalid check-in code")) return "This code belongs to another class.";
+  if (message.includes("forbidden")) return "Student check-in is only available for student accounts.";
+  if (message.includes("required")) return "Attendance is not open yet.";
+  return fallback;
+}
+
+function buildAttendanceQrCacheKey({ channelId, sessionId, expiresAt }) {
+  return [String(channelId || "").trim(), String(sessionId || "").trim(), String(expiresAt || "").trim()].join("::");
+}
+
+function storeAttendanceQrCacheEntry(entry) {
+  try {
+    if (!entry?.channelId || !entry?.sessionId || !entry?.code || !entry?.expiresAt) return;
+    const cacheKey = buildAttendanceQrCacheKey(entry);
+    const payload = {
+      cacheKey,
+      channelId: String(entry.channelId || "").trim(),
+      sessionId: String(entry.sessionId || "").trim(),
+      code: String(entry.code || "").trim().toUpperCase(),
+      expiresAt: String(entry.expiresAt || "").trim(),
+      qrValue: String(entry.qrValue || "").trim(),
+      qrDataUrl: String(entry.qrDataUrl || "").trim()
+    };
+    localStorage.setItem(ATTENDANCE_QR_CACHE_STORAGE_KEY, JSON.stringify(payload));
+  } catch (_err) {}
+}
+
+function loadAttendanceQrCacheEntry({ channelId, sessionId, expiresAt }) {
+  try {
+    const raw = localStorage.getItem(ATTENDANCE_QR_CACHE_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.cacheKey) return null;
+    const cacheKey = buildAttendanceQrCacheKey({ channelId, sessionId, expiresAt });
+    if (parsed.cacheKey !== cacheKey) return null;
+    if (!parsed.expiresAt || Date.parse(parsed.expiresAt) <= Date.now()) {
+      localStorage.removeItem(ATTENDANCE_QR_CACHE_STORAGE_KEY);
+      return null;
+    }
+    return parsed;
+  } catch (_err) {
+    return null;
+  }
+}
+
+function clearAttendanceQrCache() {
+  try {
+    localStorage.removeItem(ATTENDANCE_QR_CACHE_STORAGE_KEY);
+  } catch (_err) {}
 }
 
 function showAttendanceModal(show) {
@@ -25280,12 +25400,8 @@ function getAttendanceCounts() {
 }
 
 function renderAttendanceFooterSummary() {
-  const summary = document.getElementById("attendanceFooterSummary");
   const autosave = document.getElementById("attendanceAutosaveBadge");
   const undo = document.getElementById("attendanceUndo");
-  if (!summary) return;
-  const counts = getAttendanceCounts();
-  summary.textContent = `${counts.present} Present • ${counts.absent} Absent • ${counts.late} Late${counts.excused ? ` • ${counts.excused} Excused` : ""}`;
   if (autosave) autosave.textContent = attendanceState.autosaveEnabled ? "Auto-save ON" : "Auto-save OFF";
   if (undo) {
     undo.classList.toggle("hidden", !attendanceState.lastMutation);
@@ -25296,29 +25412,79 @@ function renderAttendanceFooterSummary() {
   }
 }
 
+function clearAttendanceQrCountdown() {
+  if (attendanceState.qrCountdownTimer) {
+    clearInterval(attendanceState.qrCountdownTimer);
+    attendanceState.qrCountdownTimer = null;
+  }
+}
+
+function formatAttendanceCountdown(ms) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function renderAttendanceExpiryCountdown() {
+  const badge = document.getElementById("attendanceCodeExpiryBadge");
+  const meta = document.getElementById("attendanceCodeExpiryMeta");
+  const input = document.getElementById("attendanceStudentCodeInput");
+  const button = document.getElementById("attendanceStudentCheckInBtn");
+  if (!badge) return;
+  const expiryMs = attendanceState.codeExpiresAt ? Date.parse(attendanceState.codeExpiresAt) : 0;
+  if (!expiryMs || Number.isNaN(expiryMs)) {
+    badge.textContent = "No active code";
+    badge.className = "attendance-inline-badge";
+    if (meta) meta.textContent = "";
+    if (input && !attendanceState.managementMode) input.disabled = false;
+    if (button && !attendanceState.managementMode) button.disabled = false;
+    clearAttendanceQrCache();
+    return;
+  }
+  const remaining = expiryMs - Date.now();
+  if (remaining <= 0) {
+    badge.textContent = "Expired";
+    badge.className = "attendance-inline-badge is-danger";
+    if (meta) meta.textContent = `Expired at ${new Date(attendanceState.codeExpiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+    if (input && !attendanceState.managementMode) input.disabled = true;
+    if (button && !attendanceState.managementMode) button.disabled = true;
+    clearAttendanceQrCache();
+    clearAttendanceQrCountdown();
+    return;
+  }
+  badge.textContent = `Expires in ${formatAttendanceCountdown(remaining)}`;
+  badge.className = `attendance-inline-badge ${remaining <= 120000 ? "is-warning" : "is-active"}`;
+  if (meta) meta.textContent = `Valid until ${new Date(attendanceState.codeExpiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  if (input && !attendanceState.managementMode) input.disabled = false;
+  if (button && !attendanceState.managementMode) button.disabled = false;
+}
+
 function renderAttendanceModalMode() {
   const teacherMode = !!attendanceState.managementMode;
-  document.getElementById("attendanceToolbarActions")?.classList.toggle("hidden", !teacherMode);
+  document.getElementById("attendanceSearchWrap")?.classList.toggle("hidden", !teacherMode);
   document.getElementById("attendanceCodePanel")?.classList.toggle("hidden", !teacherMode);
   document.getElementById("attendanceReportGrid")?.classList.toggle("hidden", !teacherMode);
   document.getElementById("attendanceList")?.classList.toggle("hidden", !teacherMode);
   document.getElementById("attendanceAutosaveBadge")?.classList.toggle("hidden", !teacherMode);
+  document.getElementById("attendanceCounts")?.classList.toggle("hidden", !teacherMode);
   document.getElementById("attendanceSaveBtn")?.classList.toggle("hidden", !teacherMode);
   const footerSummary = document.getElementById("attendanceFooterSummary");
   if (footerSummary) footerSummary.classList.toggle("hidden", !teacherMode);
 }
 
 function renderAttendanceCounts() {
-  const el = document.getElementById("attendanceCounts");
-  if (!el) return;
+  const headerCounts = document.getElementById("attendanceCounts");
+  if (!headerCounts) return;
   const { present, late, excused, absent, total } = getAttendanceCounts();
-  el.innerHTML = `
+  const chips = `
     <span class="attendance-summary-chip attendance-summary-chip--present"><i class="fa-solid fa-circle-check"></i><strong>${present}</strong><span>Present</span></span>
     <span class="attendance-summary-chip attendance-summary-chip--late"><i class="fa-solid fa-clock"></i><strong>${late}</strong><span>Late</span></span>
     <span class="attendance-summary-chip attendance-summary-chip--excused"><i class="fa-solid fa-file-medical"></i><strong>${excused}</strong><span>Excused</span></span>
     <span class="attendance-summary-chip attendance-summary-chip--absent"><i class="fa-solid fa-user-xmark"></i><strong>${absent}</strong><span>Absent</span></span>
     <span class="attendance-summary-chip"><i class="fa-solid fa-users"></i><strong>${total}</strong><span>Students</span></span>
   `;
+  headerCounts.innerHTML = chips;
   renderAttendanceFooterSummary();
 }
 
@@ -25338,24 +25504,27 @@ function renderAttendanceCodePanel() {
   const codeValue = document.getElementById("attendanceCodeValue");
   const codeMeta = document.getElementById("attendanceCodeMeta");
   const qrBox = document.getElementById("attendanceQrBox");
-  const expiryBadge = document.getElementById("attendanceCodeExpiryBadge");
+  const copyBtn = document.getElementById("attendanceCopyCodeBtn");
   if (codeValue) codeValue.textContent = attendanceState.code || "No active code";
   if (codeMeta) codeMeta.textContent = attendanceState.codeExpiresAt
-    ? "Use the code or QR preview for the current class session."
+    ? "Use the code or scan the QR card for the current class session."
     : "Generate a short-lived code for this class session.";
-  if (expiryBadge) {
-    expiryBadge.textContent = attendanceState.codeExpiresAt
-      ? `Expires ${new Date(attendanceState.codeExpiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
-      : "No active code";
-    expiryBadge.classList.toggle("is-active", !!attendanceState.codeExpiresAt);
-  }
+  if (copyBtn) copyBtn.disabled = !attendanceState.code;
   if (qrBox) {
-    const seed = String(attendanceState.code || "EMPTY");
-    const cells = Array.from({ length: 81 }).map((_, idx) => {
-      const char = seed.charCodeAt(idx % seed.length) || 0;
-      return `<span class="${(char + idx) % 2 === 0 ? "is-on" : ""}"></span>`;
-    }).join("");
-    qrBox.innerHTML = cells;
+    qrBox.innerHTML = "";
+    if (attendanceState.qrDataUrl) {
+      const image = document.createElement("img");
+      image.src = attendanceState.qrDataUrl;
+      image.alt = "Attendance check-in QR code";
+      qrBox.appendChild(image);
+    } else {
+      qrBox.innerHTML = `<div class="attendance-qr-placeholder">QR unavailable</div>`;
+    }
+  }
+  clearAttendanceQrCountdown();
+  renderAttendanceExpiryCountdown();
+  if (attendanceState.codeExpiresAt) {
+    attendanceState.qrCountdownTimer = setInterval(renderAttendanceExpiryCountdown, 1000);
   }
 }
 
@@ -25588,6 +25757,8 @@ async function loadAttendanceForChannel(channelId, requestedDate) {
       report: data.report || null,
       code: "",
       codeExpiresAt: data.session?.checkinCodeExpiresAt || "",
+      qrValue: "",
+      qrDataUrl: "",
       studentStatus: "",
       studentStatusTone: "neutral",
       managementMode: true,
@@ -25609,10 +25780,27 @@ async function loadAttendanceForChannel(channelId, requestedDate) {
       locked: !!data.locked
     };
 
+    const qrCache = loadAttendanceQrCacheEntry({
+      channelId,
+      sessionId: attendanceState.sessionId,
+      expiresAt: attendanceState.codeExpiresAt
+    });
+    if (qrCache) {
+      attendanceState.code = qrCache.code || "";
+      attendanceState.qrValue = qrCache.qrValue || "";
+      attendanceState.qrDataUrl = qrCache.qrDataUrl || "";
+    }
+
     const title = document.getElementById("attendanceTitle");
     if (title) title.textContent = "Attendance";
     const subtitle = document.getElementById("attendanceSubtitle");
-    if (subtitle) subtitle.textContent = `${data.channel?.name || "Class"} • ${attendanceState.date} • ${attendanceState.records.length} students`;
+    if (subtitle) {
+      subtitle.innerHTML = `
+        <span class="attendance-subtitle-class">${escapeHtml(data.channel?.name || "Class")}</span>
+        <span class="attendance-subtitle-sep">&bull;</span>
+        <span class="attendance-subtitle-date">${escapeHtml(attendanceState.date)}</span>
+      `;
+    }
     const search = document.getElementById("attendanceSearchInput");
     if (search) search.value = "";
     const checkbox = document.getElementById("attendanceSendEmails");
@@ -25667,6 +25855,8 @@ async function openAttendanceForCurrentClass() {
       report: null,
       code: "",
       codeExpiresAt: "",
+      qrValue: "",
+      qrDataUrl: "",
       studentStatus: "",
       studentStatusTone: "neutral",
       managementMode: false,
@@ -25756,6 +25946,22 @@ async function generateAttendanceCode() {
     attendanceState.sessionId = payload.sessionId;
     attendanceState.code = payload.code || "";
     attendanceState.codeExpiresAt = payload.expiresAt || "";
+    attendanceState.qrDataUrl = payload.qrDataUrl || "";
+    attendanceState.qrValue = payload.qrValue
+      ? `${window.location.origin}${payload.qrValue}`
+      : buildAttendanceDeepLink({
+          code: payload.code || "",
+          channelId: attendanceState.channelId,
+          sessionId: payload.sessionId
+        });
+    storeAttendanceQrCacheEntry({
+      channelId: attendanceState.channelId,
+      sessionId: payload.sessionId,
+      code: attendanceState.code,
+      expiresAt: attendanceState.codeExpiresAt,
+      qrValue: attendanceState.qrValue,
+      qrDataUrl: attendanceState.qrDataUrl
+    });
     renderAttendanceCodePanel();
     if (status) status.textContent = "Check-in code ready.";
   } catch (error) {
@@ -25763,11 +25969,13 @@ async function generateAttendanceCode() {
   }
 }
 
-async function submitAttendanceStudentCheckIn() {
-  const code = String(document.getElementById("attendanceStudentCodeInput")?.value || "").trim();
+async function submitAttendanceStudentCheckIn(options = {}) {
+  const code = String(options.codeOverride || document.getElementById("attendanceStudentCodeInput")?.value || "").trim();
   const badge = document.getElementById("attendanceStudentStatusBadge");
   const meta = document.getElementById("attendanceStudentStatusMeta");
-  if (!attendanceState.channelId || !code) return;
+  const channelId = String(options.channelIdOverride || attendanceState.channelId || "").trim();
+  const sessionId = String(options.sessionIdOverride || attendanceState.sessionId || "").trim();
+  if (!channelId || !code) return;
   try {
     const payload = await fetchJSON(`/api/attendance/check-in`, {
       method: "POST",
@@ -25776,8 +25984,8 @@ async function submitAttendanceStudentCheckIn() {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        channelId: attendanceState.channelId,
-        sessionId: attendanceState.sessionId,
+        channelId,
+        sessionId,
         code
       })
     });
@@ -25785,13 +25993,55 @@ async function submitAttendanceStudentCheckIn() {
     attendanceState.studentStatusTone = payload.status === "late" ? "warning" : "success";
     if (badge) badge.textContent = `Checked in: ${payload.status}`;
     if (meta) meta.textContent = payload.checkedInAt ? `Recorded ${new Date(payload.checkedInAt).toLocaleString()}` : "Check-in recorded.";
+    if (!options.suppressSuccessToast) {
+      showToast?.(payload.status === "late" ? "Checked in as late." : "Attendance recorded.");
+    }
+    storeAttendanceDeepLinkTarget(null);
+    clearAttendanceDeepLinkRoute();
   } catch (error) {
+    const friendly = mapAttendanceCheckInError(error, "Attendance is not open yet.");
     attendanceState.studentStatus = "Check-in blocked";
     attendanceState.studentStatusTone = "danger";
     if (badge) badge.textContent = "Check-in blocked";
-    if (meta) meta.textContent = error.message || "Unable to check in.";
+    if (meta) meta.textContent = friendly;
   }
   renderAttendanceStudentState();
+}
+
+async function maybeHandleAttendanceDeepLink({ afterAuth = false } = {}) {
+  const target = getAttendanceDeepLinkTarget() || loadStoredAttendanceDeepLinkTarget();
+  if (!target?.code) return false;
+  attendanceState.pendingDeepLinkCode = target.code;
+  storeAttendanceDeepLinkTarget(target);
+  if (!sessionUser) {
+    showLoginOverlay();
+    return true;
+  }
+  if (isTeacherUser?.() || isSchoolAdmin() || isSuperAdmin()) {
+    attendanceState.managementMode = true;
+    attendanceState.studentStatus = "Teacher/admin view";
+    attendanceState.studentStatusTone = "neutral";
+    renderAttendanceStudentState();
+    showToast?.("Student check-in is only available for student accounts.");
+    return true;
+  }
+  if (!isStudentUser()) return false;
+  attendanceState.channelId = target.channelId || attendanceState.channelId;
+  attendanceState.sessionId = target.sessionId || attendanceState.sessionId;
+  attendanceState.managementMode = false;
+  const input = document.getElementById("attendanceStudentCodeInput");
+  if (input) input.value = target.code;
+  attendanceState.studentStatus = afterAuth ? "Checking in..." : "";
+  attendanceState.studentStatusTone = "neutral";
+  renderAttendanceStudentState();
+  showAttendanceModal(true);
+  await submitAttendanceStudentCheckIn({
+    codeOverride: target.code,
+    channelIdOverride: target.channelId,
+    sessionIdOverride: target.sessionId,
+    suppressSuccessToast: false
+  });
+  return true;
 }
 
 function wireAttendanceModal() {
@@ -25800,6 +26050,15 @@ function wireAttendanceModal() {
   document.getElementById("attendanceSaveBtn")?.addEventListener("click", () => saveAttendance({ closeOnSuccess: true, silent: false }));
   document.getElementById("attendanceGenerateCodeBtn")?.addEventListener("click", generateAttendanceCode);
   document.getElementById("attendanceStudentCheckInBtn")?.addEventListener("click", submitAttendanceStudentCheckIn);
+  document.getElementById("attendanceCopyCodeBtn")?.addEventListener("click", async () => {
+    if (!attendanceState.code) return;
+    try {
+      await navigator.clipboard.writeText(attendanceState.code);
+      showToast?.("Attendance code copied.");
+    } catch (_err) {
+      showToast?.("Could not copy code.");
+    }
+  });
   document.getElementById("attendanceExportCsvBtn")?.addEventListener("click", () => {
     if (!attendanceState.channelId) return;
     window.open(`/api/classes/${encodeURIComponent(attendanceState.channelId)}/attendance/report.csv`, "_blank", "noopener,noreferrer");
@@ -33933,6 +34192,10 @@ async function completeLoginFlow(user) {
   } catch (err) {
     console.warn("Could not persist workspace selection", err);
   }
+  const pendingAttendanceLink = getAttendanceDeepLinkTarget() || loadStoredAttendanceDeepLinkTarget();
+  if (pendingAttendanceLink) {
+    storeAttendanceDeepLinkTarget(pendingAttendanceLink);
+  }
   updateAdminButtonState();
   window.location.reload();
 }
@@ -34031,6 +34294,10 @@ async function tryAutoAuth() {
     return true;
   } catch (err) {
     persistSessionUser(null);
+    const pendingAttendanceLink = getAttendanceDeepLinkTarget();
+    if (pendingAttendanceLink) {
+      storeAttendanceDeepLinkTarget(pendingAttendanceLink);
+    }
     showLoginOverlay();
     return false;
   }

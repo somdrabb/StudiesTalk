@@ -2961,28 +2961,15 @@
           <div class="attendance-subtitle" id="attendanceSubtitle">Class attendance</div>
         </div>
         <div class="attendance-header-side">
+          <label class="attendance-search attendance-search--header" id="attendanceSearchWrap">
+            <i class="fa-solid fa-magnifying-glass"></i>
+            <input id="attendanceSearchInput" type="search" placeholder="Search student..." />
+          </label>
+          <div class="attendance-toolbar-summary" id="attendanceCounts"></div>
           <div class="attendance-inline-badge is-active" id="attendanceAutosaveBadge">Auto-save ON</div>
           <button type="button" class="icon-btn" id="attendanceCloseBtn" aria-label="Close attendance">
             <i class="fa-solid fa-xmark"></i>
           </button>
-        </div>
-      </div>
-      <div class="attendance-toolbar">
-        <div class="attendance-status attendance-toolbar-summary" id="attendanceCounts">Present: 0 • Absent: 0</div>
-        <div class="attendance-toolbar-actions" id="attendanceToolbarActions">
-          <label class="attendance-search">
-            <i class="fa-solid fa-magnifying-glass"></i>
-            <input id="attendanceSearchInput" type="search" placeholder="Search student..." />
-          </label>
-          <div class="attendance-bulk-actions">
-            <button type="button" class="btn secondary" id="attendanceBulkPresentBtn">Mark All Present</button>
-            <button type="button" class="btn secondary" id="attendanceBulkAbsentBtn">Mark All Absent</button>
-            <button type="button" class="btn secondary" id="attendanceBulkLateBtn">Mark All Late</button>
-          </div>
-          <label class="attendance-checkbox">
-            <input type="checkbox" id="attendanceSendEmails" checked />
-            <span>Send absence emails</span>
-          </label>
         </div>
       </div>
       <div class="attendance-modal-body">
@@ -2990,10 +2977,17 @@
         <section class="attendance-panel" id="attendanceCodePanel">
           <div class="section-title">Check-in code</div>
           <div class="attendance-code-card">
-            <div class="attendance-qr-box" id="attendanceQrBox" aria-hidden="true"></div>
+            <div class="attendance-qr-layout">
+              <div class="attendance-qr-box" id="attendanceQrBox" aria-hidden="true"></div>
+              <div class="attendance-qr-meta">
+                <div class="attendance-qr-label">Scan to check in</div>
+                <div class="attendance-inline-badge" id="attendanceCodeExpiryBadge">No active code</div>
+                <div class="attendance-qr-expiry" id="attendanceCodeExpiryMeta"></div>
+              </div>
+            </div>
             <div class="attendance-code-header">
               <div class="attendance-code-value" id="attendanceCodeValue">No active code</div>
-              <div class="attendance-inline-badge" id="attendanceCodeExpiryBadge">No active code</div>
+              <button type="button" class="btn secondary" id="attendanceCopyCodeBtn">Copy code</button>
             </div>
             <div class="attendance-code-meta" id="attendanceCodeMeta">Generate a short-lived code for this class session.</div>
             <div class="attendance-code-actions">
@@ -3035,14 +3029,23 @@
       <div class="attendance-footer">
         <div class="attendance-footer-main">
           <div class="attendance-status" id="attendanceStatus"></div>
-          <div class="attendance-footer-summary" id="attendanceFooterSummary">0 Present • 0 Absent • 0 Late</div>
+          <div class="attendance-footer-summary" id="attendanceFooterSummary">
+            <div class="attendance-bulk-actions">
+              <button type="button" class="btn secondary" id="attendanceBulkPresentBtn">Mark All Present</button>
+              <button type="button" class="btn secondary" id="attendanceBulkAbsentBtn">Mark All Absent</button>
+              <button type="button" class="btn secondary" id="attendanceBulkLateBtn">Mark All Late</button>
+            </div>
+            <label class="attendance-checkbox">
+              <input type="checkbox" id="attendanceSendEmails" checked />
+              <span>Send absence emails</span>
+            </label>
+          </div>
           <div class="attendance-undo hidden" id="attendanceUndo">
             <span class="attendance-undo-label">Last change</span>
             <button type="button" class="btn secondary" id="attendanceUndoBtn">Undo</button>
           </div>
         </div>
         <div class="attendance-report-actions">
-          <button type="button" class="btn secondary" id="attendanceCancelBtn">Close</button>
           <button type="button" class="btn primary" id="attendanceSaveBtn">Done</button>
         </div>
       </div>

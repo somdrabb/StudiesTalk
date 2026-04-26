@@ -29,6 +29,7 @@ const { RateLimiterMemory } = require('rate-limiter-flexible');
 const helmet = require('helmet');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
+const QRCode = require('qrcode');
 const { getFfmpegCommand, isStrict } = require('./server/ffmpeg');
 const inboundEmailService = require('./server/services/inboundEmail.service');
 const jitsiConfig = require('./server/config/jitsi');
@@ -4343,6 +4344,10 @@ app.get('/register', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'register.html'));
 });
 
+app.get('/attendance/check-in', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
 app.get(/^\/channels\/[^/]+\/live\/[^/]+\/presenter\/?$/, (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'live-presenter.html'));
 });
@@ -6628,9 +6633,6 @@ CREATE TABLE IF NOT EXISTS announcements (
 
   CREATE INDEX IF NOT EXISTS idx_files_registry_ws_pinned
     ON files_registry(workspace_id, pinned);
-
-  CREATE INDEX IF NOT EXISTS idx_files_registry_ws_checksum
-    ON files_registry(workspace_id, checksum);
 
   /* ========== FILE EVENTS (ANALYTICS) ========== */
   CREATE TABLE IF NOT EXISTS file_events (
@@ -13954,6 +13956,15 @@ app.post('/api/classes/:channelId/attendance/session-code', express.json(), asyn
     const session = await getOrCreateAttendanceSession(workspaceId, channelId, sessionDate, user.id);
     const code = generateAttendanceCode();
     const expiresAt = new Date(Date.now() + expiresMinutes * 60 * 1000).toISOString();
+    const checkInPath = `/attendance/check-in?code=${encodeURIComponent(code)}&channelId=${encodeURIComponent(channelId)}&sessionId=${encodeURIComponent(session.id)}`;
+    const qrDataUrl = await QRCode.toDataURL(`${ENV.APP_BASE_URL || req.protocol + '://' + req.get('host')}${checkInPath}`, {
+      width: 160,
+      margin: 1,
+      color: {
+        dark: '#0f172a',
+        light: '#ffffff'
+      }
+    });
     db.prepare(`
       UPDATE attendance_sessions
       SET start_time = ?,
@@ -13982,7 +13993,9 @@ app.post('/api/classes/:channelId/attendance/session-code', express.json(), asyn
       gracePeriodMinutes,
       expiresAt,
       code,
-      qrValue: JSON.stringify({ channelId, sessionId: session.id, code })
+      checkInPath,
+      qrValue: checkInPath,
+      qrDataUrl
     });
   } catch (err) {
     console.error('[Attendance] Failed to create session code', err);

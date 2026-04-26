@@ -244,11 +244,20 @@ async function main() {
         json: { date: '2099-01-10', start_time: '23:59', grace_period_minutes: 10, expires_minutes: 15 }
       });
       assert.ok(codePayload.code, 'teacher should receive attendance code');
+      assert.ok(String(codePayload.checkInPath || '').includes(`/attendance/check-in?code=${encodeURIComponent(codePayload.code)}`), 'teacher should receive attendance deep-link payload');
+      assert.ok(String(codePayload.qrDataUrl || '').startsWith('data:image/png;base64,'), 'teacher should receive scannable QR image payload');
 
       const studentCheckIn = await request(baseUrl, 'POST', `/api/attendance/check-in`, studentToken, {
         json: { channelId: ids.classChannelId, sessionId: codePayload.sessionId, code: codePayload.code }
       });
       assert.strictEqual(studentCheckIn.status, 'present');
+
+      await request(baseUrl, 'POST', `/api/attendance/check-in`, teacherToken, {
+        json: { channelId: ids.classChannelId, sessionId: codePayload.sessionId, code: codePayload.code },
+        expectedStatus: 403
+      }).then((payload) => {
+        assert.strictEqual(payload.error, 'Forbidden');
+      });
 
       await request(baseUrl, 'POST', `/api/attendance/check-in`, studentToken, {
         json: { channelId: ids.classChannelId, sessionId: codePayload.sessionId, code: codePayload.code },
