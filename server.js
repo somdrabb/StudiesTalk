@@ -465,6 +465,29 @@ const policyAcceptanceLimiter = createScopedRateLimiter({
     /^\/api\/policy\/accept$/
   ]
 });
+const attendanceGuestCheckInLimiter = createScopedRateLimiter({
+  keyPrefix: 'attendance_guest_checkin',
+  points: 6,
+  duration: 15 * 60,
+  blockDuration: 15 * 60,
+  methods: ['POST'],
+  patterns: [/^\/api\/attendance\/check-in\/guest$/],
+  keyFn: (req) => {
+    const code = String(req.body?.code || '').trim().toUpperCase();
+    return `${String(req.ip || 'unknown')}::${code || 'none'}`;
+  },
+  onBlocked: (req) =>
+    logSecurityEvent({
+      type: 'attendance.guest_checkin_rate_limited',
+      severity: 'warn',
+      ip: req.ip || null,
+      userAgent: req.headers['user-agent'] || null,
+      payload: {
+        channelId: String(req.body?.channelId || '').trim(),
+        sessionId: String(req.body?.sessionId || '').trim()
+      }
+    })
+});
 const onboardingMutationLimiter = createScopedRateLimiter({
   keyPrefix: 'onboarding_mutation',
   points: 45,
@@ -4348,6 +4371,21 @@ app.get('/attendance/check-in', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+app.get('/api/attendance/check-in/public', (req, res) => {
+  const code = String(req.query?.code || '').trim().toUpperCase();
+  const channelId = String(req.query?.channelId || '').trim();
+  const sessionId = String(req.query?.sessionId || '').trim();
+  if (!code) return res.status(400).json({ error: 'code is required' });
+  const session = getAttendanceSessionByCode({ channelId, sessionId, code });
+  if (!session) {
+    return res.status(404).json({ error: 'Check-in link not found' });
+  }
+  return res.json({
+    ok: true,
+    ...resolveAttendanceSessionPublicMeta(session)
+  });
+});
+
 app.get(/^\/channels\/[^/]+\/live\/[^/]+\/presenter\/?$/, (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'live-presenter.html'));
 });
@@ -6074,6 +6112,36 @@ function getAttendanceRecordRow(sessionId, studentUserId) {
   `).get(String(sessionId || '').trim(), String(studentUserId || '').trim()) || null;
 }
 
+function getAttendanceSessionByCode({ workspaceId = '', channelId = '', sessionId = '', code = '' } = {}) {
+  const normalizedCodeHash = hashAttendanceCode(code);
+  const normalizedSessionId = String(sessionId || '').trim();
+  if (normalizedSessionId) {
+    const row = getAttendanceSessionRowById(normalizedSessionId);
+    if (!row) return null;
+    if (String(row.checkin_code_hash || '') !== normalizedCodeHash) return null;
+    if (workspaceId && String(row.workspace_id || '') !== String(workspaceId || '').trim()) return null;
+    if (channelId && String(row.channel_id || '') !== String(channelId || '').trim()) return null;
+    return row;
+  }
+  const params = [normalizedCodeHash];
+  const filters = ['checkin_code_hash = ?'];
+  if (workspaceId) {
+    filters.push('workspace_id = ?');
+    params.push(String(workspaceId || '').trim());
+  }
+  if (channelId) {
+    filters.push('channel_id = ?');
+    params.push(String(channelId || '').trim());
+  }
+  return db.prepare(`
+    SELECT *
+    FROM attendance_sessions
+    WHERE ${filters.join(' AND ')}
+    ORDER BY datetime(COALESCE(checkin_code_expires_at, created_at)) DESC
+    LIMIT 1
+  `).get(...params) || null;
+}
+
 function getWorkspaceIdFromUser(user) {
   return String(user?.workspaceId || user?.workspace_id || 'default');
 }
@@ -6122,6 +6190,65 @@ function listClassStudents(workspaceId, channelId) {
        ORDER BY LOWER(COALESCE(u.name, u.username, u.email)) ASC`
     )
     .all(channelId, workspaceId);
+}
+
+function findClassStudentForGuestCheckIn(workspaceId, channelId, identifier, dateOfBirth) {
+  const normalizedIdentifier = String(identifier || '').trim();
+  const normalizedEmail = normalizeRegistrationEmail(normalizedIdentifier);
+  const normalizedDob = normalizeDateOfBirth(dateOfBirth);
+  if (!normalizedIdentifier || !normalizedDob) return null;
+  return db.prepare(`
+    SELECT u.id,
+           u.workspace_id AS workspaceId,
+           u.email,
+           u.username,
+           u.date_of_birth AS dateOfBirth,
+           COALESCE(u.name, u.username, u.email, u.first_name || ' ' || u.last_name) AS name
+    FROM channel_members cm
+    JOIN users u ON u.id = cm.user_id
+    WHERE cm.channel_id = ?
+      AND u.workspace_id = ?
+      AND LOWER(COALESCE(u.role, '')) = 'student'
+      AND u.date_of_birth = ?
+      AND (
+        lower(COALESCE(u.email, '')) = lower(?)
+        OR COALESCE(u.username, '') = ?
+        OR u.id = ?
+      )
+    LIMIT 1
+  `).get(channelId, workspaceId, normalizedDob, normalizedEmail || normalizedIdentifier, normalizedIdentifier, normalizedIdentifier) || null;
+}
+
+function buildGuestAttendanceVerificationError() {
+  return { error: 'We could not verify your student details.' };
+}
+
+function resolveAttendanceSessionPublicMeta(session) {
+  if (!session) return null;
+  const channel = db.prepare(`
+    SELECT id, name, workspace_id AS workspaceId
+    FROM channels
+    WHERE id = ?
+    LIMIT 1
+  `).get(String(session.channel_id || '').trim()) || null;
+  const workspace = db.prepare(`
+    SELECT id, name
+    FROM workspaces
+    WHERE id = ?
+    LIMIT 1
+  `).get(String(session.workspace_id || '').trim()) || null;
+  const expiresAt = session.checkin_code_expires_at || null;
+  const expired = expiresAt ? Date.parse(expiresAt) < Date.now() : false;
+  return {
+    sessionId: String(session.id || ''),
+    channelId: String(session.channel_id || ''),
+    workspaceId: String(session.workspace_id || ''),
+    className: channel?.name || 'Class',
+    schoolName: workspace?.name || 'School',
+    sessionDate: String(session.session_date || ''),
+    expiresAt,
+    status: expired ? 'expired' : 'open'
+  };
 }
 
 async function getOrCreateAttendanceSession(workspaceId, channelId, sessionDate, createdByUserId) {
@@ -14094,6 +14221,150 @@ app.post('/api/attendance/check-in', express.json(), async (req, res) => {
   });
 
   res.json({ ok: true, sessionId, status, checkedInAt: checkedInAt.toISOString() });
+});
+
+app.post('/api/attendance/check-in/guest', attendanceGuestCheckInLimiter, express.json(), async (req, res) => {
+  const user = getAuthedUser(req);
+  if (user) {
+    return res.status(409).json({ error: 'Use the signed-in attendance check-in flow.' });
+  }
+
+  const code = String(req.body?.code || '').trim().toUpperCase();
+  const channelId = String(req.body?.channelId || '').trim();
+  const sessionId = String(req.body?.sessionId || '').trim();
+  const identifier = String(req.body?.identifier || '').trim();
+  const dateOfBirth = normalizeDateOfBirth(req.body?.dateOfBirth || '');
+
+  if (!code || !identifier || !dateOfBirth) {
+    return res.status(400).json(buildGuestAttendanceVerificationError());
+  }
+
+  const session = getAttendanceSessionByCode({ channelId, sessionId, code });
+  if (!session || String(session.channel_id || '') !== channelId) {
+    await logSecurityEvent({
+      type: 'attendance.guest_checkin_failed',
+      severity: 'warn',
+      ip: req.ip || null,
+      userAgent: req.headers['user-agent'] || null,
+      payload: {
+        reason: 'invalid_session',
+        channelId,
+        sessionId
+      }
+    });
+    return res.status(404).json({ error: 'This check-in link is invalid or expired.' });
+  }
+  if (session.checkin_code_expires_at && Date.parse(session.checkin_code_expires_at) < Date.now()) {
+    await logSecurityEvent({
+      workspaceId: session.workspace_id,
+      type: 'attendance.guest_checkin_failed',
+      severity: 'warn',
+      ip: req.ip || null,
+      userAgent: req.headers['user-agent'] || null,
+      payload: {
+        reason: 'expired',
+        channelId: session.channel_id,
+        sessionId: session.id
+      }
+    });
+    return res.status(400).json({ error: 'This check-in link is invalid or expired.' });
+  }
+
+  const chk = ensureChannelIsClass(session.workspace_id, session.channel_id);
+  if (!chk.ok) {
+    await logSecurityEvent({
+      workspaceId: session.workspace_id,
+      type: 'attendance.guest_checkin_failed',
+      severity: 'warn',
+      ip: req.ip || null,
+      userAgent: req.headers['user-agent'] || null,
+      payload: {
+        reason: 'channel_invalid',
+        channelId: session.channel_id,
+        sessionId: session.id
+      }
+    });
+    return res.status(404).json({ error: 'This check-in link is invalid or expired.' });
+  }
+
+  const student = findClassStudentForGuestCheckIn(session.workspace_id, session.channel_id, identifier, dateOfBirth);
+  if (!student) {
+    await logSecurityEvent({
+      workspaceId: session.workspace_id,
+      type: 'attendance.guest_checkin_failed',
+      severity: 'warn',
+      ip: req.ip || null,
+      userAgent: req.headers['user-agent'] || null,
+      payload: {
+        reason: 'verification_failed',
+        channelId: session.channel_id,
+        sessionId: session.id,
+        identifierType: normalizeRegistrationEmail(identifier) ? 'email' : 'student_id'
+      }
+    });
+    return res.status(403).json(buildGuestAttendanceVerificationError());
+  }
+
+  const existing = getAttendanceRecordRow(session.id, student.id);
+  if (existing && ['present', 'late', 'excused'].includes(normalizeAttendanceStatus(existing.status, 'absent'))) {
+    await logSecurityEvent({
+      workspaceId: session.workspace_id,
+      actorUserId: student.id,
+      type: 'attendance.guest_checkin_failed',
+      severity: 'info',
+      ip: req.ip || null,
+      userAgent: req.headers['user-agent'] || null,
+      payload: {
+        reason: 'duplicate',
+        channelId: session.channel_id,
+        sessionId: session.id
+      }
+    });
+    return res.status(409).json({ error: 'You are already checked in.' });
+  }
+
+  const checkedInAt = new Date();
+  const status = resolveAttendanceStatusForCheckIn(session, checkedInAt);
+  await attendanceRepository.upsertAttendanceRecords({
+    idFactory: uuid,
+    workspaceId: session.workspace_id,
+    sessionId: session.id,
+    channelId: session.channel_id,
+    markedByUserId: student.id,
+    records: [{
+      student_user_id: student.id,
+      status,
+      note: '',
+      checked_in_at: checkedInAt.toISOString(),
+      checkin_method: 'guest_code',
+      certificate_file_id: existing?.certificate_file_id || null
+    }]
+  });
+
+  await logSecurityEvent({
+    workspaceId: session.workspace_id,
+    actorUserId: student.id,
+    type: 'attendance.guest_checkin_completed',
+    severity: 'info',
+    ip: req.ip || null,
+    userAgent: req.headers['user-agent'] || null,
+    payload: {
+      channelId: session.channel_id,
+      sessionId: session.id,
+      status
+    }
+  });
+
+  return res.json({
+    ok: true,
+    sessionId: session.id,
+    channelId: session.channel_id,
+    className: chk.channel?.name || 'Class',
+    schoolName: db.prepare('SELECT name FROM workspaces WHERE id = ?').get(session.workspace_id)?.name || 'School',
+    sessionDate: String(session.session_date || ''),
+    status,
+    checkedInAt: checkedInAt.toISOString()
+  });
 });
 
 app.post('/api/classes/:channelId/attendance/records/:studentId', express.json(), async (req, res) => {
