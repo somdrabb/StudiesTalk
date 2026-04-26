@@ -25232,7 +25232,14 @@ let attendanceState = {
   qrValue: "",
   qrDataUrl: "",
   qrCountdownTimer: null,
-  pendingDeepLinkCode: null
+  pendingDeepLinkCode: null,
+  guestMode: false,
+  guestPublicMeta: null,
+  scannerStream: null,
+  scannerActive: false,
+  scannerRafId: null,
+  scannerCodeFound: "",
+  scannerMessage: ""
 };
 
 const ATTENDANCE_DEEP_LINK_STORAGE_KEY = "studiestalk_attendance_deep_link";
@@ -25314,6 +25321,26 @@ function buildAttendanceDeepLink({ code, channelId, sessionId }) {
   return `${window.location.origin}/attendance/check-in?${params.toString()}`;
 }
 
+async function loadAttendanceGuestPublicMeta(target) {
+  const params = new URLSearchParams();
+  params.set("code", String(target?.code || "").trim().toUpperCase());
+  if (target?.channelId) params.set("channelId", String(target.channelId || "").trim());
+  if (target?.sessionId) params.set("sessionId", String(target.sessionId || "").trim());
+  return fetchJSON(`/api/attendance/check-in/public?${params.toString()}`);
+}
+
+function extractAttendanceCodeFromScan(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw, window.location.origin);
+    const code = String(url.searchParams.get("code") || "").trim().toUpperCase();
+    if (code) return code;
+  } catch (_err) {}
+  const normalized = raw.toUpperCase();
+  return /^[A-Z0-9_-]{4,32}$/.test(normalized) ? normalized : "";
+}
+
 function mapAttendanceCheckInError(error, fallback = "Unable to check in.") {
   const message = String(error?.message || error?.error || fallback || "").trim().toLowerCase();
   if (message.includes("expired")) return "This code has expired. Ask your teacher for a new code.";
@@ -25321,6 +25348,15 @@ function mapAttendanceCheckInError(error, fallback = "Unable to check in.") {
   if (message.includes("not found") || message.includes("invalid check-in code")) return "This code belongs to another class.";
   if (message.includes("forbidden")) return "Student check-in is only available for student accounts.";
   if (message.includes("required")) return "Attendance is not open yet.";
+  return fallback;
+}
+
+function mapAttendanceGuestError(error, fallback = "We couldn't verify your student details.") {
+  const message = String(error?.message || error?.error || fallback || "").trim().toLowerCase();
+  if (message.includes("expired") || message.includes("invalid")) return "This check-in link is invalid or expired.";
+  if (message.includes("already checked")) return "You are already checked in.";
+  if (message.includes("rate_limited") || message.includes("too many")) return "Too many attempts. Please try again later.";
+  if (message.includes("signed-in")) return "You are already signed in. Use the normal class check-in flow.";
   return fallback;
 }
 
@@ -25369,9 +25405,39 @@ function clearAttendanceQrCache() {
   } catch (_err) {}
 }
 
+function stopAttendanceScanner() {
+  const video = document.getElementById("attendanceScannerVideo");
+  const preview = document.getElementById("attendanceScanPreviewWrap");
+  const stateBadge = document.getElementById("attendanceScannerStateBadge");
+  if (attendanceState.scannerRafId) {
+    cancelAnimationFrame(attendanceState.scannerRafId);
+    attendanceState.scannerRafId = null;
+  }
+  if (attendanceState.scannerStream) {
+    try {
+      attendanceState.scannerStream.getTracks().forEach((track) => track.stop());
+    } catch (_err) {}
+    attendanceState.scannerStream = null;
+  }
+  attendanceState.scannerActive = false;
+  if (video) {
+    try {
+      video.pause();
+      video.srcObject = null;
+    } catch (_err) {}
+  }
+  if (preview) preview.classList.add("hidden");
+  if (stateBadge) {
+    stateBadge.classList.remove("is-warning", "is-danger");
+    stateBadge.classList.add("is-active");
+    stateBadge.textContent = "Scanning…";
+  }
+}
+
 function showAttendanceModal(show) {
   const modal = document.getElementById("attendanceModal");
   if (!modal) return;
+  if (!show) stopAttendanceScanner();
   modal.classList.toggle("hidden", !show);
   document.body.classList.toggle("modal-open", show);
 }
@@ -25432,6 +25498,7 @@ function renderAttendanceExpiryCountdown() {
   const meta = document.getElementById("attendanceCodeExpiryMeta");
   const input = document.getElementById("attendanceStudentCodeInput");
   const button = document.getElementById("attendanceStudentCheckInBtn");
+  const scanButton = document.getElementById("attendanceStartScannerBtn");
   if (!badge) return;
   const expiryMs = attendanceState.codeExpiresAt ? Date.parse(attendanceState.codeExpiresAt) : 0;
   if (!expiryMs || Number.isNaN(expiryMs)) {
@@ -25440,6 +25507,7 @@ function renderAttendanceExpiryCountdown() {
     if (meta) meta.textContent = "";
     if (input && !attendanceState.managementMode) input.disabled = false;
     if (button && !attendanceState.managementMode) button.disabled = false;
+    if (scanButton && !attendanceState.managementMode) scanButton.disabled = false;
     clearAttendanceQrCache();
     return;
   }
@@ -25450,8 +25518,10 @@ function renderAttendanceExpiryCountdown() {
     if (meta) meta.textContent = `Expired at ${new Date(attendanceState.codeExpiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
     if (input && !attendanceState.managementMode) input.disabled = true;
     if (button && !attendanceState.managementMode) button.disabled = true;
+    if (scanButton && !attendanceState.managementMode) scanButton.disabled = true;
     clearAttendanceQrCache();
     clearAttendanceQrCountdown();
+    stopAttendanceScanner();
     return;
   }
   badge.textContent = `Expires in ${formatAttendanceCountdown(remaining)}`;
@@ -25459,10 +25529,13 @@ function renderAttendanceExpiryCountdown() {
   if (meta) meta.textContent = `Valid until ${new Date(attendanceState.codeExpiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
   if (input && !attendanceState.managementMode) input.disabled = false;
   if (button && !attendanceState.managementMode) button.disabled = false;
+  if (scanButton && !attendanceState.managementMode) scanButton.disabled = false;
 }
 
 function renderAttendanceModalMode() {
   const teacherMode = !!attendanceState.managementMode;
+  if (teacherMode) stopAttendanceScanner();
+  const guestMode = !!attendanceState.guestMode;
   document.getElementById("attendanceSearchWrap")?.classList.toggle("hidden", !teacherMode);
   document.getElementById("attendanceCodePanel")?.classList.toggle("hidden", !teacherMode);
   document.getElementById("attendanceReportGrid")?.classList.toggle("hidden", !teacherMode);
@@ -25472,6 +25545,9 @@ function renderAttendanceModalMode() {
   document.getElementById("attendanceSaveBtn")?.classList.toggle("hidden", !teacherMode);
   const footerSummary = document.getElementById("attendanceFooterSummary");
   if (footerSummary) footerSummary.classList.toggle("hidden", !teacherMode);
+  document.getElementById("attendanceStudentScanBlock")?.classList.toggle("hidden", teacherMode || guestMode);
+  document.getElementById("attendanceCheckinForm")?.classList.toggle("hidden", teacherMode || guestMode);
+  document.getElementById("attendanceGuestCheckIn")?.classList.toggle("hidden", !guestMode);
 }
 
 function resolveAttendanceChannelLabel(channelId) {
@@ -25549,6 +25625,13 @@ function renderAttendanceStudentState() {
   const input = document.getElementById("attendanceStudentCodeInput");
   const button = document.getElementById("attendanceStudentCheckInBtn");
   const intro = document.getElementById("attendanceStudentIntro");
+  const scanBlock = document.getElementById("attendanceStudentScanBlock");
+  const scanButton = document.getElementById("attendanceStartScannerBtn");
+  const scanStateBadge = document.getElementById("attendanceScannerStateBadge");
+  const guestIdentifierInput = document.getElementById("attendanceGuestIdentifierInput");
+  const guestDobInput = document.getElementById("attendanceGuestDobInput");
+  const guestSubmitButton = document.getElementById("attendanceGuestSubmitBtn");
+  const guestMeta = document.getElementById("attendanceGuestMeta");
   if (badge) {
     badge.className = `attendance-status-badge is-${attendanceState.studentStatusTone || "neutral"}`;
     badge.textContent = attendanceState.studentStatus || (attendanceState.managementMode ? "Teacher/admin view" : "Not checked in");
@@ -25556,6 +25639,8 @@ function renderAttendanceStudentState() {
   if (intro) {
     intro.textContent = attendanceState.managementMode
       ? "Student self check-in is available from student accounts only."
+      : attendanceState.guestMode
+        ? "Verify your student details to finish attendance on this phone."
       : attendanceState.pendingDeepLinkCode
         ? "We found your attendance link. Review the code below and confirm check-in."
         : "Scan the QR code your teacher shared, open the attendance link, or enter the class code below.";
@@ -25563,14 +25648,140 @@ function renderAttendanceStudentState() {
   if (meta) {
     if (attendanceState.managementMode) {
       meta.textContent = "Student self check-in is available from student accounts only. Teachers use this panel to generate codes and review attendance.";
+    } else if (attendanceState.guestMode) {
+      meta.textContent = attendanceState.guestPublicMeta?.status === "expired"
+        ? "This check-in link is invalid or expired."
+        : "Enter your student ID or registered email, then confirm your date of birth.";
     } else if (attendanceState.pendingDeepLinkCode && !attendanceState.studentStatus) {
       meta.textContent = "The code from your attendance link is ready. Tap Check in to continue.";
     } else if (!attendanceState.studentStatus) {
       meta.textContent = "Enter the short-lived class code to check yourself in.";
     }
   }
-  if (input) input.disabled = !!attendanceState.managementMode;
-  if (button) button.disabled = !!attendanceState.managementMode;
+  if (scanBlock) scanBlock.classList.toggle("hidden", !!attendanceState.managementMode || !!attendanceState.guestMode);
+  if (input) input.disabled = !!attendanceState.managementMode || !!attendanceState.guestMode;
+  if (button) button.disabled = !!attendanceState.managementMode || !!attendanceState.guestMode;
+  if (scanButton) {
+    scanButton.disabled = !!attendanceState.managementMode || !!attendanceState.guestMode;
+    scanButton.classList.toggle("hidden", !!attendanceState.scannerActive || !!attendanceState.guestMode);
+  }
+  if (scanStateBadge && attendanceState.scannerCodeFound) {
+    scanStateBadge.textContent = `Code found: ${attendanceState.scannerCodeFound}`;
+    scanStateBadge.classList.remove("is-danger", "is-warning");
+    scanStateBadge.classList.add("is-active");
+  }
+  if (guestMeta) {
+    const publicMeta = attendanceState.guestPublicMeta;
+    guestMeta.textContent = publicMeta
+      ? `${publicMeta.schoolName || "School"} • ${publicMeta.className || "Class"} • ${publicMeta.sessionDate || ""}`
+      : "Loading class details…";
+  }
+  if (guestIdentifierInput) guestIdentifierInput.disabled = !attendanceState.guestMode;
+  if (guestDobInput) guestDobInput.disabled = !attendanceState.guestMode;
+  if (guestSubmitButton) {
+    guestSubmitButton.disabled = !attendanceState.guestMode || attendanceState.guestPublicMeta?.status === "expired";
+  }
+}
+
+function setAttendanceScannerMessage(message, tone = "active") {
+  const stateBadge = document.getElementById("attendanceScannerStateBadge");
+  if (!stateBadge) return;
+  stateBadge.classList.remove("is-active", "is-warning", "is-danger");
+  stateBadge.classList.add(tone === "warning" ? "is-warning" : tone === "danger" ? "is-danger" : "is-active");
+  stateBadge.textContent = message;
+}
+
+async function submitAttendanceDetectedCode(code) {
+  const input = document.getElementById("attendanceStudentCodeInput");
+  attendanceState.scannerCodeFound = code;
+  if (input) input.value = code;
+  setAttendanceScannerMessage(`Code found: ${code}`);
+  attendanceState.studentStatus = "Checking in...";
+  attendanceState.studentStatusTone = "neutral";
+  renderAttendanceStudentState();
+  await submitAttendanceStudentCheckIn({ codeOverride: code });
+}
+
+function scanAttendanceVideoFrame(video, canvas, context) {
+  if (!attendanceState.scannerActive) return;
+  if (video.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) {
+    const width = video.videoWidth || 0;
+    const height = video.videoHeight || 0;
+    if (width && height) {
+      if (canvas.width !== width) canvas.width = width;
+      if (canvas.height !== height) canvas.height = height;
+      context.drawImage(video, 0, 0, width, height);
+      const frame = context.getImageData(0, 0, width, height);
+      const result = window.jsQR?.(frame.data, width, height, { inversionAttempts: "dontInvert" });
+      const code = extractAttendanceCodeFromScan(result?.data || "");
+      if (code) {
+        stopAttendanceScanner();
+        submitAttendanceDetectedCode(code).catch((error) => {
+          console.error("Attendance QR submit failed", error);
+        });
+        return;
+      }
+    }
+  }
+  attendanceState.scannerRafId = requestAnimationFrame(() => scanAttendanceVideoFrame(video, canvas, context));
+}
+
+async function startAttendanceScanner() {
+  if (attendanceState.managementMode) return;
+  const input = document.getElementById("attendanceStudentCodeInput");
+  const preview = document.getElementById("attendanceScanPreviewWrap");
+  const video = document.getElementById("attendanceScannerVideo");
+  const canvas = document.getElementById("attendanceScannerCanvas");
+  if (!navigator.mediaDevices?.getUserMedia) {
+    attendanceState.studentStatus = "Camera unavailable";
+    attendanceState.studentStatusTone = "warning";
+    const meta = document.getElementById("attendanceStudentStatusMeta");
+    if (meta) meta.textContent = "Camera access is not supported here. You can still enter the code manually.";
+    renderAttendanceStudentState();
+    return;
+  }
+  if (!window.jsQR) {
+    attendanceState.studentStatus = "Scanner unavailable";
+    attendanceState.studentStatusTone = "warning";
+    const meta = document.getElementById("attendanceStudentStatusMeta");
+    if (meta) meta.textContent = "QR scanning is unavailable right now. You can still enter the code manually.";
+    renderAttendanceStudentState();
+    return;
+  }
+  if (!video || !canvas || !preview) return;
+  stopAttendanceScanner();
+  attendanceState.scannerCodeFound = "";
+  if (input) input.value = "";
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "environment" } },
+      audio: false
+    });
+    attendanceState.scannerStream = stream;
+    attendanceState.scannerActive = true;
+    preview.classList.remove("hidden");
+    video.srcObject = stream;
+    await video.play();
+    setAttendanceScannerMessage("Scanning…");
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) {
+      throw new Error("Camera preview unavailable.");
+    }
+    attendanceState.studentStatus = "Scanner ready";
+    attendanceState.studentStatusTone = "neutral";
+    const meta = document.getElementById("attendanceStudentStatusMeta");
+    if (meta) meta.textContent = "Hold the QR code steady in front of the camera.";
+    renderAttendanceStudentState();
+    scanAttendanceVideoFrame(video, canvas, context);
+  } catch (error) {
+    console.error("Attendance scanner failed", error);
+    stopAttendanceScanner();
+    attendanceState.studentStatus = "Camera blocked";
+    attendanceState.studentStatusTone = "warning";
+    const meta = document.getElementById("attendanceStudentStatusMeta");
+    if (meta) meta.textContent = "Camera access was blocked. You can still enter the code manually.";
+    renderAttendanceStudentState();
+  }
 }
 
 function flashAttendanceRow(studentId) {
@@ -25784,6 +25995,8 @@ async function loadAttendanceForChannel(channelId, requestedDate) {
       codeExpiresAt: data.session?.checkinCodeExpiresAt || "",
       qrValue: "",
       qrDataUrl: "",
+      guestMode: false,
+      guestPublicMeta: null,
       studentStatus: "",
       studentStatusTone: "neutral",
       managementMode: true,
@@ -25882,6 +26095,8 @@ async function openAttendanceForCurrentClass() {
       codeExpiresAt: "",
       qrValue: "",
       qrDataUrl: "",
+      guestMode: false,
+      guestPublicMeta: null,
       studentStatus: "",
       studentStatusTone: "neutral",
       managementMode: false,
@@ -26023,6 +26238,7 @@ async function submitAttendanceStudentCheckIn(options = {}) {
     if (!options.suppressSuccessToast) {
       showToast?.(payload.status === "late" ? "Checked in as late." : "Attendance recorded.");
     }
+    attendanceState.pendingDeepLinkCode = null;
     storeAttendanceDeepLinkTarget(null);
     clearAttendanceDeepLinkRoute();
   } catch (error) {
@@ -26035,17 +26251,95 @@ async function submitAttendanceStudentCheckIn(options = {}) {
   renderAttendanceStudentState();
 }
 
+async function submitAttendanceGuestCheckIn() {
+  const identifierInput = document.getElementById("attendanceGuestIdentifierInput");
+  const dobInput = document.getElementById("attendanceGuestDobInput");
+  const identifier = String(identifierInput?.value || "").trim();
+  const dateOfBirth = String(dobInput?.value || "").trim();
+  if (!attendanceState.pendingDeepLinkCode || !attendanceState.channelId || !attendanceState.sessionId) {
+    attendanceState.studentStatus = "Check-in unavailable";
+    attendanceState.studentStatusTone = "danger";
+    renderAttendanceStudentState();
+    return;
+  }
+  attendanceState.studentStatus = "Verifying…";
+  attendanceState.studentStatusTone = "neutral";
+  renderAttendanceStudentState();
+  try {
+    const payload = await fetchJSON(`/api/attendance/check-in/guest`, {
+      method: "POST",
+      body: JSON.stringify({
+        code: attendanceState.pendingDeepLinkCode,
+        channelId: attendanceState.channelId,
+        sessionId: attendanceState.sessionId,
+        identifier,
+        dateOfBirth
+      })
+    });
+    attendanceState.studentStatus = payload?.status === "late" ? "Checked in as late" : "Attendance recorded";
+    attendanceState.studentStatusTone = payload?.status === "late" ? "warning" : "success";
+    const meta = document.getElementById("attendanceStudentStatusMeta");
+    if (meta) {
+      meta.textContent = payload?.checkedInAt
+        ? `Recorded ${new Date(payload.checkedInAt).toLocaleString()}`
+        : "Attendance recorded.";
+    }
+    const guestSubmitButton = document.getElementById("attendanceGuestSubmitBtn");
+    if (guestSubmitButton) guestSubmitButton.disabled = true;
+    clearAttendanceDeepLinkRoute();
+    storeAttendanceDeepLinkTarget(null);
+  } catch (error) {
+    attendanceState.studentStatus = "Check-in blocked";
+    attendanceState.studentStatusTone = "danger";
+    const meta = document.getElementById("attendanceStudentStatusMeta");
+    if (meta) meta.textContent = mapAttendanceGuestError(error, "We couldn't verify your student details.");
+  }
+  renderAttendanceStudentState();
+}
+
 async function maybeHandleAttendanceDeepLink({ afterAuth = false } = {}) {
   const target = getAttendanceDeepLinkTarget() || loadStoredAttendanceDeepLinkTarget();
   if (!target?.code) return false;
   attendanceState.pendingDeepLinkCode = target.code;
   storeAttendanceDeepLinkTarget(target);
   if (!sessionUser) {
-    showLoginOverlay();
+    hideLoginOverlay();
+    attendanceState.channelId = target.channelId || attendanceState.channelId;
+    attendanceState.sessionId = target.sessionId || attendanceState.sessionId;
+    attendanceState.date = isoDateOnlyLocal();
+    attendanceState.managementMode = false;
+    attendanceState.guestMode = true;
+    attendanceState.studentStatus = "";
+    attendanceState.studentStatusTone = "neutral";
+    try {
+      attendanceState.guestPublicMeta = await loadAttendanceGuestPublicMeta(target);
+      attendanceState.channelId = attendanceState.guestPublicMeta?.channelId || attendanceState.channelId;
+      attendanceState.sessionId = attendanceState.guestPublicMeta?.sessionId || attendanceState.sessionId;
+      attendanceState.date = attendanceState.guestPublicMeta?.sessionDate || attendanceState.date;
+      renderAttendanceStudentModalHeading(attendanceState.channelId, attendanceState.date);
+      const identifierInput = document.getElementById("attendanceGuestIdentifierInput");
+      const dobInput = document.getElementById("attendanceGuestDobInput");
+      if (identifierInput) identifierInput.value = "";
+      if (dobInput) dobInput.value = "";
+      if (attendanceState.guestPublicMeta?.status === "expired") {
+        attendanceState.studentStatus = "Link expired";
+        attendanceState.studentStatusTone = "danger";
+      }
+      renderAttendanceStudentState();
+      renderAttendanceModalMode();
+      showAttendanceModal(true);
+    } catch (_error) {
+      attendanceState.studentStatus = "Link unavailable";
+      attendanceState.studentStatusTone = "danger";
+      renderAttendanceStudentState();
+      renderAttendanceModalMode();
+      showAttendanceModal(true);
+    }
     return true;
   }
   if (isTeacherUser?.() || isSchoolAdmin() || isSuperAdmin()) {
     attendanceState.managementMode = true;
+    attendanceState.guestMode = false;
     attendanceState.studentStatus = "Teacher/admin view";
     attendanceState.studentStatusTone = "neutral";
     renderAttendanceStudentState();
@@ -26056,6 +26350,7 @@ async function maybeHandleAttendanceDeepLink({ afterAuth = false } = {}) {
   attendanceState.channelId = target.channelId || attendanceState.channelId;
   attendanceState.sessionId = target.sessionId || attendanceState.sessionId;
   attendanceState.managementMode = false;
+  attendanceState.guestMode = false;
   attendanceState.date = attendanceState.date || isoDateOnlyLocal();
   renderAttendanceStudentModalHeading(attendanceState.channelId, attendanceState.date);
   const input = document.getElementById("attendanceStudentCodeInput");
@@ -26079,6 +26374,15 @@ function wireAttendanceModal() {
   document.getElementById("attendanceSaveBtn")?.addEventListener("click", () => saveAttendance({ closeOnSuccess: true, silent: false }));
   document.getElementById("attendanceGenerateCodeBtn")?.addEventListener("click", generateAttendanceCode);
   document.getElementById("attendanceStudentCheckInBtn")?.addEventListener("click", submitAttendanceStudentCheckIn);
+  document.getElementById("attendanceGuestSubmitBtn")?.addEventListener("click", submitAttendanceGuestCheckIn);
+  document.getElementById("attendanceStartScannerBtn")?.addEventListener("click", startAttendanceScanner);
+  document.getElementById("attendanceStopScannerBtn")?.addEventListener("click", () => {
+    stopAttendanceScanner();
+    const meta = document.getElementById("attendanceStudentStatusMeta");
+    if (meta && !attendanceState.managementMode) {
+      meta.textContent = "Camera stopped. You can restart scanning or enter the class code manually.";
+    }
+  });
   document.getElementById("attendanceCopyCodeBtn")?.addEventListener("click", async () => {
     if (!attendanceState.code) return;
     try {

@@ -3003,7 +3003,36 @@
           <div class="attendance-student-intro" id="attendanceStudentIntro">
             Scan the QR code your teacher shared, open the attendance link, or enter the class code below.
           </div>
-          <div class="attendance-checkin-form">
+          <div class="attendance-guest-checkin hidden" id="attendanceGuestCheckIn">
+            <div class="attendance-guest-meta" id="attendanceGuestMeta"></div>
+            <div class="attendance-guest-field">
+              <label for="attendanceGuestIdentifierInput">Student ID or registered email</label>
+              <input id="attendanceGuestIdentifierInput" type="text" autocomplete="username" placeholder="student123 or student@example.com" />
+            </div>
+            <div class="attendance-guest-field">
+              <label for="attendanceGuestDobInput">Date of birth</label>
+              <input id="attendanceGuestDobInput" type="date" autocomplete="bday" />
+            </div>
+            <button type="button" class="btn secondary attendance-guest-submit" id="attendanceGuestSubmitBtn">Check in</button>
+          </div>
+          <div class="attendance-student-scan-block" id="attendanceStudentScanBlock">
+            <button type="button" class="attendance-scan-card" id="attendanceStartScannerBtn">
+              <span class="attendance-scan-card-icon"><i class="fa-solid fa-camera"></i></span>
+              <span class="attendance-scan-card-copy">
+                <strong>Scan QR code</strong>
+                <span>Use your camera to scan the teacher's attendance QR.</span>
+              </span>
+            </button>
+            <div class="attendance-scan-preview hidden" id="attendanceScanPreviewWrap">
+              <video id="attendanceScannerVideo" playsinline muted></video>
+              <canvas id="attendanceScannerCanvas" class="hidden"></canvas>
+              <div class="attendance-scan-preview-meta">
+                <div class="attendance-inline-badge is-active" id="attendanceScannerStateBadge">Scanning…</div>
+                <button type="button" class="btn secondary" id="attendanceStopScannerBtn">Stop scanning</button>
+              </div>
+            </div>
+          </div>
+          <div class="attendance-checkin-form" id="attendanceCheckinForm">
             <input id="attendanceStudentCodeInput" type="text" maxlength="16" placeholder="Enter class code" />
             <button type="button" class="btn secondary" id="attendanceStudentCheckInBtn">Check in</button>
           </div>
@@ -5807,6 +5836,7 @@
       "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.js";
   }
 </script>
+<script src="vendor/jsQR.js"></script>
 <!-- ✅ app.js must load BEFORE announcements.js (announcements uses helpers from app.js) -->
 <script src="app.js"></script>
 <script src="calendar/calendar.js"></script>
