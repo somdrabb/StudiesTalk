@@ -2545,6 +2545,10 @@
                 <i class="fa-solid fa-video"></i>
                 Live room
                 </div>
+                <span class="live-recording-badge hidden" id="liveRecordingBadge" aria-live="polite">
+                  <i class="fa-solid fa-circle"></i>
+                  Recording
+                </span>
                 <span class="live-domain-badge hidden" id="liveDomainModeBadge" aria-live="polite"></span>
               </div>
               <p class="live-meet-subtitle" id="liveRoomSessionContext">Meeting opens inside your classroom workspace.</p>
@@ -2587,6 +2591,42 @@
             <div class="live-slides-body">
               <canvas id="slidesCanvas"></canvas>
               <div class="muted slidesEmpty" id="slidesEmpty">No slides yet.</div>
+            </div>
+          </section>
+          <section class="live-polls-panel" aria-label="Live polls and quizzes">
+            <div class="live-slides-head">
+              <div class="live-slides-title">
+                <i class="fa-solid fa-square-poll-horizontal"></i>
+                Polls and quizzes
+              </div>
+            </div>
+            <div class="live-poll-panel-body">
+              <div class="live-controls-status muted" id="liveRoomPollStatus">No open poll right now.</div>
+              <div class="live-poll-current-card" id="liveRoomPollCard"></div>
+              <div class="live-poll-history" id="liveRoomPollHistory"></div>
+            </div>
+          </section>
+          <section class="live-whiteboard-panel" aria-label="Collaborative whiteboard">
+            <div class="live-slides-head">
+              <div class="live-slides-title">
+                <i class="fa-solid fa-pencil"></i>
+                Whiteboard
+              </div>
+              <div class="live-whiteboard-toolbar">
+                <button type="button" class="btn btn-ghost live-whiteboard-tool is-active" id="liveWhiteboardDrawBtn" title="Pencil">
+                  <i class="fa-solid fa-pencil"></i>
+                </button>
+                <button type="button" class="btn btn-ghost live-whiteboard-tool" id="liveWhiteboardEraseBtn" title="Eraser">
+                  <i class="fa-solid fa-eraser"></i>
+                </button>
+                <button type="button" class="btn btn-ghost" id="liveWhiteboardClearBtn" title="Clear board">
+                  <i class="fa-solid fa-trash-can"></i>
+                </button>
+              </div>
+            </div>
+            <div class="live-controls-status muted" id="liveWhiteboardStatus">Loading whiteboard...</div>
+            <div class="live-whiteboard-surface">
+              <canvas id="liveWhiteboardCanvas"></canvas>
             </div>
           </section>
         </div>
@@ -2776,6 +2816,86 @@
       <div class="modal-body">
         <div class="muted" id="liveAttendanceMeta"></div>
         <div class="live-controls-status muted" id="liveAttendanceStatus">Loading live session controls...</div>
+        <section class="live-control-section" aria-label="Recording controls">
+          <div class="live-control-section-head">
+            <h4>Recording consent</h4>
+            <div class="live-control-row-actions">
+              <button type="button" class="live-btn ghost" id="liveRecordingStopBtn">Stop</button>
+              <button type="button" class="live-btn primary" id="liveRecordingStartBtn">Start</button>
+            </div>
+          </div>
+          <div class="live-controls-status muted" id="liveRecordingStatus">Recording is off.</div>
+          <div class="live-control-list" id="liveConsentPendingList"></div>
+        </section>
+        <section class="live-control-section" aria-label="Stored recordings">
+          <div class="live-control-section-head">
+            <h4>Stored recordings</h4>
+          </div>
+          <div class="live-controls-status muted" id="liveRecordingListStatus">Loading recordings...</div>
+          <div class="live-control-list" id="liveRecordingList"></div>
+        </section>
+        <section class="live-control-section" aria-label="Polls and quizzes">
+          <div class="live-control-section-head">
+            <h4>Polls and quizzes</h4>
+          </div>
+          <form class="live-form live-poll-form" id="livePollForm">
+            <div class="live-form-grid-two">
+              <div class="live-form-row">
+                <label for="livePollType">Type</label>
+                <select id="livePollType">
+                  <option value="poll">Poll</option>
+                  <option value="quiz">Quiz</option>
+                </select>
+              </div>
+              <div class="live-form-row">
+                <label for="livePollCorrectOption">Correct answer</label>
+                <select id="livePollCorrectOption">
+                  <option value="">No correct answer</option>
+                </select>
+              </div>
+            </div>
+            <div class="live-form-row">
+              <label for="livePollQuestion">Question</label>
+              <input id="livePollQuestion" type="text" maxlength="220" placeholder="Ask a quick check-in or quiz question" />
+            </div>
+            <div class="live-form-grid-two">
+              <div class="live-form-row">
+                <label for="livePollOption1">Option 1</label>
+                <input id="livePollOption1" type="text" maxlength="120" placeholder="First option" />
+              </div>
+              <div class="live-form-row">
+                <label for="livePollOption2">Option 2</label>
+                <input id="livePollOption2" type="text" maxlength="120" placeholder="Second option" />
+              </div>
+              <div class="live-form-row">
+                <label for="livePollOption3">Option 3</label>
+                <input id="livePollOption3" type="text" maxlength="120" placeholder="Optional" />
+              </div>
+              <div class="live-form-row">
+                <label for="livePollOption4">Option 4</label>
+                <input id="livePollOption4" type="text" maxlength="120" placeholder="Optional" />
+              </div>
+            </div>
+            <div class="live-form-grid-two">
+              <label class="checkbox-label">
+                <input type="checkbox" id="livePollAllowMultiple" />
+                Allow multiple answers
+              </label>
+              <label class="checkbox-label">
+                <input type="checkbox" id="livePollAnonymousResults" />
+                Anonymous results
+              </label>
+            </div>
+            <div class="live-footer-end">
+              <button type="submit" class="live-save-btn" id="livePollCreateBtn">
+                <i class="fa-solid fa-plus"></i>
+                Save draft
+              </button>
+            </div>
+          </form>
+          <div class="live-controls-status muted" id="livePollListStatus">Loading polls...</div>
+          <div class="live-control-list" id="livePollList"></div>
+        </section>
         <section class="live-control-section" aria-label="Pending participants">
           <div class="live-control-section-head">
             <h4>Waiting room</h4>
@@ -2796,6 +2916,29 @@
           <button type="button" class="live-save-btn" id="liveAttendanceSave">
             <i class="fa-solid fa-rotate-right"></i>
             Refresh
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay hidden" id="liveRecordingConsentModal" role="dialog" aria-modal="true" aria-labelledby="liveRecordingConsentTitle">
+    <div class="modal-card live-modal live-recording-consent-modal">
+      <div class="modal-header">
+        <h3 id="liveRecordingConsentTitle">Recording will start</h3>
+        <button type="button" class="icon-btn" id="liveRecordingConsentClose" aria-label="Close recording consent modal">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p class="muted" id="liveRecordingConsentCopy">Your teacher is preparing this live class for recording. You must accept recording consent to continue in the session.</p>
+      </div>
+      <div class="modal-footer live-modal-footer">
+        <div class="live-footer-end">
+          <button type="button" class="live-cancel-btn" id="liveRecordingConsentLeaveBtn">Leave</button>
+          <button type="button" class="live-save-btn" id="liveRecordingConsentAcceptBtn">
+            <i class="fa-solid fa-check"></i>
+            Accept
           </button>
         </div>
       </div>

@@ -7681,6 +7681,14 @@ async function ensureLiveSessionsLoadedForRouting() {
   try {
     const res = await fetchJSON(`/api/live-sessions?scope=${encodeURIComponent("all")}`);
     liveSessions = Array.isArray(res) ? dedupeSessions(res) : [];
+    if (liveActiveSession?.id) {
+      const refreshedActive = liveSessions.find((session) => String(session?.id || "") === String(liveActiveSession.id || ""));
+      if (refreshedActive) {
+        liveActiveSession = { ...liveActiveSession, ...refreshedActive };
+        updateLiveRecordingBadge(liveActiveSession);
+        showLiveRecordingConsentModal(liveActiveSession);
+      }
+    }
     liveSessionBackgroundFetchAt = Date.now();
   } catch (err) {
     console.error("Failed to load live sessions for routing", err);
@@ -7768,6 +7776,18 @@ function getLiveSelfParticipant(session = null) {
   return getLiveControlState(session)?.self || null;
 }
 
+function getLiveRecordingState(session = null) {
+  return getLiveControlState(session)?.recording || null;
+}
+
+function isLiveRecordingActive(session = null) {
+  return !!getLiveRecordingState(session)?.enabled;
+}
+
+function isLiveRecordingConsentRequired(session = null) {
+  return !!getLiveRecordingState(session)?.selfConsentRequired;
+}
+
 function applyLiveControlsToSession(sessionId, liveControls) {
   const targetId = String(sessionId || "").trim();
   if (!targetId || !liveControls) return;
@@ -7780,10 +7800,14 @@ function applyLiveControlsToSession(sessionId, liveControls) {
 
 function getLiveJoinActionState(session = null) {
   const controls = getLiveControlState(session);
+  const recording = getLiveRecordingState(session);
   const self = controls?.self || null;
   const canManage = !!controls?.canManage;
   if (canManage) {
     return { kind: "join", label: "Join class", disabled: false, icon: "fa-video" };
+  }
+  if (recording?.selfConsentRequired) {
+    return { kind: "consent", label: "Consent required", disabled: false, icon: "fa-circle-exclamation" };
   }
   const status = String(self?.status || "").trim().toLowerCase();
   if (status === "approved" || status === "joined" || status === "left") {
@@ -7800,11 +7824,84 @@ function getLiveJoinActionState(session = null) {
 
 function canToggleLiveHand(session = null) {
   const self = getLiveSelfParticipant(session);
-  return String(self?.status || "").trim().toLowerCase() === "joined";
+  return String(self?.status || "").trim().toLowerCase() === "joined" && !isLiveRecordingConsentRequired(session);
 }
 
 function isLiveHandRaised(session = null) {
   return String(getLiveSelfParticipant(session)?.handStatus || "").trim().toLowerCase() === "raised";
+}
+
+function updateLiveRecordingBadge(session = null) {
+  if (!liveRecordingBadge) return;
+  const recording = getLiveRecordingState(session);
+  if (recording?.enabled) {
+    liveRecordingBadge.classList.remove("hidden");
+    liveRecordingBadge.title = recording.startedAt
+      ? `Recording started ${new Date(recording.startedAt).toLocaleString()}`
+      : "Recording is active";
+  } else {
+    liveRecordingBadge.classList.add("hidden");
+    liveRecordingBadge.removeAttribute("title");
+  }
+}
+
+function hideLiveRecordingConsentModal() {
+  if (!liveRecordingConsentModal) return;
+  liveRecordingConsentModal.classList.add("hidden");
+}
+
+function showLiveRecordingConsentModal(session = null) {
+  if (!liveRecordingConsentModal) return;
+  const recording = getLiveRecordingState(session);
+  if (!recording?.enabled || !recording?.selfConsentRequired) {
+    hideLiveRecordingConsentModal();
+    return;
+  }
+  if (liveRecordingConsentCopy) {
+    const startedText = recording.startedAt
+      ? ` Recording was started ${new Date(recording.startedAt).toLocaleString()}.`
+      : "";
+    liveRecordingConsentCopy.textContent = `Your teacher has enabled session recording for this live class. You must accept recording consent to continue in the session.${startedText}`;
+  }
+  liveRecordingConsentModal.classList.remove("hidden");
+}
+
+async function submitLiveRecordingConsent(consent) {
+  const sessionId = String(liveActiveSession?.id || "").trim();
+  if (!sessionId) return null;
+  const data = await fetchJSON(`/api/live-sessions/${encodeURIComponent(sessionId)}/recording-consent`, {
+    method: "POST",
+    body: JSON.stringify({ consent: !!consent })
+  });
+  if (data?.liveControls) {
+    liveAttendanceData = data.liveControls;
+    applyLiveControlsToSession(sessionId, data.liveControls);
+    liveActiveSession = { ...liveActiveSession, liveControls: data.liveControls };
+    updateLiveRecordingBadge(liveActiveSession);
+    renderLiveSchedule();
+    renderLiveRecents();
+    renderLiveAttendanceState();
+    showLiveRecordingConsentModal(liveActiveSession);
+  }
+  return data;
+}
+
+async function toggleLiveRecording(active) {
+  const sessionId = String(liveActiveSession?.id || "").trim();
+  if (!sessionId) return;
+  const route = active ? "start-recording" : "stop-recording";
+  const data = await fetchJSON(`/api/live-sessions/${encodeURIComponent(sessionId)}/${route}`, {
+    method: "POST"
+  });
+  if (data?.liveControls) {
+    liveAttendanceData = data.liveControls;
+    applyLiveControlsToSession(sessionId, data.liveControls);
+    liveActiveSession = { ...liveActiveSession, liveControls: data.liveControls };
+    updateLiveRecordingBadge(liveActiveSession);
+    renderLiveSchedule();
+    renderLiveRecents();
+    renderLiveAttendanceState();
+  }
 }
 
 async function requestLiveSessionJoin(session) {
@@ -7863,6 +7960,7 @@ function renderLiveRoomHeader(session = null, routeChannelId = null) {
   if (liveRoomBackBtn) {
     liveRoomBackBtn.dataset.channelId = session?.channel_id || routeChannelId || "";
   }
+  updateLiveRecordingBadge(session);
   updateLiveFocusModeButton();
 }
 
@@ -7883,6 +7981,13 @@ async function openLiveSessionExternally(sessionOrId) {
     }
     return;
   }
+  if (joinState.kind === "consent") {
+    if (sessionId) {
+      liveActiveSession = session || liveActiveSession;
+    }
+    showLiveRecordingConsentModal(session || liveActiveSession);
+    return;
+  }
   if (joinState.kind === "pending") {
     showToast("Waiting for teacher approval.");
     return;
@@ -7900,9 +8005,23 @@ async function openLiveSessionExternally(sessionOrId) {
       meetingJwt = String(joinData?.jitsi?.jwt || "").trim();
       if (joinData?.liveControls) {
         applyLiveControlsToSession(sessionId, joinData.liveControls);
+        liveActiveSession = { ...(joinedSession || liveActiveSession || {}), liveControls: joinData.liveControls };
+        updateLiveRecordingBadge(liveActiveSession);
       }
     } catch (err) {
       console.error("Failed to prepare external live session", err);
+      if (err?.payload?.code === "live_recording_consent_required") {
+        if (err?.payload?.liveControls) {
+          applyLiveControlsToSession(sessionId, err.payload.liveControls);
+          if (liveActiveSession && String(liveActiveSession.id || "") === sessionId) {
+            liveActiveSession = { ...liveActiveSession, liveControls: err.payload.liveControls };
+          }
+          renderLiveSchedule();
+          renderLiveRecents();
+          showLiveRecordingConsentModal(session || liveActiveSession);
+        }
+        return;
+      }
       if (err?.payload?.code === "live_waiting_room_pending") {
         try {
           await requestLiveSessionJoin(session);
@@ -7964,6 +8083,7 @@ async function openLiveRoomView({ sessionId, channelId = null, replaceHistory = 
   }
 
   const routeChannelId = resolveLiveRouteChannelId(session, channelId);
+  if (session) liveActiveSession = session;
   renderLiveRoomHeader(session, routeChannelId);
   persistLastView({
     channelId: session?.channel_id || (findChannelById(routeChannelId) ? routeChannelId : null),
@@ -7979,6 +8099,9 @@ async function openLiveRoomView({ sessionId, channelId = null, replaceHistory = 
   if (typeof openLiveSessionInsideApp === "function") {
     await openLiveSessionInsideApp(safeSessionId, { session, routeChannelId });
   }
+  await loadLivePollItems({ sessionId: safeSessionId, silent: true });
+  await loadLiveWhiteboardState(safeSessionId);
+  startLiveWhiteboardStream(safeSessionId);
 }
 
 async function openLivePresenterView({ sessionId, channelId = null, replaceHistory = false, source = "navigate" } = {}) {
@@ -8001,6 +8124,7 @@ async function openLivePresenterView({ sessionId, channelId = null, replaceHisto
   }
 
   const routeChannelId = resolveLiveRouteChannelId(session, channelId);
+  if (session) liveActiveSession = session;
   renderLiveRoomHeader(session, routeChannelId);
   if (liveRoomSessionContext) {
     liveRoomSessionContext.textContent = "Presenter view • Share this tab or window from Jitsi to avoid the mirrored meeting effect.";
@@ -8025,6 +8149,9 @@ async function openLivePresenterView({ sessionId, channelId = null, replaceHisto
   if (typeof loadInitialSlideState === "function") {
     await loadInitialSlideState(safeSessionId);
   }
+  await loadLivePollItems({ sessionId: safeSessionId, silent: true });
+  await loadLiveWhiteboardState(safeSessionId);
+  startLiveWhiteboardStream(safeSessionId);
   if (typeof startSlidesSse === "function") {
     startSlidesSse(safeSessionId);
   }
@@ -8075,6 +8202,7 @@ function openLivePanel() {
   const token = showPanel("livePanel");
   if (livePanel) livePanel.scrollTop = 0;
   setLivePresenterMode(false);
+  stopLiveWhiteboardStream();
   try {
     if (typeof leaveLiveMeetingEmbed === "function") leaveLiveMeetingEmbed();
   } catch (_err) {}
@@ -12784,6 +12912,14 @@ function renderLiveSchedule() {
       raisedValue.textContent = `${liveControls.counts.raisedHands} hands`;
       channelInfo.appendChild(raisedValue);
     }
+    if (liveControls?.recording?.enabled) {
+      const recordingValue = document.createElement("span");
+      recordingValue.className = "live-row-channel-status";
+      recordingValue.textContent = liveControls?.canManage
+        ? `Recording • ${liveControls?.counts?.consentPending || 0} pending`
+        : "Recording";
+      channelInfo.appendChild(recordingValue);
+    }
     if (liveControls?.self?.status && !liveControls?.canManage) {
       const selfStatus = document.createElement("span");
       selfStatus.className = "live-row-channel-status";
@@ -13104,6 +13240,8 @@ function renderLiveControlRows(container, rows, { emptyText, canManage = false, 
     const statusBits = [];
     if (row.role) statusBits.push(String(row.role).replace(/_/g, " "));
     if (row.status) statusBits.push(row.status);
+    if (row.recordingConsent) statusBits.push("recording consented");
+    if (!row.recordingConsent && isLiveRecordingActive(liveActiveSession)) statusBits.push("recording consent pending");
     if (row.durationSeconds) statusBits.push(`${Math.max(0, Math.round(Number(row.durationSeconds || 0) / 60))} min`);
     if (row.denialReason) statusBits.push(row.denialReason);
     meta.innerHTML = `
@@ -13113,6 +13251,9 @@ function renderLiveControlRows(container, rows, { emptyText, canManage = false, 
     item.appendChild(meta);
     const actions = document.createElement("div");
     actions.className = "live-control-row-actions";
+    if (!row.recordingConsent && isLiveRecordingActive(liveActiveSession)) {
+      item.classList.add("is-recording-required");
+    }
     if (showApproveDeny && canManage) {
       const approveBtn = document.createElement("button");
       approveBtn.type = "button";
@@ -13201,6 +13342,7 @@ function renderAttendanceList(controls) {
       record.joinedAt ? "joined" : "",
       record.leftAt ? "left" : "",
       record.handStatus === "raised" ? "hand raised" : "",
+      record.recordingConsent ? "recording consented" : (controls?.recording?.enabled ? "recording consent pending" : ""),
       record.durationSeconds ? `${Math.max(0, Math.round(Number(record.durationSeconds || 0) / 60))} min` : ""
     ].filter(Boolean);
     details.innerHTML = `
@@ -13212,12 +13354,679 @@ function renderAttendanceList(controls) {
   });
 }
 
+function renderLiveRecordingRows() {
+  if (!liveRecordingList) return;
+  liveRecordingList.innerHTML = "";
+  if (!Array.isArray(liveRecordingItems) || !liveRecordingItems.length) {
+    liveRecordingList.innerHTML = '<div class="muted">No stored recordings yet.</div>';
+    return;
+  }
+  liveRecordingItems.forEach((recording) => {
+    const row = document.createElement("div");
+    row.className = "live-control-row";
+    const meta = document.createElement("div");
+    meta.className = "live-control-row-meta";
+    const bits = [
+      recording.status || "processing",
+      recording.durationSeconds ? `${Math.max(0, Math.round(Number(recording.durationSeconds || 0) / 60))} min` : "",
+      recording.sizeBytes ? humanSize(recording.sizeBytes) : "",
+      recording.retentionUntil ? `retention ${new Date(recording.retentionUntil).toLocaleDateString()}` : "",
+      recording.studentPlaybackAllowed ? "student playback on" : "teacher playback only"
+    ].filter(Boolean);
+    meta.innerHTML = `
+      <div class="live-att-name">${escapeHtml(recording.originalName || "Live recording")}</div>
+      <div class="live-att-sub">${escapeHtml(bits.join(" • ") || "No metadata")}</div>
+    `;
+    row.appendChild(meta);
+    const actions = document.createElement("div");
+    actions.className = "live-control-row-actions";
+    const playBtn = document.createElement("button");
+    playBtn.type = "button";
+    playBtn.className = "live-btn ghost";
+    playBtn.textContent = "Playback";
+    playBtn.disabled = String(recording.status || "").toLowerCase() !== "ready";
+    playBtn.addEventListener("click", () => {
+      window.open(`/api/live-recordings/${encodeURIComponent(recording.id)}/playback`, "_blank", "noopener,noreferrer");
+    });
+    actions.appendChild(playBtn);
+    if (isAdminUser() || isTeacherUser()) {
+      const deleteBtn = document.createElement("button");
+      deleteBtn.type = "button";
+      deleteBtn.className = "live-btn ghost";
+      deleteBtn.textContent = "Delete";
+      deleteBtn.addEventListener("click", async () => {
+        try {
+          await fetchJSON(`/api/live-recordings/${encodeURIComponent(recording.id)}`, {
+            method: "DELETE"
+          });
+          await loadLiveRecordingItems();
+          showToast("Recording deleted.");
+        } catch (error) {
+          console.error("Failed to delete recording", error);
+          showToast(error?.message || "Could not delete recording.");
+        }
+      });
+      actions.appendChild(deleteBtn);
+    }
+    row.appendChild(actions);
+    liveRecordingList.appendChild(row);
+  });
+}
+
+function getLivePollOptionInputs() {
+  return [livePollOption1, livePollOption2, livePollOption3, livePollOption4].filter(Boolean);
+}
+
+function getLivePollOptionValues() {
+  return getLivePollOptionInputs()
+    .map((input) => String(input?.value || "").trim())
+    .filter(Boolean);
+}
+
+function resetLivePollForm() {
+  if (livePollForm) livePollForm.reset();
+  syncLivePollCorrectOptionChoices();
+}
+
+function syncLivePollCorrectOptionChoices() {
+  if (!livePollCorrectOption) return;
+  const values = getLivePollOptionValues();
+  const type = String(livePollType?.value || "poll").trim().toLowerCase();
+  livePollCorrectOption.innerHTML = `<option value="">${type === "quiz" ? "Select correct answer" : "No correct answer"}</option>`;
+  values.forEach((value, index) => {
+    const option = document.createElement("option");
+    option.value = String(index);
+    option.textContent = value;
+    livePollCorrectOption.appendChild(option);
+  });
+  livePollCorrectOption.disabled = type !== "quiz";
+  if (type !== "quiz") livePollCorrectOption.value = "";
+}
+
+function getLivePollStatusClass(status) {
+  const normalized = String(status || "draft").toLowerCase();
+  if (normalized === "open") return "is-open";
+  if (normalized === "closed") return "is-closed";
+  return "is-draft";
+}
+
+function buildLivePollSummaryBits(poll) {
+  const bits = [
+    poll.type === "quiz" ? "quiz" : "poll",
+    poll.allowMultiple ? "multiple answers" : "single answer",
+    poll.anonymousResults ? "anonymous results" : "named results",
+    poll.results?.totalResponses ? `${poll.results.totalResponses} response${poll.results.totalResponses === 1 ? "" : "s"}` : "no responses"
+  ];
+  return bits.filter(Boolean);
+}
+
+function renderLivePollResultsSummary(poll) {
+  const results = poll?.results || null;
+  if (!results) return "";
+  const chips = [
+    `<div class="live-poll-results-chip">Responses ${escapeHtml(String(results.totalResponses || 0))}</div>`
+  ];
+  if (Number(results.totalSelections || 0) !== Number(results.totalResponses || 0)) {
+    chips.push(`<div class="live-poll-results-chip">Selections ${escapeHtml(String(results.totalSelections || 0))}</div>`);
+  }
+  if (results.correctness) {
+    chips.push(`<div class="live-poll-results-chip">Correct ${escapeHtml(String(results.correctness.correctCount || 0))}</div>`);
+    chips.push(`<div class="live-poll-results-chip">Incorrect ${escapeHtml(String(results.correctness.incorrectCount || 0))}</div>`);
+  }
+  return `<div class="live-poll-results-summary">${chips.join("")}</div>`;
+}
+
+function renderLivePollOptionsMarkup(poll, { interactive = false } = {}) {
+  const viewerResponses = new Set(Array.isArray(poll?.viewerResponseOptionIds) ? poll.viewerResponseOptionIds.map((id) => String(id)) : []);
+  const multi = !!poll?.allowMultiple;
+  const inputType = multi ? "checkbox" : "radio";
+  return (Array.isArray(poll?.options) ? poll.options : []).map((option) => {
+    const selected = viewerResponses.has(String(option.id || ""));
+    const resultRow = (poll?.results?.options || []).find((row) => String(row.id || "") === String(option.id || ""));
+    const metaBits = [];
+    if (poll?.status !== "draft" && resultRow) {
+      metaBits.push(`${resultRow.count} • ${resultRow.percentage}%`);
+    }
+    if (poll?.correctOptionId && String(poll.correctOptionId) === String(option.id || "")) {
+      metaBits.push("correct");
+    }
+    if (interactive) {
+      return `
+        <label class="live-poll-option ${selected ? "is-selected" : ""}">
+          <span class="live-poll-option-main">
+            <input type="${inputType}" name="live-poll-answer-${escapeHtml(String(poll.id || ""))}" value="${escapeHtml(String(option.id || ""))}" ${selected ? "checked" : ""} />
+            <span>${escapeHtml(option.text || "Option")}</span>
+          </span>
+          <span class="live-poll-option-meta">${escapeHtml(metaBits.join(" • ") || "")}</span>
+        </label>
+      `;
+    }
+    return `
+      <div class="live-poll-option ${selected ? "is-selected" : ""}">
+        <span class="live-poll-option-main">${escapeHtml(option.text || "Option")}</span>
+        <span class="live-poll-option-meta">${escapeHtml(metaBits.join(" • ") || "")}</span>
+      </div>
+    `;
+  }).join("");
+}
+
+function collectLivePollSelections(scope, pollId, allowMultiple) {
+  const selector = `input[name="live-poll-answer-${String(pollId || "").replace(/"/g, "")}"]`;
+  const inputs = Array.from((scope || document).querySelectorAll(selector));
+  if (!inputs.length) return [];
+  const checked = inputs.filter((input) => input.checked).map((input) => String(input.value || ""));
+  return allowMultiple ? checked : checked.slice(0, 1);
+}
+
+async function submitLivePollAnswer(pollId, optionIds) {
+  const payload = { optionIds };
+  const data = await fetchJSON(`/api/live-polls/${encodeURIComponent(pollId)}/responses`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+  await loadLivePollItems({ sessionId: liveActiveSession?.id, silent: true });
+  if (data?.poll?.viewerHasAnswered) {
+    showToast("Answer submitted.");
+  }
+}
+
+function renderLivePollManagerRows() {
+  if (!livePollList) return;
+  livePollList.innerHTML = "";
+  if (!Array.isArray(livePollItems) || !livePollItems.length) {
+    livePollList.innerHTML = '<div class="live-poll-empty">No polls or quizzes yet.</div>';
+    return;
+  }
+  livePollItems.forEach((poll) => {
+    const row = document.createElement("div");
+    row.className = "live-poll-row";
+    row.innerHTML = `
+      <div class="live-poll-row-head">
+        <div>
+          <div class="live-poll-title">${escapeHtml(poll.question || "Untitled poll")}</div>
+          <div class="live-poll-sub">${escapeHtml(buildLivePollSummaryBits(poll).join(" • "))}</div>
+        </div>
+        <span class="live-poll-badge ${getLivePollStatusClass(poll.status)}">${escapeHtml(poll.status || "draft")}</span>
+      </div>
+      ${renderLivePollResultsSummary(poll)}
+      <div class="live-poll-options">${renderLivePollOptionsMarkup(poll)}</div>
+    `;
+    const actions = document.createElement("div");
+    actions.className = "live-poll-actions";
+    if (poll.status !== "open") {
+      const openBtn = document.createElement("button");
+      openBtn.type = "button";
+      openBtn.className = "live-btn primary";
+      openBtn.textContent = "Open";
+      openBtn.addEventListener("click", async () => {
+        try {
+          await fetchJSON(`/api/live-polls/${encodeURIComponent(poll.id)}/open`, { method: "POST" });
+          await loadLivePollItems({ sessionId: liveActiveSession?.id, silent: true });
+        } catch (error) {
+          console.error("Failed to open poll", error);
+          showToast(error?.message || "Could not open poll.");
+        }
+      });
+      actions.appendChild(openBtn);
+    }
+    if (poll.status === "open") {
+      const closeBtn = document.createElement("button");
+      closeBtn.type = "button";
+      closeBtn.className = "live-btn ghost";
+      closeBtn.textContent = "Close";
+      closeBtn.addEventListener("click", async () => {
+        try {
+          await fetchJSON(`/api/live-polls/${encodeURIComponent(poll.id)}/close`, { method: "POST" });
+          await loadLivePollItems({ sessionId: liveActiveSession?.id, silent: true });
+        } catch (error) {
+          console.error("Failed to close poll", error);
+          showToast(error?.message || "Could not close poll.");
+        }
+      });
+      actions.appendChild(closeBtn);
+    }
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "live-btn ghost";
+    deleteBtn.textContent = "Delete";
+    deleteBtn.addEventListener("click", async () => {
+      try {
+        await fetchJSON(`/api/live-polls/${encodeURIComponent(poll.id)}`, { method: "DELETE" });
+        await loadLivePollItems({ sessionId: liveActiveSession?.id, silent: true });
+      } catch (error) {
+        console.error("Failed to delete poll", error);
+        showToast(error?.message || "Could not delete poll.");
+      }
+    });
+    actions.appendChild(deleteBtn);
+    row.appendChild(actions);
+    livePollList.appendChild(row);
+  });
+}
+
+function renderLiveRoomPollPanel() {
+  if (!liveRoomPollCard || !liveRoomPollHistory) return;
+  liveRoomPollCard.innerHTML = "";
+  liveRoomPollHistory.innerHTML = "";
+  const openPoll = Array.isArray(livePollItems) ? livePollItems.find((poll) => poll.status === "open") : null;
+  const history = Array.isArray(livePollItems) ? livePollItems.filter((poll) => poll.status !== "open").slice(0, 3) : [];
+  if (liveRoomPollStatus) {
+    liveRoomPollStatus.textContent = openPoll
+      ? `${openPoll.type === "quiz" ? "Quiz" : "Poll"} is live.`
+      : "No open poll right now.";
+  }
+  if (openPoll) {
+    const card = document.createElement("div");
+    card.className = "live-poll-row";
+    const canAnswer = !openPoll.viewerHasAnswered;
+    card.innerHTML = `
+      <div class="live-poll-row-head">
+        <div>
+          <div class="live-poll-title">${escapeHtml(openPoll.question || "Open poll")}</div>
+          <div class="live-poll-sub">${escapeHtml(buildLivePollSummaryBits(openPoll).join(" • "))}</div>
+        </div>
+        <span class="live-poll-badge is-open">open</span>
+      </div>
+      <div class="live-poll-options">${renderLivePollOptionsMarkup(openPoll, { interactive: canAnswer })}</div>
+      ${renderLivePollResultsSummary(openPoll)}
+      <div class="live-poll-note">${escapeHtml(openPoll.viewerHasAnswered ? "Answer saved. Live results update here." : "Choose an answer and submit while the poll is open.")}</div>
+    `;
+    if (canAnswer) {
+      const actions = document.createElement("div");
+      actions.className = "live-poll-actions";
+      const answerBtn = document.createElement("button");
+      answerBtn.type = "button";
+      answerBtn.className = "live-btn primary";
+      answerBtn.textContent = "Submit answer";
+      answerBtn.addEventListener("click", async () => {
+        const selected = collectLivePollSelections(card, openPoll.id, openPoll.allowMultiple);
+        if (!selected.length) {
+          showToast("Select at least one option.");
+          return;
+        }
+        try {
+          await submitLivePollAnswer(openPoll.id, selected);
+        } catch (error) {
+          console.error("Failed to submit poll answer", error);
+          showToast(error?.message || "Could not submit answer.");
+        }
+      });
+      actions.appendChild(answerBtn);
+      card.appendChild(actions);
+    }
+    liveRoomPollCard.appendChild(card);
+  } else {
+    liveRoomPollCard.innerHTML = '<div class="live-poll-empty">Teachers can launch quick polls and quizzes here during class.</div>';
+  }
+  if (!history.length) {
+    liveRoomPollHistory.innerHTML = '<div class="live-poll-empty">Recent poll history will appear here.</div>';
+    return;
+  }
+  history.forEach((poll) => {
+    const row = document.createElement("div");
+    row.className = "live-poll-row";
+    row.innerHTML = `
+      <div class="live-poll-row-head">
+        <div>
+          <div class="live-poll-title">${escapeHtml(poll.question || "Poll")}</div>
+          <div class="live-poll-sub">${escapeHtml(buildLivePollSummaryBits(poll).join(" • "))}</div>
+        </div>
+        <span class="live-poll-badge ${getLivePollStatusClass(poll.status)}">${escapeHtml(poll.status || "closed")}</span>
+      </div>
+      ${renderLivePollResultsSummary(poll)}
+    `;
+    liveRoomPollHistory.appendChild(row);
+  });
+}
+
+async function loadLivePollItems({ sessionId = null, silent = false } = {}) {
+  const resolvedSessionId = String(sessionId || liveActiveSession?.id || "").trim();
+  if (!resolvedSessionId) return;
+  if (livePollListStatus && !silent) livePollListStatus.textContent = "Loading polls...";
+  if (liveRoomPollStatus && !silent) liveRoomPollStatus.textContent = "Loading polls...";
+  try {
+    const data = await fetchJSON(`/api/live-sessions/${encodeURIComponent(resolvedSessionId)}/polls`);
+    livePollItems = Array.isArray(data?.polls) ? data.polls : [];
+    if (livePollListStatus) {
+      livePollListStatus.textContent = livePollItems.length
+        ? `${livePollItems.length} poll${livePollItems.length === 1 ? "" : "s"} available`
+        : "No polls yet.";
+    }
+    renderLivePollManagerRows();
+    renderLiveRoomPollPanel();
+  } catch (error) {
+    console.error("Failed to load live polls", error);
+    livePollItems = [];
+    if (livePollListStatus) livePollListStatus.textContent = error?.message || "Could not load polls.";
+    if (liveRoomPollStatus) liveRoomPollStatus.textContent = error?.message || "Could not load polls.";
+    renderLivePollManagerRows();
+    renderLiveRoomPollPanel();
+  }
+}
+
+async function submitLivePollForm() {
+  if (!liveActiveSession?.id) return;
+  const options = getLivePollOptionValues();
+  if (options.length < 2) {
+    showToast("Add at least two options.");
+    return;
+  }
+  const payload = {
+    type: String(livePollType?.value || "poll").trim().toLowerCase(),
+    question: String(livePollQuestion?.value || "").trim(),
+    options,
+    allowMultiple: !!livePollAllowMultiple?.checked,
+    anonymousResults: !!livePollAnonymousResults?.checked
+  };
+  if (!payload.question) {
+    showToast("Add a question.");
+    return;
+  }
+  const correctIndexValue = String(livePollCorrectOption?.value || "").trim();
+  if (payload.type === "quiz" && correctIndexValue) {
+    payload.correctOptionIndex = Number(correctIndexValue);
+  }
+  if (livePollCreateBtn) livePollCreateBtn.disabled = true;
+  try {
+    await fetchJSON(`/api/live-sessions/${encodeURIComponent(liveActiveSession.id)}/polls`, {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    resetLivePollForm();
+    await loadLivePollItems({ sessionId: liveActiveSession.id, silent: true });
+    showToast("Poll draft saved.");
+  } catch (error) {
+    console.error("Failed to create live poll", error);
+    showToast(error?.message || "Could not create poll.");
+  } finally {
+    if (livePollCreateBtn) livePollCreateBtn.disabled = false;
+  }
+}
+
+function getLiveWhiteboardCanClear() {
+  return !!getLiveControlState(liveActiveSession)?.canManage;
+}
+
+function getLiveWhiteboardCanDraw() {
+  const controls = getLiveControlState(liveActiveSession);
+  if (controls?.canManage) return true;
+  const self = controls?.self || null;
+  const status = String(self?.status || "").trim().toLowerCase();
+  return (status === "approved" || status === "joined") && !isLiveRecordingConsentRequired(liveActiveSession);
+}
+
+function setLiveWhiteboardTool(tool) {
+  liveWhiteboardTool = String(tool || "draw").trim().toLowerCase() === "erase" ? "erase" : "draw";
+  if (liveWhiteboardDrawBtn) liveWhiteboardDrawBtn.classList.toggle("is-active", liveWhiteboardTool === "draw");
+  if (liveWhiteboardEraseBtn) liveWhiteboardEraseBtn.classList.toggle("is-active", liveWhiteboardTool === "erase");
+  if (liveWhiteboardCanvas) {
+    liveWhiteboardCanvas.style.cursor = liveWhiteboardTool === "erase" ? "cell" : "crosshair";
+  }
+}
+
+function getLiveWhiteboardSurfaceRect() {
+  return liveWhiteboardCanvas?.getBoundingClientRect?.() || null;
+}
+
+function normalizeWhiteboardPointFromEvent(event) {
+  const rect = getLiveWhiteboardSurfaceRect();
+  if (!rect || !rect.width || !rect.height) return null;
+  const x = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+  const y = Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height));
+  return { x, y };
+}
+
+function ensureLiveWhiteboardCanvasSize() {
+  if (!liveWhiteboardCanvas) return;
+  const rect = liveWhiteboardCanvas.getBoundingClientRect();
+  const ratio = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+  const width = Math.max(240, Math.round(rect.width || liveWhiteboardCanvas.clientWidth || 0));
+  const height = Math.max(220, Math.round(rect.height || liveWhiteboardCanvas.clientHeight || 220));
+  const targetWidth = Math.round(width * ratio);
+  const targetHeight = Math.round(height * ratio);
+  if (liveWhiteboardCanvas.width !== targetWidth || liveWhiteboardCanvas.height !== targetHeight) {
+    liveWhiteboardCanvas.width = targetWidth;
+    liveWhiteboardCanvas.height = targetHeight;
+  }
+  const ctx = liveWhiteboardCanvas.getContext("2d");
+  if (!ctx) return;
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+}
+
+function renderLiveWhiteboard() {
+  if (!liveWhiteboardCanvas) return;
+  ensureLiveWhiteboardCanvasSize();
+  const ctx = liveWhiteboardCanvas.getContext("2d");
+  if (!ctx) return;
+  const rect = liveWhiteboardCanvas.getBoundingClientRect();
+  const width = Math.max(1, rect.width || liveWhiteboardCanvas.clientWidth || 1);
+  const height = Math.max(1, rect.height || liveWhiteboardCanvas.clientHeight || 1);
+  ctx.clearRect(0, 0, width, height);
+
+  const drawPath = (operation) => {
+    const points = Array.isArray(operation?.points) ? operation.points : [];
+    if (!points.length) return;
+    ctx.save();
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.strokeStyle = operation.type === "erase" ? "#000000" : String(operation.color || "#2563eb");
+    ctx.lineWidth = Math.max(1, Number(operation.size || 4));
+    ctx.globalCompositeOperation = operation.type === "erase" ? "destination-out" : "source-over";
+    ctx.beginPath();
+    points.forEach((point, index) => {
+      const x = Number(point.x || 0) * width;
+      const y = Number(point.y || 0) * height;
+      if (index === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    if (points.length === 1) {
+      const point = points[0];
+      const x = Number(point.x || 0) * width;
+      const y = Number(point.y || 0) * height;
+      ctx.arc(x, y, Math.max(1, Number(operation.size || 4)) / 2, 0, Math.PI * 2);
+    }
+    ctx.stroke();
+    ctx.restore();
+  };
+
+  (Array.isArray(liveWhiteboardState?.operations) ? liveWhiteboardState.operations : []).forEach(drawPath);
+  if (liveWhiteboardDrawing && liveWhiteboardCurrentPoints.length) {
+    drawPath({
+      type: liveWhiteboardTool,
+      points: liveWhiteboardCurrentPoints,
+      color: "#2563eb",
+      size: liveWhiteboardTool === "erase" ? 14 : 4
+    });
+  }
+
+  if (liveWhiteboardStatus) {
+    const count = Array.isArray(liveWhiteboardState?.operations) ? liveWhiteboardState.operations.length : 0;
+    const canDraw = getLiveWhiteboardCanDraw();
+    liveWhiteboardStatus.textContent = canDraw
+      ? `${count} stroke${count === 1 ? "" : "s"} on the board`
+      : "Join the live session to draw on the whiteboard.";
+  }
+  if (liveWhiteboardClearBtn) {
+    liveWhiteboardClearBtn.disabled = !getLiveWhiteboardCanClear();
+  }
+}
+
+function stopLiveWhiteboardStream() {
+  if (typeof liveWhiteboardStopStream === "function") {
+    try {
+      liveWhiteboardStopStream();
+    } catch (_err) {
+      // ignore
+    }
+  }
+  liveWhiteboardStopStream = null;
+}
+
+function startLiveWhiteboardStream(sessionId) {
+  stopLiveWhiteboardStream();
+  const safeSessionId = String(sessionId || "").trim();
+  if (!safeSessionId || !window.EventSource) return;
+  const es = new EventSource(`/api/live-sessions/${encodeURIComponent(safeSessionId)}/whiteboard/stream`);
+  es.addEventListener("state", (ev) => {
+    try {
+      const payload = JSON.parse(ev.data);
+      liveWhiteboardState = payload?.state ? payload.state : payload;
+      renderLiveWhiteboard();
+    } catch (error) {
+      console.error("Failed to parse whiteboard state", error);
+    }
+  });
+  es.addEventListener("whiteboard", (ev) => {
+    try {
+      const payload = JSON.parse(ev.data);
+      if (payload?.state) {
+        liveWhiteboardState = payload.state;
+      } else if (payload?.operation) {
+        const nextOps = Array.isArray(liveWhiteboardState?.operations) ? [...liveWhiteboardState.operations, payload.operation] : [payload.operation];
+        liveWhiteboardState = {
+          sessionId: safeSessionId,
+          version: Number(liveWhiteboardState?.version || 0) + 1,
+          operations: nextOps
+        };
+      }
+      renderLiveWhiteboard();
+    } catch (error) {
+      console.error("Failed to parse whiteboard event", error);
+    }
+  });
+  es.onerror = () => {
+    if (liveWhiteboardStatus) {
+      liveWhiteboardStatus.textContent = "Whiteboard connection lost.";
+    }
+  };
+  liveWhiteboardStopStream = () => es.close();
+}
+
+async function loadLiveWhiteboardState(sessionId = null) {
+  const safeSessionId = String(sessionId || liveActiveSession?.id || "").trim();
+  if (!safeSessionId) return;
+  try {
+    const data = await fetchJSON(`/api/live-sessions/${encodeURIComponent(safeSessionId)}/whiteboard/state`);
+    liveWhiteboardState = data?.state || { sessionId: safeSessionId, version: 0, operations: [] };
+  } catch (error) {
+    liveWhiteboardState = { sessionId: safeSessionId, version: 0, operations: [] };
+    if (liveWhiteboardStatus) {
+      liveWhiteboardStatus.textContent = error?.message || "Could not load whiteboard.";
+    }
+  }
+  renderLiveWhiteboard();
+}
+
+async function postLiveWhiteboardOperation(route, payload) {
+  const sessionId = String(liveActiveSession?.id || "").trim();
+  if (!sessionId) return;
+  const data = await fetchJSON(`/api/live-sessions/${encodeURIComponent(sessionId)}/whiteboard/${route}`, {
+    method: "POST",
+    body: JSON.stringify(payload || {})
+  });
+  if (data?.state) {
+    liveWhiteboardState = data.state;
+    renderLiveWhiteboard();
+  }
+}
+
+function attachLiveWhiteboardCanvasEvents() {
+  if (!liveWhiteboardCanvas) return;
+  liveWhiteboardCanvas.addEventListener("pointerdown", (event) => {
+    if (!getLiveWhiteboardCanDraw()) return;
+    const point = normalizeWhiteboardPointFromEvent(event);
+    if (!point) return;
+    liveWhiteboardDrawing = true;
+    liveWhiteboardPointerId = event.pointerId;
+    liveWhiteboardCurrentPoints = [point];
+    liveWhiteboardCanvas.setPointerCapture?.(event.pointerId);
+    renderLiveWhiteboard();
+  });
+  liveWhiteboardCanvas.addEventListener("pointermove", (event) => {
+    if (!liveWhiteboardDrawing || liveWhiteboardPointerId !== event.pointerId) return;
+    const point = normalizeWhiteboardPointFromEvent(event);
+    if (!point) return;
+    liveWhiteboardCurrentPoints.push(point);
+    if (liveWhiteboardCurrentPoints.length > 256) {
+      liveWhiteboardCurrentPoints = liveWhiteboardCurrentPoints.slice(-256);
+    }
+    renderLiveWhiteboard();
+  });
+  const finishStroke = async (event) => {
+    if (!liveWhiteboardDrawing || (event && liveWhiteboardPointerId !== event.pointerId)) return;
+    liveWhiteboardDrawing = false;
+    const points = liveWhiteboardCurrentPoints.slice();
+    liveWhiteboardCurrentPoints = [];
+    liveWhiteboardPointerId = null;
+    renderLiveWhiteboard();
+    if (!points.length) return;
+    try {
+      await postLiveWhiteboardOperation(liveWhiteboardTool === "erase" ? "erase" : "draw", {
+        points,
+        color: "#2563eb",
+        size: liveWhiteboardTool === "erase" ? 14 : 4
+      });
+    } catch (error) {
+      console.error("Failed to send whiteboard stroke", error);
+      showToast(error?.message || "Could not update whiteboard.");
+    }
+  };
+  liveWhiteboardCanvas.addEventListener("pointerup", finishStroke);
+  liveWhiteboardCanvas.addEventListener("pointercancel", finishStroke);
+  liveWhiteboardCanvas.addEventListener("pointerleave", (event) => {
+    if (liveWhiteboardDrawing && liveWhiteboardPointerId === event.pointerId) {
+      void finishStroke(event);
+    }
+  });
+}
+
+async function loadLiveRecordingItems() {
+  if (!liveActiveSession?.id) return;
+  if (liveRecordingListStatus) {
+    liveRecordingListStatus.textContent = "Loading recordings...";
+  }
+  try {
+    const data = await fetchJSON(`/api/live-sessions/${encodeURIComponent(liveActiveSession.id)}/recordings`);
+    liveRecordingItems = Array.isArray(data?.recordings) ? data.recordings : [];
+    if (liveRecordingListStatus) {
+      liveRecordingListStatus.textContent = liveRecordingItems.length
+        ? `${liveRecordingItems.length} recording${liveRecordingItems.length === 1 ? "" : "s"} stored`
+        : "No stored recordings yet.";
+    }
+  } catch (error) {
+    console.error("Failed to load recording list", error);
+    liveRecordingItems = [];
+    if (liveRecordingListStatus) {
+      liveRecordingListStatus.textContent = error?.message || "Could not load stored recordings.";
+    }
+  }
+  renderLiveRecordingRows();
+}
+
 function renderLiveAttendanceState() {
   const controls = liveAttendanceData || {};
   if (liveAttendanceStatus) {
     const counts = controls?.counts || {};
     liveAttendanceStatus.textContent = `Pending ${counts.pending || 0} • Raised hands ${counts.raisedHands || 0} • Joined ${counts.joined || 0}`;
   }
+  if (liveRecordingStatus) {
+    const recording = controls?.recording || null;
+    liveRecordingStatus.textContent = recording?.enabled
+      ? `Recording is active${recording?.startedAt ? ` since ${new Date(recording.startedAt).toLocaleString()}` : ""}. Consent pending: ${controls?.counts?.consentPending || 0}. Playback: ${recording?.studentPlaybackAllowed ? "teachers and students with consent" : "teachers and school admins only"}.`
+      : `Recording is off. Playback defaults to ${controls?.recording?.studentPlaybackAllowed ? "teachers and students with consent" : "teachers and school admins only"}.`;
+  }
+  if (liveRecordingStartBtn) {
+    liveRecordingStartBtn.hidden = !controls?.canManage;
+    liveRecordingStartBtn.disabled = !!controls?.recording?.enabled;
+  }
+  if (liveRecordingStopBtn) {
+    liveRecordingStopBtn.hidden = !controls?.canManage;
+    liveRecordingStopBtn.disabled = !controls?.recording?.enabled;
+  }
+  renderLiveControlRows(liveConsentPendingList, controls?.consentPendingParticipants || [], {
+    emptyText: "No recording consent responses are pending.",
+    canManage: false
+  });
   renderLiveControlRows(livePendingList, controls?.pendingParticipants || [], {
     emptyText: "No one is waiting to join.",
     canManage: !!controls?.canManage,
@@ -13229,6 +14038,10 @@ function renderLiveAttendanceState() {
     showLower: true
   });
   renderAttendanceList(controls);
+  renderLiveRecordingRows();
+  renderLiveWhiteboard();
+  updateLiveRecordingBadge(liveActiveSession);
+  showLiveRecordingConsentModal(liveActiveSession);
 }
 
 async function loadLiveAttendanceState() {
@@ -13243,6 +14056,8 @@ async function loadLiveAttendanceState() {
       liveActiveSession = { ...liveActiveSession, ...data.session, liveControls: data.liveControls || null };
       applyLiveControlsToSession(liveActiveSession.id, data.liveControls || null);
     }
+    await loadLiveRecordingItems();
+    await loadLivePollItems({ sessionId: liveActiveSession.id, silent: true });
     renderLiveAttendanceState();
   } catch (err) {
     console.error("Failed to load live controls", err);
@@ -13261,6 +14076,8 @@ function closeAttendanceModal() {
   if (!liveAttendanceModal) return;
   liveAttendanceModal.classList.add("hidden");
   liveAttendanceData = null;
+  liveRecordingItems = [];
+  livePollItems = [];
 }
 
 function populateLiveClassOptions() {
@@ -13378,6 +14195,95 @@ function attachLiveEvents() {
   if (liveAttendanceClose) liveAttendanceClose.addEventListener("click", closeAttendanceModal);
   if (liveAttendanceCancel) liveAttendanceCancel.addEventListener("click", closeAttendanceModal);
   if (liveAttendanceSave) liveAttendanceSave.addEventListener("click", saveLiveAttendance);
+  if (livePollForm) {
+    livePollForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      submitLivePollForm();
+    });
+  }
+  if (livePollType) {
+    livePollType.addEventListener("change", syncLivePollCorrectOptionChoices);
+  }
+  getLivePollOptionInputs().forEach((input) => {
+    input.addEventListener("input", syncLivePollCorrectOptionChoices);
+  });
+  syncLivePollCorrectOptionChoices();
+  setLiveWhiteboardTool("draw");
+  attachLiveWhiteboardCanvasEvents();
+  if (liveWhiteboardDrawBtn) {
+    liveWhiteboardDrawBtn.addEventListener("click", () => setLiveWhiteboardTool("draw"));
+  }
+  if (liveWhiteboardEraseBtn) {
+    liveWhiteboardEraseBtn.addEventListener("click", () => setLiveWhiteboardTool("erase"));
+  }
+  if (liveWhiteboardClearBtn) {
+    liveWhiteboardClearBtn.addEventListener("click", async () => {
+      try {
+        await postLiveWhiteboardOperation("clear");
+      } catch (error) {
+        console.error("Failed to clear whiteboard", error);
+        showToast(error?.message || "Could not clear whiteboard.");
+      }
+    });
+  }
+  if (liveRecordingStartBtn) {
+    liveRecordingStartBtn.addEventListener("click", async () => {
+      try {
+        await toggleLiveRecording(true);
+        showToast("Recording consent is now active for this session.");
+      } catch (error) {
+        console.error("Failed to start recording consent flow", error);
+        showToast(error?.message || "Could not start recording consent.");
+      }
+    });
+  }
+  if (liveRecordingStopBtn) {
+    liveRecordingStopBtn.addEventListener("click", async () => {
+      try {
+        await toggleLiveRecording(false);
+        showToast("Recording consent flow stopped.");
+      } catch (error) {
+        console.error("Failed to stop recording consent flow", error);
+        showToast(error?.message || "Could not stop recording consent.");
+      }
+    });
+  }
+  if (liveRecordingConsentClose) liveRecordingConsentClose.addEventListener("click", hideLiveRecordingConsentModal);
+  if (liveRecordingConsentAcceptBtn) {
+    liveRecordingConsentAcceptBtn.addEventListener("click", async () => {
+      try {
+        await submitLiveRecordingConsent(true);
+        hideLiveRecordingConsentModal();
+        showToast("Recording consent saved.");
+      } catch (error) {
+        console.error("Failed to save recording consent", error);
+        showToast(error?.message || "Could not save recording consent.");
+      }
+    });
+  }
+  if (liveRecordingConsentLeaveBtn) {
+    liveRecordingConsentLeaveBtn.addEventListener("click", async () => {
+      try {
+        await submitLiveRecordingConsent(false);
+      } catch (error) {
+        console.error("Failed to decline recording consent", error);
+        if (error?.payload?.code !== "live_recording_consent_denied") {
+          showToast(error?.message || "Could not leave the recorded session.");
+          return;
+        }
+      }
+      hideLiveRecordingConsentModal();
+      setLiveRoomFocusMode(false);
+      setLiveSessionActivity(false);
+      if (typeof leaveLiveMeetingEmbed === "function") leaveLiveMeetingEmbed();
+      showToast("You left the session because recording consent was declined.");
+    });
+  }
+  if (liveRecordingConsentModal) {
+    liveRecordingConsentModal.addEventListener("click", (e) => {
+      if (e.target === liveRecordingConsentModal) hideLiveRecordingConsentModal();
+    });
+  }
   if (liveDeleteConfirmOk) liveDeleteConfirmOk.addEventListener("click", deleteLiveSession);
   if (liveDeleteConfirmCancel) liveDeleteConfirmCancel.addEventListener("click", hideDeleteConfirm);
   if (liveDeleteConfirmClose) liveDeleteConfirmClose.addEventListener("click", hideDeleteConfirm);
@@ -13428,6 +14334,9 @@ function attachLiveEvents() {
     renderClassSettingsList(e.target.value).catch((err) => console.error(err));
     });
   }
+  window.addEventListener("resize", () => {
+    renderLiveWhiteboard();
+  });
   if (classSettingsList) {
     classSettingsList.addEventListener("click", async (event) => {
       const editBtn = event.target.closest(".class-settings-edit");
@@ -16924,6 +17833,7 @@ const liveModeToggleButtons = document.querySelectorAll(".live-mode-toggle");
 const liveRoomSessionTitle = document.getElementById("liveRoomSessionTitle");
 const liveRoomSessionMeta = document.getElementById("liveRoomSessionMeta");
 const liveRoomSessionContext = document.getElementById("liveRoomSessionContext");
+const liveRecordingBadge = document.getElementById("liveRecordingBadge");
 const liveRecentMeta = document.getElementById("liveRecentMeta");
 const liveRecentList = document.getElementById("liveRecentList");
 const liveTabs = document.querySelectorAll(".live-tab");
@@ -16954,12 +17864,36 @@ const liveHostTitle = document.getElementById("liveHostTitle");
 const liveAttendanceModal = document.getElementById("liveAttendanceModal");
 const liveAttendanceMeta = document.getElementById("liveAttendanceMeta");
 const liveAttendanceStatus = document.getElementById("liveAttendanceStatus");
+const liveRecordingStatus = document.getElementById("liveRecordingStatus");
+const liveRecordingStartBtn = document.getElementById("liveRecordingStartBtn");
+const liveRecordingStopBtn = document.getElementById("liveRecordingStopBtn");
+const liveConsentPendingList = document.getElementById("liveConsentPendingList");
+const liveRecordingListStatus = document.getElementById("liveRecordingListStatus");
+const liveRecordingList = document.getElementById("liveRecordingList");
+const livePollForm = document.getElementById("livePollForm");
+const livePollType = document.getElementById("livePollType");
+const livePollQuestion = document.getElementById("livePollQuestion");
+const livePollOption1 = document.getElementById("livePollOption1");
+const livePollOption2 = document.getElementById("livePollOption2");
+const livePollOption3 = document.getElementById("livePollOption3");
+const livePollOption4 = document.getElementById("livePollOption4");
+const livePollAllowMultiple = document.getElementById("livePollAllowMultiple");
+const livePollAnonymousResults = document.getElementById("livePollAnonymousResults");
+const livePollCorrectOption = document.getElementById("livePollCorrectOption");
+const livePollCreateBtn = document.getElementById("livePollCreateBtn");
+const livePollListStatus = document.getElementById("livePollListStatus");
+const livePollList = document.getElementById("livePollList");
 const livePendingList = document.getElementById("livePendingList");
 const liveRaisedHandsList = document.getElementById("liveRaisedHandsList");
 const liveAttendanceList = document.getElementById("liveAttendanceList");
 const liveAttendanceClose = document.getElementById("liveAttendanceClose");
 const liveAttendanceCancel = document.getElementById("liveAttendanceCancel");
 const liveAttendanceSave = document.getElementById("liveAttendanceSave");
+const liveRecordingConsentModal = document.getElementById("liveRecordingConsentModal");
+const liveRecordingConsentClose = document.getElementById("liveRecordingConsentClose");
+const liveRecordingConsentCopy = document.getElementById("liveRecordingConsentCopy");
+const liveRecordingConsentLeaveBtn = document.getElementById("liveRecordingConsentLeaveBtn");
+const liveRecordingConsentAcceptBtn = document.getElementById("liveRecordingConsentAcceptBtn");
 const liveHostModal = document.getElementById("liveHostModal");
 const liveHostForm = document.getElementById("liveHostForm");
 const liveHostClose = document.getElementById("liveHostClose");
@@ -16971,6 +17905,14 @@ const liveHostEndInput = document.getElementById("liveHostEndInput");
 const liveHostNotesInput = document.getElementById("liveHostNotesInput");
 const liveHostMemberSearch = document.getElementById("liveHostMemberSearch");
 const liveHostMemberPicker = document.getElementById("liveHostMemberPicker");
+const liveRoomPollStatus = document.getElementById("liveRoomPollStatus");
+const liveRoomPollCard = document.getElementById("liveRoomPollCard");
+const liveRoomPollHistory = document.getElementById("liveRoomPollHistory");
+const liveWhiteboardStatus = document.getElementById("liveWhiteboardStatus");
+const liveWhiteboardCanvas = document.getElementById("liveWhiteboardCanvas");
+const liveWhiteboardDrawBtn = document.getElementById("liveWhiteboardDrawBtn");
+const liveWhiteboardEraseBtn = document.getElementById("liveWhiteboardEraseBtn");
+const liveWhiteboardClearBtn = document.getElementById("liveWhiteboardClearBtn");
 const SCHOOL_SETTINGS_CHANNEL_ID = "school-settings";
 const schoolEmailSettingsPage = document.getElementById("schoolEmailSettingsPage");
 const schoolEmailSettingsPageHome = schoolEmailSettingsPage?.parentElement || null;
@@ -17068,7 +18010,15 @@ const sesPreviewBtn = document.getElementById("sesPreviewBtn");
 let liveScope = "all";
 let liveSessions = [];
 let liveAttendanceData = null;
+let liveRecordingItems = [];
+let livePollItems = [];
 let liveActiveSession = null;
+let liveWhiteboardState = { sessionId: null, version: 0, operations: [] };
+let liveWhiteboardTool = "draw";
+let liveWhiteboardDrawing = false;
+let liveWhiteboardCurrentPoints = [];
+let liveWhiteboardStopStream = null;
+let liveWhiteboardPointerId = null;
 let liveHostMemberIds = new Set();
 let liveSessionSurfaceRefreshTimer = null;
 let liveSessionBackgroundFetchAt = 0;
@@ -34681,6 +35631,7 @@ document.addEventListener("DOMContentLoaded", () => {
     liveMeetLeaveBtn.addEventListener("click", async () => {
       setLiveRoomFocusMode(false);
       setLiveSessionActivity(false);
+      stopLiveWhiteboardStream();
       if (typeof leaveLiveMeetingEmbed === "function") leaveLiveMeetingEmbed();
       if (liveActiveSession?.id) {
         try {
@@ -34690,11 +35641,13 @@ document.addEventListener("DOMContentLoaded", () => {
           if (data?.liveControls) {
             applyLiveControlsToSession(liveActiveSession.id, data.liveControls);
             liveActiveSession = { ...liveActiveSession, liveControls: data.liveControls };
+            updateLiveRecordingBadge(liveActiveSession);
           }
         } catch (err) {
           console.error("Failed to leave live session", err);
         }
       }
+      hideLiveRecordingConsentModal();
       showToast("You left the session.");
     });
   }
@@ -34710,6 +35663,7 @@ document.addEventListener("DOMContentLoaded", () => {
       setLiveRoomFocusMode(false);
       setLivePresenterMode(false);
       setLiveSessionActivity(false);
+      stopLiveWhiteboardStream();
       if (typeof leaveLiveMeetingEmbed === "function") leaveLiveMeetingEmbed();
       setLivePanelView("hub");
       clearBrowserLiveRoomPath();
@@ -34727,6 +35681,7 @@ window.addEventListener("popstate", () => {
     setLiveRoomFocusMode(false);
     setLivePresenterMode(false);
     setLiveSessionActivity(false);
+    stopLiveWhiteboardStream();
     if (typeof leaveLiveMeetingEmbed === "function") leaveLiveMeetingEmbed();
     setLivePanelView("hub");
   }

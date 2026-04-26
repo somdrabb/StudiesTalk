@@ -4,6 +4,7 @@ require('dotenv').config();
 const ENV = require('./server/env');
 
 const express = require('express');
+const os = require('os');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
@@ -33,6 +34,7 @@ const inboundEmailService = require('./server/services/inboundEmail.service');
 const jitsiConfig = require('./server/config/jitsi');
 const { generateJitsiToken } = require('./server/services/jitsiTokenService');
 const { createFileStorageService, getTypeMaxBytes } = require('./server/services/fileStorage.service');
+const { createLiveRecordingService } = require('./server/services/liveRecording.service');
 const { createLocalDiskStorageAdapter } = require('./server/services/storage/localDiskStorage.adapter');
 const { createS3CompatibleStorageAdapter } = require('./server/services/storage/s3CompatibleStorage.adapter');
 const aiSpeakingScenarioConfig = require('./public/AIvoicepractice/scenarioConfig.js');
@@ -180,11 +182,22 @@ const UPLOADS_DIR = String(ENV.UPLOADS_DIR || path.join(__dirname, 'uploads')).t
 const ATTACHMENTS_DIR = path.join(process.cwd(), 'storage', 'email_attachments');
 
 const slideClientsBySession = new Map(); // sessionId -> Set(res)
+const whiteboardClientsBySession = new Map(); // sessionId -> Set(res)
+const liveWhiteboardStateBySession = new Map(); // sessionId -> { version, operations }
 
 function broadcastSse(sessionId, eventName, payload) {
   const set = slideClientsBySession.get(String(sessionId));
   if (!set) return;
 
+  const msg = `event: ${eventName}\ndata: ${JSON.stringify(payload)}\n\n`;
+  for (const res of set) {
+    res.write(msg);
+  }
+}
+
+function broadcastWhiteboardSse(sessionId, eventName, payload) {
+  const set = whiteboardClientsBySession.get(String(sessionId));
+  if (!set) return;
   const msg = `event: ${eventName}\ndata: ${JSON.stringify(payload)}\n\n`;
   for (const res of set) {
     res.write(msg);
@@ -6989,6 +7002,8 @@ try {
       hand_status TEXT NOT NULL DEFAULT 'lowered',
       hand_raised_at TEXT,
       hand_lowered_at TEXT,
+      recording_consent INTEGER NOT NULL DEFAULT 0,
+      consented_at TEXT,
       updated_at TEXT DEFAULT (datetime('now')),
       PRIMARY KEY (live_session_id, user_id),
       FOREIGN KEY (live_session_id) REFERENCES live_sessions(id) ON DELETE CASCADE,
@@ -7002,6 +7017,99 @@ try {
       ON live_session_participants(workspace_id, live_session_id, status);
     CREATE INDEX IF NOT EXISTS idx_live_session_participants_user
       ON live_session_participants(user_id, live_session_id);
+
+    CREATE TABLE IF NOT EXISTS live_session_recording (
+      session_id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      recording_enabled INTEGER NOT NULL DEFAULT 0,
+      recording_started_at TEXT,
+      recording_started_by TEXT,
+      consent_required INTEGER NOT NULL DEFAULT 1,
+      student_playback_allowed INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (session_id) REFERENCES live_sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+      FOREIGN KEY (recording_started_by) REFERENCES users(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_live_session_recording_workspace
+      ON live_session_recording(workspace_id, recording_enabled);
+
+    CREATE TABLE IF NOT EXISTS live_session_recordings (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      storage_key TEXT NOT NULL,
+      storage_provider TEXT NOT NULL DEFAULT 'local_disk',
+      storage_mode TEXT NOT NULL DEFAULT 'plain',
+      encryption_key_id TEXT DEFAULT '',
+      encryption_iv TEXT DEFAULT '',
+      encryption_tag TEXT DEFAULT '',
+      checksum TEXT DEFAULT '',
+      original_name TEXT NOT NULL,
+      mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+      size_bytes INTEGER NOT NULL DEFAULT 0,
+      duration_seconds INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'processing',
+      started_at TEXT,
+      stopped_at TEXT,
+      created_by_user_id TEXT,
+      retention_until TEXT,
+      deleted_at TEXT,
+      FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+      FOREIGN KEY (session_id) REFERENCES live_sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_live_session_recordings_workspace
+      ON live_session_recordings(workspace_id, session_id, status);
+    CREATE INDEX IF NOT EXISTS idx_live_session_recordings_retention
+      ON live_session_recordings(retention_until, deleted_at);
+
+    CREATE TABLE IF NOT EXISTS live_session_polls (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      created_by_user_id TEXT,
+      type TEXT NOT NULL DEFAULT 'poll',
+      question TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft',
+      allow_multiple INTEGER NOT NULL DEFAULT 0,
+      anonymous_results INTEGER NOT NULL DEFAULT 0,
+      correct_option_id TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      opened_at TEXT,
+      closed_at TEXT,
+      FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+      FOREIGN KEY (session_id) REFERENCES live_sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS live_session_poll_options (
+      id TEXT PRIMARY KEY,
+      poll_id TEXT NOT NULL,
+      text TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY (poll_id) REFERENCES live_session_polls(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS live_session_poll_responses (
+      id TEXT PRIMARY KEY,
+      poll_id TEXT NOT NULL,
+      option_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      answered_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (poll_id) REFERENCES live_session_polls(id) ON DELETE CASCADE,
+      FOREIGN KEY (option_id) REFERENCES live_session_poll_options(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_live_session_polls_workspace
+      ON live_session_polls(workspace_id, session_id, status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_live_session_poll_options_poll
+      ON live_session_poll_options(poll_id, sort_order);
+    CREATE INDEX IF NOT EXISTS idx_live_session_poll_responses_poll_user
+      ON live_session_poll_responses(poll_id, user_id, answered_at);
 
     CREATE TABLE IF NOT EXISTS attendance_sessions (
       id TEXT PRIMARY KEY,
@@ -7371,6 +7479,8 @@ function ensureLiveSessionParticipantSchema() {
       hand_status TEXT NOT NULL DEFAULT 'lowered',
       hand_raised_at TEXT,
       hand_lowered_at TEXT,
+      recording_consent INTEGER NOT NULL DEFAULT 0,
+      consented_at TEXT,
       updated_at TEXT DEFAULT (datetime('now')),
       PRIMARY KEY (live_session_id, user_id),
       FOREIGN KEY (live_session_id) REFERENCES live_sessions(id) ON DELETE CASCADE,
@@ -7395,12 +7505,162 @@ function ensureLiveSessionParticipantSchema() {
   safeAlter("ALTER TABLE live_session_participants ADD COLUMN hand_status TEXT NOT NULL DEFAULT 'lowered'");
   safeAlter("ALTER TABLE live_session_participants ADD COLUMN hand_raised_at TEXT");
   safeAlter("ALTER TABLE live_session_participants ADD COLUMN hand_lowered_at TEXT");
+  safeAlter("ALTER TABLE live_session_participants ADD COLUMN recording_consent INTEGER NOT NULL DEFAULT 0");
+  safeAlter("ALTER TABLE live_session_participants ADD COLUMN consented_at TEXT");
   safeAlter("ALTER TABLE live_session_participants ADD COLUMN updated_at TEXT DEFAULT (datetime('now'))");
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_live_session_participants_workspace
       ON live_session_participants(workspace_id, live_session_id, status);
     CREATE INDEX IF NOT EXISTS idx_live_session_participants_user
       ON live_session_participants(user_id, live_session_id);
+  `);
+}
+
+function ensureLiveSessionRecordingSchema() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS live_session_recording (
+      session_id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      recording_enabled INTEGER NOT NULL DEFAULT 0,
+      recording_started_at TEXT,
+      recording_started_by TEXT,
+      consent_required INTEGER NOT NULL DEFAULT 1,
+      student_playback_allowed INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (session_id) REFERENCES live_sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+      FOREIGN KEY (recording_started_by) REFERENCES users(id) ON DELETE SET NULL
+    );
+  `);
+  safeAlter("ALTER TABLE live_session_recording ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'");
+  safeAlter("ALTER TABLE live_session_recording ADD COLUMN recording_enabled INTEGER NOT NULL DEFAULT 0");
+  safeAlter("ALTER TABLE live_session_recording ADD COLUMN recording_started_at TEXT");
+  safeAlter("ALTER TABLE live_session_recording ADD COLUMN recording_started_by TEXT");
+  safeAlter("ALTER TABLE live_session_recording ADD COLUMN consent_required INTEGER NOT NULL DEFAULT 1");
+  safeAlter("ALTER TABLE live_session_recording ADD COLUMN student_playback_allowed INTEGER NOT NULL DEFAULT 0");
+  safeAlter("ALTER TABLE live_session_recording ADD COLUMN updated_at TEXT DEFAULT (datetime('now'))");
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_live_session_recording_workspace
+      ON live_session_recording(workspace_id, recording_enabled);
+  `);
+}
+
+function ensureLiveSessionRecordingsSchema() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS live_session_recordings (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      storage_key TEXT NOT NULL,
+      storage_provider TEXT NOT NULL DEFAULT 'local_disk',
+      storage_mode TEXT NOT NULL DEFAULT 'plain',
+      encryption_key_id TEXT DEFAULT '',
+      encryption_iv TEXT DEFAULT '',
+      encryption_tag TEXT DEFAULT '',
+      checksum TEXT DEFAULT '',
+      original_name TEXT NOT NULL,
+      mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+      size_bytes INTEGER NOT NULL DEFAULT 0,
+      duration_seconds INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'processing',
+      started_at TEXT,
+      stopped_at TEXT,
+      created_by_user_id TEXT,
+      retention_until TEXT,
+      deleted_at TEXT,
+      FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+      FOREIGN KEY (session_id) REFERENCES live_sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+    );
+  `);
+  safeAlter("ALTER TABLE live_session_recordings ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'");
+  safeAlter("ALTER TABLE live_session_recordings ADD COLUMN session_id TEXT NOT NULL DEFAULT ''");
+  safeAlter("ALTER TABLE live_session_recordings ADD COLUMN storage_key TEXT NOT NULL DEFAULT ''");
+  safeAlter("ALTER TABLE live_session_recordings ADD COLUMN storage_provider TEXT NOT NULL DEFAULT 'local_disk'");
+  safeAlter("ALTER TABLE live_session_recordings ADD COLUMN storage_mode TEXT NOT NULL DEFAULT 'plain'");
+  safeAlter("ALTER TABLE live_session_recordings ADD COLUMN encryption_key_id TEXT DEFAULT ''");
+  safeAlter("ALTER TABLE live_session_recordings ADD COLUMN encryption_iv TEXT DEFAULT ''");
+  safeAlter("ALTER TABLE live_session_recordings ADD COLUMN encryption_tag TEXT DEFAULT ''");
+  safeAlter("ALTER TABLE live_session_recordings ADD COLUMN checksum TEXT DEFAULT ''");
+  safeAlter("ALTER TABLE live_session_recordings ADD COLUMN original_name TEXT NOT NULL DEFAULT 'recording'");
+  safeAlter("ALTER TABLE live_session_recordings ADD COLUMN mime_type TEXT NOT NULL DEFAULT 'application/octet-stream'");
+  safeAlter("ALTER TABLE live_session_recordings ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0");
+  safeAlter("ALTER TABLE live_session_recordings ADD COLUMN duration_seconds INTEGER NOT NULL DEFAULT 0");
+  safeAlter("ALTER TABLE live_session_recordings ADD COLUMN status TEXT NOT NULL DEFAULT 'processing'");
+  safeAlter("ALTER TABLE live_session_recordings ADD COLUMN started_at TEXT");
+  safeAlter("ALTER TABLE live_session_recordings ADD COLUMN stopped_at TEXT");
+  safeAlter("ALTER TABLE live_session_recordings ADD COLUMN created_by_user_id TEXT");
+  safeAlter("ALTER TABLE live_session_recordings ADD COLUMN retention_until TEXT");
+  safeAlter("ALTER TABLE live_session_recordings ADD COLUMN deleted_at TEXT");
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_live_session_recordings_workspace
+      ON live_session_recordings(workspace_id, session_id, status);
+    CREATE INDEX IF NOT EXISTS idx_live_session_recordings_retention
+      ON live_session_recordings(retention_until, deleted_at);
+  `);
+}
+
+function ensureLiveSessionPollSchema() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS live_session_polls (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      created_by_user_id TEXT,
+      type TEXT NOT NULL DEFAULT 'poll',
+      question TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft',
+      allow_multiple INTEGER NOT NULL DEFAULT 0,
+      anonymous_results INTEGER NOT NULL DEFAULT 0,
+      correct_option_id TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      opened_at TEXT,
+      closed_at TEXT,
+      FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+      FOREIGN KEY (session_id) REFERENCES live_sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS live_session_poll_options (
+      id TEXT PRIMARY KEY,
+      poll_id TEXT NOT NULL,
+      text TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY (poll_id) REFERENCES live_session_polls(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS live_session_poll_responses (
+      id TEXT PRIMARY KEY,
+      poll_id TEXT NOT NULL,
+      option_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      answered_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (poll_id) REFERENCES live_session_polls(id) ON DELETE CASCADE,
+      FOREIGN KEY (option_id) REFERENCES live_session_poll_options(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+  `);
+  safeAlter("ALTER TABLE live_session_polls ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'");
+  safeAlter("ALTER TABLE live_session_polls ADD COLUMN session_id TEXT NOT NULL DEFAULT ''");
+  safeAlter("ALTER TABLE live_session_polls ADD COLUMN created_by_user_id TEXT");
+  safeAlter("ALTER TABLE live_session_polls ADD COLUMN type TEXT NOT NULL DEFAULT 'poll'");
+  safeAlter("ALTER TABLE live_session_polls ADD COLUMN question TEXT NOT NULL DEFAULT ''");
+  safeAlter("ALTER TABLE live_session_polls ADD COLUMN status TEXT NOT NULL DEFAULT 'draft'");
+  safeAlter("ALTER TABLE live_session_polls ADD COLUMN allow_multiple INTEGER NOT NULL DEFAULT 0");
+  safeAlter("ALTER TABLE live_session_polls ADD COLUMN anonymous_results INTEGER NOT NULL DEFAULT 0");
+  safeAlter("ALTER TABLE live_session_polls ADD COLUMN correct_option_id TEXT");
+  safeAlter("ALTER TABLE live_session_polls ADD COLUMN created_at TEXT DEFAULT (datetime('now'))");
+  safeAlter("ALTER TABLE live_session_polls ADD COLUMN opened_at TEXT");
+  safeAlter("ALTER TABLE live_session_polls ADD COLUMN closed_at TEXT");
+  safeAlter("ALTER TABLE live_session_poll_options ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0");
+  safeAlter("ALTER TABLE live_session_poll_responses ADD COLUMN answered_at TEXT DEFAULT (datetime('now'))");
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_live_session_polls_workspace
+      ON live_session_polls(workspace_id, session_id, status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_live_session_poll_options_poll
+      ON live_session_poll_options(poll_id, sort_order);
+    CREATE INDEX IF NOT EXISTS idx_live_session_poll_responses_poll_user
+      ON live_session_poll_responses(poll_id, user_id, answered_at);
   `);
 }
 
@@ -7476,6 +7736,9 @@ db.exec(`
 
 ensureLiveAttendanceForeignKey();
 ensureLiveSessionParticipantSchema();
+ensureLiveSessionRecordingSchema();
+ensureLiveSessionRecordingsSchema();
+ensureLiveSessionPollSchema();
 
 try {
   db.exec("ALTER TABLE live_sessions ADD COLUMN audience TEXT");
@@ -18853,6 +19116,9 @@ function buildEmailSignatureBlock({ profileRow = {}, workspaceRow = {}, settings
 const LIVE_SCOPE_VALUES = new Set(["today", "week", "all"]);
 const LIVE_AUDIENCE_VALUES = new Set(["general", "teachers"]);
 const LIVE_SLIDE_MANAGER_ROLES = new Set(["teacher", "admin", "school_admin", "super_admin"]);
+const LIVE_RECORDING_MANAGER_ROLES = new Set(["teacher", "admin", "school_admin", "super_admin"]);
+const LIVE_POLL_TYPES = new Set(["poll", "quiz"]);
+const LIVE_POLL_STATUSES = new Set(["draft", "open", "closed"]);
 
 function canManageLiveSessions(user) {
   if (!user) return false;
@@ -19044,6 +19310,65 @@ function listLiveSessionParticipants(sessionId) {
   `).all(String(sessionId || '').trim());
 }
 
+function getLiveSessionRecording(sessionId) {
+  const normalizedSessionId = String(sessionId || '').trim();
+  if (!normalizedSessionId) return null;
+  return db.prepare(`
+    SELECT *
+    FROM live_session_recording
+    WHERE session_id = ?
+    LIMIT 1
+  `).get(normalizedSessionId) || null;
+}
+
+function upsertLiveSessionRecording({
+  session,
+  recordingEnabled,
+  recordingStartedAt,
+  recordingStartedBy,
+  consentRequired,
+  studentPlaybackAllowed
+}) {
+  if (!session?.id) return null;
+  const existing = getLiveSessionRecording(session.id);
+  const payload = {
+    session_id: String(session.id).trim(),
+    workspace_id: String(session.workspace_id || session.workspaceId || '').trim() || 'default',
+    recording_enabled: recordingEnabled !== undefined
+      ? (recordingEnabled ? 1 : 0)
+      : Number(existing?.recording_enabled ? 1 : 0),
+    recording_started_at: recordingStartedAt !== undefined
+      ? recordingStartedAt
+      : (existing?.recording_started_at || null),
+    recording_started_by: recordingStartedBy !== undefined
+      ? recordingStartedBy
+      : (existing?.recording_started_by || null),
+    consent_required: consentRequired !== undefined
+      ? (consentRequired ? 1 : 0)
+      : Number(existing?.consent_required === 0 ? 0 : 1),
+    student_playback_allowed: studentPlaybackAllowed !== undefined
+      ? (studentPlaybackAllowed ? 1 : 0)
+      : Number(existing?.student_playback_allowed || 0),
+    updated_at: nowIso()
+  };
+  db.prepare(`
+    INSERT INTO live_session_recording (
+      session_id, workspace_id, recording_enabled, recording_started_at, recording_started_by, consent_required, student_playback_allowed, updated_at
+    ) VALUES (
+      @session_id, @workspace_id, @recording_enabled, @recording_started_at, @recording_started_by, @consent_required, @student_playback_allowed, @updated_at
+    )
+    ON CONFLICT(session_id) DO UPDATE SET
+      workspace_id = excluded.workspace_id,
+      recording_enabled = excluded.recording_enabled,
+      recording_started_at = excluded.recording_started_at,
+      recording_started_by = excluded.recording_started_by,
+      consent_required = excluded.consent_required,
+      student_playback_allowed = excluded.student_playback_allowed,
+      updated_at = excluded.updated_at
+  `).run(payload);
+  return getLiveSessionRecording(session.id);
+}
+
 function normalizeLiveParticipantStatus(value = '') {
   const normalized = String(value || '').trim().toLowerCase();
   if (['pending', 'approved', 'denied', 'joined', 'left'].includes(normalized)) {
@@ -19054,6 +19379,306 @@ function normalizeLiveParticipantStatus(value = '') {
 
 function normalizeLiveHandStatus(value = '') {
   return String(value || '').trim().toLowerCase() === 'raised' ? 'raised' : 'lowered';
+}
+
+function normalizeLiveRecordingConsent(value) {
+  return Number(value) === 1;
+}
+
+function normalizeLivePollType(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  return LIVE_POLL_TYPES.has(normalized) ? normalized : 'poll';
+}
+
+function normalizeLivePollStatus(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  return LIVE_POLL_STATUSES.has(normalized) ? normalized : 'draft';
+}
+
+function getLiveWhiteboardState(sessionId) {
+  const key = String(sessionId || '').trim();
+  if (!key) {
+    return { sessionId: '', version: 0, operations: [] };
+  }
+  if (!liveWhiteboardStateBySession.has(key)) {
+    liveWhiteboardStateBySession.set(key, {
+      sessionId: key,
+      version: 0,
+      operations: []
+    });
+  }
+  return liveWhiteboardStateBySession.get(key);
+}
+
+function listLiveWhiteboardState(sessionId) {
+  const state = getLiveWhiteboardState(sessionId);
+  return {
+    sessionId: state.sessionId,
+    version: Number(state.version || 0),
+    operations: Array.isArray(state.operations) ? state.operations.map((op) => ({ ...op })) : []
+  };
+}
+
+function normalizeWhiteboardTool(value = '') {
+  return String(value || '').trim().toLowerCase() === 'erase' ? 'erase' : 'draw';
+}
+
+function normalizeWhiteboardColor(value = '') {
+  const raw = String(value || '').trim();
+  return /^#[0-9a-f]{6}$/i.test(raw) ? raw.toLowerCase() : '#2563eb';
+}
+
+function normalizeWhiteboardSize(value, fallback = 4) {
+  const size = Number(value);
+  if (!Number.isFinite(size)) return fallback;
+  return Math.min(32, Math.max(1, Math.round(size * 10) / 10));
+}
+
+function normalizeWhiteboardPoints(points = []) {
+  if (!Array.isArray(points)) return [];
+  return points
+    .slice(0, 256)
+    .map((point) => ({
+      x: Number.isFinite(Number(point?.x)) ? Math.min(1, Math.max(0, Number(point.x))) : null,
+      y: Number.isFinite(Number(point?.y)) ? Math.min(1, Math.max(0, Number(point.y))) : null
+    }))
+    .filter((point) => point.x !== null && point.y !== null);
+}
+
+function appendWhiteboardOperation(sessionId, {
+  type = 'draw',
+  points = [],
+  color = '#2563eb',
+  size = 4,
+  userId = null,
+  role = ''
+} = {}) {
+  const state = getLiveWhiteboardState(sessionId);
+  const normalizedPoints = normalizeWhiteboardPoints(points);
+  if (normalizedPoints.length < 1) {
+    const err = new Error('Whiteboard points are required.');
+    err.statusCode = 400;
+    throw err;
+  }
+  const operation = {
+    id: generateId('wbop'),
+    type: normalizeWhiteboardTool(type),
+    points: normalizedPoints,
+    color: normalizeWhiteboardColor(color),
+    size: normalizeWhiteboardSize(size, normalizeWhiteboardTool(type) === 'erase' ? 14 : 4),
+    userId: userId ? String(userId).trim() : null,
+    role: String(role || '').trim().toLowerCase(),
+    createdAt: nowIso()
+  };
+  state.operations.push(operation);
+  if (state.operations.length > 500) {
+    state.operations = state.operations.slice(-500);
+  }
+  state.version = Number(state.version || 0) + 1;
+  return {
+    state: listLiveWhiteboardState(sessionId),
+    operation
+  };
+}
+
+function clearLiveWhiteboardState(sessionId, actor = null) {
+  const state = getLiveWhiteboardState(sessionId);
+  state.operations = [];
+  state.version = Number(state.version || 0) + 1;
+  return {
+    sessionId: String(sessionId || '').trim(),
+    version: state.version,
+    clearedBy: actor?.id || actor?.sub || null,
+    clearedAt: nowIso()
+  };
+}
+
+function canUserDrawOnLiveWhiteboard(user, session) {
+  if (!user || !session) return false;
+  if (canUserManageSpecificLiveSession(user, session)) return true;
+  const participant = getLiveSessionParticipant(session.id, user.id || user.sub);
+  const status = normalizeLiveParticipantStatus(participant?.status || '');
+  if (!['approved', 'joined'].includes(status)) return false;
+  return canUserConsumeLiveSessionContent(user, session);
+}
+
+function getLivePollById(pollId) {
+  const normalizedPollId = String(pollId || '').trim();
+  if (!normalizedPollId) return null;
+  return db.prepare(`
+    SELECT *
+    FROM live_session_polls
+    WHERE id = ?
+    LIMIT 1
+  `).get(normalizedPollId) || null;
+}
+
+function listLiveSessionPollRows(sessionId) {
+  return db.prepare(`
+    SELECT p.*,
+           COALESCE(u.name, u.username, u.email, p.created_by_user_id) AS created_by_name
+    FROM live_session_polls p
+    LEFT JOIN users u ON u.id = p.created_by_user_id
+    WHERE p.session_id = ?
+    ORDER BY
+      CASE p.status
+        WHEN 'open' THEN 0
+        WHEN 'draft' THEN 1
+        WHEN 'closed' THEN 2
+        ELSE 3
+      END,
+      p.created_at DESC,
+      p.id DESC
+  `).all(String(sessionId || '').trim());
+}
+
+function listLivePollOptions(pollId) {
+  return db.prepare(`
+    SELECT *
+    FROM live_session_poll_options
+    WHERE poll_id = ?
+    ORDER BY sort_order ASC, id ASC
+  `).all(String(pollId || '').trim());
+}
+
+function listLivePollResponses(pollId) {
+  return db.prepare(`
+    SELECT r.*,
+           COALESCE(u.name, u.username, u.email, r.user_id) AS user_name
+    FROM live_session_poll_responses r
+    LEFT JOIN users u ON u.id = r.user_id
+    WHERE r.poll_id = ?
+    ORDER BY r.answered_at ASC, r.id ASC
+  `).all(String(pollId || '').trim());
+}
+
+function listLivePollUserResponses(pollId, userId) {
+  return db.prepare(`
+    SELECT *
+    FROM live_session_poll_responses
+    WHERE poll_id = ? AND user_id = ?
+    ORDER BY answered_at ASC, id ASC
+  `).all(String(pollId || '').trim(), String(userId || '').trim());
+}
+
+function canUserAnswerLivePoll(user, session) {
+  if (!user || !session) return false;
+  if (canUserManageSpecificLiveSession(user, session)) return false;
+  const participant = getLiveSessionParticipant(session.id, user.id || user.sub);
+  const status = normalizeLiveParticipantStatus(participant?.status || '');
+  if (!['approved', 'joined'].includes(status)) return false;
+  const recording = getLiveSessionRecording(session.id);
+  if (Number(recording?.recording_enabled || 0) === 1 && Number(recording?.consent_required === 0 ? 0 : 1) === 1) {
+    return normalizeLiveRecordingConsent(participant?.recording_consent);
+  }
+  return true;
+}
+
+function buildLivePollResults(poll, viewer, { canManage = false } = {}) {
+  const options = listLivePollOptions(poll.id);
+  const responses = listLivePollResponses(poll.id);
+  const respondents = new Map();
+  responses.forEach((row) => {
+    if (!respondents.has(row.user_id)) {
+      respondents.set(row.user_id, {
+        userId: row.user_id,
+        name: row.user_name || row.user_id || 'Participant',
+        optionIds: new Set()
+      });
+    }
+    respondents.get(row.user_id).optionIds.add(row.option_id);
+  });
+  const totalResponses = respondents.size;
+  const totalSelections = responses.length;
+  const hideIdentities = Number(poll.anonymous_results || 0) === 1 || !canManage;
+  const optionStats = options.map((option) => {
+    const matching = responses.filter((row) => String(row.option_id || '') === String(option.id || ''));
+    const respondentCount = new Set(matching.map((row) => String(row.user_id || ''))).size;
+    return {
+      id: option.id,
+      text: option.text,
+      sortOrder: Number(option.sort_order || 0),
+      count: respondentCount,
+      percentage: totalResponses ? Math.round((respondentCount / totalResponses) * 1000) / 10 : 0,
+      respondents: hideIdentities
+        ? []
+        : Array.from(new Map(matching.map((row) => [
+            String(row.user_id || ''),
+            { userId: row.user_id, name: row.user_name || row.user_id || 'Participant' }
+          ])).values())
+    };
+  });
+  const correctOptionId = String(poll.correct_option_id || '').trim() || null;
+  let correctness = null;
+  if (correctOptionId) {
+    let correctCount = 0;
+    let incorrectCount = 0;
+    respondents.forEach((entry) => {
+      const selected = entry.optionIds;
+      if (selected.size === 1 && selected.has(correctOptionId)) correctCount += 1;
+      else incorrectCount += 1;
+    });
+    correctness = {
+      correctOptionId,
+      correctCount,
+      incorrectCount
+    };
+  }
+  return {
+    totalResponses,
+    totalSelections,
+    options: optionStats,
+    correctness
+  };
+}
+
+function buildLivePollForClient(poll, viewer, { canManage = false, includeResults = true } = {}) {
+  const options = listLivePollOptions(poll.id);
+  const viewerResponses = viewer?.id ? listLivePollUserResponses(poll.id, viewer.id) : [];
+  const viewerOptionIds = Array.from(new Set(viewerResponses.map((row) => String(row.option_id || ''))));
+  const status = normalizeLivePollStatus(poll.status || 'draft');
+  const type = normalizeLivePollType(poll.type || 'poll');
+  return {
+    id: poll.id,
+    workspaceId: poll.workspace_id,
+    sessionId: poll.session_id,
+    createdByUserId: poll.created_by_user_id || null,
+    createdByName: poll.created_by_name || null,
+    type,
+    question: poll.question || '',
+    status,
+    allowMultiple: Number(poll.allow_multiple || 0) === 1,
+    anonymousResults: Number(poll.anonymous_results || 0) === 1,
+    correctOptionId: String(poll.correct_option_id || '').trim() || null,
+    createdAt: poll.created_at || null,
+    openedAt: poll.opened_at || null,
+    closedAt: poll.closed_at || null,
+    options: options.map((option) => ({
+      id: option.id,
+      text: option.text || '',
+      sortOrder: Number(option.sort_order || 0)
+    })),
+    viewerResponseOptionIds: viewerOptionIds,
+    viewerHasAnswered: viewerOptionIds.length > 0,
+    results: includeResults ? buildLivePollResults(poll, viewer, { canManage }) : null
+  };
+}
+
+async function logLivePollAccessDenied(req, { session = null, actor = null, pollId = null, reason = 'live_poll_access_denied' } = {}) {
+  await logSecurityEvent({
+    workspaceId: session?.workspace_id || session?.workspaceId || actor?.workspaceId || actor?.workspace_id || null,
+    actorUserId: actor?.id || actor?.sub || null,
+    targetUserId: null,
+    type: 'forbidden_live_poll_access_attempt',
+    severity: 'warn',
+    ip: req?.ip || null,
+    userAgent: req?.headers?.['user-agent'] || null,
+    payload: {
+      sessionId: session?.id || null,
+      pollId: pollId || null,
+      reason
+    }
+  });
 }
 
 function syncLegacyLiveAttendanceRecord({
@@ -19097,7 +19722,9 @@ function upsertLiveSessionParticipant({
   durationSeconds,
   handStatus,
   handRaisedAt,
-  handLoweredAt
+  handLoweredAt,
+  recordingConsent,
+  consentedAt
 }) {
   if (!session?.id || !user?.id) return null;
   const existing = getLiveSessionParticipant(session.id, user.id);
@@ -19121,17 +19748,21 @@ function upsertLiveSessionParticipant({
     hand_status: normalizeLiveHandStatus(handStatus !== undefined ? handStatus : (existing?.hand_status || 'lowered')),
     hand_raised_at: handRaisedAt !== undefined ? handRaisedAt : (existing?.hand_raised_at || null),
     hand_lowered_at: handLoweredAt !== undefined ? handLoweredAt : (existing?.hand_lowered_at || null),
+    recording_consent: recordingConsent !== undefined
+      ? (recordingConsent ? 1 : 0)
+      : Number(existing?.recording_consent ? 1 : 0),
+    consented_at: consentedAt !== undefined ? consentedAt : (existing?.consented_at || null),
     updated_at: nowIso()
   };
   db.prepare(`
     INSERT INTO live_session_participants (
       live_session_id, workspace_id, user_id, role, status, requested_at, approved_at, denied_at,
       approved_by, denied_by, denial_reason, joined_at, left_at, duration_seconds, hand_status,
-      hand_raised_at, hand_lowered_at, updated_at
+      hand_raised_at, hand_lowered_at, recording_consent, consented_at, updated_at
     ) VALUES (
       @live_session_id, @workspace_id, @user_id, @role, @status, @requested_at, @approved_at, @denied_at,
       @approved_by, @denied_by, @denial_reason, @joined_at, @left_at, @duration_seconds, @hand_status,
-      @hand_raised_at, @hand_lowered_at, @updated_at
+      @hand_raised_at, @hand_lowered_at, @recording_consent, @consented_at, @updated_at
     )
     ON CONFLICT(live_session_id, user_id) DO UPDATE SET
       workspace_id = excluded.workspace_id,
@@ -19149,6 +19780,8 @@ function upsertLiveSessionParticipant({
       hand_status = excluded.hand_status,
       hand_raised_at = excluded.hand_raised_at,
       hand_lowered_at = excluded.hand_lowered_at,
+      recording_consent = excluded.recording_consent,
+      consented_at = excluded.consented_at,
       updated_at = excluded.updated_at
   `).run(payload);
   return getLiveSessionParticipant(session.id, user.id);
@@ -19157,6 +19790,7 @@ function upsertLiveSessionParticipant({
 function formatLiveParticipantForClient(row = {}) {
   const status = normalizeLiveParticipantStatus(row.status || 'pending');
   const handStatus = normalizeLiveHandStatus(row.hand_status || 'lowered');
+  const recordingConsent = normalizeLiveRecordingConsent(row.recording_consent);
   return {
     liveSessionId: row.live_session_id,
     workspaceId: row.workspace_id,
@@ -19175,6 +19809,8 @@ function formatLiveParticipantForClient(row = {}) {
     handStatus,
     handRaisedAt: row.hand_raised_at || null,
     handLoweredAt: row.hand_lowered_at || null,
+    recordingConsent,
+    consentedAt: row.consented_at || null,
     name: row.user_name || row.name || row.user_id || 'Participant',
     canJoin: status === 'approved' || status === 'joined' || status === 'left',
     isPending: status === 'pending',
@@ -19193,6 +19829,23 @@ async function logLiveClassAuditEvent(type, { session = null, actor = null, targ
     ip: null,
     userAgent: null,
     payload
+  });
+}
+
+async function logRecordingAccessDenied(req, { session = null, actor = null, recordingId = null, reason = 'recording_access_denied' } = {}) {
+  await logSecurityEvent({
+    workspaceId: session?.workspace_id || session?.workspaceId || actor?.workspaceId || actor?.workspace_id || null,
+    actorUserId: actor?.id || actor?.sub || null,
+    targetUserId: null,
+    type: 'recording_access_denied',
+    severity: 'warn',
+    ip: req?.ip || null,
+    userAgent: req?.headers?.['user-agent'] || null,
+    payload: {
+      sessionId: session?.id || null,
+      recordingId: recordingId || null,
+      reason
+    }
   });
 }
 
@@ -19244,9 +19897,140 @@ async function resolveLiveSessionAccess(req, sessionId, { requireManage = false 
   return { ok: true, session, user };
 }
 
+async function resolveLiveRecordingAccess(req, recordingId, { requireManage = false } = {}) {
+  const row = db.prepare(`
+    SELECT r.*,
+           s.id AS session_id_ref,
+           s.workspace_id AS session_workspace_id
+    FROM live_session_recordings r
+    JOIN live_sessions s ON s.id = r.session_id
+    WHERE r.id = ?
+    LIMIT 1
+  `).get(String(recordingId || '').trim());
+  if (!row || row.deleted_at) return { ok: false, status: 404 };
+  const sessionId = String(row.session_id_ref || row.session_id || '').trim();
+  const sessionAccess = await resolveLiveSessionAccess(req, sessionId, { requireManage });
+  if (!sessionAccess.ok) {
+    return { ...sessionAccess, recording: row };
+  }
+  return {
+    ok: true,
+    user: sessionAccess.user,
+    session: sessionAccess.session,
+    recording: row
+  };
+}
+
+async function resolveLivePollAccess(req, pollId, { requireManage = false } = {}) {
+  const poll = getLivePollById(pollId);
+  if (!poll) return { ok: false, status: 404 };
+  const sessionAccess = await resolveLiveSessionAccess(req, poll.session_id, { requireManage });
+  if (!sessionAccess.ok) {
+    return { ...sessionAccess, poll };
+  }
+  return {
+    ok: true,
+    user: sessionAccess.user,
+    session: sessionAccess.session,
+    poll
+  };
+}
+
+function createLivePoll({
+  session,
+  actor,
+  type = 'poll',
+  question,
+  status = 'draft',
+  allowMultiple = false,
+  anonymousResults = false,
+  options = [],
+  correctOptionIndex = null
+}) {
+  const normalizedOptions = options
+    .map((text) => String(text || '').trim())
+    .filter(Boolean)
+    .slice(0, 8);
+  if (normalizedOptions.length < 2) {
+    const err = new Error('At least two options are required.');
+    err.statusCode = 400;
+    throw err;
+  }
+  const trimmedQuestion = String(question || '').trim();
+  if (!trimmedQuestion) {
+    const err = new Error('Question is required.');
+    err.statusCode = 400;
+    throw err;
+  }
+  const pollId = generateId('lpoll');
+  const optionRows = normalizedOptions.map((text, index) => ({
+    id: generateId('lpopt'),
+    text,
+    sortOrder: index
+  }));
+  const correctIdx = Number.isInteger(correctOptionIndex) ? correctOptionIndex : Number(correctOptionIndex);
+  const correctOptionId = normalizeLivePollType(type) === 'quiz' && Number.isInteger(correctIdx) && correctIdx >= 0 && correctIdx < optionRows.length
+    ? optionRows[correctIdx].id
+    : null;
+  const now = nowIso();
+  const insertTx = db.transaction(() => {
+    db.prepare(`
+      INSERT INTO live_session_polls (
+        id, workspace_id, session_id, created_by_user_id, type, question, status,
+        allow_multiple, anonymous_results, correct_option_id, created_at, opened_at, closed_at
+      ) VALUES (
+        @id, @workspace_id, @session_id, @created_by_user_id, @type, @question, @status,
+        @allow_multiple, @anonymous_results, @correct_option_id, @created_at, @opened_at, @closed_at
+      )
+    `).run({
+      id: pollId,
+      workspace_id: String(session.workspace_id || session.workspaceId || '').trim() || 'default',
+      session_id: String(session.id || '').trim(),
+      created_by_user_id: actor?.id || null,
+      type: normalizeLivePollType(type),
+      question: trimmedQuestion,
+      status: normalizeLivePollStatus(status),
+      allow_multiple: allowMultiple ? 1 : 0,
+      anonymous_results: anonymousResults ? 1 : 0,
+      correct_option_id: correctOptionId,
+      created_at: now,
+      opened_at: normalizeLivePollStatus(status) === 'open' ? now : null,
+      closed_at: normalizeLivePollStatus(status) === 'closed' ? now : null
+    });
+    const optionStmt = db.prepare(`
+      INSERT INTO live_session_poll_options (id, poll_id, text, sort_order)
+      VALUES (@id, @poll_id, @text, @sort_order)
+    `);
+    optionRows.forEach((row) => {
+      optionStmt.run({
+        id: row.id,
+        poll_id: pollId,
+        text: row.text,
+        sort_order: row.sortOrder
+      });
+    });
+  });
+  insertTx();
+  return getLivePollById(pollId);
+}
+
+function updateLivePollStatus(pollId, status) {
+  const normalizedStatus = normalizeLivePollStatus(status);
+  const now = nowIso();
+  db.prepare(`
+    UPDATE live_session_polls
+    SET status = ?,
+        opened_at = CASE WHEN ? = 'open' THEN COALESCE(opened_at, ?) ELSE opened_at END,
+        closed_at = CASE WHEN ? = 'closed' THEN ? ELSE closed_at END
+    WHERE id = ?
+  `).run(normalizedStatus, normalizedStatus, now, normalizedStatus, now, String(pollId || '').trim());
+  return getLivePollById(pollId);
+}
+
 function buildLiveSessionControlState(session, viewer) {
   const participants = listLiveSessionParticipants(session.id);
   const selfParticipant = viewer?.id ? getLiveSessionParticipant(session.id, viewer.id) : null;
+  const recording = getLiveSessionRecording(session.id);
   const canManage = canUserManageSpecificLiveSession(viewer, session);
   const pending = participants
     .filter((row) => normalizeLiveParticipantStatus(row.status) === 'pending')
@@ -19258,15 +20042,38 @@ function buildLiveSessionControlState(session, viewer) {
     .filter((row) => normalizeLiveParticipantStatus(row.status) === 'joined')
     .map(formatLiveParticipantForClient);
   const self = selfParticipant ? formatLiveParticipantForClient(selfParticipant) : null;
+  const recordingEnabled = Number(recording?.recording_enabled || 0) === 1;
+  const consentRequired = Number(recording?.consent_required === 0 ? 0 : 1) === 1;
+  const studentPlaybackAllowed = Number(recording?.student_playback_allowed || 0) === 1;
+  const consentPending = participants
+    .filter((row) => normalizeLiveParticipantStatus(row.status) !== 'denied')
+    .filter((row) => !LIVE_RECORDING_MANAGER_ROLES.has(String(row.role || '').trim().toLowerCase()))
+    .filter((row) => !normalizeLiveRecordingConsent(row.recording_consent))
+    .map(formatLiveParticipantForClient);
+  const recordingState = {
+    enabled: recordingEnabled,
+    startedAt: recording?.recording_started_at || null,
+    startedBy: recording?.recording_started_by || null,
+    consentRequired,
+    consentPendingCount: recordingEnabled ? consentPending.length : 0,
+    studentPlaybackAllowed
+  };
   if (!canManage) {
     return {
       self,
+      recording: {
+        ...recordingState,
+        selfConsentRequired: !!(recordingEnabled && consentRequired && self && !self.recordingConsent),
+        selfConsented: !!self?.recordingConsent
+      },
       counts: {
         pending: 0,
         raisedHands: 0,
-        joined: self?.status === 'joined' ? 1 : 0
+        joined: self?.status === 'joined' ? 1 : 0,
+        consentPending: 0
       },
       pendingParticipants: [],
+      consentPendingParticipants: [],
       raisedHands: [],
       participants: self ? [self] : [],
       canManage: false
@@ -19274,12 +20081,15 @@ function buildLiveSessionControlState(session, viewer) {
   }
   return {
     self,
+    recording: recordingState,
     counts: {
       pending: pending.length,
       raisedHands: raisedHands.length,
-      joined: joined.length
+      joined: joined.length,
+      consentPending: recordingEnabled ? consentPending.length : 0
     },
     pendingParticipants: pending,
+    consentPendingParticipants: recordingEnabled ? consentPending : [],
     raisedHands,
     participants: participants.map(formatLiveParticipantForClient),
     canManage: true
@@ -19290,8 +20100,30 @@ function canUserConsumeLiveSessionContent(user, session) {
   if (canUserManageSpecificLiveSession(user, session)) return true;
   const participant = getLiveSessionParticipant(session?.id, user?.id || user?.sub);
   const status = normalizeLiveParticipantStatus(participant?.status || '');
-  return ['approved', 'joined', 'left'].includes(status);
+  if (!['approved', 'joined', 'left'].includes(status)) return false;
+  const recording = getLiveSessionRecording(session?.id);
+  if (Number(recording?.recording_enabled || 0) === 1 && Number(recording?.consent_required === 0 ? 0 : 1) === 1) {
+    return normalizeLiveRecordingConsent(participant?.recording_consent);
+  }
+  return true;
 }
+
+const liveRecordingService = createLiveRecordingService({
+  db,
+  fileStorageService,
+  nowIso,
+  generateId,
+  getSessionById: (sessionId) => db.prepare('SELECT * FROM live_sessions WHERE id = ?').get(String(sessionId || '').trim()) || null,
+  getRecordingStateBySessionId: getLiveSessionRecording,
+  upsertRecordingState: upsertLiveSessionRecording,
+  getParticipant: getLiveSessionParticipant,
+  canManageSession: canUserManageSpecificLiveSession,
+  canViewSession: canUserViewLiveSession,
+  isSuperAdminRole,
+  userWorkspaceId,
+  getNormalizedUserRole,
+  defaultRetentionDays: 90
+});
 
 function validateLiveSessionTarget(user, { channelId, audience, existingSession = null, allowInvitedOnly = false } = {}) {
   const normalizedAudience = normalizeAudience(audience);
@@ -20250,6 +21082,327 @@ app.get('/api/live-sessions/:sessionId/state', authRequired, async (req, res) =>
   });
 });
 
+app.post('/api/live-sessions/:sessionId/polls', authRequired, async (req, res) => {
+  const { sessionId } = req.params;
+  const access = await resolveLiveSessionAccess(req, sessionId, { requireManage: true });
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Session not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    await logLivePollAccessDenied(req, {
+      session: access.session,
+      actor: access.user,
+      reason: 'poll_create_denied'
+    });
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  try {
+    const poll = createLivePoll({
+      session: access.session,
+      actor: access.user,
+      type: req.body?.type,
+      question: req.body?.question,
+      status: req.body?.status || 'draft',
+      allowMultiple: !!req.body?.allowMultiple,
+      anonymousResults: !!req.body?.anonymousResults,
+      options: Array.isArray(req.body?.options) ? req.body.options : [],
+      correctOptionIndex: req.body?.correctOptionIndex
+    });
+    await logLiveClassAuditEvent('live_poll_created', {
+      session: access.session,
+      actor: access.user,
+      payload: {
+        sessionId,
+        pollId: poll.id,
+        type: normalizeLivePollType(poll.type),
+        optionCount: listLivePollOptions(poll.id).length
+      }
+    });
+    return res.status(201).json({
+      ok: true,
+      poll: buildLivePollForClient(poll, access.user, { canManage: true, includeResults: true })
+    });
+  } catch (err) {
+    return res.status(Number(err?.statusCode || 500)).json({ error: err?.message || 'Could not create poll' });
+  }
+});
+
+app.get('/api/live-sessions/:sessionId/polls', authRequired, async (req, res) => {
+  const { sessionId } = req.params;
+  const access = await resolveLiveSessionAccess(req, sessionId);
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Session not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    await logLivePollAccessDenied(req, {
+      session: access.session,
+      actor: access.user,
+      reason: 'poll_list_denied'
+    });
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const canManage = canUserManageSpecificLiveSession(access.user, access.session);
+  if (!canManage && !canUserConsumeLiveSessionContent(access.user, access.session)) {
+    await logLivePollAccessDenied(req, {
+      session: access.session,
+      actor: access.user,
+      reason: 'poll_list_content_denied'
+    });
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const rows = listLiveSessionPollRows(sessionId)
+    .filter((row) => canManage || normalizeLivePollStatus(row.status) !== 'draft');
+  const polls = rows.map((row) => buildLivePollForClient(row, access.user, {
+    canManage,
+    includeResults: normalizeLivePollStatus(row.status) !== 'draft'
+  }));
+  const openPoll = polls.find((poll) => poll.status === 'open') || null;
+  return res.json({ ok: true, polls, openPoll });
+});
+
+app.post('/api/live-polls/:pollId/open', authRequired, async (req, res) => {
+  const { pollId } = req.params;
+  const access = await resolveLivePollAccess(req, pollId, { requireManage: true });
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Poll not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    await logLivePollAccessDenied(req, {
+      session: access.session,
+      actor: access.user,
+      pollId,
+      reason: 'poll_open_denied'
+    });
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const poll = updateLivePollStatus(pollId, 'open');
+  await logLiveClassAuditEvent('live_poll_opened', {
+    session: access.session,
+    actor: access.user,
+    payload: { sessionId: access.session.id, pollId }
+  });
+  return res.json({ ok: true, poll: buildLivePollForClient(poll, access.user, { canManage: true, includeResults: true }) });
+});
+
+app.post('/api/live-polls/:pollId/close', authRequired, async (req, res) => {
+  const { pollId } = req.params;
+  const access = await resolveLivePollAccess(req, pollId, { requireManage: true });
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Poll not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    await logLivePollAccessDenied(req, {
+      session: access.session,
+      actor: access.user,
+      pollId,
+      reason: 'poll_close_denied'
+    });
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const poll = updateLivePollStatus(pollId, 'closed');
+  await logLiveClassAuditEvent('live_poll_closed', {
+    session: access.session,
+    actor: access.user,
+    payload: { sessionId: access.session.id, pollId }
+  });
+  return res.json({ ok: true, poll: buildLivePollForClient(poll, access.user, { canManage: true, includeResults: true }) });
+});
+
+app.post('/api/live-polls/:pollId/responses', authRequired, async (req, res) => {
+  const { pollId } = req.params;
+  const access = await resolveLivePollAccess(req, pollId);
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Poll not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    await logLivePollAccessDenied(req, {
+      session: access.session,
+      actor: access.user,
+      pollId,
+      reason: 'poll_answer_denied'
+    });
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  if (!canUserAnswerLivePoll(access.user, access.session)) {
+    await logLivePollAccessDenied(req, {
+      session: access.session,
+      actor: access.user,
+      pollId,
+      reason: 'poll_answer_participant_denied'
+    });
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const poll = access.poll;
+  if (normalizeLivePollStatus(poll.status) !== 'open') {
+    return res.status(409).json({ error: 'Poll is not open.' });
+  }
+  const options = listLivePollOptions(pollId);
+  const allowedOptionIds = new Set(options.map((row) => String(row.id || '')));
+  const rawOptionIds = Array.isArray(req.body?.optionIds)
+    ? req.body.optionIds
+    : [req.body?.optionId].filter(Boolean);
+  const selectedOptionIds = Array.from(new Set(rawOptionIds.map((value) => String(value || '').trim()).filter((value) => allowedOptionIds.has(value))));
+  if (!selectedOptionIds.length) {
+    return res.status(400).json({ error: 'Select at least one option.' });
+  }
+  if (Number(poll.allow_multiple || 0) !== 1 && selectedOptionIds.length > 1) {
+    return res.status(400).json({ error: 'This poll allows only one answer.' });
+  }
+  const existing = listLivePollUserResponses(pollId, access.user.id);
+  if (existing.length && Number(poll.allow_multiple || 0) !== 1) {
+    return res.status(409).json({ error: 'You have already answered this poll.', code: 'live_poll_duplicate_response' });
+  }
+  const insertTx = db.transaction(() => {
+    if (Number(poll.allow_multiple || 0) === 1 && existing.length) {
+      db.prepare('DELETE FROM live_session_poll_responses WHERE poll_id = ? AND user_id = ?')
+        .run(String(pollId || '').trim(), String(access.user.id || '').trim());
+    }
+    const stmt = db.prepare(`
+      INSERT INTO live_session_poll_responses (id, poll_id, option_id, user_id, answered_at)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    const answeredAt = nowIso();
+    selectedOptionIds.forEach((optionId) => {
+      stmt.run(generateId('lpresp'), String(pollId || '').trim(), optionId, String(access.user.id || '').trim(), answeredAt);
+    });
+  });
+  insertTx();
+  await logLiveClassAuditEvent('live_poll_answered', {
+    session: access.session,
+    actor: access.user,
+    payload: { sessionId: access.session.id, pollId, selectionCount: selectedOptionIds.length }
+  });
+  const refreshed = getLivePollById(pollId);
+  return res.json({
+    ok: true,
+    poll: buildLivePollForClient(refreshed, access.user, {
+      canManage: false,
+      includeResults: true
+    })
+  });
+});
+
+app.get('/api/live-polls/:pollId/results', authRequired, async (req, res) => {
+  const { pollId } = req.params;
+  const access = await resolveLivePollAccess(req, pollId);
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Poll not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    await logLivePollAccessDenied(req, {
+      session: access.session,
+      actor: access.user,
+      pollId,
+      reason: 'poll_results_denied'
+    });
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const canManage = canUserManageSpecificLiveSession(access.user, access.session);
+  if (!canManage && !canUserConsumeLiveSessionContent(access.user, access.session)) {
+    await logLivePollAccessDenied(req, {
+      session: access.session,
+      actor: access.user,
+      pollId,
+      reason: 'poll_results_content_denied'
+    });
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  return res.json({
+    ok: true,
+    pollId,
+    results: buildLivePollResults(access.poll, access.user, { canManage })
+  });
+});
+
+app.delete('/api/live-polls/:pollId', authRequired, async (req, res) => {
+  const { pollId } = req.params;
+  const access = await resolveLivePollAccess(req, pollId, { requireManage: true });
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Poll not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    await logLivePollAccessDenied(req, {
+      session: access.session,
+      actor: access.user,
+      pollId,
+      reason: 'poll_delete_denied'
+    });
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  db.prepare('DELETE FROM live_session_polls WHERE id = ?').run(String(pollId || '').trim());
+  await logLiveClassAuditEvent('live_poll_deleted', {
+    session: access.session,
+    actor: access.user,
+    payload: { sessionId: access.session.id, pollId }
+  });
+  return res.json({ ok: true, pollId });
+});
+
+app.post('/api/live-sessions/:sessionId/start-recording', authRequired, async (req, res) => {
+  const { sessionId } = req.params;
+  const access = await resolveLiveSessionAccess(req, sessionId, { requireManage: true });
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Session not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const now = nowIso();
+  const existing = getLiveSessionParticipant(sessionId, access.user.id);
+  await liveRecordingService.startRecording(sessionId, access.user, {
+    studentPlaybackAllowed: !!req.body?.studentPlaybackAllowed
+  });
+  upsertLiveSessionParticipant({
+    session: access.session,
+    user: access.user,
+    status: normalizeLiveParticipantStatus(existing?.status || 'approved'),
+    requestedAt: existing?.requested_at || now,
+    approvedAt: existing?.approved_at || now,
+    approvedBy: existing?.approved_by || access.user.id,
+    deniedAt: null,
+    deniedBy: null,
+    denialReason: null,
+    joinedAt: existing?.joined_at || null,
+    leftAt: existing?.left_at || null,
+    durationSeconds: existing?.duration_seconds || 0,
+    handStatus: existing?.hand_status || 'lowered',
+    handRaisedAt: existing?.hand_raised_at || null,
+    handLoweredAt: existing?.hand_lowered_at || null,
+    recordingConsent: true,
+    consentedAt: now
+  });
+  await logLiveClassAuditEvent('recording_started', {
+    session: access.session,
+    actor: access.user,
+    payload: { sessionId, consentRequired: true }
+  });
+  return res.json({
+    ok: true,
+    liveControls: buildLiveSessionControlState(access.session, access.user)
+  });
+});
+
+app.post('/api/live-sessions/:sessionId/stop-recording', authRequired, async (req, res) => {
+  const { sessionId } = req.params;
+  const access = await resolveLiveSessionAccess(req, sessionId, { requireManage: true });
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Session not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  await liveRecordingService.stopRecording(sessionId, access.user);
+  await logLiveClassAuditEvent('recording_stopped', {
+    session: access.session,
+    actor: access.user,
+    payload: { sessionId }
+  });
+  return res.json({
+    ok: true,
+    liveControls: buildLiveSessionControlState(access.session, access.user)
+  });
+});
+
 app.post('/api/live-sessions/:sessionId/request-join', authRequired, async (req, res) => {
   const { sessionId } = req.params;
   const access = await resolveLiveSessionAccess(req, sessionId);
@@ -20277,7 +21430,9 @@ app.post('/api/live-sessions/:sessionId/request-join', authRequired, async (req,
       approvedBy: access.user.id,
       deniedAt: null,
       deniedBy: null,
-      denialReason: null
+      denialReason: null,
+      recordingConsent: true,
+      consentedAt: now
     });
     syncLegacyLiveAttendanceRecord({
       sessionId,
@@ -20333,6 +21488,331 @@ app.post('/api/live-sessions/:sessionId/request-join', authRequired, async (req,
   });
 });
 
+app.post('/api/live-sessions/:sessionId/recording-consent', authRequired, async (req, res) => {
+  const { sessionId } = req.params;
+  const access = await resolveLiveSessionAccess(req, sessionId);
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Session not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  if (canUserManageSpecificLiveSession(access.user, access.session)) {
+    return res.json({
+      ok: true,
+      bypassed: true,
+      liveControls: buildLiveSessionControlState(access.session, access.user)
+    });
+  }
+  const recording = getLiveSessionRecording(sessionId);
+  if (Number(recording?.recording_enabled || 0) !== 1 || Number(recording?.consent_required === 0 ? 0 : 1) !== 1) {
+    return res.status(409).json({ error: 'Recording consent is not active for this session.' });
+  }
+  const participant = getLiveSessionParticipant(sessionId, access.user.id);
+  if (!participant) {
+    return res.status(409).json({ error: 'Request access to the live session before responding to recording consent.' });
+  }
+  const consent = req.body?.consent !== undefined
+    ? !!req.body.consent
+    : !String(req.body?.decision || '').trim().toLowerCase().startsWith('deny');
+  const now = nowIso();
+  if (!consent) {
+    const joinedAtMs = participant.joined_at ? new Date(participant.joined_at).getTime() : null;
+    const durationSeconds = joinedAtMs
+      ? Number(participant.duration_seconds || 0) + Math.max(0, Math.floor((Date.now() - joinedAtMs) / 1000))
+      : Number(participant.duration_seconds || 0);
+    const nextStatus = normalizeLiveParticipantStatus(participant.status || '') === 'joined' ? 'left' : participant.status;
+    upsertLiveSessionParticipant({
+      session: access.session,
+      user: access.user,
+      status: nextStatus,
+      requestedAt: participant.requested_at,
+      approvedAt: participant.approved_at,
+      approvedBy: participant.approved_by,
+      deniedAt: participant.denied_at,
+      deniedBy: participant.denied_by,
+      denialReason: participant.denial_reason,
+      joinedAt: participant.joined_at,
+      leftAt: now,
+      durationSeconds,
+      handStatus: 'lowered',
+      handRaisedAt: participant.hand_raised_at,
+      handLoweredAt: now,
+      recordingConsent: false,
+      consentedAt: null
+    });
+    if (nextStatus === 'left') {
+      syncLegacyLiveAttendanceRecord({
+        sessionId,
+        userId: access.user.id,
+        joinedAt: participant.joined_at || null,
+        status: 'left',
+        updatedAt: now
+      });
+    }
+    await logLiveClassAuditEvent('recording_consent_denied', {
+      session: access.session,
+      actor: access.user,
+      payload: { sessionId }
+    });
+    return res.json({
+      ok: true,
+      declined: true,
+      error: 'Recording consent was declined. You cannot continue in this session.',
+      code: 'live_recording_consent_denied',
+      liveControls: buildLiveSessionControlState(access.session, access.user)
+    });
+  }
+  upsertLiveSessionParticipant({
+    session: access.session,
+    user: access.user,
+    status: participant.status,
+    requestedAt: participant.requested_at,
+    approvedAt: participant.approved_at,
+    approvedBy: participant.approved_by,
+    deniedAt: participant.denied_at,
+    deniedBy: participant.denied_by,
+    denialReason: participant.denial_reason,
+    joinedAt: participant.joined_at,
+    leftAt: participant.left_at,
+    durationSeconds: participant.duration_seconds,
+    handStatus: participant.hand_status,
+    handRaisedAt: participant.hand_raised_at,
+    handLoweredAt: participant.hand_lowered_at,
+    recordingConsent: true,
+    consentedAt: now
+  });
+  await logLiveClassAuditEvent('recording_consent_given', {
+    session: access.session,
+    actor: access.user,
+    payload: { sessionId }
+  });
+  return res.json({
+    ok: true,
+    liveControls: buildLiveSessionControlState(access.session, access.user)
+  });
+});
+
+app.get('/api/live-sessions/:sessionId/recordings', authRequired, async (req, res) => {
+  const { sessionId } = req.params;
+  const access = await resolveLiveSessionAccess(req, sessionId);
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Session not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    await logRecordingAccessDenied(req, {
+      session: access.session,
+      actor: access.user,
+      reason: 'recording_list_denied'
+    });
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  try {
+    const recordings = await liveRecordingService.listRecordings(sessionId, access.user);
+    return res.json({ recordings });
+  } catch (err) {
+    if (err?.tenantForbidden) {
+      await logRecordingAccessDenied(req, {
+        session: access.session,
+        actor: access.user,
+        reason: err.reason || 'recording_list_tenant_forbidden'
+      });
+      return tenantForbidden(res);
+    }
+    if (Number(err?.statusCode || 500) === 403) {
+      await logRecordingAccessDenied(req, {
+        session: access.session,
+        actor: access.user,
+        reason: err.reason || 'recording_list_denied'
+      });
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    if (Number(err?.statusCode || 500) === 404) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+    console.error('Failed to list live recordings', err);
+    return res.status(500).json({ error: 'Could not load recordings' });
+  }
+});
+
+app.get('/api/live-recordings/:recordingId/playback', authRequired, async (req, res) => {
+  const { recordingId } = req.params;
+  const access = await resolveLiveRecordingAccess(req, recordingId);
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Recording not found' });
+    if (access.tenantForbidden) {
+      await logRecordingAccessDenied(req, {
+        session: access.session,
+        actor: access.user,
+        recordingId,
+        reason: 'recording_playback_tenant_forbidden'
+      });
+      return tenantForbidden(res);
+    }
+    await logRecordingAccessDenied(req, {
+      session: access.session,
+      actor: access.user,
+      recordingId,
+      reason: 'recording_playback_denied'
+    });
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  try {
+    const recording = await liveRecordingService.getRecording(recordingId, access.user);
+    const stream = fileStorageService.createReadStream(recording);
+    await logLiveClassAuditEvent('recording_playback_opened', {
+      session: access.session,
+      actor: access.user,
+      payload: { sessionId: access.session.id, recordingId }
+    });
+    return sendManagedUploadStream(res, stream, {
+      fileName: recording.originalName || 'live-recording.webm',
+      mimeType: recording.mimeType || 'application/octet-stream'
+    });
+  } catch (err) {
+    if (err?.tenantForbidden) {
+      await logRecordingAccessDenied(req, {
+        session: access.session,
+        actor: access.user,
+        recordingId,
+        reason: err.reason || 'recording_playback_tenant_forbidden'
+      });
+      return tenantForbidden(res);
+    }
+    if (Number(err?.statusCode || 500) === 403) {
+      await logRecordingAccessDenied(req, {
+        session: access.session,
+        actor: access.user,
+        recordingId,
+        reason: err.reason || 'recording_playback_denied'
+      });
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    if (Number(err?.statusCode || 500) === 404) {
+      return res.status(404).json({ error: 'Recording not found' });
+    }
+    console.error('Failed to open recording playback', err);
+    return res.status(500).json({ error: 'Could not open recording playback' });
+  }
+});
+
+app.delete('/api/live-recordings/:recordingId', authRequired, async (req, res) => {
+  const { recordingId } = req.params;
+  const access = await resolveLiveRecordingAccess(req, recordingId, { requireManage: true });
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Recording not found' });
+    if (access.tenantForbidden) {
+      await logRecordingAccessDenied(req, {
+        session: access.session,
+        actor: access.user,
+        recordingId,
+        reason: 'recording_delete_tenant_forbidden'
+      });
+      return tenantForbidden(res);
+    }
+    await logRecordingAccessDenied(req, {
+      session: access.session,
+      actor: access.user,
+      recordingId,
+      reason: 'recording_delete_denied'
+    });
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  try {
+    const recording = await liveRecordingService.deleteRecording(recordingId, access.user);
+    await logLiveClassAuditEvent('recording_deleted', {
+      session: access.session,
+      actor: access.user,
+      payload: { sessionId: access.session.id, recordingId }
+    });
+    return res.json({ ok: true, recording });
+  } catch (err) {
+    if (err?.tenantForbidden) return tenantForbidden(res);
+    if (Number(err?.statusCode || 500) === 403) return res.status(403).json({ error: 'Forbidden' });
+    if (Number(err?.statusCode || 500) === 404) return res.status(404).json({ error: 'Recording not found' });
+    console.error('Failed to delete recording', err);
+    return res.status(500).json({ error: 'Could not delete recording' });
+  }
+});
+
+app.post('/api/live-sessions/:sessionId/recordings/attach-dev-file', authRequired, express.json({ limit: '2mb' }), async (req, res) => {
+  if (String(process.env.NODE_ENV || '').trim().toLowerCase() === 'production') {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  const { sessionId } = req.params;
+  const access = await resolveLiveSessionAccess(req, sessionId, { requireManage: true });
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Session not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const recordingState = getLiveSessionRecording(sessionId);
+  if (!recordingState?.recording_started_at) {
+    return res.status(409).json({ error: 'Start recording before attaching a dev recording object.' });
+  }
+  const base64Content = String(req.body?.base64Content || '').trim();
+  const utf8Text = String(req.body?.utf8Text || '').trim();
+  if (!base64Content && !utf8Text) {
+    return res.status(400).json({ error: 'base64Content or utf8Text is required' });
+  }
+  const mimeType = String(req.body?.mimeType || 'video/webm').trim() || 'video/webm';
+  const originalName = String(req.body?.originalName || 'live-recording-dev.webm').trim() || 'live-recording-dev.webm';
+  const durationSeconds = Math.max(0, Math.floor(Number(req.body?.durationSeconds || 0) || 0));
+  const studentPlaybackAllowed = !!req.body?.studentPlaybackAllowed;
+  const tempPath = path.join(os.tmpdir(), `studiestalk-recording-${Date.now()}-${crypto.randomBytes(6).toString('hex')}`);
+  try {
+    const buffer = base64Content
+      ? Buffer.from(base64Content, 'base64')
+      : Buffer.from(utf8Text, 'utf8');
+    await fs.promises.writeFile(tempPath, buffer);
+    const stored = await fileStorageService.storeFromFile({
+      inputPath: tempPath,
+      workspaceId: access.session.workspace_id || access.session.workspaceId || userWorkspaceId(access.user) || 'default',
+      originalName,
+      mimeType,
+      permissions: 'workspace_private'
+    });
+    upsertLiveSessionRecording({
+      session: access.session,
+      recordingEnabled: false,
+      recordingStartedAt: recordingState.recording_started_at,
+      recordingStartedBy: recordingState.recording_started_by || access.user.id,
+      consentRequired: true,
+      studentPlaybackAllowed
+    });
+    const recording = await liveRecordingService.attachRecordingObject(sessionId, {
+      storageKey: stored.storageKey,
+      storageProvider: stored.storageProvider,
+      storageMode: stored.storageMode,
+      encryptionKeyId: stored.encryptionKeyId,
+      encryptionIv: stored.encryptionIv,
+      encryptionTag: stored.encryptionTag,
+      checksum: stored.checksum,
+      originalName: stored.originalName,
+      mimeType: stored.mimeType,
+      sizeBytes: stored.sizeBytes,
+      durationSeconds,
+      status: 'ready',
+      startedAt: recordingState.recording_started_at,
+      stoppedAt: nowIso()
+    }, access.user);
+    await logLiveClassAuditEvent('recording_object_attached', {
+      session: access.session,
+      actor: access.user,
+      payload: { sessionId, recordingId: recording.id, storageProvider: recording.storageProvider }
+    });
+    return res.json({ ok: true, recording });
+  } catch (err) {
+    console.error('Failed to attach dev recording file', err);
+    return res.status(Number(err?.statusCode || 500)).json({ error: err?.message || 'Could not attach dev recording file' });
+  } finally {
+    await fs.promises.unlink(tempPath).catch(() => null);
+  }
+});
+
 app.post('/api/live-sessions/:sessionId/participants/:userId/approve', authRequired, async (req, res) => {
   const { sessionId, userId } = req.params;
   const access = await resolveLiveSessionAccess(req, sessionId, { requireManage: true });
@@ -20358,7 +21838,9 @@ app.post('/api/live-sessions/:sessionId/participants/:userId/approve', authRequi
     deniedBy: null,
     denialReason: null,
     handStatus: 'lowered',
-    handLoweredAt: now
+    handLoweredAt: now,
+    recordingConsent: normalizeLiveRecordingConsent(getLiveSessionParticipant(sessionId, userId)?.recording_consent),
+    consentedAt: getLiveSessionParticipant(sessionId, userId)?.consented_at || null
   });
   syncLegacyLiveAttendanceRecord({
     sessionId,
@@ -20405,7 +21887,9 @@ app.post('/api/live-sessions/:sessionId/participants/:userId/deny', authRequired
     deniedBy: access.user.id,
     denialReason,
     handStatus: 'lowered',
-    handLoweredAt: now
+    handLoweredAt: now,
+    recordingConsent: normalizeLiveRecordingConsent(getLiveSessionParticipant(sessionId, userId)?.recording_consent),
+    consentedAt: getLiveSessionParticipant(sessionId, userId)?.consented_at || null
   });
   syncLegacyLiveAttendanceRecord({
     sessionId,
@@ -20446,6 +21930,8 @@ app.post('/api/live-sessions/:sessionId/join', authRequired, async (req, res) =>
   const now = nowIso();
   let participant = getLiveSessionParticipant(sessionId, access.user.id);
   const canModerate = canUserManageSpecificLiveSession(access.user, access.session);
+  const recording = getLiveSessionRecording(sessionId);
+  const recordingConsentRequired = Number(recording?.recording_enabled || 0) === 1 && Number(recording?.consent_required === 0 ? 0 : 1) === 1;
   if (!canModerate) {
     const currentStatus = normalizeLiveParticipantStatus(participant?.status || '');
     if (!participant) {
@@ -20483,6 +21969,13 @@ app.post('/api/live-sessions/:sessionId/join', authRequired, async (req, res) =>
         code: 'live_waiting_room_pending'
       });
     }
+    if (recordingConsentRequired && !normalizeLiveRecordingConsent(participant?.recording_consent)) {
+      return res.status(403).json({
+        error: 'Recording consent is required before joining this session.',
+        code: 'live_recording_consent_required',
+        liveControls: buildLiveSessionControlState(access.session, access.user)
+      });
+    }
   }
   participant = upsertLiveSessionParticipant({
     session: access.session,
@@ -20495,7 +21988,9 @@ app.post('/api/live-sessions/:sessionId/join', authRequired, async (req, res) =>
     deniedBy: null,
     denialReason: null,
     joinedAt: now,
-    leftAt: null
+    leftAt: null,
+    recordingConsent: canModerate ? true : normalizeLiveRecordingConsent(participant?.recording_consent),
+    consentedAt: canModerate ? (participant?.consented_at || now) : (participant?.consented_at || null)
   });
   syncLegacyLiveAttendanceRecord({
     sessionId,
@@ -20567,7 +22062,9 @@ app.post('/api/live-sessions/:sessionId/leave', authRequired, async (req, res) =
     leftAt: now,
     durationSeconds,
     handStatus: 'lowered',
-    handLoweredAt: now
+    handLoweredAt: now,
+    recordingConsent: normalizeLiveRecordingConsent(existing?.recording_consent),
+    consentedAt: existing?.consented_at || null
   });
   syncLegacyLiveAttendanceRecord({
     sessionId,
@@ -20601,6 +22098,13 @@ app.post('/api/live-sessions/:sessionId/hand/raise', authRequired, async (req, r
   if (!existing || normalizeLiveParticipantStatus(existing.status) !== 'joined') {
     return res.status(409).json({ error: 'Join the live session before raising your hand.' });
   }
+  if (!canUserConsumeLiveSessionContent(access.user, access.session)) {
+    return res.status(403).json({
+      error: 'Recording consent is required before continuing in this session.',
+      code: 'live_recording_consent_required',
+      liveControls: buildLiveSessionControlState(access.session, access.user)
+    });
+  }
   const now = nowIso();
   upsertLiveSessionParticipant({
     session: access.session,
@@ -20614,7 +22118,9 @@ app.post('/api/live-sessions/:sessionId/hand/raise', authRequired, async (req, r
     durationSeconds: existing.duration_seconds,
     handStatus: 'raised',
     handRaisedAt: now,
-    handLoweredAt: null
+    handLoweredAt: null,
+    recordingConsent: normalizeLiveRecordingConsent(existing?.recording_consent),
+    consentedAt: existing?.consented_at || null
   });
   await logLiveClassAuditEvent('live_hand_raised', {
     session: access.session,
@@ -20662,7 +22168,9 @@ app.post('/api/live-sessions/:sessionId/hand/lower', authRequired, async (req, r
     durationSeconds: existing.duration_seconds,
     handStatus: 'lowered',
     handRaisedAt: existing.hand_raised_at,
-    handLoweredAt: now
+    handLoweredAt: now,
+    recordingConsent: normalizeLiveRecordingConsent(existing?.recording_consent),
+    consentedAt: existing?.consented_at || null
   });
   await logLiveClassAuditEvent('live_hand_lowered', {
     session: access.session,
@@ -20673,6 +22181,152 @@ app.post('/api/live-sessions/:sessionId/hand/lower', authRequired, async (req, r
   res.json({
     ok: true,
     liveControls: buildLiveSessionControlState(access.session, access.user)
+  });
+});
+
+app.get('/api/live-sessions/:sessionId/whiteboard/stream', authRequired, async (req, res) => {
+  const { sessionId } = req.params;
+  const access = await resolveLiveSessionAccess(req, sessionId);
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Session not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  if (!canUserDrawOnLiveWhiteboard(access.user, access.session)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+
+  if (!whiteboardClientsBySession.has(sessionId)) {
+    whiteboardClientsBySession.set(sessionId, new Set());
+  }
+  whiteboardClientsBySession.get(sessionId).add(res);
+  res.write(`event: ready\ndata: {"ok":true}\n\n`);
+  res.write(`event: state\ndata: ${JSON.stringify(listLiveWhiteboardState(sessionId))}\n\n`);
+
+  req.on('close', () => {
+    const set = whiteboardClientsBySession.get(sessionId);
+    if (set) {
+      set.delete(res);
+      if (!set.size) whiteboardClientsBySession.delete(sessionId);
+    }
+  });
+});
+
+app.get('/api/live-sessions/:sessionId/whiteboard/state', authRequired, async (req, res) => {
+  const { sessionId } = req.params;
+  const access = await resolveLiveSessionAccess(req, sessionId);
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Session not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  if (!canUserDrawOnLiveWhiteboard(access.user, access.session)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  return res.json({
+    ok: true,
+    state: listLiveWhiteboardState(sessionId)
+  });
+});
+
+app.post('/api/live-sessions/:sessionId/whiteboard/draw', authRequired, async (req, res) => {
+  const { sessionId } = req.params;
+  const access = await resolveLiveSessionAccess(req, sessionId);
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Session not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  if (!canUserDrawOnLiveWhiteboard(access.user, access.session)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  try {
+    const result = appendWhiteboardOperation(sessionId, {
+      type: req.body?.type,
+      points: req.body?.points,
+      color: req.body?.color,
+      size: req.body?.size,
+      userId: access.user.id,
+      role: getNormalizedUserRole(access.user)
+    });
+    broadcastWhiteboardSse(sessionId, 'whiteboard', {
+      type: result.operation.type,
+      operation: result.operation,
+      state: result.state
+    });
+    return res.json({
+      ok: true,
+      operation: result.operation,
+      state: result.state
+    });
+  } catch (err) {
+    return res.status(Number(err?.statusCode || 500)).json({ error: err?.message || 'Could not update whiteboard' });
+  }
+});
+
+app.post('/api/live-sessions/:sessionId/whiteboard/erase', authRequired, async (req, res) => {
+  const { sessionId } = req.params;
+  const access = await resolveLiveSessionAccess(req, sessionId);
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Session not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  if (!canUserDrawOnLiveWhiteboard(access.user, access.session)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  try {
+    const result = appendWhiteboardOperation(sessionId, {
+      type: 'erase',
+      points: req.body?.points,
+      color: '#000000',
+      size: req.body?.size || 14,
+      userId: access.user.id,
+      role: getNormalizedUserRole(access.user)
+    });
+    broadcastWhiteboardSse(sessionId, 'whiteboard', {
+      type: result.operation.type,
+      operation: result.operation,
+      state: result.state
+    });
+    return res.json({
+      ok: true,
+      operation: result.operation,
+      state: result.state
+    });
+  } catch (err) {
+    return res.status(Number(err?.statusCode || 500)).json({ error: err?.message || 'Could not update whiteboard' });
+  }
+});
+
+app.post('/api/live-sessions/:sessionId/whiteboard/clear', authRequired, async (req, res) => {
+  const { sessionId } = req.params;
+  const access = await resolveLiveSessionAccess(req, sessionId, { requireManage: true });
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Session not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const cleared = clearLiveWhiteboardState(sessionId, access.user);
+  broadcastWhiteboardSse(sessionId, 'whiteboard', {
+    type: 'clear',
+    state: listLiveWhiteboardState(sessionId),
+    ...cleared
+  });
+  return res.json({
+    ok: true,
+    state: listLiveWhiteboardState(sessionId),
+    cleared
   });
 });
 
