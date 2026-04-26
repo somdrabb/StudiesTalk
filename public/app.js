@@ -25218,7 +25218,15 @@ let attendanceState = {
   report: null,
   code: "",
   codeExpiresAt: "",
-  studentStatus: ""
+  studentStatus: "",
+  studentStatusTone: "neutral",
+  managementMode: false,
+  searchQuery: "",
+  autosaveEnabled: true,
+  autosaveTimer: null,
+  saveSeq: 0,
+  saveInFlight: false,
+  lastMutation: null
 };
 
 function isoDateOnlyLocal(date = new Date()) {
@@ -25247,14 +25255,71 @@ function showAttendanceModal(show) {
   document.body.classList.toggle("modal-open", show);
 }
 
+function attendanceStatusLabel(status) {
+  switch (String(status || "").toLowerCase()) {
+    case "present":
+      return "Present";
+    case "late":
+      return "Late";
+    case "excused":
+      return "Excused";
+    case "absent":
+    default:
+      return "Absent";
+  }
+}
+
+function getAttendanceCounts() {
+  return {
+    present: attendanceState.records.filter((r) => r.status === "present").length,
+    late: attendanceState.records.filter((r) => r.status === "late").length,
+    excused: attendanceState.records.filter((r) => r.status === "excused").length,
+    absent: attendanceState.records.filter((r) => r.status === "absent").length,
+    total: attendanceState.records.length
+  };
+}
+
+function renderAttendanceFooterSummary() {
+  const summary = document.getElementById("attendanceFooterSummary");
+  const autosave = document.getElementById("attendanceAutosaveBadge");
+  const undo = document.getElementById("attendanceUndo");
+  if (!summary) return;
+  const counts = getAttendanceCounts();
+  summary.textContent = `${counts.present} Present • ${counts.absent} Absent • ${counts.late} Late${counts.excused ? ` • ${counts.excused} Excused` : ""}`;
+  if (autosave) autosave.textContent = attendanceState.autosaveEnabled ? "Auto-save ON" : "Auto-save OFF";
+  if (undo) {
+    undo.classList.toggle("hidden", !attendanceState.lastMutation);
+    if (attendanceState.lastMutation) {
+      const label = undo.querySelector(".attendance-undo-label");
+      if (label) label.textContent = attendanceState.lastMutation.label || "Change saved";
+    }
+  }
+}
+
+function renderAttendanceModalMode() {
+  const teacherMode = !!attendanceState.managementMode;
+  document.getElementById("attendanceToolbarActions")?.classList.toggle("hidden", !teacherMode);
+  document.getElementById("attendanceCodePanel")?.classList.toggle("hidden", !teacherMode);
+  document.getElementById("attendanceReportGrid")?.classList.toggle("hidden", !teacherMode);
+  document.getElementById("attendanceList")?.classList.toggle("hidden", !teacherMode);
+  document.getElementById("attendanceAutosaveBadge")?.classList.toggle("hidden", !teacherMode);
+  document.getElementById("attendanceSaveBtn")?.classList.toggle("hidden", !teacherMode);
+  const footerSummary = document.getElementById("attendanceFooterSummary");
+  if (footerSummary) footerSummary.classList.toggle("hidden", !teacherMode);
+}
+
 function renderAttendanceCounts() {
   const el = document.getElementById("attendanceCounts");
   if (!el) return;
-  const present = attendanceState.records.filter((r) => r.status === "present").length;
-  const late = attendanceState.records.filter((r) => r.status === "late").length;
-  const excused = attendanceState.records.filter((r) => r.status === "excused").length;
-  const absent = attendanceState.records.filter((r) => r.status === "absent").length;
-  el.textContent = `Present: ${present} • Late: ${late} • Excused: ${excused} • Absent: ${absent}`;
+  const { present, late, excused, absent, total } = getAttendanceCounts();
+  el.innerHTML = `
+    <span class="attendance-summary-chip attendance-summary-chip--present"><i class="fa-solid fa-circle-check"></i><strong>${present}</strong><span>Present</span></span>
+    <span class="attendance-summary-chip attendance-summary-chip--late"><i class="fa-solid fa-clock"></i><strong>${late}</strong><span>Late</span></span>
+    <span class="attendance-summary-chip attendance-summary-chip--excused"><i class="fa-solid fa-file-medical"></i><strong>${excused}</strong><span>Excused</span></span>
+    <span class="attendance-summary-chip attendance-summary-chip--absent"><i class="fa-solid fa-user-xmark"></i><strong>${absent}</strong><span>Absent</span></span>
+    <span class="attendance-summary-chip"><i class="fa-solid fa-users"></i><strong>${total}</strong><span>Students</span></span>
+  `;
+  renderAttendanceFooterSummary();
 }
 
 function renderAttendanceReport() {
@@ -25262,10 +25327,10 @@ function renderAttendanceReport() {
   if (!cards) return;
   const totals = attendanceState.report?.totals || { present: 0, late: 0, absent: 0, excused: 0, total: 0 };
   cards.innerHTML = `
-    <div class="stat-card"><div class="stat-label">Present</div><div class="stat-value">${Number(totals.present || 0)}</div></div>
-    <div class="stat-card"><div class="stat-label">Late</div><div class="stat-value">${Number(totals.late || 0)}</div></div>
-    <div class="stat-card"><div class="stat-label">Excused</div><div class="stat-value">${Number(totals.excused || 0)}</div></div>
-    <div class="stat-card"><div class="stat-label">Absent</div><div class="stat-value">${Number(totals.absent || 0)}</div></div>
+    <article class="attendance-stat-tile attendance-stat-tile--present"><span class="attendance-stat-icon"><i class="fa-solid fa-circle-check"></i></span><div><div class="attendance-stat-label">Present</div><div class="attendance-stat-value">${Number(totals.present || 0)}</div></div></article>
+    <article class="attendance-stat-tile attendance-stat-tile--late"><span class="attendance-stat-icon"><i class="fa-solid fa-clock"></i></span><div><div class="attendance-stat-label">Late</div><div class="attendance-stat-value">${Number(totals.late || 0)}</div></div></article>
+    <article class="attendance-stat-tile attendance-stat-tile--excused"><span class="attendance-stat-icon"><i class="fa-solid fa-file-medical"></i></span><div><div class="attendance-stat-label">Excused</div><div class="attendance-stat-value">${Number(totals.excused || 0)}</div></div></article>
+    <article class="attendance-stat-tile attendance-stat-tile--absent"><span class="attendance-stat-icon"><i class="fa-solid fa-user-xmark"></i></span><div><div class="attendance-stat-label">Absent</div><div class="attendance-stat-value">${Number(totals.absent || 0)}</div></div></article>
   `;
 }
 
@@ -25273,10 +25338,17 @@ function renderAttendanceCodePanel() {
   const codeValue = document.getElementById("attendanceCodeValue");
   const codeMeta = document.getElementById("attendanceCodeMeta");
   const qrBox = document.getElementById("attendanceQrBox");
+  const expiryBadge = document.getElementById("attendanceCodeExpiryBadge");
   if (codeValue) codeValue.textContent = attendanceState.code || "No active code";
   if (codeMeta) codeMeta.textContent = attendanceState.codeExpiresAt
-    ? `Expires ${new Date(attendanceState.codeExpiresAt).toLocaleString()}`
+    ? "Use the code or QR preview for the current class session."
     : "Generate a short-lived code for this class session.";
+  if (expiryBadge) {
+    expiryBadge.textContent = attendanceState.codeExpiresAt
+      ? `Expires ${new Date(attendanceState.codeExpiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+      : "No active code";
+    expiryBadge.classList.toggle("is-active", !!attendanceState.codeExpiresAt);
+  }
   if (qrBox) {
     const seed = String(attendanceState.code || "EMPTY");
     const cells = Array.from({ length: 81 }).map((_, idx) => {
@@ -25287,10 +25359,104 @@ function renderAttendanceCodePanel() {
   }
 }
 
+function renderAttendanceStudentState() {
+  const badge = document.getElementById("attendanceStudentStatusBadge");
+  const meta = document.getElementById("attendanceStudentStatusMeta");
+  const input = document.getElementById("attendanceStudentCodeInput");
+  const button = document.getElementById("attendanceStudentCheckInBtn");
+  if (badge) {
+    badge.className = `attendance-status-badge is-${attendanceState.studentStatusTone || "neutral"}`;
+    badge.textContent = attendanceState.studentStatus || (attendanceState.managementMode ? "Teacher/admin view" : "Not checked in");
+  }
+  if (meta) {
+    if (attendanceState.managementMode) {
+      meta.textContent = "Student self check-in is available from student accounts only. Teachers use this panel to generate codes and review attendance.";
+    } else if (!attendanceState.studentStatus) {
+      meta.textContent = "Enter the short-lived class code to check yourself in.";
+    }
+  }
+  if (input) input.disabled = !!attendanceState.managementMode;
+  if (button) button.disabled = !!attendanceState.managementMode;
+}
+
+function flashAttendanceRow(studentId) {
+  const row = document.querySelector(`.att-row[data-student-id="${CSS.escape(String(studentId || ""))}"]`);
+  if (!row) return;
+  row.classList.remove("is-updated");
+  void row.offsetWidth;
+  row.classList.add("is-updated");
+}
+
+function rememberAttendanceMutation(label, undo) {
+  attendanceState.lastMutation = undo ? { label, undo } : null;
+  renderAttendanceFooterSummary();
+}
+
+function scheduleAttendanceAutosave(reason = "Updated attendance") {
+  if (!attendanceState.autosaveEnabled || !attendanceState.managementMode || !attendanceState.channelId) return;
+  const status = document.getElementById("attendanceStatus");
+  if (status) status.textContent = `${reason}...`;
+  if (attendanceState.autosaveTimer) clearTimeout(attendanceState.autosaveTimer);
+  attendanceState.autosaveTimer = setTimeout(() => {
+    saveAttendance({ closeOnSuccess: false, silent: true });
+  }, 450);
+}
+
+function setAttendanceRecordStatus(record, status, options = {}) {
+  if (!record) return;
+  const normalized = ["present", "late", "absent", "excused"].includes(status) ? status : "absent";
+  const previousStatus = record.status || "absent";
+  if (previousStatus === normalized && !options.force) return;
+  record.status = normalized;
+  if (normalized !== "excused" && !options.preserveNote && options.clearExcusedNote !== false && String(record.note || "").trim() === "") {
+    record.note = record.note || "";
+  }
+  rememberAttendanceMutation(options.undoLabel || `${record.name || "Student"} marked ${attendanceStatusLabel(normalized)}`, () => {
+    record.status = previousStatus;
+    renderAttendanceList();
+    renderAttendanceCounts();
+    scheduleAttendanceAutosave("Reverted attendance");
+    flashAttendanceRow(record.student_user_id);
+  });
+  renderAttendanceList();
+  renderAttendanceCounts();
+  scheduleAttendanceAutosave(options.saveLabel || `${attendanceStatusLabel(normalized)} saved`);
+  flashAttendanceRow(record.student_user_id);
+}
+
+function applyAttendanceBulkStatus(status) {
+  const records = attendanceState.records || [];
+  if (!records.length) return;
+  const previous = records.map((record) => ({ student_user_id: record.student_user_id, status: record.status }));
+  records.forEach((record) => {
+    record.status = status;
+  });
+  rememberAttendanceMutation(`Marked ${records.length} students ${attendanceStatusLabel(status).toLowerCase()}`, () => {
+    previous.forEach((entry) => {
+      const target = attendanceState.records.find((record) => String(record.student_user_id) === String(entry.student_user_id));
+      if (target) target.status = entry.status;
+    });
+    renderAttendanceList();
+    renderAttendanceCounts();
+    scheduleAttendanceAutosave("Reverted bulk attendance");
+  });
+  renderAttendanceList();
+  renderAttendanceCounts();
+  scheduleAttendanceAutosave(`Marked all ${attendanceStatusLabel(status).toLowerCase()}`);
+}
+
 function renderAttendanceList() {
   const list = document.getElementById("attendanceList");
   if (!list) return;
   list.innerHTML = "";
+
+  const search = String(attendanceState.searchQuery || "").trim().toLowerCase();
+  const visibleRecords = (attendanceState.records || []).filter((record) => {
+    if (!search) return true;
+    return [record.name, record.email, record.status, record.note]
+      .map((value) => String(value || "").toLowerCase())
+      .some((value) => value.includes(search));
+  });
 
   if (!attendanceState.records.length) {
     renderUiState(list, {
@@ -25300,42 +25466,60 @@ function renderAttendanceList() {
     return;
   }
 
-  attendanceState.records.forEach((record) => {
+  if (!visibleRecords.length) {
+    renderUiState(list, {
+      message: "No students match the current search.",
+      compact: true
+    });
+    return;
+  }
+
+  visibleRecords.forEach((record) => {
     const row = document.createElement("div");
     row.className = "att-row";
+    row.dataset.status = record.status || "absent";
+    row.dataset.studentId = record.student_user_id;
 
     const left = document.createElement("div");
     left.className = "att-student";
     left.innerHTML = `
       <div class="att-name">${escapeHtml(record.name || "Student")}</div>
+      <div class="att-email">${escapeHtml(record.email || "")}</div>
+      <div class="att-inline-meta">
+        <span class="attendance-inline-badge is-soft">${escapeHtml(attendanceStatusLabel(record.status || "absent"))}</span>
+        <span>${record.checked_in_at ? escapeHtml(new Date(record.checked_in_at).toLocaleString()) : "No check-in yet"}</span>
+      </div>
     `;
 
     const controls = document.createElement("div");
     controls.className = "attendance-row-controls";
-    const select = document.createElement("select");
-    ["present", "late", "absent", "excused"].forEach((status) => {
-      const option = document.createElement("option");
-      option.value = status;
-      option.textContent = status;
-      option.selected = record.status === status;
-      select.appendChild(option);
-    });
-    select.addEventListener("change", () => {
-      record.status = select.value;
-      renderAttendanceCounts();
+    const actions = document.createElement("div");
+    actions.className = "att-actions";
+    ["present", "absent", "late", "excused"].forEach((status) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `att-btn ${status}${record.status === status ? " active" : ""}`;
+      button.textContent = attendanceStatusLabel(status);
+      button.addEventListener("click", () => setAttendanceRecordStatus(record, status));
+      actions.appendChild(button);
     });
     const note = document.createElement("input");
     note.type = "text";
-    note.placeholder = "Note";
+    note.placeholder = record.status === "excused" ? "Excuse note or reason" : "Optional note";
     note.value = record.note || "";
     note.addEventListener("input", () => {
       record.note = note.value;
+      scheduleAttendanceAutosave("Updated notes");
     });
-    controls.appendChild(select);
+    const saved = document.createElement("span");
+    saved.className = "attendance-row-state";
+    saved.textContent = record.certificate?.url ? "Certificate attached" : "Ready";
+    controls.appendChild(actions);
     controls.appendChild(note);
     const fileInput = document.createElement("input");
     fileInput.type = "file";
     fileInput.accept = ".pdf,.png,.jpg,.jpeg";
+    fileInput.className = "attendance-file-input";
     fileInput.addEventListener("change", async () => {
       const selected = fileInput.files?.[0];
       if (!selected || !attendanceState.channelId) return;
@@ -25356,6 +25540,7 @@ function renderAttendanceList() {
           throw new Error(payload?.error || "Upload failed");
         }
         record.certificate = payload.file || null;
+        saved.textContent = "Certificate attached";
         showToast?.("Certificate uploaded.");
         renderAttendanceList();
       } catch (error) {
@@ -25364,17 +25549,21 @@ function renderAttendanceList() {
         fileInput.value = "";
       }
     });
-    controls.appendChild(fileInput);
+    const certificateGroup = document.createElement("div");
+    certificateGroup.className = "attendance-certificate-group";
+    certificateGroup.appendChild(fileInput);
     if (record.certificate?.url) {
       const viewBtn = document.createElement("button");
       viewBtn.type = "button";
-      viewBtn.className = "btn secondary";
+      viewBtn.className = "btn secondary attendance-action-btn";
       viewBtn.textContent = "View certificate";
       viewBtn.addEventListener("click", () => {
         window.open(record.certificate.url, "_blank", "noopener,noreferrer");
       });
-      controls.appendChild(viewBtn);
+      certificateGroup.appendChild(viewBtn);
     }
+    controls.appendChild(certificateGroup);
+    controls.appendChild(saved);
 
     row.appendChild(left);
     row.appendChild(controls);
@@ -25400,6 +25589,14 @@ async function loadAttendanceForChannel(channelId, requestedDate) {
       code: "",
       codeExpiresAt: data.session?.checkinCodeExpiresAt || "",
       studentStatus: "",
+      studentStatusTone: "neutral",
+      managementMode: true,
+      searchQuery: "",
+      autosaveEnabled: true,
+      autosaveTimer: null,
+      saveSeq: 0,
+      saveInFlight: false,
+      lastMutation: null,
       records: (data.records || []).map((r) => ({
         student_user_id: r.student_user_id,
         name: r.name,
@@ -25415,7 +25612,9 @@ async function loadAttendanceForChannel(channelId, requestedDate) {
     const title = document.getElementById("attendanceTitle");
     if (title) title.textContent = "Attendance";
     const subtitle = document.getElementById("attendanceSubtitle");
-    if (subtitle) subtitle.textContent = `${data.channel?.name || "Class"} • ${attendanceState.date}`;
+    if (subtitle) subtitle.textContent = `${data.channel?.name || "Class"} • ${attendanceState.date} • ${attendanceState.records.length} students`;
+    const search = document.getElementById("attendanceSearchInput");
+    if (search) search.value = "";
     const checkbox = document.getElementById("attendanceSendEmails");
     if (checkbox && checkbox.checked === false) checkbox.checked = true;
     if (attendanceState.session?.startTime) {
@@ -25431,6 +25630,8 @@ async function loadAttendanceForChannel(channelId, requestedDate) {
     renderAttendanceCounts();
     renderAttendanceReport();
     renderAttendanceCodePanel();
+    renderAttendanceStudentState();
+    renderAttendanceModalMode();
     if (status) status.textContent = "";
     showAttendanceModal(true);
   } catch (error) {
@@ -25466,23 +25667,32 @@ async function openAttendanceForCurrentClass() {
       report: null,
       code: "",
       codeExpiresAt: "",
-      studentStatus: ""
+      studentStatus: "",
+      studentStatusTone: "neutral",
+      managementMode: false,
+      searchQuery: "",
+      autosaveEnabled: true,
+      autosaveTimer: null,
+      saveSeq: 0,
+      saveInFlight: false,
+      lastMutation: null
     };
     renderAttendanceCounts();
     renderAttendanceReport();
     renderAttendanceCodePanel();
-    document.getElementById("attendanceSaveBtn")?.classList.add("hidden");
-    document.getElementById("attendanceGenerateCodeBtn")?.classList.add("hidden");
+    renderAttendanceStudentState();
+    renderAttendanceModalMode();
     showAttendanceModal(true);
     return;
   }
   await loadAttendanceForChannel(channelId);
 }
 
-async function saveAttendance() {
+async function saveAttendance(options = {}) {
   if (!attendanceState.channelId) return;
+  const { closeOnSuccess = true, silent = false } = options;
   const status = document.getElementById("attendanceStatus");
-  if (status) status.textContent = "Saving...";
+  if (status) status.textContent = silent ? "Auto-saving..." : "Saving...";
   const payload = {
     date: attendanceState.date,
     send_absence_emails: !!document.getElementById("attendanceSendEmails")?.checked,
@@ -25496,6 +25706,7 @@ async function saveAttendance() {
   payload.grace_period_minutes = Number(document.getElementById("attendanceGracePeriod")?.value || 10);
 
   try {
+    attendanceState.saveInFlight = true;
     const data = await fetchJSON(`/api/classes/${encodeURIComponent(attendanceState.channelId)}/attendance/save`, {
       method: "POST",
       headers: {
@@ -25508,13 +25719,19 @@ async function saveAttendance() {
     if (status) {
       const emailed = data?.absence_emails?.emailed ?? 0;
       const skipped = data?.absence_emails?.skipped ?? 0;
-      status.textContent = `Saved ✅ (emails sent: ${emailed}, skipped: ${skipped})`;
+      status.textContent = silent
+        ? `Saved automatically${emailed || skipped ? ` • emails: ${emailed} sent, ${skipped} skipped` : ""}`
+        : `Saved ✅ (emails sent: ${emailed}, skipped: ${skipped})`;
     }
-    setTimeout(() => showAttendanceModal(false), 600);
+    if (closeOnSuccess) {
+      setTimeout(() => showAttendanceModal(false), 600);
+    }
   } catch (error) {
     console.error("Failed to save attendance", error);
     if (status) status.textContent = `Save failed: ${error.message || error}`;
     showToast?.("Could not save attendance.");
+  } finally {
+    attendanceState.saveInFlight = false;
   }
 }
 
@@ -25565,23 +25782,42 @@ async function submitAttendanceStudentCheckIn() {
       })
     });
     attendanceState.studentStatus = payload.status || "";
+    attendanceState.studentStatusTone = payload.status === "late" ? "warning" : "success";
     if (badge) badge.textContent = `Checked in: ${payload.status}`;
     if (meta) meta.textContent = payload.checkedInAt ? `Recorded ${new Date(payload.checkedInAt).toLocaleString()}` : "Check-in recorded.";
   } catch (error) {
+    attendanceState.studentStatus = "Check-in blocked";
+    attendanceState.studentStatusTone = "danger";
     if (badge) badge.textContent = "Check-in blocked";
     if (meta) meta.textContent = error.message || "Unable to check in.";
   }
+  renderAttendanceStudentState();
 }
 
 function wireAttendanceModal() {
   document.getElementById("attendanceCloseBtn")?.addEventListener("click", () => showAttendanceModal(false));
   document.getElementById("attendanceCancelBtn")?.addEventListener("click", () => showAttendanceModal(false));
-  document.getElementById("attendanceSaveBtn")?.addEventListener("click", saveAttendance);
+  document.getElementById("attendanceSaveBtn")?.addEventListener("click", () => saveAttendance({ closeOnSuccess: true, silent: false }));
   document.getElementById("attendanceGenerateCodeBtn")?.addEventListener("click", generateAttendanceCode);
   document.getElementById("attendanceStudentCheckInBtn")?.addEventListener("click", submitAttendanceStudentCheckIn);
   document.getElementById("attendanceExportCsvBtn")?.addEventListener("click", () => {
     if (!attendanceState.channelId) return;
     window.open(`/api/classes/${encodeURIComponent(attendanceState.channelId)}/attendance/report.csv`, "_blank", "noopener,noreferrer");
+  });
+  document.getElementById("attendanceSearchInput")?.addEventListener("input", (event) => {
+    attendanceState.searchQuery = String(event.target?.value || "");
+    renderAttendanceList();
+  });
+  document.getElementById("attendanceBulkPresentBtn")?.addEventListener("click", () => applyAttendanceBulkStatus("present"));
+  document.getElementById("attendanceBulkAbsentBtn")?.addEventListener("click", () => applyAttendanceBulkStatus("absent"));
+  document.getElementById("attendanceBulkLateBtn")?.addEventListener("click", () => applyAttendanceBulkStatus("late"));
+  document.getElementById("attendanceUndoBtn")?.addEventListener("click", () => {
+    if (typeof attendanceState.lastMutation?.undo === "function") {
+      const undo = attendanceState.lastMutation.undo;
+      attendanceState.lastMutation = null;
+      undo();
+      renderAttendanceFooterSummary();
+    }
   });
   document.getElementById("attendanceModal")?.addEventListener("click", (event) => {
     if (event.target === event.currentTarget) {
