@@ -14,7 +14,11 @@ function normalizeSessionRow(row) {
   if (!row) return null;
   return {
     ...row,
-    locked_by: row.locked_by || null
+    locked_by: row.locked_by || null,
+    start_time: row.start_time || null,
+    grace_period_minutes: Number(row.grace_period_minutes || 0),
+    checkin_code_hash: row.checkin_code_hash || null,
+    checkin_code_expires_at: row.checkin_code_expires_at || null
   };
 }
 
@@ -55,7 +59,14 @@ function createSqliteAttendanceRepository(sqliteDb) {
 
     async listAttendanceStatuses({ workspaceId, sessionId }) {
       return sqliteDb.prepare(`
-        SELECT student_user_id, status
+        SELECT student_user_id,
+               status,
+               COALESCE(note, '') AS note,
+               checked_in_at AS checkedInAt,
+               checkin_method AS checkinMethod,
+               certificate_file_id AS certificateFileId,
+               marked_by_user_id AS markedByUserId,
+               marked_at AS markedAt
         FROM attendance_records
         WHERE workspace_id = ? AND session_id = ?
       `).all(workspaceId, sessionId);
@@ -64,17 +75,23 @@ function createSqliteAttendanceRepository(sqliteDb) {
     async upsertAttendanceRecords({ idFactory, workspaceId, sessionId, channelId, records, markedByUserId }) {
       const insertStmt = sqliteDb.prepare(`
         INSERT INTO attendance_records
-          (id, workspace_id, session_id, channel_id, student_user_id, status, marked_by_user_id, marked_at)
+          (id, workspace_id, session_id, channel_id, student_user_id, status, note, checked_in_at, checkin_method, certificate_file_id, marked_by_user_id, marked_at, updated_at)
         VALUES
-          (?, ?, ?, ?, ?, ?, ?, ?)
+          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id, student_user_id) DO UPDATE SET
           status = excluded.status,
+          note = excluded.note,
+          checked_in_at = excluded.checked_in_at,
+          checkin_method = excluded.checkin_method,
+          certificate_file_id = COALESCE(excluded.certificate_file_id, attendance_records.certificate_file_id),
           marked_by_user_id = excluded.marked_by_user_id,
-          marked_at = excluded.marked_at
+          marked_at = excluded.marked_at,
+          updated_at = excluded.updated_at
       `);
 
       sqliteDb.transaction(() => {
         for (const row of records) {
+          const markedAt = nowSqlTimestamp();
           insertStmt.run(
             idFactory('arec'),
             workspaceId,
@@ -82,8 +99,13 @@ function createSqliteAttendanceRepository(sqliteDb) {
             channelId,
             row.student_user_id,
             row.status,
+            row.note || '',
+            row.checked_in_at || null,
+            row.checkin_method || 'manual',
+            row.certificate_file_id || null,
             markedByUserId || null,
-            nowSqlTimestamp()
+            markedAt,
+            markedAt
           );
         }
       })();
@@ -108,7 +130,13 @@ function createSqliteAttendanceRepository(sqliteDb) {
 
     async listStudentAttendance({ workspaceId, studentId, limit }) {
       return sqliteDb.prepare(`
-        SELECT ar.status, s.session_date, c.name AS class_name, ar.channel_id
+        SELECT ar.status,
+               COALESCE(ar.note, '') AS note,
+               ar.checked_in_at AS checkedInAt,
+               ar.certificate_file_id AS certificateFileId,
+               s.session_date,
+               c.name AS class_name,
+               ar.channel_id
         FROM attendance_records ar
         JOIN attendance_sessions s ON s.id = ar.session_id
         JOIN channels c ON c.id = ar.channel_id
@@ -136,7 +164,7 @@ function createSqliteAttendanceRepository(sqliteDb) {
         LIMIT ?
       `).all(...params, limit);
 
-      const present = rows.filter((row) => String(row.status || '').toLowerCase() === 'present').length;
+      const present = rows.filter((row) => ['present', 'late'].includes(String(row.status || '').toLowerCase())).length;
       const total = rows.length;
       const absent = Math.max(0, total - present);
       const attendanceRate = total ? Math.round((present / total) * 100) : 0;
@@ -199,7 +227,14 @@ function createPostgresAttendanceRepository() {
 
     async listAttendanceStatuses({ workspaceId, sessionId }) {
       return postgres.queryMany(`
-        SELECT student_user_id, status
+        SELECT student_user_id,
+               status,
+               COALESCE(note, '') AS note,
+               checked_in_at AS "checkedInAt",
+               checkin_method AS "checkinMethod",
+               certificate_file_id AS "certificateFileId",
+               marked_by_user_id AS "markedByUserId",
+               marked_at AS "markedAt"
         FROM attendance_records
         WHERE workspace_id = ? AND session_id = ?
       `, [workspaceId, sessionId]);
@@ -211,13 +246,18 @@ function createPostgresAttendanceRepository() {
         for (const row of records) {
           await tx.execute(`
             INSERT INTO attendance_records
-              (id, workspace_id, session_id, channel_id, student_user_id, status, marked_by_user_id, marked_at)
+              (id, workspace_id, session_id, channel_id, student_user_id, status, note, checked_in_at, checkin_method, certificate_file_id, marked_by_user_id, marked_at, updated_at)
             VALUES
-              (?, ?, ?, ?, ?, ?, ?, ?)
+              (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(session_id, student_user_id) DO UPDATE SET
               status = EXCLUDED.status,
+              note = EXCLUDED.note,
+              checked_in_at = EXCLUDED.checked_in_at,
+              checkin_method = EXCLUDED.checkin_method,
+              certificate_file_id = COALESCE(EXCLUDED.certificate_file_id, attendance_records.certificate_file_id),
               marked_by_user_id = EXCLUDED.marked_by_user_id,
-              marked_at = EXCLUDED.marked_at
+              marked_at = EXCLUDED.marked_at,
+              updated_at = EXCLUDED.updated_at
           `, [
             idFactory('arec'),
             workspaceId,
@@ -225,7 +265,12 @@ function createPostgresAttendanceRepository() {
             channelId,
             row.student_user_id,
             row.status,
+            row.note || '',
+            row.checked_in_at || null,
+            row.checkin_method || 'manual',
+            row.certificate_file_id || null,
             markedByUserId || null,
+            markedAt,
             markedAt
           ]);
         }
@@ -252,7 +297,13 @@ function createPostgresAttendanceRepository() {
 
     async listStudentAttendance({ workspaceId, studentId, limit }) {
       return postgres.queryMany(`
-        SELECT ar.status, s.session_date, c.name AS class_name, ar.channel_id
+        SELECT ar.status,
+               COALESCE(ar.note, '') AS note,
+               ar.checked_in_at AS "checkedInAt",
+               ar.certificate_file_id AS "certificateFileId",
+               s.session_date,
+               c.name AS class_name,
+               ar.channel_id
         FROM attendance_records ar
         JOIN attendance_sessions s ON s.id = ar.session_id
         JOIN channels c ON c.id = ar.channel_id
@@ -280,7 +331,7 @@ function createPostgresAttendanceRepository() {
         LIMIT ?
       `, [...params, limit]);
 
-      const present = rows.filter((row) => String(row.status || '').toLowerCase() === 'present').length;
+      const present = rows.filter((row) => ['present', 'late'].includes(String(row.status || '').toLowerCase())).length;
       const total = rows.length;
       const absent = Math.max(0, total - present);
       const attendanceRate = total ? Math.round((present / total) * 100) : 0;

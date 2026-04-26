@@ -4187,7 +4187,23 @@ app.use((req, res, next) => {
 const onboardingGuard = createOnboardingGuard({
   onboardingRepository,
   attachAccessTokenIfPresent,
-  logger: console
+  logger: console,
+  onBlocked: async (req, details) => {
+    logSecurityEvent({
+      type: 'security.onboarding_gate_blocked',
+      severity: 'warn',
+      workspaceId: details?.workspaceId || null,
+      actorUserId: details?.user?.id || details?.user?.sub || null,
+      ip: req.ip || null,
+      userAgent: req.get?.('user-agent') || '',
+      payload: {
+        route: req.originalUrl || req.url || '',
+        method: req.method || '',
+        step: details?.gate?.onboarding?.currentStep || null,
+        status: details?.gate?.onboarding?.status || null
+      }
+    });
+  }
 });
 
 app.use('/api', onboardingGuard.middleware);
@@ -4195,7 +4211,22 @@ app.use('/api', onboardingGuard.middleware);
 const policyGuard = createPolicyGuard({
   policyRepository,
   attachAccessTokenIfPresent,
-  logger: console
+  logger: console,
+  onBlocked: async (req, details) => {
+    logSecurityEvent({
+      type: 'security.policy_gate_blocked',
+      severity: 'warn',
+      workspaceId: details?.workspaceId || null,
+      actorUserId: details?.userId || details?.user?.id || details?.user?.sub || null,
+      ip: req.ip || null,
+      userAgent: req.get?.('user-agent') || '',
+      payload: {
+        route: req.originalUrl || req.url || '',
+        method: req.method || '',
+        version: details?.gate?.version || null
+      }
+    });
+  }
 });
 
 app.use('/api', policyGuard.middleware);
@@ -5938,7 +5969,8 @@ function requireTeacherOrAdmin(user) {
 }
 
 function canTakeAttendance(workspaceId, channelId, user) {
-  if (requireTeacherOrAdmin(user)) return true;
+  if (isSuperAdminRole(user)) return false;
+  if (isAttendanceManagerRole(user)) return true;
   if (!workspaceId || !channelId || !user?.id) return false;
 
   try {
@@ -5958,11 +5990,101 @@ function canTakeAttendance(workspaceId, channelId, user) {
   }
 }
 
+function isAttendanceManagerRole(user) {
+  const role = String(user?.role || user?.user_role || '').toLowerCase();
+  if (!user) return false;
+  if (isSuperAdminRole(user)) return false;
+  return ['teacher', 'admin', 'school_admin', 'instructor'].includes(role) || user?.is_teacher === 1 || user?.is_admin === 1;
+}
+
+function canStudentCheckIntoAttendance(workspaceId, channelId, user) {
+  if (!user?.id || isSuperAdminRole(user)) return false;
+  if (userWorkspaceId(user) !== String(workspaceId || '').trim()) return false;
+  const role = String(user?.role || user?.user_role || '').toLowerCase();
+  if (role !== 'student') return false;
+  return isUserInChannel(String(user.id || user.sub || ''), channelId);
+}
+
+function normalizeAttendanceStatus(value, fallback = 'absent') {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ['present', 'late', 'absent', 'excused'].includes(normalized) ? normalized : fallback;
+}
+
+function attendanceCountsFromRows(rows = []) {
+  return rows.reduce((acc, row) => {
+    const status = normalizeAttendanceStatus(row?.status, 'absent');
+    acc[status] = (acc[status] || 0) + 1;
+    acc.total += 1;
+    return acc;
+  }, { present: 0, late: 0, absent: 0, excused: 0, total: 0 });
+}
+
+function hashAttendanceCode(code = '') {
+  return crypto.createHash('sha256').update(String(code || '').trim().toUpperCase()).digest('hex');
+}
+
+function generateAttendanceCode() {
+  return crypto.randomBytes(4).toString('hex').toUpperCase();
+}
+
+function toIsoDateTimeString(value) {
+  if (!value) return null;
+  const dt = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(dt.getTime())) return null;
+  return dt.toISOString();
+}
+
+function combineAttendanceSessionDateTime(sessionDate, startTime) {
+  const dateText = String(sessionDate || '').trim();
+  const timeText = String(startTime || '').trim();
+  if (!dateText) return null;
+  const composed = timeText ? `${dateText}T${timeText.length === 5 ? `${timeText}:00` : timeText}` : `${dateText}T00:00:00`;
+  const dt = new Date(composed);
+  return Number.isNaN(dt.getTime()) ? null : dt;
+}
+
+function resolveAttendanceStatusForCheckIn(session, checkedInAt = new Date()) {
+  const startDt = combineAttendanceSessionDateTime(session?.session_date, session?.start_time);
+  const graceMinutes = Math.max(0, Number(session?.grace_period_minutes || 0));
+  if (!startDt) return 'present';
+  const lateBoundary = startDt.getTime() + graceMinutes * 60 * 1000;
+  return checkedInAt.getTime() > lateBoundary ? 'late' : 'present';
+}
+
+function getAttendanceSessionRowById(sessionId) {
+  return db.prepare(`
+    SELECT *
+    FROM attendance_sessions
+    WHERE id = ?
+    LIMIT 1
+  `).get(String(sessionId || '').trim()) || null;
+}
+
+function getAttendanceRecordRow(sessionId, studentUserId) {
+  return db.prepare(`
+    SELECT *
+    FROM attendance_records
+    WHERE session_id = ? AND student_user_id = ?
+    LIMIT 1
+  `).get(String(sessionId || '').trim(), String(studentUserId || '').trim()) || null;
+}
+
 function getWorkspaceIdFromUser(user) {
   return String(user?.workspaceId || user?.workspace_id || 'default');
 }
 
 function ensureChannelIsClass(workspaceId, channelId) {
+  const anyRow = db
+    .prepare(
+      `SELECT id, category, name, workspace_id AS workspaceId
+       FROM channels
+       WHERE id = ?
+       LIMIT 1`
+    )
+    .get(channelId);
+  if (anyRow && String(anyRow.workspaceId || '') !== String(workspaceId || '')) {
+    return { ok: false, code: 403, error: 'Forbidden', tenantForbidden: true };
+  }
   const row = db
     .prepare(
       `SELECT id, category, name
@@ -7116,6 +7238,11 @@ try {
       workspace_id TEXT NOT NULL,
       channel_id TEXT NOT NULL,
       session_date TEXT NOT NULL,
+      start_time TEXT,
+      grace_period_minutes INTEGER DEFAULT 10,
+      checkin_code_hash TEXT,
+      checkin_code_expires_at TEXT,
+      checkin_code_created_at TEXT,
       created_by_user_id TEXT,
       created_at TEXT DEFAULT (datetime('now')),
       UNIQUE(channel_id, session_date),
@@ -7130,14 +7257,20 @@ try {
       session_id TEXT NOT NULL,
       channel_id TEXT NOT NULL,
       student_user_id TEXT NOT NULL,
-      status TEXT NOT NULL CHECK(status IN ('present','absent')),
+      status TEXT NOT NULL CHECK(status IN ('present','late','absent','excused')),
+      note TEXT DEFAULT '',
+      checked_in_at TEXT,
+      checkin_method TEXT DEFAULT 'manual',
+      certificate_file_id TEXT,
       marked_by_user_id TEXT,
       marked_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
       UNIQUE(session_id, student_user_id),
       FOREIGN KEY (session_id) REFERENCES attendance_sessions(id) ON DELETE CASCADE,
       FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE,
       FOREIGN KEY (student_user_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY (marked_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+      FOREIGN KEY (marked_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+      FOREIGN KEY (certificate_file_id) REFERENCES files_registry(file_id) ON DELETE SET NULL
     );
 
     CREATE TABLE IF NOT EXISTS attendance_notifications (
@@ -8390,6 +8523,99 @@ function ensureFilesRegistryStorageSchema() {
   }
 }
 
+function ensureAttendanceTrackingSchema() {
+  try {
+    const sessionCols = db.prepare('PRAGMA table_info(attendance_sessions)').all();
+    if (sessionCols.length) {
+      const sessionNames = sessionCols.map((c) => c.name);
+      if (!sessionNames.includes('start_time')) db.exec("ALTER TABLE attendance_sessions ADD COLUMN start_time TEXT");
+      if (!sessionNames.includes('grace_period_minutes')) db.exec("ALTER TABLE attendance_sessions ADD COLUMN grace_period_minutes INTEGER DEFAULT 10");
+      if (!sessionNames.includes('checkin_code_hash')) db.exec("ALTER TABLE attendance_sessions ADD COLUMN checkin_code_hash TEXT");
+      if (!sessionNames.includes('checkin_code_expires_at')) db.exec("ALTER TABLE attendance_sessions ADD COLUMN checkin_code_expires_at TEXT");
+      if (!sessionNames.includes('checkin_code_created_at')) db.exec("ALTER TABLE attendance_sessions ADD COLUMN checkin_code_created_at TEXT");
+    }
+
+    const recordCols = db.prepare('PRAGMA table_info(attendance_records)').all();
+    if (!recordCols.length) return;
+    const recordNames = recordCols.map((c) => c.name);
+    const needsRebuild =
+      !recordNames.includes('note') ||
+      !recordNames.includes('checked_in_at') ||
+      !recordNames.includes('checkin_method') ||
+      !recordNames.includes('certificate_file_id') ||
+      !recordNames.includes('updated_at');
+    if (!needsRebuild) return;
+
+    db.exec('PRAGMA foreign_keys = OFF');
+    db.exec('BEGIN TRANSACTION');
+    db.exec('ALTER TABLE attendance_records RENAME TO attendance_records_old');
+    db.exec(`
+      CREATE TABLE attendance_records (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        student_user_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('present','late','absent','excused')),
+        note TEXT DEFAULT '',
+        checked_in_at TEXT,
+        checkin_method TEXT DEFAULT 'manual',
+        certificate_file_id TEXT,
+        marked_by_user_id TEXT,
+        marked_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(session_id, student_user_id),
+        FOREIGN KEY (session_id) REFERENCES attendance_sessions(id) ON DELETE CASCADE,
+        FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE,
+        FOREIGN KEY (student_user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (marked_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+        FOREIGN KEY (certificate_file_id) REFERENCES files_registry(file_id) ON DELETE SET NULL
+      );
+    `);
+    db.exec(`
+      INSERT INTO attendance_records (
+        id, workspace_id, session_id, channel_id, student_user_id, status, note, checked_in_at, checkin_method, certificate_file_id, marked_by_user_id, marked_at, updated_at
+      )
+      SELECT
+        id,
+        workspace_id,
+        session_id,
+        channel_id,
+        student_user_id,
+        CASE
+          WHEN lower(COALESCE(status, 'absent')) IN ('present', 'late', 'excused') THEN lower(COALESCE(status, 'absent'))
+          ELSE 'absent'
+        END,
+        '',
+        NULL,
+        'manual',
+        NULL,
+        marked_by_user_id,
+        marked_at,
+        COALESCE(marked_at, datetime('now'))
+      FROM attendance_records_old
+    `);
+    db.exec('DROP TABLE attendance_records_old');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_att_records_session ON attendance_records(session_id)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_att_records_student ON attendance_records(student_user_id)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_att_records_certificate ON attendance_records(certificate_file_id)');
+    db.exec('COMMIT');
+  } catch (err) {
+    try {
+      db.exec('ROLLBACK');
+    } catch (_err) {
+      // ignore
+    }
+    console.error('Failed to ensure attendance tracking schema', err);
+  } finally {
+    try {
+      db.exec('PRAGMA foreign_keys = ON');
+    } catch (_err) {
+      // ignore
+    }
+  }
+}
+
   ensureMessageSchema();
   ensureReplySchema();
   ensureDmSchema();
@@ -8398,6 +8624,7 @@ function ensureFilesRegistryStorageSchema() {
   ensureKnowledgeSchema();
   ensureFileEventsSchema();
   ensureFilesRegistryStorageSchema();
+  ensureAttendanceTrackingSchema();
 
 function nowIso() {
   return new Date().toISOString();
@@ -11997,6 +12224,43 @@ function buildRequestCsv(rows) {
   return lines.join('\n');
 }
 
+function buildSecurityEventCsv(rows) {
+  const cols = [
+    'createdAt',
+    'type',
+    'severity',
+    'workspaceId',
+    'actorEmail',
+    'targetEmail',
+    'ip',
+    'userAgent',
+    'payload'
+  ];
+  const lines = [cols.join(',')];
+  for (const row of rows) {
+    const values = [
+      new Date(Number(row.createdAt) || Date.now()).toISOString(),
+      row.type || '',
+      row.severity || '',
+      row.workspaceId || '',
+      row.actorEmail || '',
+      row.targetEmail || '',
+      row.ip || '',
+      row.userAgent || '',
+      row.payload ? JSON.stringify(row.payload) : ''
+    ];
+    lines.push(values.map(csvEscape).join(','));
+  }
+  return lines.join('\n');
+}
+
+function getSecurityDashboardRange(query) {
+  const days = Math.min(90, Math.max(1, Number(query?.days || 7)));
+  const until = Date.now();
+  const since = until - days * 24 * 60 * 60 * 1000;
+  return { days, since, until };
+}
+
 function buildRequestFilter(whereParts, params, status, search) {
   if (status && status !== 'all') {
     whereParts.push('status = ?');
@@ -12240,10 +12504,80 @@ app.get('/api/admin/security/events', async (req, res) => {
   const limit = Math.min(200, Math.max(10, Number(req.query.limit || 50)));
   const q = String(req.query.q || '').trim().toLowerCase();
   const type = String(req.query.type || '').trim();
-
-  const rows = await authRepository.listSecurityEvents({ query: q, type, limit });
+  const severity = String(req.query.severity || '').trim().toLowerCase();
+  const { since, until } = getSecurityDashboardRange(req.query);
+  const rows = await authRepository.listSecurityEvents({
+    query: q,
+    type,
+    severity,
+    limit,
+    since,
+    until
+  });
 
   res.json({ ok: true, events: rows });
+});
+
+app.get('/api/admin/security/dashboard', async (req, res) => {
+  const admin = requireSuperAdmin(req, res);
+  if (!admin) return;
+
+  const limit = Math.min(200, Math.max(10, Number(req.query.limit || 60)));
+  const q = String(req.query.q || '').trim().toLowerCase();
+  const type = String(req.query.type || '').trim();
+  const severity = String(req.query.severity || '').trim().toLowerCase();
+  const { days, since, until } = getSecurityDashboardRange(req.query);
+
+  const [summary, trend, events] = await Promise.all([
+    authRepository.getSecurityDashboardSummary({ since, until }),
+    authRepository.listSecurityTrend({ since, until }),
+    authRepository.listSecurityEvents({
+      query: q,
+      type,
+      severity,
+      limit,
+      since,
+      until
+    })
+  ]);
+
+  res.json({
+    ok: true,
+    range: { days, since, until },
+    generatedAt: Date.now(),
+    summary,
+    trend,
+    events
+  });
+});
+
+app.get('/api/admin/security/events/export.csv', async (req, res) => {
+  const admin = requireSuperAdmin(req, res);
+  if (!admin) return;
+
+  const limit = Math.min(MAX_EXPORT_ROWS, Math.max(10, Number(req.query.limit || 1000)));
+  const q = String(req.query.q || '').trim().toLowerCase();
+  const type = String(req.query.type || '').trim();
+  const severity = String(req.query.severity || '').trim().toLowerCase();
+  const { days, since, until } = getSecurityDashboardRange(req.query);
+
+  try {
+    const rows = await authRepository.listSecurityEvents({
+      query: q,
+      type,
+      severity,
+      limit,
+      since,
+      until
+    });
+    const csv = buildSecurityEventCsv(rows);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="security_events_${days}d.csv"`);
+    res.send(csv);
+  } catch (error) {
+    console.error('Failed to export security events', error);
+    res.status(500).json({ error: 'Failed to export security events' });
+  }
 });
 
 app.get('/api/workspaces/:workspaceId/email-settings', authRequired, (req, res) => {
@@ -13205,11 +13539,146 @@ app.get('/api/classes/:channelId/students', (req, res) => {
   if (!canTakeAttendance(workspaceId, channelId, user)) return res.status(403).json({ error: 'Forbidden' });
 
   const chk = ensureChannelIsClass(workspaceId, channelId);
-  if (!chk.ok) return res.status(chk.code).json({ error: chk.error });
+  if (!chk.ok) return chk.tenantForbidden ? tenantForbidden(res) : res.status(chk.code).json({ error: chk.error });
 
   const students = listClassStudents(workspaceId, channelId);
   res.json({ channel: chk.channel, students });
 });
+
+function mapAttendanceRecordForClient(record = {}) {
+  const certificate = record.certificate_file_id
+    ? findManagedUploadRecordById(record.certificate_file_id)
+    : null;
+  return {
+    student_user_id: String(record.student_user_id || ''),
+    name: record.name || '',
+    email: record.email || '',
+    status: normalizeAttendanceStatus(record.status, 'absent'),
+    note: String(record.note || ''),
+    checked_in_at: record.checkedInAt || record.checked_in_at || null,
+    checkin_method: String(record.checkinMethod || record.checkin_method || 'manual'),
+    certificate: certificate ? {
+      fileId: certificate.fileId,
+      fileName: certificate.name,
+      url: certificate.url,
+      mime: certificate.mime,
+      sizeBytes: Number(certificate.sizeBytes || 0)
+    } : null
+  };
+}
+
+function buildAttendanceReportPayload(workspaceId, channelId, { studentId = '', from = '', to = '' } = {}) {
+  const filters = ['s.workspace_id = ?', 's.channel_id = ?'];
+  const params = [workspaceId, channelId];
+  const normalizedStudentId = String(studentId || '').trim();
+  const normalizedFrom = String(from || '').trim();
+  const normalizedTo = String(to || '').trim();
+  if (normalizedStudentId) {
+    filters.push('ar.student_user_id = ?');
+    params.push(normalizedStudentId);
+  }
+  if (normalizedFrom) {
+    filters.push('s.session_date >= ?');
+    params.push(normalizedFrom);
+  }
+  if (normalizedTo) {
+    filters.push('s.session_date <= ?');
+    params.push(normalizedTo);
+  }
+  const whereSql = filters.join(' AND ');
+  const rows = db.prepare(`
+    SELECT ar.student_user_id AS studentUserId,
+           COALESCE(u.name, u.username, u.email, u.first_name || ' ' || u.last_name) AS studentName,
+           u.email AS studentEmail,
+           ar.status,
+           COALESCE(ar.note, '') AS note,
+           ar.checked_in_at AS checkedInAt,
+           ar.checkin_method AS checkinMethod,
+           ar.certificate_file_id AS certificateFileId,
+           s.id AS sessionId,
+           s.session_date AS sessionDate,
+           s.start_time AS startTime,
+           s.grace_period_minutes AS gracePeriodMinutes
+    FROM attendance_records ar
+    JOIN attendance_sessions s ON s.id = ar.session_id
+    JOIN users u ON u.id = ar.student_user_id
+    WHERE ${whereSql}
+    ORDER BY s.session_date DESC, LOWER(COALESCE(u.name, u.username, u.email, '')) ASC
+  `).all(...params);
+
+  const totals = attendanceCountsFromRows(rows);
+  const byStudentMap = new Map();
+  const monthlyMap = new Map();
+  const weeklyMap = new Map();
+
+  rows.forEach((row) => {
+    const studentKey = String(row.studentUserId || '');
+    const studentEntry = byStudentMap.get(studentKey) || {
+      studentUserId: studentKey,
+      studentName: row.studentName || row.studentEmail || 'Student',
+      studentEmail: row.studentEmail || '',
+      present: 0,
+      late: 0,
+      absent: 0,
+      excused: 0,
+      total: 0
+    };
+    const status = normalizeAttendanceStatus(row.status, 'absent');
+    studentEntry[status] += 1;
+    studentEntry.total += 1;
+    byStudentMap.set(studentKey, studentEntry);
+
+    const monthlyKey = String(row.sessionDate || '').slice(0, 7);
+    const monthlyEntry = monthlyMap.get(monthlyKey) || { period: monthlyKey, present: 0, late: 0, absent: 0, excused: 0, total: 0 };
+    monthlyEntry[status] += 1;
+    monthlyEntry.total += 1;
+    monthlyMap.set(monthlyKey, monthlyEntry);
+
+    const weeklyKey = db.prepare(`SELECT strftime('%Y-W%W', ?) AS bucket`).get(String(row.sessionDate || ''))?.bucket || String(row.sessionDate || '').slice(0, 10);
+    const weeklyEntry = weeklyMap.get(weeklyKey) || { period: weeklyKey, present: 0, late: 0, absent: 0, excused: 0, total: 0 };
+    weeklyEntry[status] += 1;
+    weeklyEntry.total += 1;
+    weeklyMap.set(weeklyKey, weeklyEntry);
+  });
+
+  return {
+    totals,
+    rows: rows.map((row) => ({
+      studentUserId: row.studentUserId,
+      studentName: row.studentName || row.studentEmail || 'Student',
+      studentEmail: row.studentEmail || '',
+      status: normalizeAttendanceStatus(row.status, 'absent'),
+      note: String(row.note || ''),
+      checkedInAt: row.checkedInAt || null,
+      checkinMethod: String(row.checkinMethod || 'manual'),
+      sessionId: row.sessionId,
+      sessionDate: row.sessionDate,
+      startTime: row.startTime || null,
+      gracePeriodMinutes: Number(row.gracePeriodMinutes || 0),
+      certificateFileId: row.certificateFileId || null
+    })),
+    byStudent: Array.from(byStudentMap.values()).sort((a, b) => a.studentName.localeCompare(b.studentName)),
+    monthly: Array.from(monthlyMap.values()).sort((a, b) => String(a.period).localeCompare(String(b.period))).reverse(),
+    weekly: Array.from(weeklyMap.values()).sort((a, b) => String(a.period).localeCompare(String(b.period))).reverse()
+  };
+}
+
+function buildAttendanceReportCsv(report = {}) {
+  const cols = ['sessionDate', 'studentName', 'studentEmail', 'status', 'checkedInAt', 'checkinMethod', 'note'];
+  const lines = [cols.join(',')];
+  for (const row of Array.isArray(report.rows) ? report.rows : []) {
+    lines.push([
+      row.sessionDate || '',
+      row.studentName || '',
+      row.studentEmail || '',
+      row.status || '',
+      row.checkedInAt || '',
+      row.checkinMethod || '',
+      row.note || ''
+    ].map(csvEscape).join(','));
+  }
+  return lines.join('\n');
+}
 
 app.get('/api/classes/:channelId/attendance', async (req, res) => {
   const user = getAuthedUser(req);
@@ -13217,12 +13686,22 @@ app.get('/api/classes/:channelId/attendance', async (req, res) => {
 
   const channelId = String(req.params.channelId || '');
   const workspaceId = getWorkspaceIdFromUser(user);
-  if (!canTakeAttendance(workspaceId, channelId, user)) return res.status(403).json({ error: 'Forbidden' });
+  if (!canTakeAttendance(workspaceId, channelId, user)) {
+    if (isSuperAdminRole(user)) {
+      return denyTenantAccess(req, res, {
+        workspaceId,
+        targetType: 'attendance',
+        targetId: channelId,
+        reason: 'super_admin_private_content_denied'
+      });
+    }
+    return res.status(403).json({ error: 'Forbidden' });
+  }
 
   const sessionDate = String(req.query.date || isoDateOnly());
 
   const chk = ensureChannelIsClass(workspaceId, channelId);
-  if (!chk.ok) return res.status(chk.code).json({ error: chk.error });
+  if (!chk.ok) return chk.tenantForbidden ? tenantForbidden(res) : res.status(chk.code).json({ error: chk.error });
 
   try {
     const session = await getOrCreateAttendanceSession(workspaceId, channelId, sessionDate, user.id);
@@ -13231,21 +13710,34 @@ app.get('/api/classes/:channelId/attendance', async (req, res) => {
       workspaceId,
       sessionId: session.id
     });
-    const statusMap = new Map(rows.map((r) => [String(r.student_user_id), String(r.status)]));
+    const statusMap = new Map(rows.map((r) => [String(r.student_user_id), r]));
     const records = roster.map((s) => ({
       student_user_id: s.user_id,
       name: s.name,
       email: s.email,
-      status: statusMap.get(String(s.user_id)) || 'absent'
+      ...(statusMap.get(String(s.user_id)) || { status: 'absent' })
     }));
     const locked = Boolean(session.locked_by) && !isAttendanceAdminUser(user);
+    const report = buildAttendanceReportPayload(workspaceId, channelId, {
+      from: String(req.query.from || '').trim(),
+      to: String(req.query.to || '').trim()
+    });
 
     res.json({
       channel: chk.channel,
       session_id: session.id,
       session_date: sessionDate,
-      records,
-      locked
+      session: {
+        id: session.id,
+        sessionDate,
+        startTime: session.start_time || null,
+        gracePeriodMinutes: Number(session.grace_period_minutes || 0),
+        checkinCodeExpiresAt: session.checkin_code_expires_at || null
+      },
+      records: records.map(mapAttendanceRecordForClient),
+      locked,
+      counts: attendanceCountsFromRows(records),
+      report
     });
   } catch (err) {
     console.error('[Attendance] Load failed', err);
@@ -13259,23 +13751,45 @@ app.post('/api/classes/:channelId/attendance/save', express.json(), async (req, 
 
   const workspaceId = getWorkspaceIdFromUser(user);
   const channelId = String(req.params.channelId || '');
-  if (!canTakeAttendance(workspaceId, channelId, user)) return res.status(403).json({ error: 'Forbidden' });
+  if (!canTakeAttendance(workspaceId, channelId, user)) {
+    if (isSuperAdminRole(user)) {
+      return denyTenantAccess(req, res, {
+        workspaceId,
+        targetType: 'attendance',
+        targetId: channelId,
+        reason: 'super_admin_private_content_denied'
+      });
+    }
+    return res.status(403).json({ error: 'Forbidden' });
+  }
   const chk = ensureChannelIsClass(workspaceId, channelId);
-  if (!chk.ok) return res.status(chk.code).json({ error: chk.error });
+  if (!chk.ok) return chk.tenantForbidden ? tenantForbidden(res) : res.status(chk.code).json({ error: chk.error });
 
   const sessionDate = String(req.body?.date || isoDateOnly());
   const records = Array.isArray(req.body?.records) ? req.body.records : [];
   const sendAbsenceEmails = req.body?.send_absence_emails !== false;
+  const startTime = String(req.body?.start_time || '').trim() || null;
+  const gracePeriodMinutes = Math.max(0, Math.min(120, Number(req.body?.grace_period_minutes || 10) || 10));
 
   try {
     const session = await getOrCreateAttendanceSession(workspaceId, channelId, sessionDate, user.id);
+    db.prepare(`
+      UPDATE attendance_sessions
+      SET start_time = COALESCE(?, start_time),
+          grace_period_minutes = ?
+      WHERE id = ?
+    `).run(startTime, gracePeriodMinutes, session.id);
     const roster = listClassStudents(workspaceId, channelId);
     const rosterSet = new Set(roster.map((r) => String(r.user_id)));
 
     const normalized = records
       .map((r) => ({
         student_user_id: String(r.student_user_id || ''),
-        status: String(r.status || 'absent').toLowerCase() === 'present' ? 'present' : 'absent'
+        status: normalizeAttendanceStatus(r.status, 'absent'),
+        note: String(r.note || '').trim(),
+        checked_in_at: ['present', 'late'].includes(normalizeAttendanceStatus(r.status, 'absent')) ? (String(r.checked_in_at || '').trim() || nowISOString()) : null,
+        checkin_method: String(r.checkin_method || 'manual').trim() || 'manual',
+        certificate_file_id: String(r.certificate_file_id || '').trim() || null
       }))
       .filter((r) => r.student_user_id && rosterSet.has(r.student_user_id));
 
@@ -13295,7 +13809,7 @@ app.post('/api/classes/:channelId/attendance/save', express.json(), async (req, 
       sessionId: session.id
     });
     const presentSet = new Set(
-      savedRows.filter((x) => x.status === 'present').map((x) => String(x.student_user_id))
+      savedRows.filter((x) => ['present', 'late', 'excused'].includes(String(x.status || '').toLowerCase())).map((x) => String(x.student_user_id))
     );
     const absentees = roster
       .filter((s) => !presentSet.has(String(s.user_id)))
@@ -13403,12 +13917,234 @@ app.post('/api/classes/:channelId/attendance/save', express.json(), async (req, 
       session_id: session.id,
       session_date: sessionDate,
       absentees_count: absentees.length,
-      absence_emails: { emailed, skipped }
+      absence_emails: { emailed, skipped },
+      counts: attendanceCountsFromRows(savedRows)
     });
   } catch (err) {
     console.error('[Attendance] Save failed', err);
     res.status(500).json({ error: 'Failed to save attendance' });
   }
+});
+
+app.post('/api/classes/:channelId/attendance/session-code', express.json(), async (req, res) => {
+  const user = getAuthedUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const workspaceId = getWorkspaceIdFromUser(user);
+  const channelId = String(req.params.channelId || '');
+  if (!canTakeAttendance(workspaceId, channelId, user)) {
+    if (isSuperAdminRole(user)) {
+      return denyTenantAccess(req, res, {
+        workspaceId,
+        targetType: 'attendance',
+        targetId: channelId,
+        reason: 'super_admin_private_content_denied'
+      });
+    }
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const chk = ensureChannelIsClass(workspaceId, channelId);
+  if (!chk.ok) return chk.tenantForbidden ? tenantForbidden(res) : res.status(chk.code).json({ error: chk.error });
+
+  const sessionDate = String(req.body?.date || isoDateOnly()).trim();
+  const startTime = String(req.body?.start_time || timeHHMM()).trim();
+  const gracePeriodMinutes = Math.max(0, Math.min(120, Number(req.body?.grace_period_minutes || 10) || 10));
+  const expiresMinutes = Math.max(1, Math.min(120, Number(req.body?.expires_minutes || 15) || 15));
+
+  try {
+    const session = await getOrCreateAttendanceSession(workspaceId, channelId, sessionDate, user.id);
+    const code = generateAttendanceCode();
+    const expiresAt = new Date(Date.now() + expiresMinutes * 60 * 1000).toISOString();
+    db.prepare(`
+      UPDATE attendance_sessions
+      SET start_time = ?,
+          grace_period_minutes = ?,
+          checkin_code_hash = ?,
+          checkin_code_expires_at = ?,
+          checkin_code_created_at = datetime('now')
+      WHERE id = ?
+    `).run(startTime, gracePeriodMinutes, hashAttendanceCode(code), expiresAt, session.id);
+
+    await logSecurityEvent({
+      workspaceId,
+      actorUserId: user.id,
+      type: 'attendance.checkin_code_created',
+      severity: 'info',
+      ip: req.ip || null,
+      userAgent: req.headers['user-agent'] || null,
+      payload: { channelId, sessionId: session.id, sessionDate }
+    });
+
+    res.json({
+      ok: true,
+      sessionId: session.id,
+      sessionDate,
+      startTime,
+      gracePeriodMinutes,
+      expiresAt,
+      code,
+      qrValue: JSON.stringify({ channelId, sessionId: session.id, code })
+    });
+  } catch (err) {
+    console.error('[Attendance] Failed to create session code', err);
+    res.status(500).json({ error: 'Failed to create attendance code' });
+  }
+});
+
+app.post('/api/attendance/check-in', express.json(), async (req, res) => {
+  const user = getAuthedUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const channelId = String(req.body?.channelId || '').trim();
+  const sessionId = String(req.body?.sessionId || '').trim();
+  const code = String(req.body?.code || '').trim().toUpperCase();
+  const workspaceId = getWorkspaceIdFromUser(user);
+  const resolvedChannel = resolveChannelAccessRow(channelId);
+  if (resolvedChannel && String(resolvedChannel.workspaceId || '') !== workspaceId) {
+    return denyTenantAccess(req, res, {
+      workspaceId: resolvedChannel.workspaceId,
+      targetType: 'attendance',
+      targetId: channelId,
+      reason: 'cross_workspace_attendance_checkin'
+    });
+  }
+  if (!canStudentCheckIntoAttendance(workspaceId, channelId, user)) {
+    if (isSuperAdminRole(user) || userWorkspaceId(user) !== workspaceId) {
+      return denyTenantAccess(req, res, {
+        workspaceId,
+        targetType: 'attendance',
+        targetId: channelId || sessionId,
+        reason: 'attendance_student_checkin_forbidden'
+      });
+    }
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  if (!code || !channelId) {
+    return res.status(400).json({ error: 'channelId and code are required' });
+  }
+  const resolvedSession = sessionId
+    ? getAttendanceSessionRowById(sessionId)
+    : db.prepare(`
+        SELECT *
+        FROM attendance_sessions
+        WHERE workspace_id = ?
+          AND channel_id = ?
+          AND checkin_code_hash = ?
+        ORDER BY datetime(COALESCE(checkin_code_expires_at, created_at)) DESC
+        LIMIT 1
+      `).get(workspaceId, channelId, hashAttendanceCode(code));
+  const session = resolvedSession;
+  if (!session || String(session.channel_id || '') !== channelId) {
+    return res.status(404).json({ error: 'Attendance session not found' });
+  }
+  const sameWorkspace = await assertSameWorkspace(user, session.workspace_id, req, {
+    targetType: 'attendance',
+    targetId: sessionId,
+    privateContent: true
+  });
+  if (!sameWorkspace.ok) return tenantForbidden(res);
+  if (String(session.checkin_code_hash || '') !== hashAttendanceCode(code)) {
+    return res.status(400).json({ error: 'Invalid check-in code' });
+  }
+  if (session.checkin_code_expires_at && Date.parse(session.checkin_code_expires_at) < Date.now()) {
+    return res.status(400).json({ error: 'Check-in code expired' });
+  }
+  const existing = getAttendanceRecordRow(sessionId, user.id);
+  if (existing && ['present', 'late', 'excused'].includes(normalizeAttendanceStatus(existing.status, 'absent'))) {
+    return res.status(409).json({ error: 'Already checked in' });
+  }
+
+  const checkedInAt = new Date();
+  const status = resolveAttendanceStatusForCheckIn(session, checkedInAt);
+  await attendanceRepository.upsertAttendanceRecords({
+    idFactory: uuid,
+    workspaceId,
+    sessionId,
+    channelId,
+    markedByUserId: user.id,
+    records: [{
+      student_user_id: user.id,
+      status,
+      note: '',
+      checked_in_at: checkedInAt.toISOString(),
+      checkin_method: 'code',
+      certificate_file_id: existing?.certificate_file_id || null
+    }]
+  });
+
+  await logSecurityEvent({
+    workspaceId,
+    actorUserId: user.id,
+    type: 'attendance.checkin_completed',
+    severity: 'info',
+    ip: req.ip || null,
+    userAgent: req.headers['user-agent'] || null,
+    payload: { channelId, sessionId, status }
+  });
+
+  res.json({ ok: true, sessionId, status, checkedInAt: checkedInAt.toISOString() });
+});
+
+app.post('/api/classes/:channelId/attendance/records/:studentId', express.json(), async (req, res) => {
+  const user = getAuthedUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const workspaceId = getWorkspaceIdFromUser(user);
+  const channelId = String(req.params.channelId || '').trim();
+  const studentId = String(req.params.studentId || '').trim();
+  if (!canTakeAttendance(workspaceId, channelId, user)) {
+    if (isSuperAdminRole(user)) {
+      return denyTenantAccess(req, res, {
+        workspaceId,
+        targetType: 'attendance',
+        targetId: channelId,
+        reason: 'super_admin_private_content_denied'
+      });
+    }
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const chk = ensureChannelIsClass(workspaceId, channelId);
+  if (!chk.ok) return chk.tenantForbidden ? tenantForbidden(res) : res.status(chk.code).json({ error: chk.error });
+  if (!listClassStudents(workspaceId, channelId).some((row) => String(row.user_id) === studentId)) {
+    return res.status(404).json({ error: 'Student not found in class' });
+  }
+  const sessionDate = String(req.body?.date || isoDateOnly()).trim();
+  const sessionId = String(req.body?.sessionId || '').trim();
+  const session = sessionId
+    ? getAttendanceSessionRowById(sessionId)
+    : await getOrCreateAttendanceSession(workspaceId, channelId, sessionDate, user.id);
+  if (!session) return res.status(404).json({ error: 'Attendance session not found' });
+  const status = normalizeAttendanceStatus(req.body?.status, 'absent');
+  const note = String(req.body?.note || '').trim();
+  const existing = getAttendanceRecordRow(session.id, studentId);
+  const checkedInAt = ['present', 'late'].includes(status)
+    ? (String(req.body?.checked_in_at || '').trim() || existing?.checked_in_at || nowISOString())
+    : null;
+  await attendanceRepository.upsertAttendanceRecords({
+    idFactory: uuid,
+    workspaceId,
+    sessionId: session.id,
+    channelId,
+    markedByUserId: user.id,
+    records: [{
+      student_user_id: studentId,
+      status,
+      note,
+      checked_in_at: checkedInAt,
+      checkin_method: 'manual',
+      certificate_file_id: String(req.body?.certificate_file_id || existing?.certificate_file_id || '').trim() || null
+    }]
+  });
+
+  await logSecurityEvent({
+    workspaceId,
+    actorUserId: user.id,
+    targetUserId: studentId,
+    type: 'attendance.manual_status_updated',
+    severity: 'info',
+    ip: req.ip || null,
+    userAgent: req.headers['user-agent'] || null,
+    payload: { channelId, sessionId: session.id, status }
+  });
+
+  res.json({ ok: true, sessionId: session.id, status });
 });
 
 app.get('/api/students/:studentId/attendance', (req, res) => {
@@ -13429,6 +14165,187 @@ app.get('/api/students/:studentId/attendance', (req, res) => {
       console.error('[Attendance] Student history failed', err);
       res.status(500).json({ error: 'Failed to load student attendance' });
     });
+});
+
+app.post('/api/classes/:channelId/attendance/records/:studentId/certificate', (req, res) => {
+  const user = getAuthedUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const workspaceId = getWorkspaceIdFromUser(user);
+  const channelId = String(req.params.channelId || '').trim();
+  const studentId = String(req.params.studentId || '').trim();
+  if (!canTakeAttendance(workspaceId, channelId, user)) {
+    if (isSuperAdminRole(user)) {
+      return denyTenantAccess(req, res, {
+        workspaceId,
+        targetType: 'attendance',
+        targetId: channelId,
+        reason: 'super_admin_private_content_denied'
+      });
+    }
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const chk = ensureChannelIsClass(workspaceId, channelId);
+  if (!chk.ok) return chk.tenantForbidden ? tenantForbidden(res) : res.status(chk.code).json({ error: chk.error });
+  if (!listClassStudents(workspaceId, channelId).some((row) => String(row.user_id) === studentId)) {
+    return res.status(404).json({ error: 'Student not found in class' });
+  }
+
+  upload.single('file')(req, res, async (uploadErr) => {
+    if (uploadErr) {
+      return res.status(Number(uploadErr?.statusCode || 400)).json({ error: uploadErr?.message || 'Upload failed' });
+    }
+    const file = req.file;
+    if (!file?.path || !fs.existsSync(file.path)) {
+      return res.status(400).json({ error: 'No certificate file received' });
+    }
+
+    try {
+      const sessionDate = String(req.body?.date || isoDateOnly()).trim();
+      const requestedSessionId = String(req.body?.sessionId || '').trim();
+      const session = requestedSessionId
+        ? getAttendanceSessionRowById(requestedSessionId)
+        : await getOrCreateAttendanceSession(workspaceId, channelId, sessionDate, user.id);
+      if (!session) return res.status(404).json({ error: 'Attendance session not found' });
+
+      const stored = await fileStorageService.storeFromFile({
+        inputPath: file.path,
+        workspaceId,
+        originalName: file.originalname,
+        mimeType: file.mimetype || 'application/octet-stream',
+        permissions: 'workspace_private'
+      });
+      await fs.promises.unlink(file.path).catch(() => null);
+
+      const fileId = generateId('attcert_');
+      const metadata = normalizeStoredAttachmentMetadata(stored, 'workspace_private');
+      db.prepare(`
+        INSERT INTO files_registry (
+          file_id, workspace_id, channel_id, message_id, uploader_id, purpose, file_name, mime, size_bytes, url,
+          storage_key, checksum, storage_provider, storage_mode, encryption_key_id, encryption_iv, encryption_tag, permissions, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      `).run(
+        fileId,
+        workspaceId,
+        channelId,
+        '',
+        user.id,
+        'attendance_certificate',
+        stored.originalName,
+        stored.mimeType,
+        stored.sizeBytes,
+        stored.url,
+        metadata.storageKey,
+        metadata.checksum,
+        metadata.storageProvider,
+        metadata.storageMode,
+        metadata.encryptionKeyId,
+        metadata.encryptionIv,
+        metadata.encryptionTag,
+        metadata.permissions
+      );
+
+      const existing = getAttendanceRecordRow(session.id, studentId);
+      await attendanceRepository.upsertAttendanceRecords({
+        idFactory: uuid,
+        workspaceId,
+        sessionId: session.id,
+        channelId,
+        markedByUserId: user.id,
+        records: [{
+          student_user_id: studentId,
+          status: normalizeAttendanceStatus(req.body?.status || existing?.status, 'excused'),
+          note: String(req.body?.note || existing?.note || '').trim(),
+          checked_in_at: existing?.checked_in_at || null,
+          checkin_method: existing?.checkin_method || 'manual',
+          certificate_file_id: fileId
+        }]
+      });
+
+      await logSecurityEvent({
+        workspaceId,
+        actorUserId: user.id,
+        targetUserId: studentId,
+        type: 'attendance.certificate_uploaded',
+        severity: 'info',
+        ip: req.ip || null,
+        userAgent: req.headers['user-agent'] || null,
+        payload: { channelId, sessionId: session.id, fileId }
+      });
+
+      res.json({
+        ok: true,
+        sessionId: session.id,
+        file: {
+          fileId,
+          fileName: stored.originalName,
+          url: stored.url,
+          mimeType: stored.mimeType,
+          sizeBytes: stored.sizeBytes
+        }
+      });
+    } catch (err) {
+      console.error('[Attendance] Certificate upload failed', err);
+      res.status(500).json({ error: 'Failed to upload certificate' });
+    }
+  });
+});
+
+app.get('/api/classes/:channelId/attendance/report', (req, res) => {
+  const user = getAuthedUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const workspaceId = getWorkspaceIdFromUser(user);
+  const channelId = String(req.params.channelId || '').trim();
+  if (!canTakeAttendance(workspaceId, channelId, user)) {
+    if (isSuperAdminRole(user)) {
+      return denyTenantAccess(req, res, {
+        workspaceId,
+        targetType: 'attendance',
+        targetId: channelId,
+        reason: 'super_admin_private_content_denied'
+      });
+    }
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const chk = ensureChannelIsClass(workspaceId, channelId);
+  if (!chk.ok) return chk.tenantForbidden ? tenantForbidden(res) : res.status(chk.code).json({ error: chk.error });
+  const report = buildAttendanceReportPayload(workspaceId, channelId, {
+    studentId: String(req.query.studentId || '').trim(),
+    from: String(req.query.from || '').trim(),
+    to: String(req.query.to || '').trim()
+  });
+  res.json({
+    ok: true,
+    channel: chk.channel,
+    report
+  });
+});
+
+app.get('/api/classes/:channelId/attendance/report.csv', (req, res) => {
+  const user = getAuthedUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const workspaceId = getWorkspaceIdFromUser(user);
+  const channelId = String(req.params.channelId || '').trim();
+  if (!canTakeAttendance(workspaceId, channelId, user)) {
+    if (isSuperAdminRole(user)) {
+      return denyTenantAccess(req, res, {
+        workspaceId,
+        targetType: 'attendance',
+        targetId: channelId,
+        reason: 'super_admin_private_content_denied'
+      });
+    }
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const chk = ensureChannelIsClass(workspaceId, channelId);
+  if (!chk.ok) return chk.tenantForbidden ? tenantForbidden(res) : res.status(chk.code).json({ error: chk.error });
+  const report = buildAttendanceReportPayload(workspaceId, channelId, {
+    studentId: String(req.query.studentId || '').trim(),
+    from: String(req.query.from || '').trim(),
+    to: String(req.query.to || '').trim()
+  });
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="attendance_${channelId}.csv"`);
+  res.send(buildAttendanceReportCsv(report));
 });
 
 app.get('/api/analytics/school-overview', authRequired, (req, res) => {

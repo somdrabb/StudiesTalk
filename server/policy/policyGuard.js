@@ -36,6 +36,7 @@ function createPolicyGuard({
   policyRepository,
   attachAccessTokenIfPresent,
   logger = console,
+  onBlocked = null,
   cacheTtlMs = DEFAULT_GATE_CACHE_TTL_MS
 } = {}) {
   if (!policyRepository) throw new Error('policyRepository is required');
@@ -132,6 +133,14 @@ function createPolicyGuard({
       const userId = String(user?.sub || user?.id || '').trim();
       const gate = await getGateState({ workspaceId, userId, user });
       if (!gate.required) return next();
+      if (typeof onBlocked === 'function') {
+        await onBlocked(req, {
+          workspaceId,
+          userId,
+          user,
+          gate
+        });
+      }
       return res.status(403).json({
         error: 'Policy acceptance required before workspace access.',
         code: 'policy_acceptance_required',

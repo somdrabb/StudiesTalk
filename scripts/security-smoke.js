@@ -342,6 +342,14 @@ async function main() {
 
     await api(adminJar, 'GET', '/api/dms', { expectedStatus: 200 });
 
+    await api(adminJar, 'POST', '/api/auth/forgot-password', {
+      json: { email: `admin.${runId}@example.com` },
+      expectedStatus: 200,
+      extraHeaders: { 'x-csrf-token': csrfToken }
+    }).then((payload) => {
+      assert.strictEqual(payload.ok, true);
+    });
+
     const { jar: superJar } = await login(`super.${runId}@example.com`);
     await api(superJar, 'GET', '/api/channels', { expectedStatus: 200 });
 
@@ -379,6 +387,27 @@ async function main() {
     assert.ok(countSecurityEvent('security.csrf_rejected') >= 1, 'expected csrf rejection to be logged');
     assert.ok(countSecurityEvent('security.upload_rejected') >= 1, 'expected upload rejection to be logged');
     assert.ok(countSecurityEvent('security.login_rate_limited') >= 1, 'expected login rate limit to be logged');
+    assert.ok(countSecurityEvent('security.onboarding_gate_blocked') >= 1, 'expected onboarding block to be logged');
+    assert.ok(countSecurityEvent('security.policy_gate_blocked') >= 1, 'expected policy block to be logged');
+
+    const dashboard = await api(superJar, 'GET', '/api/admin/security/dashboard?days=7&limit=100', {
+      expectedStatus: 200
+    });
+    assert.ok(dashboard?.ok, 'expected dashboard payload');
+    assert.ok(Number(dashboard?.summary?.csrfRejects || 0) >= 1, 'expected csrf rejects in summary');
+    assert.ok(Number(dashboard?.summary?.uploadRejections || 0) >= 1, 'expected upload rejections in summary');
+    assert.ok(Number(dashboard?.summary?.rateLimits || 0) >= 1, 'expected rate limits in summary');
+    assert.ok(Number(dashboard?.summary?.passwordResetActivity || 0) >= 1, 'expected password reset activity in summary');
+    assert.ok(Number(dashboard?.summary?.policyGateBlocks || 0) >= 1, 'expected policy gate blocks in summary');
+    assert.ok(Number(dashboard?.summary?.onboardingGateBlocks || 0) >= 1, 'expected onboarding gate blocks in summary');
+    assert.ok(Array.isArray(dashboard?.events), 'expected dashboard events array');
+
+    const { data: exportCsv } = await request(superJar, 'GET', '/api/admin/security/events/export.csv?days=7&type=security.csrf_rejected', {
+      expectedStatus: 200,
+      parseJson: false
+    });
+    assert.ok(exportCsv.includes('createdAt,type,severity'), 'expected csv header');
+    assert.ok(exportCsv.includes('security.csrf_rejected'), 'expected csv data row');
 
     console.log('[security-smoke] passed');
   } finally {

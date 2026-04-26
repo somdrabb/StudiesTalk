@@ -11494,6 +11494,202 @@ async function renderNotificationsPanel(token = uiNavigationToken) {
   });
 }
 
+const analyticsSecurityFilters = {
+  days: 7,
+  severity: "",
+  type: "",
+  q: ""
+};
+
+function formatSecurityDashboardTimestamp(value) {
+  const ms = Number(value);
+  if (!Number.isFinite(ms) || ms <= 0) return "—";
+  return new Date(ms).toLocaleString();
+}
+
+function getSecurityEventDisplayLabel(type) {
+  const labels = {
+    "auth.login_failed": "Failed login",
+    "security.login_rate_limited": "Rate limit",
+    "security.upload_rejected": "Upload rejected",
+    "security.csrf_rejected": "CSRF rejected",
+    "security.cross_workspace_access_attempt": "Tenant violation",
+    "security.super_admin_private_content_denied": "Private content blocked",
+    "security.forbidden_channel_access": "Forbidden channel access",
+    "security.forbidden_file_access": "Forbidden file access",
+    "security.forbidden_homework_access": "Forbidden homework access",
+    "security.forbidden_live_access_attempt": "Forbidden live access",
+    "forbidden_live_poll_access_attempt": "Forbidden poll access",
+    "forbidden_breakout_access_attempt": "Forbidden breakout access",
+    "recording_access_denied": "Forbidden recording access",
+    "auth.password_reset_requested": "Password reset requested",
+    "auth.password_reset_completed": "Password reset completed",
+    "security.policy_gate_blocked": "Policy gate blocked",
+    "security.onboarding_gate_blocked": "Onboarding gate blocked"
+  };
+  return labels[String(type || "").trim()] || String(type || "Security event");
+}
+
+function getSecurityEventSummary(row) {
+  const payload = row && row.payload && typeof row.payload === "object" ? row.payload : null;
+  if (!payload) return "";
+  if (payload.route) return `${payload.method || "REQ"} ${payload.route}`;
+  if (payload.reason) return String(payload.reason);
+  if (payload.version) return `Version ${payload.version}`;
+  return "";
+}
+
+function renderSecurityDashboardSection(dashboard, filters) {
+  const summary = dashboard?.summary || {};
+  const events = Array.isArray(dashboard?.events) ? dashboard.events : [];
+  const eventRows = Array.isArray(dashboard?.trend?.eventRows) ? dashboard.trend.eventRows : [];
+  const loginRows = Array.isArray(dashboard?.trend?.loginRows) ? dashboard.trend.loginRows : [];
+  const byDay = new Map();
+  eventRows.forEach((row) => {
+    byDay.set(String(row.day || ""), {
+      day: String(row.day || ""),
+      failedLogins: 0,
+      rateLimits: Number(row.rateLimits || 0),
+      uploadRejections: Number(row.uploadRejections || 0),
+      csrfRejects: Number(row.csrfRejects || 0),
+      tenantViolations: Number(row.tenantViolations || 0),
+      passwordResetActivity: Number(row.passwordResetActivity || 0),
+      policyGateBlocks: Number(row.policyGateBlocks || 0),
+      onboardingGateBlocks: Number(row.onboardingGateBlocks || 0)
+    });
+  });
+  loginRows.forEach((row) => {
+    const day = String(row.day || "");
+    const current = byDay.get(day) || {
+      day,
+      rateLimits: 0,
+      uploadRejections: 0,
+      csrfRejects: 0,
+      tenantViolations: 0,
+      passwordResetActivity: 0,
+      policyGateBlocks: 0,
+      onboardingGateBlocks: 0
+    };
+    current.failedLogins = Number(row.failedLogins || 0);
+    byDay.set(day, current);
+  });
+  const trendRows = Array.from(byDay.values())
+    .sort((a, b) => String(b.day).localeCompare(String(a.day)))
+    .slice(0, 7);
+
+  return `
+    <div class="analytics-section">
+      <div class="analytics-header">
+        <div>
+          <div class="section-title">Security Dashboard</div>
+          <p class="muted">Operator view across authentication, rate limits, guard blocks, and denied access attempts.</p>
+        </div>
+        <div class="security-filter-bar">
+          <select class="js-security-days">
+            ${[7, 30, 90].map((value) => `<option value="${value}" ${Number(filters.days) === value ? "selected" : ""}>Last ${value} days</option>`).join("")}
+          </select>
+          <select class="js-security-severity">
+            <option value="">All severities</option>
+            ${["info", "warn", "high"].map((value) => `<option value="${value}" ${filters.severity === value ? "selected" : ""}>${escapeHtml(value)}</option>`).join("")}
+          </select>
+          <input class="js-security-type" type="text" placeholder="Event type" value="${escapeHtml(filters.type || "")}" />
+          <input class="js-security-search" type="text" placeholder="Search actor or type" value="${escapeHtml(filters.q || "")}" />
+          <button type="button" class="btn secondary js-security-apply">Apply</button>
+          <button type="button" class="btn secondary js-security-export">Export CSV</button>
+        </div>
+      </div>
+
+      <div class="analytics-grid security-analytics-grid">
+        <div class="stat-card">
+          <div class="stat-label">Failed logins</div>
+          <div class="stat-value">${Number(summary.failedLogins || 0)}</div>
+          <div class="stat-meta">Successful logins: ${Number(summary.successfulLogins || 0)}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Rate limits</div>
+          <div class="stat-value">${Number(summary.rateLimits || 0)}</div>
+          <div class="stat-meta">CSRF rejects: ${Number(summary.csrfRejects || 0)}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Tenant violations</div>
+          <div class="stat-value">${Number(summary.tenantViolations || 0)}</div>
+          <div class="stat-meta">Upload rejects: ${Number(summary.uploadRejections || 0)}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Password reset activity</div>
+          <div class="stat-value">${Number(summary.passwordResetActivity || 0)}</div>
+          <div class="stat-meta">Policy blocks: ${Number(summary.policyGateBlocks || 0)} · Onboarding blocks: ${Number(summary.onboardingGateBlocks || 0)}</div>
+        </div>
+      </div>
+
+      <div class="analytics-two">
+        <div class="security-trend-card">
+          <div class="section-title">Recent Trends</div>
+          <div class="security-trend-list">
+            ${trendRows.length ? trendRows.map((row) => `
+              <div class="security-trend-row">
+                <div class="security-trend-day">${escapeHtml(row.day)}</div>
+                <div class="security-trend-metrics">
+                  <span>Failed ${Number(row.failedLogins || 0)}</span>
+                  <span>Rate ${Number(row.rateLimits || 0)}</span>
+                  <span>Tenant ${Number(row.tenantViolations || 0)}</span>
+                  <span>Reset ${Number(row.passwordResetActivity || 0)}</span>
+                </div>
+              </div>
+            `).join("") : `<div class="muted">No security trend data in range.</div>`}
+          </div>
+        </div>
+        <div class="security-trend-card">
+          <div class="section-title">Filtered Events</div>
+          <div class="security-events-table">
+            ${events.length ? events.map((row) => `
+              <div class="security-event-row">
+                <div class="security-event-main">
+                  <strong>${escapeHtml(getSecurityEventDisplayLabel(row.type))}</strong>
+                  <span class="security-event-type">${escapeHtml(String(row.type || ""))}</span>
+                  <span class="security-event-summary">${escapeHtml(getSecurityEventSummary(row))}</span>
+                </div>
+                <div class="security-event-meta">
+                  <span>${escapeHtml(String(row.severity || "info").toUpperCase())}</span>
+                  <span>${escapeHtml(row.actorEmail || "—")}</span>
+                  <span>${escapeHtml(formatSecurityDashboardTimestamp(row.created_at || row.createdAt))}</span>
+                </div>
+              </div>
+            `).join("") : `<div class="muted">No matching security events.</div>`}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function bindSecurityDashboardControls(panel) {
+  if (!panel) return;
+  const applyButton = panel.querySelector(".js-security-apply");
+  const exportButton = panel.querySelector(".js-security-export");
+  if (applyButton) {
+    applyButton.addEventListener("click", () => {
+      analyticsSecurityFilters.days = Number(panel.querySelector(".js-security-days")?.value || 7);
+      analyticsSecurityFilters.severity = String(panel.querySelector(".js-security-severity")?.value || "").trim().toLowerCase();
+      analyticsSecurityFilters.type = String(panel.querySelector(".js-security-type")?.value || "").trim();
+      analyticsSecurityFilters.q = String(panel.querySelector(".js-security-search")?.value || "").trim();
+      renderAnalyticsPanel();
+    });
+  }
+  if (exportButton) {
+    exportButton.addEventListener("click", () => {
+      const params = new URLSearchParams({
+        days: String(analyticsSecurityFilters.days || 7),
+        limit: "1000"
+      });
+      if (analyticsSecurityFilters.severity) params.set("severity", analyticsSecurityFilters.severity);
+      if (analyticsSecurityFilters.type) params.set("type", analyticsSecurityFilters.type);
+      if (analyticsSecurityFilters.q) params.set("q", analyticsSecurityFilters.q);
+      window.open(`/api/admin/security/events/export.csv?${params.toString()}`, "_blank", "noopener,noreferrer");
+    });
+  }
+}
+
 async function renderAnalyticsPanel(token = uiNavigationToken) {
   const panel = document.getElementById("analyticsPanel");
   if (!panel) return;
@@ -11510,6 +11706,17 @@ async function renderAnalyticsPanel(token = uiNavigationToken) {
     const list = Array.isArray(users) ? users : [];
     userDirectoryCache = list;
     userDirectoryLoaded = true;
+    const securityDashboard = isSuperAdmin()
+      ? await fetchJSON(
+          `/api/admin/security/dashboard?${new URLSearchParams({
+            days: String(analyticsSecurityFilters.days || 7),
+            limit: "60",
+            ...(analyticsSecurityFilters.severity ? { severity: analyticsSecurityFilters.severity } : {}),
+            ...(analyticsSecurityFilters.type ? { type: analyticsSecurityFilters.type } : {}),
+            ...(analyticsSecurityFilters.q ? { q: analyticsSecurityFilters.q } : {})
+          }).toString()}`
+        ).catch(() => null)
+      : null;
 
     const students = list.filter((u) => String(u.role || "").toLowerCase() === "student");
     const teachers = list.filter((u) => String(u.role || "").toLowerCase() === "teacher");
@@ -11818,6 +12025,8 @@ async function renderAnalyticsPanel(token = uiNavigationToken) {
           </div>
         </div>
 
+        ${securityDashboard ? renderSecurityDashboardSection(securityDashboard, analyticsSecurityFilters) : ""}
+
         <div class="analytics-section">
           <div class="section-title">School Activity – Last 7 days</div>
           <div class="activity-chart">
@@ -11903,6 +12112,7 @@ async function renderAnalyticsPanel(token = uiNavigationToken) {
         </div>
       </div>
     `;
+    bindSecurityDashboardControls(panel);
   } catch (err) {
     console.error("Failed to load analytics", err);
     panel.innerHTML = `<div class="analytics-wrap"><div class="muted">Could not load analytics.</div></div>`;
@@ -18379,6 +18589,7 @@ const headerDocCountBtn = document.getElementById("headerDocCountBtn");
 const headerDocCountValue = document.getElementById("headerDocCountValue");
 const channelRoleTabs = document.getElementById("channelRoleTabs");
 const channelAddMemberBtn = document.getElementById("channelAddMemberBtn");
+const channelAttendanceBtn = document.getElementById("channelAttendanceBtn");
 const headerStarBtn = document.getElementById("headerStarBtn");
 const headerPinBtn = document.getElementById("headerPinBtn");
 const headerMuteBtn = document.getElementById("headerMuteBtn");
@@ -25002,7 +25213,12 @@ let attendanceState = {
   sessionId: null,
   date: null,
   records: [],
-  locked: false
+  locked: false,
+  session: null,
+  report: null,
+  code: "",
+  codeExpiresAt: "",
+  studentStatus: ""
 };
 
 function isoDateOnlyLocal(date = new Date()) {
@@ -25035,8 +25251,40 @@ function renderAttendanceCounts() {
   const el = document.getElementById("attendanceCounts");
   if (!el) return;
   const present = attendanceState.records.filter((r) => r.status === "present").length;
-  const absent = attendanceState.records.length - present;
-  el.textContent = `Present: ${present} • Absent: ${absent}`;
+  const late = attendanceState.records.filter((r) => r.status === "late").length;
+  const excused = attendanceState.records.filter((r) => r.status === "excused").length;
+  const absent = attendanceState.records.filter((r) => r.status === "absent").length;
+  el.textContent = `Present: ${present} • Late: ${late} • Excused: ${excused} • Absent: ${absent}`;
+}
+
+function renderAttendanceReport() {
+  const cards = document.getElementById("attendanceReportCards");
+  if (!cards) return;
+  const totals = attendanceState.report?.totals || { present: 0, late: 0, absent: 0, excused: 0, total: 0 };
+  cards.innerHTML = `
+    <div class="stat-card"><div class="stat-label">Present</div><div class="stat-value">${Number(totals.present || 0)}</div></div>
+    <div class="stat-card"><div class="stat-label">Late</div><div class="stat-value">${Number(totals.late || 0)}</div></div>
+    <div class="stat-card"><div class="stat-label">Excused</div><div class="stat-value">${Number(totals.excused || 0)}</div></div>
+    <div class="stat-card"><div class="stat-label">Absent</div><div class="stat-value">${Number(totals.absent || 0)}</div></div>
+  `;
+}
+
+function renderAttendanceCodePanel() {
+  const codeValue = document.getElementById("attendanceCodeValue");
+  const codeMeta = document.getElementById("attendanceCodeMeta");
+  const qrBox = document.getElementById("attendanceQrBox");
+  if (codeValue) codeValue.textContent = attendanceState.code || "No active code";
+  if (codeMeta) codeMeta.textContent = attendanceState.codeExpiresAt
+    ? `Expires ${new Date(attendanceState.codeExpiresAt).toLocaleString()}`
+    : "Generate a short-lived code for this class session.";
+  if (qrBox) {
+    const seed = String(attendanceState.code || "EMPTY");
+    const cells = Array.from({ length: 81 }).map((_, idx) => {
+      const char = seed.charCodeAt(idx % seed.length) || 0;
+      return `<span class="${(char + idx) % 2 === 0 ? "is-on" : ""}"></span>`;
+    }).join("");
+    qrBox.innerHTML = cells;
+  }
 }
 
 function renderAttendanceList() {
@@ -25062,23 +25310,74 @@ function renderAttendanceList() {
       <div class="att-name">${escapeHtml(record.name || "Student")}</div>
     `;
 
-    const switchLabel = document.createElement("label");
-    switchLabel.className = "att-switch";
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.checked = record.status === "present";
-    input.addEventListener("change", () => {
-      record.status = input.checked ? "present" : "absent";
-      row.classList.toggle("is-present", input.checked);
+    const controls = document.createElement("div");
+    controls.className = "attendance-row-controls";
+    const select = document.createElement("select");
+    ["present", "late", "absent", "excused"].forEach((status) => {
+      const option = document.createElement("option");
+      option.value = status;
+      option.textContent = status;
+      option.selected = record.status === status;
+      select.appendChild(option);
+    });
+    select.addEventListener("change", () => {
+      record.status = select.value;
       renderAttendanceCounts();
     });
-    const slider = document.createElement("span");
-    slider.className = "att-switch-slider";
-    switchLabel.appendChild(input);
-    switchLabel.appendChild(slider);
+    const note = document.createElement("input");
+    note.type = "text";
+    note.placeholder = "Note";
+    note.value = record.note || "";
+    note.addEventListener("input", () => {
+      record.note = note.value;
+    });
+    controls.appendChild(select);
+    controls.appendChild(note);
+    const fileInput = document.createElement("input");
+    fileInput.type = "file";
+    fileInput.accept = ".pdf,.png,.jpg,.jpeg";
+    fileInput.addEventListener("change", async () => {
+      const selected = fileInput.files?.[0];
+      if (!selected || !attendanceState.channelId) return;
+      const form = new FormData();
+      form.append("file", selected);
+      form.append("date", attendanceState.date || isoDateOnlyLocal());
+      form.append("status", record.status || "excused");
+      form.append("note", record.note || "");
+      if (attendanceState.sessionId) form.append("sessionId", attendanceState.sessionId);
+      try {
+        const response = await fetch(`/api/classes/${encodeURIComponent(attendanceState.channelId)}/attendance/records/${encodeURIComponent(record.student_user_id)}/certificate`, {
+          method: "POST",
+          headers: { "x-user-id": getCurrentUserId() },
+          body: form
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload?.error || "Upload failed");
+        }
+        record.certificate = payload.file || null;
+        showToast?.("Certificate uploaded.");
+        renderAttendanceList();
+      } catch (error) {
+        showToast?.(error.message || "Could not upload certificate.");
+      } finally {
+        fileInput.value = "";
+      }
+    });
+    controls.appendChild(fileInput);
+    if (record.certificate?.url) {
+      const viewBtn = document.createElement("button");
+      viewBtn.type = "button";
+      viewBtn.className = "btn secondary";
+      viewBtn.textContent = "View certificate";
+      viewBtn.addEventListener("click", () => {
+        window.open(record.certificate.url, "_blank", "noopener,noreferrer");
+      });
+      controls.appendChild(viewBtn);
+    }
 
     row.appendChild(left);
-    row.appendChild(switchLabel);
+    row.appendChild(controls);
     list.appendChild(row);
   });
 }
@@ -25096,12 +25395,21 @@ async function loadAttendanceForChannel(channelId, requestedDate) {
       channelId,
       sessionId: data.session_id || null,
       date: data.session_date || dateValue,
+      session: data.session || null,
+      report: data.report || null,
+      code: "",
+      codeExpiresAt: data.session?.checkinCodeExpiresAt || "",
+      studentStatus: "",
       records: (data.records || []).map((r) => ({
         student_user_id: r.student_user_id,
         name: r.name,
         email: r.email,
-        status: r.status === "present" ? "present" : "absent"
-      }))
+        status: ["present", "late", "excused"].includes(r.status) ? r.status : "absent",
+        note: r.note || "",
+        checked_in_at: r.checked_in_at || null,
+        certificate: r.certificate || null
+      })),
+      locked: !!data.locked
     };
 
     const title = document.getElementById("attendanceTitle");
@@ -25110,9 +25418,19 @@ async function loadAttendanceForChannel(channelId, requestedDate) {
     if (subtitle) subtitle.textContent = `${data.channel?.name || "Class"} • ${attendanceState.date}`;
     const checkbox = document.getElementById("attendanceSendEmails");
     if (checkbox && checkbox.checked === false) checkbox.checked = true;
+    if (attendanceState.session?.startTime) {
+      const startInput = document.getElementById("attendanceStartTime");
+      if (startInput) startInput.value = attendanceState.session.startTime;
+    }
+    const graceInput = document.getElementById("attendanceGracePeriod");
+    if (graceInput) graceInput.value = String(attendanceState.session?.gracePeriodMinutes || 10);
+    document.getElementById("attendanceSaveBtn")?.classList.remove("hidden");
+    document.getElementById("attendanceGenerateCodeBtn")?.classList.remove("hidden");
 
     renderAttendanceList();
     renderAttendanceCounts();
+    renderAttendanceReport();
+    renderAttendanceCodePanel();
     if (status) status.textContent = "";
     showAttendanceModal(true);
   } catch (error) {
@@ -25137,6 +25455,27 @@ async function openAttendanceForCurrentClass() {
     showToast?.("No class selected for attendance.");
     return;
   }
+  if (!isTeacherUser?.() && !isSchoolAdmin() && !isSuperAdmin()) {
+    attendanceState = {
+      channelId,
+      sessionId: null,
+      date: isoDateOnlyLocal(),
+      records: [],
+      locked: false,
+      session: null,
+      report: null,
+      code: "",
+      codeExpiresAt: "",
+      studentStatus: ""
+    };
+    renderAttendanceCounts();
+    renderAttendanceReport();
+    renderAttendanceCodePanel();
+    document.getElementById("attendanceSaveBtn")?.classList.add("hidden");
+    document.getElementById("attendanceGenerateCodeBtn")?.classList.add("hidden");
+    showAttendanceModal(true);
+    return;
+  }
   await loadAttendanceForChannel(channelId);
 }
 
@@ -25149,9 +25488,12 @@ async function saveAttendance() {
     send_absence_emails: !!document.getElementById("attendanceSendEmails")?.checked,
     records: attendanceState.records.map((r) => ({
       student_user_id: r.student_user_id,
-      status: r.status
+      status: r.status,
+      note: r.note || ""
     }))
   };
+  payload.start_time = document.getElementById("attendanceStartTime")?.value || "";
+  payload.grace_period_minutes = Number(document.getElementById("attendanceGracePeriod")?.value || 10);
 
   try {
     const data = await fetchJSON(`/api/classes/${encodeURIComponent(attendanceState.channelId)}/attendance/save`, {
@@ -25176,10 +25518,71 @@ async function saveAttendance() {
   }
 }
 
+async function generateAttendanceCode() {
+  if (!attendanceState.channelId) return;
+  const status = document.getElementById("attendanceStatus");
+  if (status) status.textContent = "Generating check-in code...";
+  try {
+    const payload = await fetchJSON(`/api/classes/${encodeURIComponent(attendanceState.channelId)}/attendance/session-code`, {
+      method: "POST",
+      headers: {
+        "x-user-id": getCurrentUserId(),
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        date: attendanceState.date || isoDateOnlyLocal(),
+        start_time: document.getElementById("attendanceStartTime")?.value || "",
+        grace_period_minutes: Number(document.getElementById("attendanceGracePeriod")?.value || 10),
+        expires_minutes: Number(document.getElementById("attendanceCodeExpiry")?.value || 15)
+      })
+    });
+    attendanceState.sessionId = payload.sessionId;
+    attendanceState.code = payload.code || "";
+    attendanceState.codeExpiresAt = payload.expiresAt || "";
+    renderAttendanceCodePanel();
+    if (status) status.textContent = "Check-in code ready.";
+  } catch (error) {
+    if (status) status.textContent = `Could not generate code: ${error.message || error}`;
+  }
+}
+
+async function submitAttendanceStudentCheckIn() {
+  const code = String(document.getElementById("attendanceStudentCodeInput")?.value || "").trim();
+  const badge = document.getElementById("attendanceStudentStatusBadge");
+  const meta = document.getElementById("attendanceStudentStatusMeta");
+  if (!attendanceState.channelId || !code) return;
+  try {
+    const payload = await fetchJSON(`/api/attendance/check-in`, {
+      method: "POST",
+      headers: {
+        "x-user-id": getCurrentUserId(),
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        channelId: attendanceState.channelId,
+        sessionId: attendanceState.sessionId,
+        code
+      })
+    });
+    attendanceState.studentStatus = payload.status || "";
+    if (badge) badge.textContent = `Checked in: ${payload.status}`;
+    if (meta) meta.textContent = payload.checkedInAt ? `Recorded ${new Date(payload.checkedInAt).toLocaleString()}` : "Check-in recorded.";
+  } catch (error) {
+    if (badge) badge.textContent = "Check-in blocked";
+    if (meta) meta.textContent = error.message || "Unable to check in.";
+  }
+}
+
 function wireAttendanceModal() {
   document.getElementById("attendanceCloseBtn")?.addEventListener("click", () => showAttendanceModal(false));
   document.getElementById("attendanceCancelBtn")?.addEventListener("click", () => showAttendanceModal(false));
   document.getElementById("attendanceSaveBtn")?.addEventListener("click", saveAttendance);
+  document.getElementById("attendanceGenerateCodeBtn")?.addEventListener("click", generateAttendanceCode);
+  document.getElementById("attendanceStudentCheckInBtn")?.addEventListener("click", submitAttendanceStudentCheckIn);
+  document.getElementById("attendanceExportCsvBtn")?.addEventListener("click", () => {
+    if (!attendanceState.channelId) return;
+    window.open(`/api/classes/${encodeURIComponent(attendanceState.channelId)}/attendance/report.csv`, "_blank", "noopener,noreferrer");
+  });
   document.getElementById("attendanceModal")?.addEventListener("click", (event) => {
     if (event.target === event.currentTarget) {
       showAttendanceModal(false);
@@ -25188,6 +25591,7 @@ function wireAttendanceModal() {
 }
 
 wireAttendanceModal();
+channelAttendanceBtn?.addEventListener("click", () => openAttendanceForCurrentClass());
 
 function ensureAttendanceButtonInChannelHeader(ch) {
   const existing = document.getElementById("attendanceHeaderBtn");

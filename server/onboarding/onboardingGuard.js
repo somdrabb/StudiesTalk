@@ -84,6 +84,7 @@ function createOnboardingGuard({
   onboardingRepository,
   attachAccessTokenIfPresent,
   logger = console,
+  onBlocked = null,
   cacheTtlMs = DEFAULT_GATE_CACHE_TTL_MS
 } = {}) {
   if (!onboardingRepository) throw new Error('onboardingRepository is required');
@@ -153,6 +154,13 @@ function createOnboardingGuard({
 
       const gate = await getGateState(workspaceId);
       if (!gate?.required) return next();
+      if (typeof onBlocked === 'function') {
+        await onBlocked(req, {
+          workspaceId,
+          user,
+          gate
+        });
+      }
 
       return res.status(403).json({
         error: 'Onboarding required before full workspace access.',

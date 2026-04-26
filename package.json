@@ -28,7 +28,7 @@
     "test:runtime:smoke:pg": "node scripts/runtime-domain-smoke.js postgres",
     "test:tasks:smoke": "node scripts/tasks-rehearsal-smoke.js sqlite",
     "test:tasks:smoke:pg": "node scripts/tasks-rehearsal-smoke.js postgres",
-    "test:attendance:smoke": "node scripts/attendance-rehearsal-smoke.js sqlite",
+    "test:attendance:smoke": "node scripts/attendance-tracking-smoke.js",
     "test:attendance:smoke:pg": "node scripts/attendance-rehearsal-smoke.js postgres",
     "test:smoke:sqlite": "npm run test:runtime:smoke && npm run test:tasks:smoke && npm run test:attendance:smoke",
     "test:smoke:pg": "npm run test:runtime:smoke:pg && npm run test:tasks:smoke:pg && npm run test:attendance:smoke:pg",

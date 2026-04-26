@@ -1875,6 +1875,87 @@ html[data-theme="dark"] #toast {
   display: grid;
   gap: 8px;
 }
+.attendance-advanced-grid,
+.attendance-report-grid{
+  padding: 12px 16px 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+.attendance-panel{
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+  padding: 12px;
+  background: var(--bg-surface);
+}
+.attendance-code-card,
+.attendance-checkin-form,
+.attendance-report-actions,
+.attendance-row-controls{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.attendance-code-value{
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--text-primary);
+  letter-spacing: 0;
+}
+.attendance-code-meta{
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 6px;
+}
+.attendance-code-actions input,
+.attendance-checkin-form input,
+.attendance-row-controls input,
+.attendance-row-controls select{
+  min-height: 36px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-surface-2);
+  color: var(--text-primary);
+}
+.attendance-qr-box{
+  width: 126px;
+  height: 126px;
+  display: grid;
+  grid-template-columns: repeat(9, 1fr);
+  gap: 3px;
+  padding: 8px;
+  border-radius: 12px;
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border-soft);
+  margin-bottom: 10px;
+}
+.attendance-qr-box span{
+  display: block;
+  border-radius: 2px;
+  background: rgba(148,163,184,.18);
+}
+.attendance-qr-box span.is-on{
+  background: var(--text-primary);
+}
+.attendance-status-badge{
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(59,130,246,.12);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  margin-top: 10px;
+}
+.attendance-report-cards{
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
 .att-switch {
   position: relative;
   display: inline-block;
@@ -19227,6 +19308,76 @@ html[data-theme="dark"] #channelsContainer .homework-connector {
     font-size: 14px;
     font-weight: 700;
     letter-spacing: 0.02em;
+  }
+  .security-filter-bar{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+  .security-filter-bar input,
+  .security-filter-bar select{
+    min-height: 36px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    border: 1px solid var(--border-soft);
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    font-size: 13px;
+  }
+  .security-analytics-grid .stat-card{
+    min-height: 118px;
+  }
+  .security-trend-card{
+    background: var(--bg-surface);
+    border: 1px solid var(--border-soft);
+    border-radius: 14px;
+    padding: 12px;
+    box-shadow: var(--shadow-1);
+  }
+  .security-trend-list,
+  .security-events-table{
+    display: grid;
+    gap: 8px;
+  }
+  .security-trend-row,
+  .security-event-row{
+    display: grid;
+    gap: 6px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: var(--bg-surface-2);
+    border: 1px solid var(--border-soft);
+  }
+  .security-trend-day{
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+  .security-trend-metrics{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--text-soft);
+  }
+  .security-event-main{
+    display: grid;
+    gap: 4px;
+  }
+  .security-event-main strong{
+    font-size: 14px;
+    color: var(--text-primary);
+  }
+  .security-event-type,
+  .security-event-summary,
+  .security-event-meta{
+    font-size: 12px;
+    color: var(--text-soft);
+  }
+  .security-event-meta{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
   }
   .course-list{
     list-style: none;

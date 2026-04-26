@@ -190,40 +190,162 @@ function createSqliteAuthRepository(sqliteDb) {
       `).all(limit);
     },
 
-    listSecurityEvents({ query = '', type = '', limit = 50 }) {
+    listSecurityEvents({ query = '', type = '', severity = '', limit = 50, since = null, until = null }) {
       const normalizedQuery = String(query || '').trim().toLowerCase();
       const normalizedType = String(type || '').trim();
+      const normalizedSeverity = String(severity || '').trim().toLowerCase();
+      const whereParts = [];
+      const params = [];
       if (normalizedQuery) {
-        const params = [`%${normalizedQuery}%`, `%${normalizedQuery}%`, `%${normalizedQuery}%`];
-        if (normalizedType) params.push(normalizedType);
-        params.push(limit);
-        return sqliteDb.prepare(`
+        whereParts.push('(lower(e.type) LIKE ? OR lower(COALESCE(au.email,\'\')) LIKE ? OR lower(COALESCE(tu.email,\'\')) LIKE ?)');
+        params.push(`%${normalizedQuery}%`, `%${normalizedQuery}%`, `%${normalizedQuery}%`);
+      }
+      if (normalizedType) {
+        whereParts.push('e.type = ?');
+        params.push(normalizedType);
+      }
+      if (normalizedSeverity) {
+        whereParts.push('lower(e.severity) = ?');
+        params.push(normalizedSeverity);
+      }
+      if (Number.isFinite(Number(since))) {
+        whereParts.push('e.created_at >= ?');
+        params.push(Number(since));
+      }
+      if (Number.isFinite(Number(until))) {
+        whereParts.push('e.created_at <= ?');
+        params.push(Number(until));
+      }
+      params.push(limit);
+      return sqliteDb.prepare(`
           SELECT e.*,
                  au.email AS actorEmail,
                  tu.email AS targetEmail
           FROM security_events e
           LEFT JOIN users au ON au.id = e.actor_user_id
           LEFT JOIN users tu ON tu.id = e.target_user_id
-          WHERE (lower(e.type) LIKE ? OR lower(COALESCE(au.email,'')) LIKE ? OR lower(COALESCE(tu.email,'')) LIKE ?)
-          ${normalizedType ? 'AND e.type = ?' : ''}
+          ${whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : ''}
           ORDER BY e.created_at DESC
           LIMIT ?
-        `).all(...params);
-      }
-      const params = [];
-      if (normalizedType) params.push(normalizedType);
-      params.push(limit);
-      return sqliteDb.prepare(`
-        SELECT e.*,
-               au.email AS actorEmail,
-               tu.email AS targetEmail
-        FROM security_events e
-        LEFT JOIN users au ON au.id = e.actor_user_id
-        LEFT JOIN users tu ON tu.id = e.target_user_id
-        ${normalizedType ? 'WHERE e.type = ?' : ''}
-        ORDER BY e.created_at DESC
-        LIMIT ?
       `).all(...params);
+    },
+
+    getSecurityDashboardSummary({ since, until }) {
+      const params = [];
+      const eventWhere = [];
+      const loginWhere = [];
+      if (Number.isFinite(Number(since))) {
+        eventWhere.push('created_at >= ?');
+        loginWhere.push('created_at >= ?');
+        params.push(Number(since));
+      }
+      if (Number.isFinite(Number(until))) {
+        eventWhere.push('created_at <= ?');
+        loginWhere.push('created_at <= ?');
+        params.push(Number(until));
+      }
+      const eventWhereSql = eventWhere.length ? `WHERE ${eventWhere.join(' AND ')}` : '';
+      const loginWhereSql = loginWhere.length ? `WHERE ${loginWhere.join(' AND ')}` : '';
+      const eventCounts = sqliteDb.prepare(`
+        SELECT
+          SUM(CASE WHEN type = 'auth.login_failed' THEN 1 ELSE 0 END) AS failed_logins,
+          SUM(CASE WHEN type = 'security.login_rate_limited' THEN 1 ELSE 0 END) AS rate_limits,
+          SUM(CASE WHEN type = 'security.upload_rejected' THEN 1 ELSE 0 END) AS upload_rejections,
+          SUM(CASE WHEN type = 'security.csrf_rejected' THEN 1 ELSE 0 END) AS csrf_rejects,
+          SUM(CASE WHEN type IN (
+            'security.cross_workspace_access_attempt',
+            'security.super_admin_private_content_denied',
+            'security.forbidden_channel_access',
+            'security.forbidden_file_access',
+            'security.forbidden_homework_access',
+            'security.forbidden_live_access_attempt',
+            'forbidden_live_poll_access_attempt',
+            'forbidden_breakout_access_attempt',
+            'recording_access_denied'
+          ) THEN 1 ELSE 0 END) AS tenant_violations,
+          SUM(CASE WHEN type IN (
+            'auth.password_reset_requested',
+            'auth.password_reset_completed'
+          ) THEN 1 ELSE 0 END) AS password_reset_activity,
+          SUM(CASE WHEN type = 'security.policy_gate_blocked' THEN 1 ELSE 0 END) AS policy_gate_blocks,
+          SUM(CASE WHEN type = 'security.onboarding_gate_blocked' THEN 1 ELSE 0 END) AS onboarding_gate_blocks
+        FROM security_events
+        ${eventWhereSql}
+      `).get(...params) || {};
+      const loginCounts = sqliteDb.prepare(`
+        SELECT
+          SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS failed_logins,
+          SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) AS successful_logins
+        FROM login_attempts
+        ${loginWhereSql}
+      `).get(...params) || {};
+      return {
+        failedLogins: Number(eventCounts.failed_logins || loginCounts.failed_logins || 0),
+        successfulLogins: Number(loginCounts.successful_logins || 0),
+        rateLimits: Number(eventCounts.rate_limits || 0),
+        uploadRejections: Number(eventCounts.upload_rejections || 0),
+        csrfRejects: Number(eventCounts.csrf_rejects || 0),
+        tenantViolations: Number(eventCounts.tenant_violations || 0),
+        passwordResetActivity: Number(eventCounts.password_reset_activity || 0),
+        policyGateBlocks: Number(eventCounts.policy_gate_blocks || 0),
+        onboardingGateBlocks: Number(eventCounts.onboarding_gate_blocks || 0)
+      };
+    },
+
+    listSecurityTrend({ since, until }) {
+      const eventParams = [];
+      const loginParams = [];
+      const eventWhere = [];
+      const loginWhere = [];
+      if (Number.isFinite(Number(since))) {
+        eventWhere.push('created_at >= ?');
+        loginWhere.push('created_at >= ?');
+        eventParams.push(Number(since));
+        loginParams.push(Number(since));
+      }
+      if (Number.isFinite(Number(until))) {
+        eventWhere.push('created_at <= ?');
+        loginWhere.push('created_at <= ?');
+        eventParams.push(Number(until));
+        loginParams.push(Number(until));
+      }
+      const eventWhereSql = eventWhere.length ? `WHERE ${eventWhere.join(' AND ')}` : '';
+      const loginWhereSql = loginWhere.length ? `WHERE ${loginWhere.join(' AND ')}` : '';
+      const eventRows = sqliteDb.prepare(`
+        SELECT
+          strftime('%Y-%m-%d', created_at / 1000, 'unixepoch') AS day,
+          SUM(CASE WHEN type = 'security.login_rate_limited' THEN 1 ELSE 0 END) AS rate_limits,
+          SUM(CASE WHEN type = 'security.upload_rejected' THEN 1 ELSE 0 END) AS upload_rejections,
+          SUM(CASE WHEN type = 'security.csrf_rejected' THEN 1 ELSE 0 END) AS csrf_rejects,
+          SUM(CASE WHEN type IN (
+            'security.cross_workspace_access_attempt',
+            'security.super_admin_private_content_denied',
+            'security.forbidden_channel_access',
+            'security.forbidden_file_access',
+            'security.forbidden_homework_access',
+            'security.forbidden_live_access_attempt',
+            'forbidden_live_poll_access_attempt',
+            'forbidden_breakout_access_attempt',
+            'recording_access_denied'
+          ) THEN 1 ELSE 0 END) AS tenant_violations,
+          SUM(CASE WHEN type IN ('auth.password_reset_requested', 'auth.password_reset_completed') THEN 1 ELSE 0 END) AS password_reset_activity,
+          SUM(CASE WHEN type = 'security.policy_gate_blocked' THEN 1 ELSE 0 END) AS policy_gate_blocks,
+          SUM(CASE WHEN type = 'security.onboarding_gate_blocked' THEN 1 ELSE 0 END) AS onboarding_gate_blocks
+        FROM security_events
+        ${eventWhereSql}
+        GROUP BY strftime('%Y-%m-%d', created_at / 1000, 'unixepoch')
+        ORDER BY day ASC
+      `).all(...eventParams);
+      const loginRows = sqliteDb.prepare(`
+        SELECT
+          strftime('%Y-%m-%d', created_at / 1000, 'unixepoch') AS day,
+          SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS failed_logins
+        FROM login_attempts
+        ${loginWhereSql}
+        GROUP BY strftime('%Y-%m-%d', created_at / 1000, 'unixepoch')
+        ORDER BY day ASC
+      `).all(...loginParams);
+      return { eventRows, loginRows };
     },
 
     getSecurityOverview({ since }) {
@@ -497,40 +619,162 @@ function createPostgresAuthRepository() {
       `, [limit]);
     },
 
-    async listSecurityEvents({ query = '', type = '', limit = 50 }) {
+    async listSecurityEvents({ query = '', type = '', severity = '', limit = 50, since = null, until = null }) {
       const normalizedQuery = String(query || '').trim().toLowerCase();
       const normalizedType = String(type || '').trim();
+      const normalizedSeverity = String(severity || '').trim().toLowerCase();
+      const params = [];
+      const whereParts = [];
       if (normalizedQuery) {
-        const params = [`%${normalizedQuery}%`, `%${normalizedQuery}%`, `%${normalizedQuery}%`];
-        if (normalizedType) params.push(normalizedType);
-        params.push(limit);
-        return postgres.many(`
+        whereParts.push('(lower(e.type) LIKE ? OR lower(COALESCE(au.email::text,\'\')) LIKE ? OR lower(COALESCE(tu.email::text,\'\')) LIKE ?)');
+        params.push(`%${normalizedQuery}%`, `%${normalizedQuery}%`, `%${normalizedQuery}%`);
+      }
+      if (normalizedType) {
+        whereParts.push('e.type = ?');
+        params.push(normalizedType);
+      }
+      if (normalizedSeverity) {
+        whereParts.push('lower(e.severity) = ?');
+        params.push(normalizedSeverity);
+      }
+      if (Number.isFinite(Number(since))) {
+        whereParts.push('e.created_at >= ?');
+        params.push(Number(since));
+      }
+      if (Number.isFinite(Number(until))) {
+        whereParts.push('e.created_at <= ?');
+        params.push(Number(until));
+      }
+      params.push(limit);
+      return postgres.many(`
           SELECT e.*,
                  au.email AS "actorEmail",
                  tu.email AS "targetEmail"
           FROM security_events e
           LEFT JOIN users au ON au.id = e.actor_user_id
           LEFT JOIN users tu ON tu.id = e.target_user_id
-          WHERE (lower(e.type) LIKE ? OR lower(COALESCE(au.email::text,'')) LIKE ? OR lower(COALESCE(tu.email::text,'')) LIKE ?)
-          ${normalizedType ? 'AND e.type = ?' : ''}
+          ${whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : ''}
           ORDER BY e.created_at DESC
           LIMIT ?
-        `, params);
-      }
-      const params = [];
-      if (normalizedType) params.push(normalizedType);
-      params.push(limit);
-      return postgres.many(`
-        SELECT e.*,
-               au.email AS "actorEmail",
-               tu.email AS "targetEmail"
-        FROM security_events e
-        LEFT JOIN users au ON au.id = e.actor_user_id
-        LEFT JOIN users tu ON tu.id = e.target_user_id
-        ${normalizedType ? 'WHERE e.type = ?' : ''}
-        ORDER BY e.created_at DESC
-        LIMIT ?
       `, params);
+    },
+
+    async getSecurityDashboardSummary({ since, until }) {
+      const eventWhere = [];
+      const eventParams = [];
+      const loginWhere = [];
+      const loginParams = [];
+      if (Number.isFinite(Number(since))) {
+        eventWhere.push('created_at >= ?');
+        loginWhere.push('created_at >= ?');
+        eventParams.push(Number(since));
+        loginParams.push(Number(since));
+      }
+      if (Number.isFinite(Number(until))) {
+        eventWhere.push('created_at <= ?');
+        loginWhere.push('created_at <= ?');
+        eventParams.push(Number(until));
+        loginParams.push(Number(until));
+      }
+      const eventWhereSql = eventWhere.length ? `WHERE ${eventWhere.join(' AND ')}` : '';
+      const loginWhereSql = loginWhere.length ? `WHERE ${loginWhere.join(' AND ')}` : '';
+      const eventCounts = await postgres.one(`
+        SELECT
+          SUM(CASE WHEN type = 'auth.login_failed' THEN 1 ELSE 0 END)::int AS "failedLogins",
+          SUM(CASE WHEN type = 'security.login_rate_limited' THEN 1 ELSE 0 END)::int AS "rateLimits",
+          SUM(CASE WHEN type = 'security.upload_rejected' THEN 1 ELSE 0 END)::int AS "uploadRejections",
+          SUM(CASE WHEN type = 'security.csrf_rejected' THEN 1 ELSE 0 END)::int AS "csrfRejects",
+          SUM(CASE WHEN type IN (
+            'security.cross_workspace_access_attempt',
+            'security.super_admin_private_content_denied',
+            'security.forbidden_channel_access',
+            'security.forbidden_file_access',
+            'security.forbidden_homework_access',
+            'security.forbidden_live_access_attempt',
+            'forbidden_live_poll_access_attempt',
+            'forbidden_breakout_access_attempt',
+            'recording_access_denied'
+          ) THEN 1 ELSE 0 END)::int AS "tenantViolations",
+          SUM(CASE WHEN type IN ('auth.password_reset_requested', 'auth.password_reset_completed') THEN 1 ELSE 0 END)::int AS "passwordResetActivity",
+          SUM(CASE WHEN type = 'security.policy_gate_blocked' THEN 1 ELSE 0 END)::int AS "policyGateBlocks",
+          SUM(CASE WHEN type = 'security.onboarding_gate_blocked' THEN 1 ELSE 0 END)::int AS "onboardingGateBlocks"
+        FROM security_events
+        ${eventWhereSql}
+      `, eventParams);
+      const loginCounts = await postgres.one(`
+        SELECT
+          SUM(CASE WHEN success = false THEN 1 ELSE 0 END)::int AS "failedLogins",
+          SUM(CASE WHEN success = true THEN 1 ELSE 0 END)::int AS "successfulLogins"
+        FROM login_attempts
+        ${loginWhereSql}
+      `, loginParams);
+      return {
+        failedLogins: Number(eventCounts?.failedLogins || loginCounts?.failedLogins || 0),
+        successfulLogins: Number(loginCounts?.successfulLogins || 0),
+        rateLimits: Number(eventCounts?.rateLimits || 0),
+        uploadRejections: Number(eventCounts?.uploadRejections || 0),
+        csrfRejects: Number(eventCounts?.csrfRejects || 0),
+        tenantViolations: Number(eventCounts?.tenantViolations || 0),
+        passwordResetActivity: Number(eventCounts?.passwordResetActivity || 0),
+        policyGateBlocks: Number(eventCounts?.policyGateBlocks || 0),
+        onboardingGateBlocks: Number(eventCounts?.onboardingGateBlocks || 0)
+      };
+    },
+
+    async listSecurityTrend({ since, until }) {
+      const eventWhere = [];
+      const eventParams = [];
+      const loginWhere = [];
+      const loginParams = [];
+      if (Number.isFinite(Number(since))) {
+        eventWhere.push('created_at >= ?');
+        loginWhere.push('created_at >= ?');
+        eventParams.push(Number(since));
+        loginParams.push(Number(since));
+      }
+      if (Number.isFinite(Number(until))) {
+        eventWhere.push('created_at <= ?');
+        loginWhere.push('created_at <= ?');
+        eventParams.push(Number(until));
+        loginParams.push(Number(until));
+      }
+      const eventWhereSql = eventWhere.length ? `WHERE ${eventWhere.join(' AND ')}` : '';
+      const loginWhereSql = loginWhere.length ? `WHERE ${loginWhere.join(' AND ')}` : '';
+      const eventRows = await postgres.many(`
+        SELECT
+          to_char(to_timestamp(created_at::double precision / 1000.0) AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
+          SUM(CASE WHEN type = 'security.login_rate_limited' THEN 1 ELSE 0 END)::int AS "rateLimits",
+          SUM(CASE WHEN type = 'security.upload_rejected' THEN 1 ELSE 0 END)::int AS "uploadRejections",
+          SUM(CASE WHEN type = 'security.csrf_rejected' THEN 1 ELSE 0 END)::int AS "csrfRejects",
+          SUM(CASE WHEN type IN (
+            'security.cross_workspace_access_attempt',
+            'security.super_admin_private_content_denied',
+            'security.forbidden_channel_access',
+            'security.forbidden_file_access',
+            'security.forbidden_homework_access',
+            'security.forbidden_live_access_attempt',
+            'forbidden_live_poll_access_attempt',
+            'forbidden_breakout_access_attempt',
+            'recording_access_denied'
+          ) THEN 1 ELSE 0 END)::int AS "tenantViolations",
+          SUM(CASE WHEN type IN ('auth.password_reset_requested', 'auth.password_reset_completed') THEN 1 ELSE 0 END)::int AS "passwordResetActivity",
+          SUM(CASE WHEN type = 'security.policy_gate_blocked' THEN 1 ELSE 0 END)::int AS "policyGateBlocks",
+          SUM(CASE WHEN type = 'security.onboarding_gate_blocked' THEN 1 ELSE 0 END)::int AS "onboardingGateBlocks"
+        FROM security_events
+        ${eventWhereSql}
+        GROUP BY 1
+        ORDER BY 1 ASC
+      `, eventParams);
+      const loginRows = await postgres.many(`
+        SELECT
+          to_char(to_timestamp(created_at::double precision / 1000.0) AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
+          SUM(CASE WHEN success = false THEN 1 ELSE 0 END)::int AS "failedLogins"
+        FROM login_attempts
+        ${loginWhereSql}
+        GROUP BY 1
+        ORDER BY 1 ASC
+      `, loginParams);
+      return { eventRows, loginRows };
     },
 
     async getSecurityOverview({ since }) {
