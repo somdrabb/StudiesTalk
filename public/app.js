@@ -25042,6 +25042,7 @@ function renderChannelHeader(channelId) {
     hideAnnouncementsPopup();
   }
   if (channelAttendanceBtn) {
+    const showStudentCheckIn = isClassesScopedHeader && isStudentUser();
     channelAttendanceBtn.classList.toggle(
       "hidden",
       isSchoolTaskChannel ||
@@ -25051,7 +25052,7 @@ function renderChannelHeader(channelId) {
         isNoteChannel ||
         hideForAnnouncements ||
         isSpeakingPracticeChannel ||
-        (isClassesScopedHeader && !canManageClassesHeader)
+        (isClassesScopedHeader && !canManageClassesHeader && !showStudentCheckIn)
     );
   }
   if (tasksBtn) {
@@ -25473,6 +25474,20 @@ function renderAttendanceModalMode() {
   if (footerSummary) footerSummary.classList.toggle("hidden", !teacherMode);
 }
 
+function resolveAttendanceChannelLabel(channelId) {
+  const channel = Array.isArray(channels)
+    ? channels.find((entry) => String(entry?.id || "") === String(channelId || ""))
+    : null;
+  return channel?.name || "Class";
+}
+
+function renderAttendanceStudentModalHeading(channelId, requestedDate) {
+  const title = document.getElementById("attendanceTitle");
+  const subtitle = document.getElementById("attendanceSubtitle");
+  if (title) title.textContent = `Check in to ${resolveAttendanceChannelLabel(channelId)}`;
+  if (subtitle) subtitle.textContent = requestedDate || isoDateOnlyLocal();
+}
+
 function renderAttendanceCounts() {
   const headerCounts = document.getElementById("attendanceCounts");
   if (!headerCounts) return;
@@ -25533,13 +25548,23 @@ function renderAttendanceStudentState() {
   const meta = document.getElementById("attendanceStudentStatusMeta");
   const input = document.getElementById("attendanceStudentCodeInput");
   const button = document.getElementById("attendanceStudentCheckInBtn");
+  const intro = document.getElementById("attendanceStudentIntro");
   if (badge) {
     badge.className = `attendance-status-badge is-${attendanceState.studentStatusTone || "neutral"}`;
     badge.textContent = attendanceState.studentStatus || (attendanceState.managementMode ? "Teacher/admin view" : "Not checked in");
   }
+  if (intro) {
+    intro.textContent = attendanceState.managementMode
+      ? "Student self check-in is available from student accounts only."
+      : attendanceState.pendingDeepLinkCode
+        ? "We found your attendance link. Review the code below and confirm check-in."
+        : "Scan the QR code your teacher shared, open the attendance link, or enter the class code below.";
+  }
   if (meta) {
     if (attendanceState.managementMode) {
       meta.textContent = "Student self check-in is available from student accounts only. Teachers use this panel to generate codes and review attendance.";
+    } else if (attendanceState.pendingDeepLinkCode && !attendanceState.studentStatus) {
+      meta.textContent = "The code from your attendance link is ready. Tap Check in to continue.";
     } else if (!attendanceState.studentStatus) {
       meta.textContent = "Enter the short-lived class code to check yourself in.";
     }
@@ -25865,8 +25890,10 @@ async function openAttendanceForCurrentClass() {
       autosaveTimer: null,
       saveSeq: 0,
       saveInFlight: false,
-      lastMutation: null
+      lastMutation: null,
+      pendingDeepLinkCode: ""
     };
+    renderAttendanceStudentModalHeading(channelId, attendanceState.date);
     renderAttendanceCounts();
     renderAttendanceReport();
     renderAttendanceCodePanel();
@@ -26029,6 +26056,8 @@ async function maybeHandleAttendanceDeepLink({ afterAuth = false } = {}) {
   attendanceState.channelId = target.channelId || attendanceState.channelId;
   attendanceState.sessionId = target.sessionId || attendanceState.sessionId;
   attendanceState.managementMode = false;
+  attendanceState.date = attendanceState.date || isoDateOnlyLocal();
+  renderAttendanceStudentModalHeading(attendanceState.channelId, attendanceState.date);
   const input = document.getElementById("attendanceStudentCodeInput");
   if (input) input.value = target.code;
   attendanceState.studentStatus = afterAuth ? "Checking in..." : "";
@@ -26089,8 +26118,17 @@ wireAttendanceModal();
 channelAttendanceBtn?.addEventListener("click", () => openAttendanceForCurrentClass());
 
 function ensureAttendanceButtonInChannelHeader(ch) {
-  const existing = document.getElementById("attendanceHeaderBtn");
-  if (existing) existing.remove();
+  if (!channelAttendanceBtn) return;
+  const studentEntry = !!(ch && isStudentUser() && isClassesScopedHeaderChannel(ch));
+  const label = studentEntry ? "Check in" : "Attendance";
+  channelAttendanceBtn.title = label;
+  channelAttendanceBtn.setAttribute("aria-label", label);
+  const text = channelAttendanceBtn.querySelector("span");
+  if (text) text.textContent = label;
+  const icon = channelAttendanceBtn.querySelector("i");
+  if (icon) {
+    icon.className = studentEntry ? "fa-solid fa-qrcode" : "fa-solid fa-clipboard-check";
+  }
 }
 
 function renderDmHeader(dmId) {

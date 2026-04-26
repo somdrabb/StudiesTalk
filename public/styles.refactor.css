@@ -2263,6 +2263,17 @@ html[data-theme="dark"] #toast {
   line-height: 1.4;
 }
 
+.attendance-student-intro {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid #e2e8f0;
+  background: #f8fbff;
+  color: #526277;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .attendance-qr-label {
   font-size: 12px;
   font-weight: 700;
@@ -2888,6 +2899,12 @@ html[data-theme="dark"] .attendance-checkin-form input {
   background: #1e293b;
   border-color: #334155;
   color: #e2e8f0;
+}
+
+html[data-theme="dark"] .attendance-student-intro {
+  background: #172235;
+  border-color: #334155;
+  color: #cbd5e1;
 }
 
 html[data-theme="dark"] .attendance-qr-box {
