@@ -16072,7 +16072,7 @@ html:not([data-theme="dark"]) #livePanel .live-header-actions .btn{
 
 .live-right{
   display: grid;
-  grid-template-rows: minmax(340px, 1.2fr) minmax(240px, 0.85fr) minmax(240px, 0.95fr);
+  grid-template-rows: minmax(340px, 1.2fr) minmax(240px, 0.85fr) minmax(240px, 0.95fr) minmax(220px, 0.85fr);
   gap: 18px;
   min-width: 0;
 }
@@ -17041,6 +17041,19 @@ html[data-theme="dark"] .live-poll-results-chip{
 html[data-theme="dark"] .live-poll-results-chip{
   background: rgba(226, 232, 240, 0.08);
 }
+html[data-theme="dark"] .live-breakout-member-chip{
+  background: rgba(226, 232, 240, 0.08);
+  color: #f8fbff;
+}
+html[data-theme="dark"] .live-breakout-member-chip.is-joined{
+  background: rgba(16, 185, 129, 0.18);
+  color: #a7f3d0;
+}
+html[data-theme="dark"] .live-breakout-select{
+  background: rgba(15, 23, 42, 0.7);
+  border-color: rgba(226, 232, 240, 0.22);
+  color: #f8fbff;
+}
 html[data-theme="dark"] .live-whiteboard-surface{
   border-color: rgba(226, 232, 240, 0.18);
   background:
@@ -17396,6 +17409,61 @@ html[data-theme="dark"] .live-form-row input{
   font-size:12px;
   color: var(--text-soft);
 }
+.live-breakout-members{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+}
+.live-breakout-member-chip{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  min-height:28px;
+  padding:0 10px;
+  border-radius:999px;
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--text-main);
+  font-size:12px;
+  font-weight:700;
+}
+.live-breakout-member-chip.is-joined{
+  background: rgba(5, 150, 105, 0.12);
+  color: #047857;
+}
+.breakout-remove-member-btn{
+  width:20px;
+  height:20px;
+  min-width:20px;
+  border-radius:999px;
+  border:0;
+  background: transparent;
+  color: currentColor;
+  padding:0;
+}
+.live-breakout-assign{
+  display:grid;
+  grid-template-columns: 1fr auto;
+  gap:8px;
+}
+.live-breakout-select{
+  min-height:38px;
+  border-radius:12px;
+  border:1px solid rgba(15, 23, 42, 0.12);
+  background: rgba(255,255,255,0.88);
+  color: var(--text-main);
+  padding:0 10px;
+  font-weight:700;
+}
+.live-breakout-actions{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+}
+.live-breakout-room-link{
+  font-size:12px;
+  color: var(--text-soft);
+  word-break: break-all;
+}
 .live-control-section-head{
   display:flex;
   align-items:center;
@@ -17437,6 +17505,9 @@ html[data-theme="dark"] .live-form-row input{
 }
 @media (max-width: 640px){
   .live-control-row{
+    grid-template-columns: 1fr;
+  }
+  .live-breakout-assign{
     grid-template-columns: 1fr;
   }
 }

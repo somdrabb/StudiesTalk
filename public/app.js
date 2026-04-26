@@ -7780,6 +7780,10 @@ function getLiveRecordingState(session = null) {
   return getLiveControlState(session)?.recording || null;
 }
 
+function getLiveBreakoutRoomsFromSession(session = null) {
+  return Array.isArray(getLiveControlState(session)?.breakoutRooms) ? getLiveControlState(session).breakoutRooms : [];
+}
+
 function isLiveRecordingActive(session = null) {
   return !!getLiveRecordingState(session)?.enabled;
 }
@@ -8100,6 +8104,7 @@ async function openLiveRoomView({ sessionId, channelId = null, replaceHistory = 
     await openLiveSessionInsideApp(safeSessionId, { session, routeChannelId });
   }
   await loadLivePollItems({ sessionId: safeSessionId, silent: true });
+  await loadLiveBreakoutRooms({ sessionId: safeSessionId, silent: true });
   await loadLiveWhiteboardState(safeSessionId);
   startLiveWhiteboardStream(safeSessionId);
 }
@@ -8150,6 +8155,7 @@ async function openLivePresenterView({ sessionId, channelId = null, replaceHisto
     await loadInitialSlideState(safeSessionId);
   }
   await loadLivePollItems({ sessionId: safeSessionId, silent: true });
+  await loadLiveBreakoutRooms({ sessionId: safeSessionId, silent: true });
   await loadLiveWhiteboardState(safeSessionId);
   startLiveWhiteboardStream(safeSessionId);
   if (typeof startSlidesSse === "function") {
@@ -13743,6 +13749,310 @@ async function submitLivePollForm() {
   }
 }
 
+function getLiveAssignableBreakoutParticipants() {
+  const rows = Array.isArray(liveAttendanceData?.participants) ? liveAttendanceData.participants : [];
+  return rows.filter((row) => {
+    const status = String(row?.status || "").trim().toLowerCase();
+    return status === "approved" || status === "joined" || status === "left";
+  });
+}
+
+function syncLiveBreakoutState(data = null, sessionId = null) {
+  const resolvedSessionId = String(sessionId || liveActiveSession?.id || "").trim();
+  if (!resolvedSessionId || !data?.liveControls) return;
+  liveAttendanceData = data.liveControls;
+  applyLiveControlsToSession(resolvedSessionId, data.liveControls);
+  if (liveActiveSession && String(liveActiveSession.id || "") === resolvedSessionId) {
+    liveActiveSession = { ...liveActiveSession, liveControls: data.liveControls };
+  }
+  renderLiveSchedule();
+  renderLiveRecents();
+  renderLiveAttendanceState();
+}
+
+function buildLiveBreakoutSummaryBits(room) {
+  return [
+    room.status || "draft",
+    `${Number(room.assignedCount || 0)} assigned`,
+    `${Number(room.joinedCount || 0)} joined`
+  ];
+}
+
+function renderLiveBreakoutMemberChips(room, { canManage = false } = {}) {
+  const members = Array.isArray(room?.members) ? room.members : [];
+  if (!members.length) {
+    return '<div class="live-poll-empty">No members assigned yet.</div>';
+  }
+  return `
+    <div class="live-breakout-members">
+      ${members.map((member) => `
+        <span class="live-breakout-member-chip ${member.isJoined ? "is-joined" : ""}">
+          ${escapeHtml(member.name || member.userId || "Participant")}
+          ${canManage ? `<button type="button" class="icon-btn breakout-remove-member-btn" data-room-id="${escapeHtml(room.id)}" data-user-id="${escapeHtml(member.userId)}" aria-label="Remove member"><i class="fa-solid fa-xmark"></i></button>` : ""}
+        </span>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderLiveBreakoutManagerRows() {
+  if (!liveBreakoutList) return;
+  liveBreakoutList.innerHTML = "";
+  if (!Array.isArray(liveBreakoutRooms) || !liveBreakoutRooms.length) {
+    liveBreakoutList.innerHTML = '<div class="live-poll-empty">No breakout rooms yet.</div>';
+    return;
+  }
+  const assignable = getLiveAssignableBreakoutParticipants();
+  liveBreakoutRooms.forEach((room) => {
+    const row = document.createElement("div");
+    row.className = "live-poll-row";
+    row.innerHTML = `
+      <div class="live-poll-row-head">
+        <div>
+          <div class="live-poll-title">${escapeHtml(room.name || "Breakout room")}</div>
+          <div class="live-poll-sub">${escapeHtml(buildLiveBreakoutSummaryBits(room).join(" • "))}</div>
+        </div>
+        <span class="live-poll-badge ${getLivePollStatusClass(room.status)}">${escapeHtml(room.status || "draft")}</span>
+      </div>
+      <div class="live-breakout-room-link">${escapeHtml(room.meetingUrl || "")}</div>
+      ${renderLiveBreakoutMemberChips(room, { canManage: true })}
+    `;
+    const assignRow = document.createElement("div");
+    assignRow.className = "live-breakout-assign";
+    const select = document.createElement("select");
+    select.className = "live-breakout-select";
+    select.innerHTML = `<option value="">Assign participant</option>${assignable.map((person) => `<option value="${escapeHtml(person.userId)}">${escapeHtml(person.name || person.userId || "Participant")}</option>`).join("")}`;
+    const assignBtn = document.createElement("button");
+    assignBtn.type = "button";
+    assignBtn.className = "live-btn primary";
+    assignBtn.textContent = "Assign";
+    assignBtn.addEventListener("click", async () => {
+      const userId = String(select.value || "").trim();
+      if (!userId) {
+        showToast("Choose a participant to assign.");
+        return;
+      }
+      try {
+        const data = await fetchJSON(`/api/live-breakout-rooms/${encodeURIComponent(room.id)}/members`, {
+          method: "POST",
+          body: JSON.stringify({ userId })
+        });
+        syncLiveBreakoutState(data);
+        await loadLiveBreakoutRooms({ sessionId: liveActiveSession?.id, silent: true });
+      } catch (error) {
+        console.error("Failed to assign breakout member", error);
+        showToast(error?.message || "Could not assign participant.");
+      }
+    });
+    assignRow.appendChild(select);
+    assignRow.appendChild(assignBtn);
+    row.appendChild(assignRow);
+
+    const actions = document.createElement("div");
+    actions.className = "live-breakout-actions";
+    if (room.status !== "open") {
+      const openBtn = document.createElement("button");
+      openBtn.type = "button";
+      openBtn.className = "live-btn primary";
+      openBtn.textContent = "Open";
+      openBtn.addEventListener("click", async () => {
+        try {
+          const data = await fetchJSON(`/api/live-breakout-rooms/${encodeURIComponent(room.id)}/open`, { method: "POST" });
+          syncLiveBreakoutState(data);
+          await loadLiveBreakoutRooms({ sessionId: liveActiveSession?.id, silent: true });
+        } catch (error) {
+          console.error("Failed to open breakout room", error);
+          showToast(error?.message || "Could not open room.");
+        }
+      });
+      actions.appendChild(openBtn);
+    }
+    if (room.status === "open") {
+      const closeBtn = document.createElement("button");
+      closeBtn.type = "button";
+      closeBtn.className = "live-btn ghost";
+      closeBtn.textContent = "Close";
+      closeBtn.addEventListener("click", async () => {
+        try {
+          const data = await fetchJSON(`/api/live-breakout-rooms/${encodeURIComponent(room.id)}/close`, { method: "POST" });
+          syncLiveBreakoutState(data);
+          await loadLiveBreakoutRooms({ sessionId: liveActiveSession?.id, silent: true });
+        } catch (error) {
+          console.error("Failed to close breakout room", error);
+          showToast(error?.message || "Could not close room.");
+        }
+      });
+      actions.appendChild(closeBtn);
+      const joinBtn = document.createElement("button");
+      joinBtn.type = "button";
+      joinBtn.className = "live-btn ghost";
+      joinBtn.textContent = "Join";
+      joinBtn.addEventListener("click", async () => {
+        try {
+          const data = await fetchJSON(`/api/live-breakout-rooms/${encodeURIComponent(room.id)}/join`, { method: "POST" });
+          syncLiveBreakoutState(data);
+          await loadLiveBreakoutRooms({ sessionId: liveActiveSession?.id, silent: true });
+          const launchUrl = buildLiveMeetingLaunchUrl(data?.jitsi?.meetingUrl || room.meetingUrl, {
+            disablePrejoin: true,
+            startWithVideoMuted: isTeacherUser?.() || isAdminUser?.()
+          });
+          window.open(launchUrl, "_blank", "noopener,noreferrer");
+        } catch (error) {
+          console.error("Failed to join breakout room", error);
+          showToast(error?.message || "Could not join room.");
+        }
+      });
+      actions.appendChild(joinBtn);
+    }
+    row.appendChild(actions);
+    liveBreakoutList.appendChild(row);
+  });
+  liveBreakoutList.querySelectorAll(".breakout-remove-member-btn").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const roomId = String(button.dataset.roomId || "").trim();
+      const userId = String(button.dataset.userId || "").trim();
+      if (!roomId || !userId) return;
+      try {
+        const data = await fetchJSON(`/api/live-breakout-rooms/${encodeURIComponent(roomId)}/members/${encodeURIComponent(userId)}`, {
+          method: "DELETE"
+        });
+        syncLiveBreakoutState(data);
+        await loadLiveBreakoutRooms({ sessionId: liveActiveSession?.id, silent: true });
+      } catch (error) {
+        console.error("Failed to remove breakout member", error);
+        showToast(error?.message || "Could not remove participant.");
+      }
+    });
+  });
+}
+
+function renderLiveRoomBreakoutPanel() {
+  if (!liveRoomBreakoutList || !liveRoomBreakoutStatus) return;
+  liveRoomBreakoutList.innerHTML = "";
+  const rooms = Array.isArray(liveBreakoutRooms) ? liveBreakoutRooms : [];
+  if (!rooms.length) {
+    liveRoomBreakoutStatus.textContent = "No breakout rooms yet.";
+    liveRoomBreakoutList.innerHTML = '<div class="live-poll-empty">Teachers can open breakout rooms here during live class.</div>';
+    return;
+  }
+  const openAssigned = rooms.filter((room) => room.status === "open");
+  liveRoomBreakoutStatus.textContent = openAssigned.length
+    ? `${openAssigned.length} breakout room${openAssigned.length === 1 ? "" : "s"} available`
+    : "No breakout rooms are open right now.";
+  rooms.forEach((room) => {
+    const row = document.createElement("div");
+    row.className = "live-poll-row";
+    row.innerHTML = `
+      <div class="live-poll-row-head">
+        <div>
+          <div class="live-poll-title">${escapeHtml(room.name || "Breakout room")}</div>
+          <div class="live-poll-sub">${escapeHtml(buildLiveBreakoutSummaryBits(room).join(" • "))}</div>
+        </div>
+        <span class="live-poll-badge ${getLivePollStatusClass(room.status)}">${escapeHtml(room.status || "draft")}</span>
+      </div>
+      ${renderLiveBreakoutMemberChips(room, { canManage: false })}
+    `;
+    const actions = document.createElement("div");
+    actions.className = "live-breakout-actions";
+    if (room.canJoin) {
+      const joinBtn = document.createElement("button");
+      joinBtn.type = "button";
+      joinBtn.className = "live-btn primary";
+      joinBtn.textContent = room.self?.isJoined ? "Rejoin room" : "Join room";
+      joinBtn.addEventListener("click", async () => {
+        try {
+          const data = await fetchJSON(`/api/live-breakout-rooms/${encodeURIComponent(room.id)}/join`, { method: "POST" });
+          syncLiveBreakoutState(data);
+          await loadLiveBreakoutRooms({ sessionId: liveActiveSession?.id, silent: true });
+          const launchUrl = buildLiveMeetingLaunchUrl(data?.jitsi?.meetingUrl || room.meetingUrl, {
+            disablePrejoin: true,
+            startWithVideoMuted: isTeacherUser?.() || isAdminUser?.()
+          });
+          window.open(launchUrl, "_blank", "noopener,noreferrer");
+        } catch (error) {
+          console.error("Failed to join breakout room", error);
+          showToast(error?.message || "Could not join room.");
+        }
+      });
+      actions.appendChild(joinBtn);
+    }
+    if (room.self?.isJoined || room.canLeave) {
+      const leaveBtn = document.createElement("button");
+      leaveBtn.type = "button";
+      leaveBtn.className = "live-btn ghost";
+      leaveBtn.textContent = "Leave room";
+      leaveBtn.addEventListener("click", async () => {
+        try {
+          const data = await fetchJSON(`/api/live-breakout-rooms/${encodeURIComponent(room.id)}/leave`, { method: "POST" });
+          syncLiveBreakoutState(data);
+          await loadLiveBreakoutRooms({ sessionId: liveActiveSession?.id, silent: true });
+        } catch (error) {
+          console.error("Failed to leave breakout room", error);
+          showToast(error?.message || "Could not leave room.");
+        }
+      });
+      actions.appendChild(leaveBtn);
+    }
+    if (!actions.childElementCount) {
+      const note = document.createElement("div");
+      note.className = "live-poll-empty";
+      note.textContent = room.self ? "Waiting for the teacher to open this room." : "You are not assigned to this room.";
+      row.appendChild(note);
+    } else {
+      row.appendChild(actions);
+    }
+    liveRoomBreakoutList.appendChild(row);
+  });
+}
+
+async function loadLiveBreakoutRooms({ sessionId = null, silent = false } = {}) {
+  const resolvedSessionId = String(sessionId || liveActiveSession?.id || "").trim();
+  if (!resolvedSessionId) return;
+  if (liveBreakoutListStatus && !silent) liveBreakoutListStatus.textContent = "Loading breakout rooms...";
+  if (liveRoomBreakoutStatus && !silent) liveRoomBreakoutStatus.textContent = "Loading breakout rooms...";
+  try {
+    const data = await fetchJSON(`/api/live-sessions/${encodeURIComponent(resolvedSessionId)}/breakout-rooms`);
+    liveBreakoutRooms = Array.isArray(data?.rooms) ? data.rooms : [];
+    if (liveBreakoutListStatus) {
+      liveBreakoutListStatus.textContent = liveBreakoutRooms.length
+        ? `${liveBreakoutRooms.length} breakout room${liveBreakoutRooms.length === 1 ? "" : "s"} available`
+        : "No breakout rooms yet.";
+    }
+  } catch (error) {
+    console.error("Failed to load breakout rooms", error);
+    liveBreakoutRooms = [];
+    if (liveBreakoutListStatus) liveBreakoutListStatus.textContent = error?.message || "Could not load breakout rooms.";
+    if (liveRoomBreakoutStatus) liveRoomBreakoutStatus.textContent = error?.message || "Could not load breakout rooms.";
+  }
+  renderLiveBreakoutManagerRows();
+  renderLiveRoomBreakoutPanel();
+}
+
+async function submitLiveBreakoutForm() {
+  if (!liveActiveSession?.id) return;
+  const name = String(liveBreakoutRoomName?.value || "").trim();
+  if (!name) {
+    showToast("Add a breakout room name.");
+    return;
+  }
+  if (liveBreakoutCreateBtn) liveBreakoutCreateBtn.disabled = true;
+  try {
+    const data = await fetchJSON(`/api/live-sessions/${encodeURIComponent(liveActiveSession.id)}/breakout-rooms`, {
+      method: "POST",
+      body: JSON.stringify({ name })
+    });
+    syncLiveBreakoutState(data);
+    if (liveBreakoutForm) liveBreakoutForm.reset();
+    await loadLiveBreakoutRooms({ sessionId: liveActiveSession.id, silent: true });
+    showToast("Breakout room created.");
+  } catch (error) {
+    console.error("Failed to create breakout room", error);
+    showToast(error?.message || "Could not create breakout room.");
+  } finally {
+    if (liveBreakoutCreateBtn) liveBreakoutCreateBtn.disabled = false;
+  }
+}
+
 function getLiveWhiteboardCanClear() {
   return !!getLiveControlState(liveActiveSession)?.canManage;
 }
@@ -14007,7 +14317,7 @@ function renderLiveAttendanceState() {
   const controls = liveAttendanceData || {};
   if (liveAttendanceStatus) {
     const counts = controls?.counts || {};
-    liveAttendanceStatus.textContent = `Pending ${counts.pending || 0} • Raised hands ${counts.raisedHands || 0} • Joined ${counts.joined || 0}`;
+    liveAttendanceStatus.textContent = `Pending ${counts.pending || 0} • Raised hands ${counts.raisedHands || 0} • Joined ${counts.joined || 0} • Breakouts ${counts.breakoutOpen || 0}`;
   }
   if (liveRecordingStatus) {
     const recording = controls?.recording || null;
@@ -14039,6 +14349,8 @@ function renderLiveAttendanceState() {
   });
   renderAttendanceList(controls);
   renderLiveRecordingRows();
+  renderLiveBreakoutManagerRows();
+  renderLiveRoomBreakoutPanel();
   renderLiveWhiteboard();
   updateLiveRecordingBadge(liveActiveSession);
   showLiveRecordingConsentModal(liveActiveSession);
@@ -14058,6 +14370,7 @@ async function loadLiveAttendanceState() {
     }
     await loadLiveRecordingItems();
     await loadLivePollItems({ sessionId: liveActiveSession.id, silent: true });
+    await loadLiveBreakoutRooms({ sessionId: liveActiveSession.id, silent: true });
     renderLiveAttendanceState();
   } catch (err) {
     console.error("Failed to load live controls", err);
@@ -14078,6 +14391,7 @@ function closeAttendanceModal() {
   liveAttendanceData = null;
   liveRecordingItems = [];
   livePollItems = [];
+  liveBreakoutRooms = [];
 }
 
 function populateLiveClassOptions() {
@@ -14199,6 +14513,12 @@ function attachLiveEvents() {
     livePollForm.addEventListener("submit", (e) => {
       e.preventDefault();
       submitLivePollForm();
+    });
+  }
+  if (liveBreakoutForm) {
+    liveBreakoutForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      submitLiveBreakoutForm();
     });
   }
   if (livePollType) {
@@ -17908,11 +18228,18 @@ const liveHostMemberPicker = document.getElementById("liveHostMemberPicker");
 const liveRoomPollStatus = document.getElementById("liveRoomPollStatus");
 const liveRoomPollCard = document.getElementById("liveRoomPollCard");
 const liveRoomPollHistory = document.getElementById("liveRoomPollHistory");
+const liveRoomBreakoutStatus = document.getElementById("liveRoomBreakoutStatus");
+const liveRoomBreakoutList = document.getElementById("liveRoomBreakoutList");
 const liveWhiteboardStatus = document.getElementById("liveWhiteboardStatus");
 const liveWhiteboardCanvas = document.getElementById("liveWhiteboardCanvas");
 const liveWhiteboardDrawBtn = document.getElementById("liveWhiteboardDrawBtn");
 const liveWhiteboardEraseBtn = document.getElementById("liveWhiteboardEraseBtn");
 const liveWhiteboardClearBtn = document.getElementById("liveWhiteboardClearBtn");
+const liveBreakoutForm = document.getElementById("liveBreakoutForm");
+const liveBreakoutRoomName = document.getElementById("liveBreakoutRoomName");
+const liveBreakoutCreateBtn = document.getElementById("liveBreakoutCreateBtn");
+const liveBreakoutListStatus = document.getElementById("liveBreakoutListStatus");
+const liveBreakoutList = document.getElementById("liveBreakoutList");
 const SCHOOL_SETTINGS_CHANNEL_ID = "school-settings";
 const schoolEmailSettingsPage = document.getElementById("schoolEmailSettingsPage");
 const schoolEmailSettingsPageHome = schoolEmailSettingsPage?.parentElement || null;
@@ -18012,6 +18339,7 @@ let liveSessions = [];
 let liveAttendanceData = null;
 let liveRecordingItems = [];
 let livePollItems = [];
+let liveBreakoutRooms = [];
 let liveActiveSession = null;
 let liveWhiteboardState = { sessionId: null, version: 0, operations: [] };
 let liveWhiteboardTool = "draw";

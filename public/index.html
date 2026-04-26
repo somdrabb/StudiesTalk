@@ -2629,6 +2629,18 @@
               <canvas id="liveWhiteboardCanvas"></canvas>
             </div>
           </section>
+          <section class="live-polls-panel" aria-label="Breakout rooms">
+            <div class="live-slides-head">
+              <div class="live-slides-title">
+                <i class="fa-solid fa-people-group"></i>
+                Breakout rooms
+              </div>
+            </div>
+            <div class="live-poll-panel-body">
+              <div class="live-controls-status muted" id="liveRoomBreakoutStatus">No breakout rooms yet.</div>
+              <div class="live-poll-history" id="liveRoomBreakoutList"></div>
+            </div>
+          </section>
         </div>
       </div>
     </div>
@@ -2895,6 +2907,25 @@
           </form>
           <div class="live-controls-status muted" id="livePollListStatus">Loading polls...</div>
           <div class="live-control-list" id="livePollList"></div>
+        </section>
+        <section class="live-control-section" aria-label="Breakout rooms">
+          <div class="live-control-section-head">
+            <h4>Breakout rooms</h4>
+          </div>
+          <form class="live-form live-poll-form" id="liveBreakoutForm">
+            <div class="live-form-row">
+              <label for="liveBreakoutRoomName">Room name</label>
+              <input id="liveBreakoutRoomName" type="text" maxlength="120" placeholder="Group A discussion" />
+            </div>
+            <div class="live-footer-end">
+              <button type="submit" class="live-save-btn" id="liveBreakoutCreateBtn">
+                <i class="fa-solid fa-plus"></i>
+                Create room
+              </button>
+            </div>
+          </form>
+          <div class="live-controls-status muted" id="liveBreakoutListStatus">Loading breakout rooms...</div>
+          <div class="live-control-list" id="liveBreakoutList"></div>
         </section>
         <section class="live-control-section" aria-label="Pending participants">
           <div class="live-control-section-head">

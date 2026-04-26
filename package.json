@@ -20,6 +20,7 @@
     "test:file-storage:smoke": "node scripts/file-storage-smoke.js",
     "test:live-controls:smoke": "node scripts/live-class-controls-smoke.js",
     "test:live-whiteboard:smoke": "node scripts/live-whiteboard-smoke.js",
+    "test:live-breakout:smoke": "node scripts/live-breakout-rooms-smoke.js",
     "test:live-polling:smoke": "node scripts/live-polling-smoke.js",
     "test:live-recording-consent:smoke": "node scripts/live-recording-consent-smoke.js",
     "test:live-recording-storage:smoke": "node scripts/live-recording-storage-smoke.js",

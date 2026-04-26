@@ -7664,6 +7664,59 @@ function ensureLiveSessionPollSchema() {
   `);
 }
 
+function ensureLiveBreakoutRoomSchema() {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS live_breakout_rooms (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft',
+      created_by_user_id TEXT,
+      opened_at TEXT,
+      closed_at TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+      FOREIGN KEY (session_id) REFERENCES live_sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS live_breakout_room_members (
+      id TEXT PRIMARY KEY,
+      room_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT '',
+      assigned_at TEXT DEFAULT (datetime('now')),
+      joined_at TEXT,
+      left_at TEXT,
+      FOREIGN KEY (room_id) REFERENCES live_breakout_rooms(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+  `);
+  safeAlter("ALTER TABLE live_breakout_rooms ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'");
+  safeAlter("ALTER TABLE live_breakout_rooms ADD COLUMN session_id TEXT NOT NULL DEFAULT ''");
+  safeAlter("ALTER TABLE live_breakout_rooms ADD COLUMN name TEXT NOT NULL DEFAULT 'Breakout room'");
+  safeAlter("ALTER TABLE live_breakout_rooms ADD COLUMN status TEXT NOT NULL DEFAULT 'draft'");
+  safeAlter("ALTER TABLE live_breakout_rooms ADD COLUMN created_by_user_id TEXT");
+  safeAlter("ALTER TABLE live_breakout_rooms ADD COLUMN opened_at TEXT");
+  safeAlter("ALTER TABLE live_breakout_rooms ADD COLUMN closed_at TEXT");
+  safeAlter("ALTER TABLE live_breakout_rooms ADD COLUMN created_at TEXT DEFAULT (datetime('now'))");
+  safeAlter("ALTER TABLE live_breakout_room_members ADD COLUMN role TEXT NOT NULL DEFAULT ''");
+  safeAlter("ALTER TABLE live_breakout_room_members ADD COLUMN assigned_at TEXT DEFAULT (datetime('now'))");
+  safeAlter("ALTER TABLE live_breakout_room_members ADD COLUMN joined_at TEXT");
+  safeAlter("ALTER TABLE live_breakout_room_members ADD COLUMN left_at TEXT");
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_live_breakout_room_members_unique
+      ON live_breakout_room_members(room_id, user_id);
+    CREATE INDEX IF NOT EXISTS idx_live_breakout_rooms_workspace
+      ON live_breakout_rooms(workspace_id, session_id, status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_live_breakout_room_members_room
+      ON live_breakout_room_members(room_id, user_id, assigned_at);
+    CREATE INDEX IF NOT EXISTS idx_live_breakout_room_members_user
+      ON live_breakout_room_members(user_id, room_id);
+  `);
+}
+
 function rebuildLiveSessionsAllowingNullChannel() {
   if (hasColumn("live_sessions", "audience")) return;
   const cols = db.prepare("PRAGMA table_info(live_sessions)").all();
@@ -7739,6 +7792,7 @@ ensureLiveSessionParticipantSchema();
 ensureLiveSessionRecordingSchema();
 ensureLiveSessionRecordingsSchema();
 ensureLiveSessionPollSchema();
+ensureLiveBreakoutRoomSchema();
 
 try {
   db.exec("ALTER TABLE live_sessions ADD COLUMN audience TEXT");
@@ -19395,6 +19449,237 @@ function normalizeLivePollStatus(value = '') {
   return LIVE_POLL_STATUSES.has(normalized) ? normalized : 'draft';
 }
 
+function normalizeLiveBreakoutRoomStatus(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'open' || normalized === 'closed') return normalized;
+  return 'draft';
+}
+
+function buildLiveBreakoutRoomName(session, room) {
+  if (!session || !room) return '';
+  const workspaceSegment = sanitizeLiveRoomSegment(session.workspace_id || session.workspaceId, 'workspace');
+  const sessionSegment = sanitizeLiveRoomSegment(session.id, 'session');
+  const roomSegment = sanitizeLiveRoomSegment(room.id, 'breakout');
+  return `${workspaceSegment}-${sessionSegment}-breakout-${roomSegment}`;
+}
+
+function buildLiveBreakoutMeetingUrl(session, room) {
+  const roomName = buildLiveBreakoutRoomName(session, room);
+  if (!roomName) return '';
+  return `${jitsiConfig.publicOrigin}/${encodeURIComponent(roomName)}`;
+}
+
+function getLiveBreakoutRoomById(roomId) {
+  const normalizedRoomId = String(roomId || '').trim();
+  if (!normalizedRoomId) return null;
+  return db.prepare(`
+    SELECT r.*,
+           COALESCE(u.name, u.username, u.email, r.created_by_user_id) AS created_by_name
+    FROM live_breakout_rooms r
+    LEFT JOIN users u ON u.id = r.created_by_user_id
+    WHERE r.id = ?
+    LIMIT 1
+  `).get(normalizedRoomId) || null;
+}
+
+function listLiveBreakoutRoomRows(sessionId) {
+  return db.prepare(`
+    SELECT r.*,
+           COALESCE(u.name, u.username, u.email, r.created_by_user_id) AS created_by_name
+    FROM live_breakout_rooms r
+    LEFT JOIN users u ON u.id = r.created_by_user_id
+    WHERE r.session_id = ?
+    ORDER BY
+      CASE r.status
+        WHEN 'open' THEN 0
+        WHEN 'draft' THEN 1
+        WHEN 'closed' THEN 2
+        ELSE 3
+      END,
+      lower(r.name) ASC,
+      r.created_at ASC,
+      r.id ASC
+  `).all(String(sessionId || '').trim());
+}
+
+function getLiveBreakoutRoomMember(roomId, userId) {
+  const normalizedRoomId = String(roomId || '').trim();
+  const normalizedUserId = String(userId || '').trim();
+  if (!normalizedRoomId || !normalizedUserId) return null;
+  return db.prepare(`
+    SELECT m.*,
+           COALESCE(u.name, u.username, u.email, m.user_id) AS user_name
+    FROM live_breakout_room_members m
+    LEFT JOIN users u ON u.id = m.user_id
+    WHERE m.room_id = ? AND m.user_id = ?
+    LIMIT 1
+  `).get(normalizedRoomId, normalizedUserId) || null;
+}
+
+function listLiveBreakoutRoomMembers(roomId) {
+  return db.prepare(`
+    SELECT m.*,
+           COALESCE(u.name, u.username, u.email, m.user_id) AS user_name
+    FROM live_breakout_room_members m
+    LEFT JOIN users u ON u.id = m.user_id
+    WHERE m.room_id = ?
+    ORDER BY lower(COALESCE(u.name, u.username, u.email, m.user_id)) ASC, m.id ASC
+  `).all(String(roomId || '').trim());
+}
+
+function formatLiveBreakoutMemberForClient(row = {}) {
+  const joined = !!row.joined_at && (!row.left_at || new Date(row.joined_at).getTime() >= new Date(row.left_at).getTime());
+  return {
+    id: row.id,
+    roomId: row.room_id,
+    userId: row.user_id,
+    role: String(row.role || '').trim().toLowerCase(),
+    assignedAt: row.assigned_at || null,
+    joinedAt: row.joined_at || null,
+    leftAt: row.left_at || null,
+    isJoined: joined,
+    name: row.user_name || row.name || row.user_id || 'Participant'
+  };
+}
+
+function buildLiveBreakoutRoomForClient(session, room, viewer, { canManage = false } = {}) {
+  const members = listLiveBreakoutRoomMembers(room.id).map(formatLiveBreakoutMemberForClient);
+  const self = viewer?.id ? members.find((member) => String(member.userId || '') === String(viewer.id || '')) || null : null;
+  const status = normalizeLiveBreakoutRoomStatus(room.status || 'draft');
+  return {
+    id: room.id,
+    workspaceId: room.workspace_id,
+    sessionId: room.session_id,
+    name: room.name || 'Breakout room',
+    status,
+    createdByUserId: room.created_by_user_id || null,
+    createdByName: room.created_by_name || null,
+    createdAt: room.created_at || null,
+    openedAt: room.opened_at || null,
+    closedAt: room.closed_at || null,
+    roomName: buildLiveBreakoutRoomName(session, room),
+    meetingUrl: buildLiveBreakoutMeetingUrl(session, room),
+    members: canManage ? members : (self ? [self] : []),
+    assignedCount: members.length,
+    joinedCount: members.filter((member) => member.isJoined).length,
+    self,
+    canJoin: canManage || (status === 'open' && !!self),
+    canLeave: canManage ? status === 'open' : !!self?.isJoined
+  };
+}
+
+function createLiveBreakoutRoom({ session, actor, name }) {
+  const trimmedName = String(name || '').trim();
+  if (!trimmedName) {
+    const err = new Error('Room name is required.');
+    err.statusCode = 400;
+    throw err;
+  }
+  const roomId = generateId('lbroom');
+  db.prepare(`
+    INSERT INTO live_breakout_rooms (
+      id, workspace_id, session_id, name, status, created_by_user_id, opened_at, closed_at, created_at
+    ) VALUES (?, ?, ?, ?, 'draft', ?, NULL, NULL, ?)
+  `).run(
+    roomId,
+    String(session.workspace_id || session.workspaceId || '').trim() || 'default',
+    String(session.id || '').trim(),
+    trimmedName,
+    actor?.id || null,
+    nowIso()
+  );
+  return getLiveBreakoutRoomById(roomId);
+}
+
+function updateLiveBreakoutRoomStatus(roomId, status) {
+  const normalizedStatus = normalizeLiveBreakoutRoomStatus(status);
+  const now = nowIso();
+  db.prepare(`
+    UPDATE live_breakout_rooms
+    SET status = ?,
+        opened_at = CASE WHEN ? = 'open' THEN COALESCE(opened_at, ?) ELSE opened_at END,
+        closed_at = CASE WHEN ? = 'closed' THEN ? ELSE closed_at END
+    WHERE id = ?
+  `).run(normalizedStatus, normalizedStatus, now, normalizedStatus, now, String(roomId || '').trim());
+  if (normalizedStatus === 'closed') {
+    db.prepare(`
+      UPDATE live_breakout_room_members
+      SET left_at = COALESCE(left_at, ?)
+      WHERE room_id = ? AND joined_at IS NOT NULL
+    `).run(now, String(roomId || '').trim());
+  }
+  return getLiveBreakoutRoomById(roomId);
+}
+
+function assignLiveBreakoutRoomMember({ room, session, targetUser }) {
+  const now = nowIso();
+  const tx = db.transaction(() => {
+    db.prepare(`
+      DELETE FROM live_breakout_room_members
+      WHERE user_id = ?
+        AND room_id IN (
+          SELECT id FROM live_breakout_rooms WHERE session_id = ?
+        )
+    `).run(String(targetUser.id || '').trim(), String(session.id || '').trim());
+    db.prepare(`
+      INSERT INTO live_breakout_room_members (
+        id, room_id, user_id, role, assigned_at, joined_at, left_at
+      ) VALUES (?, ?, ?, ?, ?, NULL, NULL)
+    `).run(
+      generateId('lbmem'),
+      String(room.id || '').trim(),
+      String(targetUser.id || '').trim(),
+      getNormalizedUserRole(targetUser),
+      now
+    );
+  });
+  tx();
+  return getLiveBreakoutRoomMember(room.id, targetUser.id);
+}
+
+function removeLiveBreakoutRoomMember(roomId, userId) {
+  db.prepare(`
+    DELETE FROM live_breakout_room_members
+    WHERE room_id = ? AND user_id = ?
+  `).run(String(roomId || '').trim(), String(userId || '').trim());
+}
+
+function joinLiveBreakoutRoom({ room, user }) {
+  const now = nowIso();
+  const existing = getLiveBreakoutRoomMember(room.id, user.id);
+  if (existing) {
+    db.prepare(`
+      UPDATE live_breakout_room_members
+      SET joined_at = ?, left_at = NULL
+      WHERE room_id = ? AND user_id = ?
+    `).run(now, String(room.id || '').trim(), String(user.id || '').trim());
+  } else {
+    db.prepare(`
+      INSERT INTO live_breakout_room_members (
+        id, room_id, user_id, role, assigned_at, joined_at, left_at
+      ) VALUES (?, ?, ?, ?, ?, ?, NULL)
+    `).run(
+      generateId('lbmem'),
+      String(room.id || '').trim(),
+      String(user.id || '').trim(),
+      getNormalizedUserRole(user),
+      now,
+      now
+    );
+  }
+  return getLiveBreakoutRoomMember(room.id, user.id);
+}
+
+function leaveLiveBreakoutRoom({ roomId, userId }) {
+  const now = nowIso();
+  db.prepare(`
+    UPDATE live_breakout_room_members
+    SET left_at = ?
+    WHERE room_id = ? AND user_id = ?
+  `).run(now, String(roomId || '').trim(), String(userId || '').trim());
+  return getLiveBreakoutRoomMember(roomId, userId);
+}
+
 function getLiveWhiteboardState(sessionId) {
   const key = String(sessionId || '').trim();
   if (!key) {
@@ -19936,6 +20221,64 @@ async function resolveLivePollAccess(req, pollId, { requireManage = false } = {}
   };
 }
 
+async function logLiveBreakoutAccessDenied(req, {
+  session = null,
+  actor = null,
+  roomId = null,
+  reason = 'live_breakout_access_denied'
+} = {}) {
+  await logSecurityEvent({
+    workspaceId: session?.workspace_id || session?.workspaceId || actor?.workspaceId || actor?.workspace_id || null,
+    actorUserId: actor?.id || actor?.sub || null,
+    targetUserId: null,
+    type: 'forbidden_breakout_access_attempt',
+    severity: 'warn',
+    ip: req?.ip || null,
+    userAgent: req?.headers?.['user-agent'] || null,
+    payload: {
+      sessionId: session?.id || null,
+      roomId: roomId || null,
+      reason
+    }
+  });
+}
+
+async function resolveLiveBreakoutRoomAccess(req, roomId, { requireManage = false } = {}) {
+  const room = getLiveBreakoutRoomById(roomId);
+  if (!room) return { ok: false, status: 404 };
+  const sessionAccess = await resolveLiveSessionAccess(req, room.session_id, { requireManage });
+  if (!sessionAccess.ok) {
+    return { ...sessionAccess, room };
+  }
+  return {
+    ok: true,
+    user: sessionAccess.user,
+    session: sessionAccess.session,
+    room
+  };
+}
+
+function canUserJoinLiveBreakoutRoom(user, session, room) {
+  if (!user || !session || !room) return false;
+  if (canUserManageSpecificLiveSession(user, session)) {
+    return normalizeLiveBreakoutRoomStatus(room.status || '') === 'open';
+  }
+  if (!canUserConsumeLiveSessionContent(user, session)) return false;
+  const participant = getLiveSessionParticipant(session.id, user.id || user.sub);
+  const participantStatus = normalizeLiveParticipantStatus(participant?.status || '');
+  if (!['approved', 'joined'].includes(participantStatus)) return false;
+  if (normalizeLiveBreakoutRoomStatus(room.status || '') !== 'open') return false;
+  return Boolean(getLiveBreakoutRoomMember(room.id, user.id || user.sub));
+}
+
+function listLiveBreakoutRoomsForViewer(session, viewer) {
+  const canManage = canUserManageSpecificLiveSession(viewer, session);
+  const rows = listLiveBreakoutRoomRows(session.id);
+  return rows
+    .map((room) => buildLiveBreakoutRoomForClient(session, room, viewer, { canManage }))
+    .filter((room) => canManage || room.self);
+}
+
 function createLivePoll({
   session,
   actor,
@@ -20032,6 +20375,7 @@ function buildLiveSessionControlState(session, viewer) {
   const selfParticipant = viewer?.id ? getLiveSessionParticipant(session.id, viewer.id) : null;
   const recording = getLiveSessionRecording(session.id);
   const canManage = canUserManageSpecificLiveSession(viewer, session);
+  const breakoutRooms = listLiveBreakoutRoomsForViewer(session, viewer);
   const pending = participants
     .filter((row) => normalizeLiveParticipantStatus(row.status) === 'pending')
     .map(formatLiveParticipantForClient);
@@ -20070,11 +20414,13 @@ function buildLiveSessionControlState(session, viewer) {
         pending: 0,
         raisedHands: 0,
         joined: self?.status === 'joined' ? 1 : 0,
-        consentPending: 0
+        consentPending: 0,
+        breakoutOpen: breakoutRooms.filter((room) => room.status === 'open').length
       },
       pendingParticipants: [],
       consentPendingParticipants: [],
       raisedHands: [],
+      breakoutRooms,
       participants: self ? [self] : [],
       canManage: false
     };
@@ -20086,11 +20432,13 @@ function buildLiveSessionControlState(session, viewer) {
       pending: pending.length,
       raisedHands: raisedHands.length,
       joined: joined.length,
-      consentPending: recordingEnabled ? consentPending.length : 0
+      consentPending: recordingEnabled ? consentPending.length : 0,
+      breakoutOpen: breakoutRooms.filter((room) => room.status === 'open').length
     },
     pendingParticipants: pending,
     consentPendingParticipants: recordingEnabled ? consentPending : [],
     raisedHands,
+    breakoutRooms,
     participants: participants.map(formatLiveParticipantForClient),
     canManage: true
   };
@@ -21336,6 +21684,290 @@ app.delete('/api/live-polls/:pollId', authRequired, async (req, res) => {
     payload: { sessionId: access.session.id, pollId }
   });
   return res.json({ ok: true, pollId });
+});
+
+app.post('/api/live-sessions/:sessionId/breakout-rooms', authRequired, async (req, res) => {
+  const { sessionId } = req.params;
+  const access = await resolveLiveSessionAccess(req, sessionId, { requireManage: true });
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Session not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    await logLiveBreakoutAccessDenied(req, {
+      session: access.session,
+      actor: access.user,
+      reason: 'breakout_create_denied'
+    });
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  try {
+    const room = createLiveBreakoutRoom({
+      session: access.session,
+      actor: access.user,
+      name: req.body?.name
+    });
+    await logLiveClassAuditEvent('live_breakout_room_created', {
+      session: access.session,
+      actor: access.user,
+      payload: { sessionId, roomId: room.id }
+    });
+    return res.status(201).json({
+      ok: true,
+      room: buildLiveBreakoutRoomForClient(access.session, room, access.user, { canManage: true }),
+      liveControls: buildLiveSessionControlState(access.session, access.user)
+    });
+  } catch (err) {
+    return res.status(Number(err?.statusCode || 500)).json({ error: err?.message || 'Could not create breakout room' });
+  }
+});
+
+app.get('/api/live-sessions/:sessionId/breakout-rooms', authRequired, async (req, res) => {
+  const { sessionId } = req.params;
+  const access = await resolveLiveSessionAccess(req, sessionId);
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Session not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    await logLiveBreakoutAccessDenied(req, {
+      session: access.session,
+      actor: access.user,
+      reason: 'breakout_list_denied'
+    });
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const canManage = canUserManageSpecificLiveSession(access.user, access.session);
+  if (!canManage && !canUserConsumeLiveSessionContent(access.user, access.session)) {
+    await logLiveBreakoutAccessDenied(req, {
+      session: access.session,
+      actor: access.user,
+      reason: 'breakout_list_content_denied'
+    });
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const rooms = listLiveBreakoutRoomsForViewer(access.session, access.user);
+  return res.json({ ok: true, rooms });
+});
+
+app.post('/api/live-breakout-rooms/:roomId/open', authRequired, async (req, res) => {
+  const { roomId } = req.params;
+  const access = await resolveLiveBreakoutRoomAccess(req, roomId, { requireManage: true });
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Breakout room not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    await logLiveBreakoutAccessDenied(req, {
+      session: access.session,
+      actor: access.user,
+      roomId,
+      reason: 'breakout_open_denied'
+    });
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const room = updateLiveBreakoutRoomStatus(roomId, 'open');
+  await logLiveClassAuditEvent('live_breakout_room_opened', {
+    session: access.session,
+    actor: access.user,
+    payload: { sessionId: access.session.id, roomId }
+  });
+  return res.json({
+    ok: true,
+    room: buildLiveBreakoutRoomForClient(access.session, room, access.user, { canManage: true }),
+    liveControls: buildLiveSessionControlState(access.session, access.user)
+  });
+});
+
+app.post('/api/live-breakout-rooms/:roomId/close', authRequired, async (req, res) => {
+  const { roomId } = req.params;
+  const access = await resolveLiveBreakoutRoomAccess(req, roomId, { requireManage: true });
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Breakout room not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    await logLiveBreakoutAccessDenied(req, {
+      session: access.session,
+      actor: access.user,
+      roomId,
+      reason: 'breakout_close_denied'
+    });
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const room = updateLiveBreakoutRoomStatus(roomId, 'closed');
+  await logLiveClassAuditEvent('live_breakout_room_closed', {
+    session: access.session,
+    actor: access.user,
+    payload: { sessionId: access.session.id, roomId }
+  });
+  return res.json({
+    ok: true,
+    room: buildLiveBreakoutRoomForClient(access.session, room, access.user, { canManage: true }),
+    liveControls: buildLiveSessionControlState(access.session, access.user)
+  });
+});
+
+app.post('/api/live-breakout-rooms/:roomId/members', authRequired, async (req, res) => {
+  const { roomId } = req.params;
+  const access = await resolveLiveBreakoutRoomAccess(req, roomId, { requireManage: true });
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Breakout room not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    await logLiveBreakoutAccessDenied(req, {
+      session: access.session,
+      actor: access.user,
+      roomId,
+      reason: 'breakout_assign_denied'
+    });
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const userId = String(req.body?.userId || '').trim();
+  if (!userId) {
+    return res.status(400).json({ error: 'User is required.' });
+  }
+  const targetUser = getWorkspaceScopedUser(access.session.workspace_id, userId);
+  if (!targetUser) return tenantForbidden(res);
+  const participant = getLiveSessionParticipant(access.session.id, userId);
+  if (!canUserManageSpecificLiveSession(targetUser, access.session) && !participant) {
+    return res.status(409).json({ error: 'Approve the participant before assigning a breakout room.' });
+  }
+  if (normalizeLiveParticipantStatus(participant?.status || '') === 'denied') {
+    return res.status(409).json({ error: 'Denied participants cannot be assigned to breakout rooms.' });
+  }
+  const member = assignLiveBreakoutRoomMember({
+    room: access.room,
+    session: access.session,
+    targetUser
+  });
+  await logLiveClassAuditEvent('live_breakout_member_assigned', {
+    session: access.session,
+    actor: access.user,
+    targetUserId: userId,
+    payload: { sessionId: access.session.id, roomId }
+  });
+  return res.json({
+    ok: true,
+    member: formatLiveBreakoutMemberForClient(member),
+    room: buildLiveBreakoutRoomForClient(access.session, getLiveBreakoutRoomById(roomId), access.user, { canManage: true }),
+    liveControls: buildLiveSessionControlState(access.session, access.user)
+  });
+});
+
+app.delete('/api/live-breakout-rooms/:roomId/members/:userId', authRequired, async (req, res) => {
+  const { roomId, userId } = req.params;
+  const access = await resolveLiveBreakoutRoomAccess(req, roomId, { requireManage: true });
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Breakout room not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    await logLiveBreakoutAccessDenied(req, {
+      session: access.session,
+      actor: access.user,
+      roomId,
+      reason: 'breakout_remove_member_denied'
+    });
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const targetUser = getWorkspaceScopedUser(access.session.workspace_id, userId);
+  if (!targetUser) return tenantForbidden(res);
+  removeLiveBreakoutRoomMember(roomId, userId);
+  await logLiveClassAuditEvent('live_breakout_member_removed', {
+    session: access.session,
+    actor: access.user,
+    targetUserId: userId,
+    payload: { sessionId: access.session.id, roomId }
+  });
+  return res.json({
+    ok: true,
+    roomId,
+    userId,
+    liveControls: buildLiveSessionControlState(access.session, access.user)
+  });
+});
+
+app.post('/api/live-breakout-rooms/:roomId/join', authRequired, async (req, res) => {
+  const { roomId } = req.params;
+  const access = await resolveLiveBreakoutRoomAccess(req, roomId);
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Breakout room not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    await logLiveBreakoutAccessDenied(req, {
+      session: access.session,
+      actor: access.user,
+      roomId,
+      reason: 'breakout_join_denied'
+    });
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  if (!canUserJoinLiveBreakoutRoom(access.user, access.session, access.room)) {
+    await logLiveBreakoutAccessDenied(req, {
+      session: access.session,
+      actor: access.user,
+      roomId,
+      reason: 'breakout_join_assignment_denied'
+    });
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const member = joinLiveBreakoutRoom({ room: access.room, user: access.user });
+  await logLiveClassAuditEvent('live_breakout_joined', {
+    session: access.session,
+    actor: access.user,
+    payload: { sessionId: access.session.id, roomId }
+  });
+  return res.json({
+    ok: true,
+    room: buildLiveBreakoutRoomForClient(access.session, getLiveBreakoutRoomById(roomId), access.user, {
+      canManage: canUserManageSpecificLiveSession(access.user, access.session)
+    }),
+    member: formatLiveBreakoutMemberForClient(member),
+    jitsi: {
+      domain: jitsiConfig.domain,
+      roomName: buildLiveBreakoutRoomName(access.session, access.room),
+      meetingUrl: buildLiveBreakoutMeetingUrl(access.session, access.room)
+    },
+    liveControls: buildLiveSessionControlState(access.session, access.user)
+  });
+});
+
+app.post('/api/live-breakout-rooms/:roomId/leave', authRequired, async (req, res) => {
+  const { roomId } = req.params;
+  const access = await resolveLiveBreakoutRoomAccess(req, roomId);
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Breakout room not found' });
+    if (access.tenantForbidden) return tenantForbidden(res);
+    await logLiveBreakoutAccessDenied(req, {
+      session: access.session,
+      actor: access.user,
+      roomId,
+      reason: 'breakout_leave_denied'
+    });
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const isManager = canUserManageSpecificLiveSession(access.user, access.session);
+  const member = getLiveBreakoutRoomMember(roomId, access.user.id);
+  if (!isManager && !member) {
+    await logLiveBreakoutAccessDenied(req, {
+      session: access.session,
+      actor: access.user,
+      roomId,
+      reason: 'breakout_leave_member_denied'
+    });
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const updatedMember = leaveLiveBreakoutRoom({ roomId, userId: access.user.id });
+  await logLiveClassAuditEvent('live_breakout_left', {
+    session: access.session,
+    actor: access.user,
+    payload: { sessionId: access.session.id, roomId }
+  });
+  return res.json({
+    ok: true,
+    room: buildLiveBreakoutRoomForClient(access.session, getLiveBreakoutRoomById(roomId), access.user, {
+      canManage: isManager
+    }),
+    member: updatedMember ? formatLiveBreakoutMemberForClient(updatedMember) : null,
+    liveControls: buildLiveSessionControlState(access.session, access.user)
+  });
 });
 
 app.post('/api/live-sessions/:sessionId/start-recording', authRequired, async (req, res) => {
