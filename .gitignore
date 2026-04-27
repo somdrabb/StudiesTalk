@@ -76,3 +76,5 @@ dist
 !.yarn/versions
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+.env.save
+.env.*
