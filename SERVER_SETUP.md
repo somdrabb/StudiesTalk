@@ -1,5 +1,16 @@
 # Jitsi + TURN Foundation for meet.studistalk.de
 
+This file is infrastructure-focused and should be read with the current app-side deployment docs:
+
+- [README.md](/Users/jannatuladny/cat-6.1/README.md)
+- [docs/production-deployment-runbook.md](/Users/jannatuladny/cat-6.1/docs/production-deployment-runbook.md)
+- [docs/staging-deployment-checklist.md](/Users/jannatuladny/cat-6.1/docs/staging-deployment-checklist.md)
+
+Current app constraint:
+
+- StudiesTalk moderator JWT auto-host does not work on public `meet.jit.si`
+- use `8x8.vc` JaaS or self-hosted Jitsi if teachers/admins should open as host without separate Jitsi login
+
 ## Architecture goals
 - Build **meet.studistalk.de** as an Ubuntu 22.04+ all-in-one Jitsi Meet stack (Prosody, Jicofo, JVB, Nginx) using the official quickstart so TLS, media ports, and the standard web UI work before we embed the repo’s announcements interface. citeturn1search0
 - Run **turn.studistalk.de** as a dedicated Coturn relay so users stuck behind strict Wi-Fi/NAT can connect through authenticated TURN lines that Prosody advertises to Jitsi clients. citeturn2search5turn2search0

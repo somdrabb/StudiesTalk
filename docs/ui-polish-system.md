@@ -4,9 +4,18 @@
 This pass keeps backend behavior unchanged and focuses on safe UI normalization in:
 
 - `public/styles.refactor.css`
+- `public/css/homework.css`
 - `public/app.js`
 
 No API, auth/session, onboarding rule, policy rule, database, or core chat logic changes were made.
+
+## Current frontend file split
+
+Recent UI cleanup also split homework-channel-specific styles out of the main stylesheet:
+
+- shared/global app surface styles remain in `public/styles.refactor.css`
+- homework board/channel styles now live in `public/css/homework.css`
+- `public/index.html` loads the homework stylesheet after the main stylesheet so homework overrides stay local to that surface
 
 ## Theme Variables Added
 Late-stage `@layer overrides` tokens were added in `:root` and `html[data-theme="dark"]` for:
@@ -107,7 +116,7 @@ Shared state classes were added:
 - database writes or schema
 - complex chat/thread renderers
 - major DOM restructuring in admin/mailbox/modals
-- bespoke live/session/homework modal layouts outside safe global normalization
+- bespoke live/session modal layouts outside safe global normalization
 
 ## Notes
 The polish layer is intentionally appended late in the stylesheet so it wins the cascade with minimal churn. Older duplicated rules still exist underneath, but the current system should now present as one cohesive StudiesTalk surface in both light and dark themes.

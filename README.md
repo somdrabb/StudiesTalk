@@ -1,246 +1,188 @@
-# 🎓 StudiesTalk – AI-Powered Language School SaaS Platform
+# StudiesTalk
 
-StudiesTalk is a multi-tenant SaaS platform designed for language schools.  
-It provides live classes, AI voice practice, task management, announcements, billing control, and a full admin moderation system.
+StudiesTalk is a multi-tenant language-school platform built on Node.js, Express, SQLite/PostgreSQL-ready data access, and a vanilla-JS frontend. The current codebase supports school workspaces, live classes, onboarding and policy gates, attendance, homework, messaging, built-in email tooling, AI usage tracking, and deployment hardening work for staging.
 
-Built as a full-stack application using Node.js, Express, and modern frontend architecture.
+## Current product surface
 
----
+### Core platform
 
-## 🚀 Features
-
-### 👥 Multi-Tenant Architecture
-- Workspace (school) isolation
-- Role-based access (student, teacher, admin, super_admin)
-- JWT authentication + refresh tokens
+- multi-tenant workspaces with tenant isolation
+- roles: `student`, `teacher`, `admin`, `school_admin`, `super_admin`
+- JWT access + refresh token auth
 - CSRF protection
+- login-attempt and account-security hardening
+- onboarding state machine and policy acceptance gates
 
-### 🎥 Live Classes
-- Jitsi Meet integration
-- JWT-secured rooms
-- Slide deck support
-- Real-time slide state synchronization
-- Attendance tracking
+### Live classes
 
-### 🤖 AI Voice Practice
-- Speech-based AI practice module
-- Token-based usage tracking
-- Runtime billing calculation
-- Monthly AI budget caps per workspace
-- Admin override system
+- Jitsi-backed live sessions
+- waiting room and teacher/admin approval flow
+- teacher/admin host auto-join for JWT-capable Jitsi deployments
+- raise hand state
+- live attendance lifecycle tracking
+- whiteboard / slide state sync
+- polling / quizzes
+- breakout rooms
+- recording consent and recording storage foundation
 
-### 📢 Communication
-- Announcements system
-- Channels & direct messaging
-- Tasks & assignments
-- Attendance records
+Important constraint:
 
-### 💳 Billing System
-- Invoice generation
-- Payment tracking
-- Workspace billing ledger
-- AI cost tracking (EUR)
-- Budget enforcement
+- public `meet.jit.si` cannot provide StudiesTalk moderator JWT auto-host
+- use `8x8.vc` JaaS or self-hosted Jitsi for automatic host mode
 
-### 🛡 Security
-- Role-based authorization
-- Login attempt tracking
-- IP blocking
-- Audit logs
-- CSRF tokens
-- Refresh token rotation
+### Coursework and communication
 
----
-
-## 🏗 Architecture Overview
-
-The platform follows a modular SaaS architecture:
-
-Frontend:
-- Vanilla JS SPA-style admin panel
-- Dynamic state management
-- Modular feature components
-
-Backend:
-- Node.js + Express
-- REST API architecture
-- Service-layer abstraction
-- JWT-based authentication
-- Multi-tenant workspace scoping
-
-Database:
-- SQLite in WAL mode for concurrent reads/writes during development
-- Workspace-scoped relational schema
-- AI usage ledger tables
-- Audit trail tables
-- PostgreSQL recommended for production deployment
-
----
-
-## 🧠 AI Budget System Design
-
-The AI system includes:
-
-- `ai_usage_ledger`
-- `ai_runtime_sessions`
-- `ai_budget_settings`
-- Platform-level default caps
-- Per-workspace overrides
-- Automatic cost enforcement
-
-Each AI interaction calculates:
-- Token usage
-- Runtime cost
-- Total EUR consumption
-
-When monthly cap is reached:
-- AI usage is automatically blocked.
-
----
-
-## 🎥 Live Class Architecture
-
-- Jitsi Meet server integration
-- Secure JWT room creation
-- Slide deck upload system
-- Slide state sync service
-- PDF processing for slide preview
-
-Flow:
-1. Teacher creates live class
-2. Server generates Jitsi JWT
-3. Students join via secured room
-4. Slide state synchronized across participants
-
----
-
-## 🗄 Database Schema Highlights
-
-Key tables:
-- users
-- workspaces
-- channels
+- channels and direct messages
+- announcements
+- homework / assignments
 - tasks
-- submissions
-- messages
-- invoices
-- payments
-- ai_usage_ledger
-- inbound_emails
-- ai_runtime_sessions
-- live_classes
-- slide_decks
-- slide_state
-- audit_logs
+- attendance sessions and class attendance
+- calendar events
+- built-in school email inbox, templates, replies, and logs
 
-See [docs/database-schema.md](/Users/jannatuladny/cat-6.1/docs/database-schema.md) for a table diagram and deployment notes.
+### AI and billing foundation
 
----
+- AI runtime sessions
+- AI usage ledger
+- AI budget settings
+- workspace billing
+- invoices and payments
 
-## 🛠 Tech Stack
+## Current runtime posture
 
-Backend:
-- Node.js
-- Express
-- SQLite (dev) / PostgreSQL (recommended production)
-- JWT
-- bcrypt
-- Nodemailer
-- Twilio
-- Jitsi Meet
+- development default: SQLite
+- production recommendation: PostgreSQL
+- deployable file storage modes:
+  - `FILE_STORAGE_ADAPTER=local`
+  - `FILE_STORAGE_ADAPTER=s3|s3_compatible|r2` with S3-compatible env configured
+- staging/production should run on Node.js 20
 
-Frontend:
-- Vanilla JavaScript (SPA style)
-- Custom CSS design system
-- Responsive layout
-- Accessible components
+## Project structure
 
-Infrastructure:
-- Nginx (recommended)
-- PM2 process manager
-- HTTPS (production)
+```text
+.
+├── public/
+│   ├── app.js
+│   ├── index.html
+│   ├── styles.refactor.css
+│   ├── css/
+│   │   └── homework.css
+│   ├── live-presenter.html
+│   ├── live-presenter.js
+│   └── ...
+├── server/
+│   ├── config/
+│   ├── onboarding/
+│   ├── policy/
+│   ├── repositories/
+│   ├── routes/
+│   ├── services/
+│   └── utils/
+├── scripts/
+│   ├── preflight.js
+│   ├── cleanup-demo-data.js
+│   ├── *-smoke.js
+│   ├── backup-sqlite.js
+│   └── restore-sqlite-backup.js
+├── db/
+│   └── schema/
+├── docs/
+├── storage/
+├── uploads/
+└── server.js
+```
 
----
+## Frontend structure
 
-## 🔐 Security Design
+- `public/index.html` is the main app shell
+- `public/app.js` contains the main client runtime
+- `public/styles.refactor.css` is the main stylesheet
+- `public/css/homework.css` now holds homework-channel-specific styles extracted from the main stylesheet
+- `public/live-presenter.*` contains the live presenter surface
 
-- JWT + Refresh tokens
-- CSRF protection
-- Role-based access control
-- Workspace isolation middleware
-- Rate limiting
-- Audit logs for admin actions
+## Backend structure
 
----
-## ✉️ School Email Settings (Built-in Email Client + Templates)
+- `server.js` wires the Express app, health endpoints, auth/session flow, live-class routes, uploads, and platform APIs
+- `server/env.js` is the runtime env contract and production blocker validator
+- `server/repositories/` contains SQLite/PostgreSQL-aware data access logic
+- `server/services/` contains feature services such as Jitsi token generation, file storage, and media processing
+- `server/config/` contains runtime configuration helpers, including Jitsi config
 
-Language schools can manage email directly inside the platform:
+## Database shape
 
-### Inbox + Email Client
-- Inbox view with search, refresh, mark-all-read
-- Read email with attachment previews
-- Reply/forward inside the dashboard
-- Email history tracking (sent messages)
+The schema has moved beyond the older simplified `tasks/submissions/live_classes` description. The current runtime includes tables and behaviors around:
 
-### Email Templates System
-- Template gallery with enable/disable switches
-- Token-based templates (e.g. `{{user_name}}`, `{{otp_code}}`, `{{reset_link}}`)
-- Live preview rendering
-- Test-send to a target email
-- Templates included:
-  - Welcome email
-  - Student invite (set password)
-  - Teacher invite (set password)
-  - Password reset
-  - Live session invite
-  - OTP / 2FA code
-  - Invoice email
-  - Payment success
-  - Course end reminder
-  - New course offer
-  - Class absence notice
-  - Course completion congratulations
-  - Exam registration success
-  - Exam date notice
-    
----
-## 📷 Screenshots
+- `workspaces`
+- `users`
+- `channels`
+- `messages`, `replies`, `message_reactions`
+- `dms`, `dm_messages`, `dm_replies`
+- `homework_items`, `homework_submissions`, `homework_completions`
+- `attendance_sessions`, `attendance_records`
+- `class_attendance`, `class_attendance_records`
+- `live_sessions`
+- `live_session_participants`
+- `live_attendance`
+- `slide_state`
+- `live_session_polls`, `live_session_poll_options`, `live_session_poll_responses`
+- `live_breakout_rooms`, `live_breakout_room_members`
+- `live_session_recording`, `live_session_recordings`
+- `workspace_email_logs`, `inbound_emails`, `email_replies`
+- `ai_runtime_sessions`, `ai_usage_ledger`, `ai_budget_settings`
+- `workspace_billing`, `invoices`, `payments`
+- `policy_acceptances`
+- `workspace_onboarding`, `workspace_onboarding_steps`, `workspace_onboarding_events`
 
-### Inbox
-![Inbox](screenshots/email-inbox.png)
+See [docs/database-schema.md](/Users/jannatuladny/cat-6.1/docs/database-schema.md).
 
-### Message Viewer + Attachments
-![Message Viewer](screenshots/email-viewer.png)
-
-### Reply Composer
-![Reply Composer](screenshots/email-reply.png)
-
-### Templates Gallery
-![Templates Gallery](screenshots/email-templates.png)
-
-### Template Editor (OTP / 2FA)
-![Template Editor OTP](screenshots/email-template-editor-otp.png)
-
-### History
-![Email History](screenshots/email-history.png)
-
-### Compose
-![Compose](screenshots/email-compose.png)
-## 📦 Installation
+## Install and run
 
 ```bash
-git clone https://github.com/yourusername/studiestalk.git
-cd studiestalk
+source ~/.nvm/nvm.sh
+nvm use 20 || nvm install 20
 npm install
 npm run dev
 ```
 
-## 🧪 Preflight And Smoke
+Normal server start:
+
+```bash
+npm start
+```
+
+## Preflight and smoke
+
+Preflight:
 
 ```bash
 npm run preflight
+```
+
+Current smoke bundle:
+
+```bash
 npm run test:all:smoke
 ```
+
+`test:all:smoke` covers the current non-PostgreSQL smoke set:
+
+- runtime
+- tasks
+- attendance
+- security
+- account security
+- onboarding
+- policy acceptance
+- tenant isolation
+- file storage
+- live controls
+- whiteboard
+- breakout rooms
+- polling
+- recording consent
+- recording storage
+
+## Database maintenance
 
 SQLite backup helpers:
 
@@ -250,15 +192,40 @@ npm run verify:backup
 node scripts/restore-sqlite-backup.js --from backup/<file>.db --confirm-restore
 ```
 
-## 🚚 Production Notes
+Demo/default data cleanup:
 
-- SQLite remains the default runtime.
-- PostgreSQL staging remains opt-in and documented separately.
-- Prefer `APP_BASE_URL` for deployed environments.
-- Set strong `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET` in production.
-- Set `COOKIE_SECURE=true` behind HTTPS.
-- Review:
-  - [docs/production-readiness-inventory.md](/Users/jannatuladny/cat-6.1/docs/production-readiness-inventory.md)
-  - [docs/production-deployment-runbook.md](/Users/jannatuladny/cat-6.1/docs/production-deployment-runbook.md)
-  - [docs/production-rollback-runbook.md](/Users/jannatuladny/cat-6.1/docs/production-rollback-runbook.md)
-  - [docs/postgres-staging-rehearsal.md](/Users/jannatuladny/cat-6.1/docs/postgres-staging-rehearsal.md)
+```bash
+npm run cleanup:demo:dry
+npm run cleanup:demo
+```
+
+See [docs/database-cleanup.md](/Users/jannatuladny/cat-6.1/docs/database-cleanup.md).
+
+## Deployment docs
+
+- [docs/staging-deployment-checklist.md](/Users/jannatuladny/cat-6.1/docs/staging-deployment-checklist.md)
+- [docs/production-deployment-runbook.md](/Users/jannatuladny/cat-6.1/docs/production-deployment-runbook.md)
+- [docs/production-rollback-runbook.md](/Users/jannatuladny/cat-6.1/docs/production-rollback-runbook.md)
+- [docs/postgres-staging-rehearsal.md](/Users/jannatuladny/cat-6.1/docs/postgres-staging-rehearsal.md)
+
+## High-signal feature docs
+
+- [docs/live-class-production-controls.md](/Users/jannatuladny/cat-6.1/docs/live-class-production-controls.md)
+- [docs/live-class-breakout-rooms.md](/Users/jannatuladny/cat-6.1/docs/live-class-breakout-rooms.md)
+- [docs/live-class-polling-quizzes.md](/Users/jannatuladny/cat-6.1/docs/live-class-polling-quizzes.md)
+- [docs/live-recording-storage-playback.md](/Users/jannatuladny/cat-6.1/docs/live-recording-storage-playback.md)
+- [docs/onboarding-production-readiness.md](/Users/jannatuladny/cat-6.1/docs/onboarding-production-readiness.md)
+- [docs/policy-acceptance-flow.md](/Users/jannatuladny/cat-6.1/docs/policy-acceptance-flow.md)
+- [docs/file-storage-security.md](/Users/jannatuladny/cat-6.1/docs/file-storage-security.md)
+- [docs/ui-polish-system.md](/Users/jannatuladny/cat-6.1/docs/ui-polish-system.md)
+
+## Known current deployment blockers
+
+- multi-instance deployment is not ready while storage is local-disk only
+- `meet.jit.si` cannot do JWT moderator auto-host
+
+## Health endpoints
+
+- `GET /health`
+- `GET /health/deep`
+- `GET /api/ai/health`
