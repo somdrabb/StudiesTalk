@@ -173,6 +173,7 @@ const DB_PATH = (() => {
   if (fs.existsSync(LEGACY_DB_PATH)) return LEGACY_DB_PATH;
   return DEFAULT_DB_PATH;
 })();
+const HOST = String(process.env.HOST || '0.0.0.0').trim() || '0.0.0.0';
 if (ENV.DB_ENGINE && ENV.DB_ENGINE !== 'sqlite') {
   console.warn(
     `[DB] DB_ENGINE=${ENV.DB_ENGINE} is configured, but server.js still runs on SQLite during the staged PostgreSQL migration.`
@@ -855,14 +856,26 @@ function isPromiseLike(value) {
 
   ensureDir(UPLOADS_DIR);
   ensureDir(WS_UPLOADS_DIR);
-  ensureDir(FILE_STORAGE_LOCAL_ROOT);
+  if (FILE_STORAGE_ADAPTER === 'local') {
+    ensureDir(FILE_STORAGE_LOCAL_ROOT);
+  }
 
   const fileStorageAdapter = (() => {
     if (FILE_STORAGE_ADAPTER === 'local') {
       return createLocalDiskStorageAdapter({ rootDir: FILE_STORAGE_LOCAL_ROOT });
     }
-    return createS3CompatibleStorageAdapter({ rootDir: FILE_STORAGE_LOCAL_ROOT });
+    return createS3CompatibleStorageAdapter({
+      endpoint: ENV.S3_ENDPOINT,
+      region: ENV.S3_REGION,
+      bucket: ENV.S3_BUCKET,
+      accessKeyId: ENV.S3_ACCESS_KEY_ID,
+      secretAccessKey: ENV.S3_SECRET_ACCESS_KEY,
+      forcePathStyle: ENV.S3_FORCE_PATH_STYLE,
+      providerName: FILE_STORAGE_ADAPTER === 'r2' ? 'r2' : 's3_compatible'
+    });
   })();
+  // open / create SQLite DB
+  const db = new Database(DB_PATH);
   const fileStorageService = createFileStorageService({
     adapter: fileStorageAdapter,
     globalMaxBytes: UPLOAD_MAX_FILE_BYTES,
@@ -874,11 +887,29 @@ function isPromiseLike(value) {
     },
     encryptionEnabled: FILE_STORAGE_ENCRYPTION_ENABLED,
     encryptionKeyHex: FILE_STORAGE_ENCRYPTION_KEY,
-    encryptionKeyId: FILE_STORAGE_ENCRYPTION_KEY_ID
+    encryptionKeyId: FILE_STORAGE_ENCRYPTION_KEY_ID,
+    findExistingObjectMetadata({ checksum, workspaceId, storageProvider, storageMode }) {
+      return db.prepare(`
+        SELECT
+          storage_key AS storageKey,
+          storage_mode AS storageMode,
+          storage_provider AS storageProvider,
+          encryption_key_id AS encryptionKeyId,
+          encryption_iv AS encryptionIv,
+          encryption_tag AS encryptionTag
+        FROM files_registry
+        WHERE workspace_id = ?
+          AND checksum = ?
+          AND storage_provider = ?
+          AND storage_mode = ?
+          AND purpose = 'upload_temp'
+          AND (message_id IS NULL OR message_id = '')
+          AND COALESCE(deleted, 0) = 0
+        ORDER BY datetime(created_at) DESC, rowid DESC
+        LIMIT 1
+      `).get(workspaceId, checksum, storageProvider, storageMode) || null;
+    }
   });
-
-  // open / create SQLite DB
-  const db = new Database(DB_PATH);
   // Billing migration boundary: this repository is the first domain allowed
   // to use either SQLite or PostgreSQL while auth/session runtime stays SQLite.
   const billingRepository = createBillingRepository({
@@ -10147,8 +10178,9 @@ function ensureDefaultMembershipsForAllWorkspaces() {
 const DEFAULT_USER_ID = 'u-you';
 
 function ensureDefaultWorkspaceAndUser() {
-  // 1) ensure at least one workspace
-  const wsCount = db.prepare('SELECT COUNT(*) AS c FROM workspaces').get().c;
+  // 1) ensure at least one workspace, but do not recreate "default" in a populated DB.
+  const wsCount = Number(db.prepare('SELECT COUNT(*) AS c FROM workspaces').get().c || 0);
+  let defaultWorkspaceExists = !!db.prepare('SELECT 1 FROM workspaces WHERE id = ?').get('default');
   if (!wsCount) {
     db.prepare(
       `
@@ -10156,11 +10188,17 @@ function ensureDefaultWorkspaceAndUser() {
       VALUES ('default', 'Default Workspace')
     `
     ).run();
+    defaultWorkspaceExists = true;
   }
+  const fallbackWorkspaceId =
+    (defaultWorkspaceExists && 'default') ||
+    db.prepare('SELECT id FROM workspaces ORDER BY created_at ASC, rowid ASC LIMIT 1').get()?.id ||
+    'default';
 
-  // 2) ensure at least one user ("You")
-  const userCount = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
-  if (!userCount) {
+  // 2) ensure at least one user ("You"), but place it into a real workspace.
+  const userCount = Number(db.prepare('SELECT COUNT(*) AS c FROM users').get().c || 0);
+  const defaultUser = db.prepare('SELECT id, workspace_id AS workspaceId FROM users WHERE id = ?').get(DEFAULT_USER_ID);
+  if (!userCount && !defaultUser) {
     db.prepare(
       `
       INSERT INTO users (id, workspace_id, first_name, last_name, name, username, email, password_hash, role, status, native_language, native_language_confirmed)
@@ -10168,7 +10206,7 @@ function ensureDefaultWorkspaceAndUser() {
     `
     ).run({
       id: DEFAULT_USER_ID,
-      workspace_id: 'default',
+      workspace_id: fallbackWorkspaceId,
       first_name: 'You',
       last_name: 'User',
       name: 'You User',
@@ -10182,14 +10220,21 @@ function ensureDefaultWorkspaceAndUser() {
     });
   }
 
-  // 3) ensure membership of default workspace
-  const membership = db
-    .prepare('SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?')
-    .get('default', DEFAULT_USER_ID);
-  if (!membership) {
+  // 3) ensure default user membership only when both sides exist.
+  const ensuredDefaultUser = db.prepare('SELECT id, workspace_id AS workspaceId FROM users WHERE id = ?').get(DEFAULT_USER_ID);
+  const membershipWorkspaceId = String(ensuredDefaultUser?.workspaceId || fallbackWorkspaceId || '').trim();
+  const membershipWorkspaceExists = membershipWorkspaceId
+    ? !!db.prepare('SELECT 1 FROM workspaces WHERE id = ?').get(membershipWorkspaceId)
+    : false;
+  const membership = membershipWorkspaceExists && ensuredDefaultUser
+    ? db
+        .prepare('SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?')
+        .get(membershipWorkspaceId, DEFAULT_USER_ID)
+    : null;
+  if (membershipWorkspaceExists && ensuredDefaultUser && !membership) {
     db.prepare(
       'INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)'
-    ).run('default', DEFAULT_USER_ID, 'owner');
+    ).run(membershipWorkspaceId, DEFAULT_USER_ID, 'owner');
   }
 
   // 4) backfill channels to default workspace if missing
@@ -10238,6 +10283,73 @@ function normalizeStoredAttachmentMetadata(file = {}, fallbackPermissions = 'wor
     encryptionTag: String(file?.encryptionTag || '').trim(),
     permissions: fileStorageService.normalizePermissions(file?.permissions || fallbackPermissions)
   };
+}
+
+function registerManagedUploadStagingRow({
+  workspaceId,
+  uploaderId,
+  channelId = null,
+  stored,
+  purpose = 'upload_temp'
+}) {
+  const url = String(stored?.url || '').trim();
+  if (!url) return null;
+  const normalizedWorkspaceId = String(workspaceId || '').trim();
+  const normalizedUploaderId = String(uploaderId || '').trim() || null;
+  const normalizedChannelId = purpose === 'upload_temp'
+    ? null
+    : (String(channelId || '').trim() || null);
+  const name = String(stored?.originalName || 'attachment').trim() || 'attachment';
+  const fileId = computeFileIdFromMeta({ url, channelId: '', messageId: '', name });
+  const storageMeta = normalizeStoredAttachmentMetadata(stored, 'workspace_private');
+  try {
+    db.prepare(`
+      INSERT OR IGNORE INTO files_registry
+      (file_id, workspace_id, channel_id, message_id, uploader_id, purpose, file_name, mime, size_bytes, url, storage_key, checksum, storage_provider, storage_mode, encryption_key_id, encryption_iv, encryption_tag, permissions, pinned, deleted, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, datetime('now'), datetime('now'))
+    `).run(
+      fileId,
+      normalizedWorkspaceId,
+      normalizedChannelId,
+      '',
+      normalizedUploaderId,
+      purpose,
+      name,
+      stored.mimeType,
+      stored.sizeBytes,
+      url,
+      storageMeta.storageKey,
+      storageMeta.checksum,
+      storageMeta.storageProvider,
+      storageMeta.storageMode,
+      storageMeta.encryptionKeyId,
+      storageMeta.encryptionIv,
+      storageMeta.encryptionTag,
+      storageMeta.permissions
+    );
+  } catch (err) {
+    if (String(err?.code || '').includes('SQLITE_CONSTRAINT')) {
+      console.error('[Uploads] registerManagedUploadStagingRow constraint failed', {
+        workspaceId: normalizedWorkspaceId,
+        uploaderId: normalizedUploaderId,
+        channelId: normalizedChannelId,
+        messageId: '',
+        storageKey: storageMeta.storageKey,
+        purpose
+      });
+    }
+    throw err;
+  }
+  return fileId;
+}
+
+async function cleanupManagedObjectIfSafe(stored = null) {
+  if (!stored?.storageKey || !stored?.cleanupOnFailure) return;
+  try {
+    await fileStorageService.deleteObject(stored);
+  } catch (cleanupErr) {
+    console.warn('Failed to clean up managed object after metadata failure', cleanupErr && cleanupErr.message ? cleanupErr.message : cleanupErr);
+  }
 }
 
 function timeHHMM() {
@@ -11015,7 +11127,26 @@ app.post('/api/uploads', (req, res) => {
       if (!files.length) {
         return res.status(400).json({ error: 'No files received' });
       }
-      const storageRequester = req.auth || getAuthedUser(req) || null;
+      const storageRequester = getEffectiveRequestUser(req);
+      const requesterWorkspaceId = String(storageRequester?.workspaceId || '').trim() || 'default';
+      const requesterUserId = String(storageRequester?.userId || '').trim() || null;
+      const requestedChannelId = String(req.body?.channelId || '').trim() || null;
+      let stagingChannelId = null;
+      if (requestedChannelId) {
+        const channelRow = db.prepare(`
+          SELECT id, workspace_id AS workspaceId
+          FROM channels
+          WHERE id = ?
+          LIMIT 1
+        `).get(requestedChannelId);
+        if (!channelRow) {
+          return res.status(400).json({ error: 'Invalid upload channel' });
+        }
+        if (String(channelRow.workspaceId || '').trim() !== requesterWorkspaceId) {
+          return tenantForbidden(res);
+        }
+        stagingChannelId = String(channelRow.id || '').trim() || null;
+      }
 
       const out = [];
 
@@ -11041,12 +11172,25 @@ app.post('/api/uploads', (req, res) => {
 
         const stored = await fileStorageService.storeFromFile({
           inputPath: outPath,
-          workspaceId: storageRequester?.workspaceId || storageRequester?.workspace_id || 'default',
+          workspaceId: requesterWorkspaceId,
           originalName: f.originalname,
           mimeType: outMime || f.mimetype || 'application/octet-stream',
           permissions: 'workspace_private'
         });
         await fs.promises.unlink(outPath).catch(() => null);
+
+        try {
+          registerManagedUploadStagingRow({
+            workspaceId: requesterWorkspaceId,
+            uploaderId: requesterUserId,
+            channelId: stagingChannelId,
+            stored,
+            purpose: 'upload_temp'
+          });
+        } catch (registryErr) {
+          await cleanupManagedObjectIfSafe(stored);
+          throw registryErr;
+        }
 
         out.push({
           url: stored.url,
@@ -14502,31 +14646,36 @@ app.post('/api/classes/:channelId/attendance/records/:studentId/certificate', (r
 
       const fileId = generateId('attcert_');
       const metadata = normalizeStoredAttachmentMetadata(stored, 'workspace_private');
-      db.prepare(`
-        INSERT INTO files_registry (
-          file_id, workspace_id, channel_id, message_id, uploader_id, purpose, file_name, mime, size_bytes, url,
-          storage_key, checksum, storage_provider, storage_mode, encryption_key_id, encryption_iv, encryption_tag, permissions, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-      `).run(
-        fileId,
-        workspaceId,
-        channelId,
-        '',
-        user.id,
-        'attendance_certificate',
-        stored.originalName,
-        stored.mimeType,
-        stored.sizeBytes,
-        stored.url,
-        metadata.storageKey,
-        metadata.checksum,
-        metadata.storageProvider,
-        metadata.storageMode,
-        metadata.encryptionKeyId,
-        metadata.encryptionIv,
-        metadata.encryptionTag,
-        metadata.permissions
-      );
+      try {
+        db.prepare(`
+          INSERT INTO files_registry (
+            file_id, workspace_id, channel_id, message_id, uploader_id, purpose, file_name, mime, size_bytes, url,
+            storage_key, checksum, storage_provider, storage_mode, encryption_key_id, encryption_iv, encryption_tag, permissions, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        `).run(
+          fileId,
+          workspaceId,
+          channelId,
+          '',
+          user.id,
+          'attendance_certificate',
+          stored.originalName,
+          stored.mimeType,
+          stored.sizeBytes,
+          stored.url,
+          metadata.storageKey,
+          metadata.checksum,
+          metadata.storageProvider,
+          metadata.storageMode,
+          metadata.encryptionKeyId,
+          metadata.encryptionIv,
+          metadata.encryptionTag,
+          metadata.permissions
+        );
+      } catch (registryErr) {
+        await cleanupManagedObjectIfSafe(stored);
+        throw registryErr;
+      }
 
       const existing = getAttendanceRecordRow(session.id, studentId);
       await attendanceRepository.upsertAttendanceRecords({
@@ -20372,6 +20521,7 @@ const LIVE_SCOPE_VALUES = new Set(["today", "week", "all"]);
 const LIVE_AUDIENCE_VALUES = new Set(["general", "teachers"]);
 const LIVE_SLIDE_MANAGER_ROLES = new Set(["teacher", "admin", "school_admin", "super_admin"]);
 const LIVE_RECORDING_MANAGER_ROLES = new Set(["teacher", "admin", "school_admin", "super_admin"]);
+const LIVE_JITSI_MODERATOR_ROLES = new Set(["teacher", "admin", "school_admin"]);
 const LIVE_POLL_TYPES = new Set(["poll", "quiz"]);
 const LIVE_POLL_STATUSES = new Set(["draft", "open", "closed"]);
 
@@ -20404,8 +20554,37 @@ function buildLiveRoomName(session) {
 
 function buildLiveMeetingUrl(session) {
   const roomName = buildLiveRoomName(session);
-  if (!roomName) return "";
-  return `${jitsiConfig.publicOrigin}/${encodeURIComponent(roomName)}`;
+  return jitsiConfig.buildMeetingUrl(roomName);
+}
+
+function buildJitsiMeetingJoinUrl(meetingUrl, token) {
+  const rawMeetingUrl = String(meetingUrl || '').trim();
+  const rawToken = String(token || '').trim();
+  if (!rawMeetingUrl || !rawToken) return rawMeetingUrl;
+  try {
+    const url = new URL(rawMeetingUrl);
+    url.searchParams.set('jwt', rawToken);
+    const hashParams = new URLSearchParams(String(url.hash || '').replace(/^#/, ''));
+    hashParams.set('config.prejoinPageEnabled', 'false');
+    hashParams.set('config.requireDisplayName', 'false');
+    url.hash = hashParams.toString() ? `#${hashParams.toString()}` : '';
+    return url.toString();
+  } catch (_err) {
+    const separator = rawMeetingUrl.includes('?') ? '&' : '?';
+    return `${rawMeetingUrl}${separator}jwt=${encodeURIComponent(rawToken)}#config.prejoinPageEnabled=false&config.requireDisplayName=false`;
+  }
+}
+
+function logJitsiJoinPayloadDebug({ domain, hasJwt, isModerator, roomName, sessionId, kind }) {
+  if (ENV.IS_PROD) return;
+  logEvent('info', '[JITSI] join payload', {
+    domain: String(domain || '').trim() || null,
+    hasJwt: Boolean(hasJwt),
+    isModerator: Boolean(isModerator),
+    roomName: roomName || null,
+    sessionId: sessionId || null,
+    kind: kind || 'live'
+  });
 }
 
 function buildLiveAppPath(session) {
@@ -20505,6 +20684,11 @@ function canUserManageSpecificLiveSession(user, session) {
   if (userWorkspaceId(user) !== String(session.workspace_id || session.workspaceId || '').trim()) return false;
   if (isWorkspaceAdmin(user)) return true;
   return canTeacherManageLiveSession(user, session);
+}
+
+function canUserAutoJoinJitsiAsModerator(user, session) {
+  if (!canUserManageSpecificLiveSession(user, session)) return false;
+  return LIVE_JITSI_MODERATOR_ROLES.has(getNormalizedUserRole(user));
 }
 
 function canUserViewLiveSession(user, session) {
@@ -20666,8 +20850,7 @@ function buildLiveBreakoutRoomName(session, room) {
 
 function buildLiveBreakoutMeetingUrl(session, room) {
   const roomName = buildLiveBreakoutRoomName(session, room);
-  if (!roomName) return '';
-  return `${jitsiConfig.publicOrigin}/${encodeURIComponent(roomName)}`;
+  return jitsiConfig.buildMeetingUrl(roomName);
 }
 
 function getLiveBreakoutRoomById(roomId) {
@@ -23109,6 +23292,27 @@ app.post('/api/live-breakout-rooms/:roomId/join', authRequired, async (req, res)
     return res.status(403).json({ error: 'Forbidden' });
   }
   const member = joinLiveBreakoutRoom({ room: access.room, user: access.user });
+  const breakoutRoomName = buildLiveBreakoutRoomName(access.session, access.room);
+  const canModerate = canUserAutoJoinJitsiAsModerator(access.user, access.session);
+  let token = null;
+  let meetingUrl = buildLiveBreakoutMeetingUrl(access.session, access.room);
+  if (jitsiConfig.canGenerateTokens && canModerate) {
+    token = generateJitsiToken({
+      user: access.user,
+      room: breakoutRoomName,
+      moderator: true,
+      ttlSeconds: 2 * 60 * 60
+    });
+    meetingUrl = buildJitsiMeetingJoinUrl(meetingUrl, token);
+  }
+  logJitsiJoinPayloadDebug({
+    domain: jitsiConfig.domain,
+    hasJwt: Boolean(token),
+    isModerator: canModerate,
+    roomName: breakoutRoomName,
+    sessionId: access.session.id,
+    kind: 'breakout'
+  });
   await logLiveClassAuditEvent('live_breakout_joined', {
     session: access.session,
     actor: access.user,
@@ -23122,8 +23326,11 @@ app.post('/api/live-breakout-rooms/:roomId/join', authRequired, async (req, res)
     member: formatLiveBreakoutMemberForClient(member),
     jitsi: {
       domain: jitsiConfig.domain,
-      roomName: buildLiveBreakoutRoomName(access.session, access.room),
-      meetingUrl: buildLiveBreakoutMeetingUrl(access.session, access.room)
+      roomName: breakoutRoomName,
+      meetingUrl,
+      jwt: token,
+      moderator: canModerate,
+      publicMeetNoAutoHost: jitsiConfig.isPublicMeetDomain && canModerate
     },
     liveControls: buildLiveSessionControlState(access.session, access.user)
   });
@@ -23608,30 +23815,36 @@ app.post('/api/live-sessions/:sessionId/recordings/attach-dev-file', authRequire
       mimeType,
       permissions: 'workspace_private'
     });
-    upsertLiveSessionRecording({
-      session: access.session,
-      recordingEnabled: false,
-      recordingStartedAt: recordingState.recording_started_at,
-      recordingStartedBy: recordingState.recording_started_by || access.user.id,
-      consentRequired: true,
-      studentPlaybackAllowed
-    });
-    const recording = await liveRecordingService.attachRecordingObject(sessionId, {
-      storageKey: stored.storageKey,
-      storageProvider: stored.storageProvider,
-      storageMode: stored.storageMode,
-      encryptionKeyId: stored.encryptionKeyId,
-      encryptionIv: stored.encryptionIv,
-      encryptionTag: stored.encryptionTag,
-      checksum: stored.checksum,
-      originalName: stored.originalName,
-      mimeType: stored.mimeType,
-      sizeBytes: stored.sizeBytes,
-      durationSeconds,
-      status: 'ready',
-      startedAt: recordingState.recording_started_at,
-      stoppedAt: nowIso()
-    }, access.user);
+    let recording;
+    try {
+      upsertLiveSessionRecording({
+        session: access.session,
+        recordingEnabled: false,
+        recordingStartedAt: recordingState.recording_started_at,
+        recordingStartedBy: recordingState.recording_started_by || access.user.id,
+        consentRequired: true,
+        studentPlaybackAllowed
+      });
+      recording = await liveRecordingService.attachRecordingObject(sessionId, {
+        storageKey: stored.storageKey,
+        storageProvider: stored.storageProvider,
+        storageMode: stored.storageMode,
+        encryptionKeyId: stored.encryptionKeyId,
+        encryptionIv: stored.encryptionIv,
+        encryptionTag: stored.encryptionTag,
+        checksum: stored.checksum,
+        originalName: stored.originalName,
+        mimeType: stored.mimeType,
+        sizeBytes: stored.sizeBytes,
+        durationSeconds,
+        status: 'ready',
+        startedAt: recordingState.recording_started_at,
+        stoppedAt: nowIso()
+      }, access.user);
+    } catch (persistErr) {
+      await cleanupManagedObjectIfSafe(stored);
+      throw persistErr;
+    }
     await logLiveClassAuditEvent('recording_object_attached', {
       session: access.session,
       actor: access.user,
@@ -23762,10 +23975,10 @@ app.post('/api/live-sessions/:sessionId/join', authRequired, async (req, res) =>
   }
   const now = nowIso();
   let participant = getLiveSessionParticipant(sessionId, access.user.id);
-  const canModerate = canUserManageSpecificLiveSession(access.user, access.session);
+  const canManageJoin = canUserManageSpecificLiveSession(access.user, access.session);
   const recording = getLiveSessionRecording(sessionId);
   const recordingConsentRequired = Number(recording?.recording_enabled || 0) === 1 && Number(recording?.consent_required === 0 ? 0 : 1) === 1;
-  if (!canModerate) {
+  if (!canManageJoin) {
     const currentStatus = normalizeLiveParticipantStatus(participant?.status || '');
     if (!participant) {
       upsertLiveSessionParticipant({
@@ -23815,15 +24028,15 @@ app.post('/api/live-sessions/:sessionId/join', authRequired, async (req, res) =>
     user: access.user,
     status: 'joined',
     requestedAt: participant?.requested_at || now,
-    approvedAt: canModerate ? (participant?.approved_at || now) : participant?.approved_at,
-    approvedBy: canModerate ? (participant?.approved_by || access.user.id) : participant?.approved_by,
+    approvedAt: canManageJoin ? (participant?.approved_at || now) : participant?.approved_at,
+    approvedBy: canManageJoin ? (participant?.approved_by || access.user.id) : participant?.approved_by,
     deniedAt: null,
     deniedBy: null,
     denialReason: null,
     joinedAt: now,
     leftAt: null,
-    recordingConsent: canModerate ? true : normalizeLiveRecordingConsent(participant?.recording_consent),
-    consentedAt: canModerate ? (participant?.consented_at || now) : (participant?.consented_at || null)
+    recordingConsent: canManageJoin ? true : normalizeLiveRecordingConsent(participant?.recording_consent),
+    consentedAt: canManageJoin ? (participant?.consented_at || now) : (participant?.consented_at || null)
   });
   syncLegacyLiveAttendanceRecord({
     sessionId,
@@ -23838,14 +24051,26 @@ app.post('/api/live-sessions/:sessionId/join', authRequired, async (req, res) =>
     payload: { sessionId, role: getNormalizedUserRole(access.user) }
   });
   const hydratedSession = hydrateLiveSession(access.session);
+  const canModerate = canUserAutoJoinJitsiAsModerator(access.user, access.session);
   let token = null;
-  if (jitsiConfig.canGenerateTokens) {
+  let meetingUrl = hydratedSession.meeting_url;
+  if (jitsiConfig.canGenerateTokens && canModerate) {
     token = generateJitsiToken({
       user: access.user,
       room: hydratedSession.room_name,
-      moderator: canModerate,
+      moderator: true,
+      ttlSeconds: 2 * 60 * 60
     });
+    meetingUrl = buildJitsiMeetingJoinUrl(meetingUrl, token);
   }
+  logJitsiJoinPayloadDebug({
+    domain: jitsiConfig.domain,
+    hasJwt: Boolean(token),
+    isModerator: canModerate,
+    roomName: hydratedSession.room_name,
+    sessionId,
+    kind: 'live'
+  });
   res.json({
     ok: true,
     sessionId,
@@ -23856,9 +24081,10 @@ app.post('/api/live-sessions/:sessionId/join', authRequired, async (req, res) =>
     jitsi: {
       domain: jitsiConfig.domain,
       roomName: hydratedSession.room_name,
-      meetingUrl: hydratedSession.meeting_url,
+      meetingUrl,
       jwt: token,
       moderator: canModerate,
+      publicMeetNoAutoHost: jitsiConfig.isPublicMeetDomain && canModerate,
     },
   });
 });
@@ -27793,8 +28019,9 @@ app.use((err, req, res, next) => {
 });
 
 /* ---------- START SERVER ---------- */
-app.listen(PORT, () => {
+app.listen(PORT, HOST, () => {
   logEvent('info', `StudiesTalk server (SQLite + reactions) listening on port ${PORT}`, {
+    host: HOST,
     nodeEnv: ENV.NODE_ENV,
     appBaseUrl: ENV.BASE_URL || `http://localhost:${PORT}`,
     dbPath: DB_PATH,

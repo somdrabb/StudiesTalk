@@ -8,6 +8,7 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const Database = require('better-sqlite3');
+const { createS3CompatibleStorageAdapter } = require('../server/services/storage/s3CompatibleStorage.adapter');
 
 const runId = `file_storage_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
 const port = 4500 + Math.floor(Math.random() * 100);
@@ -192,6 +193,27 @@ function latestFileRow() {
   `).get() || null);
 }
 
+function countRegistryRowsByStorageKey(storageKey) {
+  return withDb((db) => {
+    const row = db.prepare(`
+      SELECT COUNT(*) AS c
+      FROM files_registry
+      WHERE storage_key = ?
+    `).get(String(storageKey || '').trim());
+    return Number(row?.c || 0);
+  });
+}
+
+function deleteTempRegistryRowsByStorageKey(storageKey) {
+  return withDb((db) => db.prepare(`
+    DELETE FROM files_registry
+    WHERE storage_key = ?
+      AND purpose = 'upload_temp'
+      AND (channel_id IS NULL OR channel_id = '')
+      AND (message_id IS NULL OR message_id = '')
+  `).run(String(storageKey || '').trim()));
+}
+
 function startServer() {
   const child = spawn(process.execPath, ['server.js'], {
     cwd: process.cwd(),
@@ -220,6 +242,125 @@ function startServer() {
   return child;
 }
 
+function createMockResponse({ status = 200, headers = {}, bodyText = '', bodyBuffer = null } = {}) {
+  const headerMap = new Map(Object.entries(headers).map(([key, value]) => [String(key).toLowerCase(), String(value)]));
+  const payload = bodyBuffer !== null ? Buffer.from(bodyBuffer) : Buffer.from(String(bodyText || ''), 'utf8');
+  return {
+    status,
+    headers: {
+      get(name) {
+        return headerMap.get(String(name || '').toLowerCase()) || null;
+      }
+    },
+    async text() {
+      return payload.toString('utf8');
+    },
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(payload);
+        controller.close();
+      }
+    })
+  };
+}
+
+async function runS3AdapterMockTest() {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `s3-adapter-${runId}-`));
+  const sampleFile = path.join(tempDir, 'sample.txt');
+  fs.writeFileSync(sampleFile, 'mock object body', 'utf8');
+
+  const calls = [];
+  const objectBytes = Buffer.from('mock object body', 'utf8');
+  const metadataText = JSON.stringify({ ok: true });
+  const fetchImpl = async (url, options = {}) => {
+    const href = String(url);
+    calls.push({
+      method: String(options.method || 'GET'),
+      url: href,
+      headers: { ...(options.headers || {}) }
+    });
+
+    if (href.includes('missing-object')) {
+      return createMockResponse({ status: 404 });
+    }
+    if (String(options.method) === 'HEAD') {
+      return createMockResponse({
+        status: 200,
+        headers: {
+          'content-length': String(objectBytes.length),
+          'last-modified': new Date('2026-04-27T12:00:00Z').toUTCString(),
+          etag: '"etag-1"',
+          'content-type': 'text/plain'
+        }
+      });
+    }
+    if (String(options.method) === 'PUT') {
+      return createMockResponse({ status: 200 });
+    }
+    if (String(options.method) === 'DELETE') {
+      return createMockResponse({ status: 204 });
+    }
+    if (href.endsWith('/docs/note.txt')) {
+      return createMockResponse({
+        status: 200,
+        headers: { 'content-type': 'text/plain' },
+        bodyText: metadataText
+      });
+    }
+    return createMockResponse({
+      status: 200,
+      headers: {
+        'content-length': String(objectBytes.length),
+        'content-type': 'text/plain'
+      },
+      bodyBuffer: objectBytes
+    });
+  };
+
+  try {
+    const adapter = createS3CompatibleStorageAdapter({
+      endpoint: 'https://example-account.r2.cloudflarestorage.com',
+      region: 'auto',
+      bucket: 'studiestalk-test',
+      accessKeyId: 'key-id',
+      secretAccessKey: 'secret-key',
+      forcePathStyle: true,
+      fetchImpl,
+      now: () => new Date('2026-04-27T12:00:00Z')
+    });
+
+    assert.equal(await adapter.exists('docs/sample.txt'), true, 'exists should succeed on 200 HEAD');
+    assert.equal(await adapter.exists('missing-object.txt'), false, 'exists should return false on 404');
+
+    await adapter.putFile({ key: 'docs/sample.txt', sourcePath: sampleFile });
+    await adapter.putText({ key: 'docs/note.txt', text: metadataText });
+
+    const stat = await adapter.stat('docs/sample.txt');
+    assert.equal(stat.size, objectBytes.length, 'stat should expose object size');
+    assert.equal(stat.contentType, 'text/plain', 'stat should expose content type');
+
+    const downloadedText = await adapter.getText('docs/note.txt');
+    assert.equal(downloadedText, metadataText, 'getText should read object text');
+
+    const stream = adapter.createReadStream('docs/sample.txt');
+    const chunks = [];
+    for await (const chunk of stream) {
+      chunks.push(Buffer.from(chunk));
+    }
+    assert.equal(Buffer.concat(chunks).toString('utf8'), objectBytes.toString('utf8'), 'createReadStream should stream object bytes');
+
+    await adapter.delete('docs/sample.txt');
+
+    const authCalls = calls.filter((call) => call.headers.authorization || call.headers.Authorization);
+    assert.ok(authCalls.length >= 5, 'signed requests should include authorization headers');
+    assert.ok(authCalls.every((call) => String(call.headers.authorization || call.headers.Authorization).startsWith('AWS4-HMAC-SHA256 ')), 'authorization headers should use SigV4');
+
+    console.log('[file-storage-smoke] s3 adapter mock passed');
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
 async function login(baseUrl) {
   const jar = {};
   await api(baseUrl, jar, 'GET', '/api/auth/csrf');
@@ -240,12 +381,19 @@ async function acceptPolicy(baseUrl, jar) {
 async function uploadFile(baseUrl, jar, fileName, content, type = 'text/plain') {
   const body = new FormData();
   body.append('files', new Blob([content], { type }), fileName);
+  body.append('channelId', ids.channelId);
   const { data } = await request(baseUrl, jar, 'POST', '/api/uploads', { body });
   assert.ok(Array.isArray(data?.files) && data.files.length === 1, 'upload should return one file');
   return data.files[0];
 }
 
 async function main() {
+  await runS3AdapterMockTest();
+  if (String(process.env.FILE_STORAGE_SMOKE_MODE || '').trim().toLowerCase() === 'adapter-only') {
+    console.log('[file-storage-smoke] adapter-only mode passed');
+    return;
+  }
+
   if (fs.existsSync(sqlitePath)) fs.unlinkSync(sqlitePath);
   fs.rmSync(uploadsDir, { recursive: true, force: true });
 
@@ -269,6 +417,7 @@ async function main() {
     assert.equal(firstUpload.checksum, secondUpload.checksum, 'dedupe should keep same checksum');
     assert.equal(firstUpload.storageKey, secondUpload.storageKey, 'dedupe should reuse the same storage key');
     assert.equal(firstUpload.storageMode, 'encrypted', 'private school uploads should be encrypted when enabled');
+    assert.ok(countRegistryRowsByStorageKey(firstUpload.storageKey) >= 1, 'upload route should register temporary DB metadata');
 
     await api(baseUrl, jar, 'POST', `/api/channels/${encodeURIComponent(ids.channelId)}/messages`, {
       json: {
@@ -288,6 +437,14 @@ async function main() {
     const rawStored = fs.readFileSync(objectPath);
     assert.ok(rawStored.length > 0, 'encrypted object should exist on disk');
     assert.equal(rawStored.includes(Buffer.from(plaintext)), false, 'encrypted object must not contain plaintext bytes');
+    assert.equal(fs.existsSync(`${objectPath}.meta.json`), false, 'managed upload metadata should stay in DB, not sidecar files');
+
+    deleteTempRegistryRowsByStorageKey(firstUpload.storageKey);
+    const recoveredUpload = await uploadFile(baseUrl, jar, 'secure-note.txt', plaintext);
+    assert.equal(recoveredUpload.checksum, firstUpload.checksum, 'recovery upload should preserve plaintext checksum');
+    assert.equal(recoveredUpload.storageMode, 'encrypted', 'recovery upload should stay encrypted');
+    assert.notEqual(recoveredUpload.storageKey, firstUpload.storageKey, 'metadata-missing recovery should generate a fresh storage key instead of crashing');
+    assert.ok(countRegistryRowsByStorageKey(recoveredUpload.storageKey) >= 1, 'recovery upload should recreate DB metadata');
 
     const downloaded = await request(baseUrl, jar, 'GET', row.url, {
       expectedStatus: 200,

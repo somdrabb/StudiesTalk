@@ -145,7 +145,8 @@ function createFileStorageService({
   perTypeMaxBytes = {},
   encryptionEnabled = false,
   encryptionKeyHex = '',
-  encryptionKeyId = 'file-key-v1'
+  encryptionKeyId = 'file-key-v1',
+  findExistingObjectMetadata = null
 }) {
   if (!adapter) {
     throw new Error('File storage adapter is required.');
@@ -191,20 +192,18 @@ function createFileStorageService({
     ].join('/');
   }
 
-  async function readObjectMetadata(storageKey) {
-    try {
-      const text = await adapter.getText(`${storageKey}.meta.json`);
-      return JSON.parse(text);
-    } catch (_err) {
-      return null;
+  function buildRecoveryStorageKey(baseStorageKey = '') {
+    const normalized = String(baseStorageKey || '').trim();
+    if (!normalized) return '';
+    const suffix = `.recovery-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    if (normalized.endsWith('.enc')) {
+      return `${normalized.slice(0, -'.enc'.length)}${suffix}.enc`;
     }
-  }
-
-  async function writeObjectMetadata(storageKey, metadata) {
-    await adapter.putText({
-      key: `${storageKey}.meta.json`,
-      text: JSON.stringify(metadata || {}, null, 2)
-    });
+    const ext = path.extname(normalized);
+    if (ext) {
+      return `${normalized.slice(0, -ext.length)}${suffix}${ext}`;
+    }
+    return `${normalized}${suffix}`;
   }
 
   async function storeFromFile({
@@ -228,26 +227,59 @@ function createFileStorageService({
 
     const checksum = await hashFile(inputPath);
     const shouldEncrypt = Boolean(encryptionEnabled && isPrivatePermission(permissions));
-    const storageKey = buildStorageKey({
+    const deterministicStorageKey = buildStorageKey({
       workspaceId,
       checksum,
       fileName: safeName,
       encrypted: shouldEncrypt
     });
-    const exists = await adapter.exists(storageKey);
+    let storageKey = deterministicStorageKey;
+    const normalizedPermissions = normalizePermissions(permissions);
+    const storageMode = shouldEncrypt ? 'encrypted' : 'plain';
+    const storedMeta = typeof findExistingObjectMetadata === 'function'
+      ? await findExistingObjectMetadata({
+          storageKey: deterministicStorageKey,
+          checksum,
+          workspaceId,
+          permissions: normalizedPermissions,
+          storageProvider: adapter.providerName,
+          storageMode
+        })
+      : null;
+    let exists = false;
 
     let encryptionIv = null;
     let encryptionTag = null;
     let encryptionKeyIdValue = null;
     let deduped = false;
 
-    if (exists) {
+    if (storedMeta?.storageKey) {
+      storageKey = String(storedMeta.storageKey || '').trim() || deterministicStorageKey;
+      exists = await adapter.exists(storageKey);
       deduped = true;
-      const storedMeta = await readObjectMetadata(storageKey);
       encryptionIv = storedMeta?.encryptionIv || null;
       encryptionTag = storedMeta?.encryptionTag || null;
       encryptionKeyIdValue = storedMeta?.encryptionKeyId || null;
-    } else if (shouldEncrypt) {
+      if (!exists) {
+        deduped = false;
+        storageKey = deterministicStorageKey;
+        encryptionIv = null;
+        encryptionTag = null;
+        encryptionKeyIdValue = null;
+      }
+    } else {
+      exists = await adapter.exists(deterministicStorageKey);
+      if (exists) {
+        storageKey = buildRecoveryStorageKey(deterministicStorageKey);
+        exists = false;
+        deduped = false;
+        encryptionIv = null;
+        encryptionTag = null;
+        encryptionKeyIdValue = null;
+      }
+    }
+
+    if (!exists && shouldEncrypt) {
       const encrypted = await encryptToTempFile({
         inputPath,
         keyBuffer: encryptionKeyBuffer
@@ -260,29 +292,8 @@ function createFileStorageService({
       encryptionIv = encrypted.ivHex;
       encryptionTag = encrypted.tagHex;
       encryptionKeyIdValue = encryptionKeyId;
-      await writeObjectMetadata(storageKey, {
-        checksum,
-        workspaceId,
-        originalName: safeName,
-        mimeType,
-        sizeBytes: Number(stat.size || 0),
-        permissions: normalizePermissions(permissions),
-        encrypted: true,
-        encryptionIv,
-        encryptionTag,
-        encryptionKeyId: encryptionKeyIdValue
-      });
-    } else {
+    } else if (!exists) {
       await adapter.putFile({ key: storageKey, sourcePath: inputPath });
-      await writeObjectMetadata(storageKey, {
-        checksum,
-        workspaceId,
-        originalName: safeName,
-        mimeType,
-        sizeBytes: Number(stat.size || 0),
-        permissions: normalizePermissions(permissions),
-        encrypted: false
-      });
     }
 
     return {
@@ -294,11 +305,12 @@ function createFileStorageService({
       sizeBytes: Number(stat.size || 0),
       mimeType,
       originalName: safeName,
-      permissions: normalizePermissions(permissions),
+      permissions: normalizedPermissions,
       encryptionKeyId: encryptionKeyIdValue,
       encryptionIv,
       encryptionTag,
-      deduped
+      deduped,
+      cleanupOnFailure: !deduped
     };
   }
 
@@ -342,7 +354,6 @@ function createFileStorageService({
       const storageKey = String(record.storageKey || '').trim();
       if (!storageKey) return { ok: true };
       await adapter.delete(storageKey);
-      await adapter.delete(`${storageKey}.meta.json`);
       return { ok: true };
     }
   };

@@ -58,9 +58,30 @@ Files marked `workspace_public` can remain plain if app-level encryption is disa
 The application uses a storage service with adapter boundaries:
 
 - `local_disk`: writes managed objects to a disk-backed storage root for development and single-node deployments
-- `s3_compatible`: placeholder interface for future Cloudflare R2 / S3 / Wasabi / Hetzner Object Storage integration
+- `s3_compatible`: Cloudflare R2 / AWS S3-compatible object storage backend
 
 The application route stays stable while the adapter changes underneath it.
+
+Current S3-compatible env surface:
+
+- `S3_ENDPOINT`
+- `S3_REGION`
+- `S3_BUCKET`
+- `S3_ACCESS_KEY_ID`
+- `S3_SECRET_ACCESS_KEY`
+- `S3_FORCE_PATH_STYLE`
+
+Bucket credentials remain backend-only. They are never returned to the frontend and are used only by the server-side storage adapter.
+
+## S3 / R2 behavior
+
+- object bodies are stored in the bucket
+- metadata remains in `files_registry` and related DB tables, not object metadata headers
+- `createReadStream()` reads the encrypted or plain object from object storage and keeps decrypt-on-read behavior in the app layer
+- deletes remove the object while metadata lifecycle stays in the database layer
+- `exists()` and `stat()` use signed object requests without exposing credentials
+
+This preserves the same app contract across local disk and S3-compatible storage.
 
 ## Download Path
 
@@ -98,4 +119,7 @@ If `UPLOAD_MAX_FILE_BYTES` is lower than a type default, the lower value wins.
 
 - Managed object garbage collection is not implemented yet, so deleted/detached duplicate objects are not reclaimed automatically.
 - Encryption is optional; if production enables it, key rotation and key escrow procedures still need an operational runbook.
-- The S3-compatible adapter is still a placeholder and has not been integrated with a real object storage backend yet.
+- Bucket IAM policy still needs operational hardening outside the app:
+  - least-privilege access key scoped to one bucket
+  - HTTPS-only endpoint use
+  - bucket lifecycle/retention review

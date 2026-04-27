@@ -28,9 +28,9 @@ No file body is stored in `files_registry`.
 The storage service supports:
 
 - local disk in development and single-node deployments
-- an S3/R2-compatible placeholder for production object storage
+- S3/R2-compatible object storage for staging/production-style deployments
 
-This keeps the app-side contract stable while allowing production to move to lower-cost object storage later.
+This keeps the app-side contract stable while allowing production to move managed objects off local disk without changing the DB metadata model.
 
 ## Deduplication Savings
 
@@ -69,10 +69,23 @@ Effective enforcement is the smaller of the type cap and `UPLOAD_MAX_FILE_BYTES`
 For production:
 
 1. keep `files_registry` metadata-only
-2. move managed storage from local disk to R2/S3-compatible storage
+2. move managed storage from local disk to R2/S3-compatible storage using:
+   - `S3_ENDPOINT`
+   - `S3_REGION`
+   - `S3_BUCKET`
+   - `S3_ACCESS_KEY_ID`
+   - `S3_SECRET_ACCESS_KEY`
+   - `S3_FORCE_PATH_STYLE`
 3. enable `FILE_STORAGE_ENCRYPTION_ENABLED=true` for private school files
 4. keep encryption keys outside the database
 5. add lifecycle cleanup for deleted and unreferenced objects
+
+## Cost notes for R2 / S3-compatible storage
+
+- deduplication still happens before object persistence, so repeated uploads within a workspace reuse one object key
+- DB backups stay smaller because only metadata lives in relational storage
+- app-layer AES-GCM encryption still works because encryption happens before upload, not inside the bucket
+- metadata stays in the database, so the bucket cost footprint is the encrypted/plain object body only
 
 ## Next Cost Improvements
 
