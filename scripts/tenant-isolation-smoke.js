@@ -293,6 +293,7 @@ function startServer() {
     env: {
       ...process.env,
       NODE_ENV: 'development',
+      HOST: '127.0.0.1',
       PORT: String(port),
       DB_ENGINE: 'sqlite',
       DB_PATH: sqlitePath,

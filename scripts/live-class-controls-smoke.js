@@ -7,7 +7,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
+const { spawnSync } = require('child_process');
 const Database = require('better-sqlite3');
+const jwt = require('jsonwebtoken');
 
 const runId = `live_controls_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
 const port = 4600 + Math.floor(Math.random() * 100);
@@ -186,6 +188,7 @@ function startServer() {
     env: {
       ...process.env,
       NODE_ENV: 'development',
+      HOST: '127.0.0.1',
       PORT: String(port),
       DB_ENGINE: 'sqlite',
       DB_PATH: sqlitePath,
@@ -195,6 +198,12 @@ function startServer() {
       ATTENDANCE_DB_ENGINE: 'sqlite',
       CHANNELS_DB_ENGINE: 'sqlite',
       MESSAGES_DB_ENGINE: 'sqlite',
+      JITSI_DOMAIN: 'meet.studiestalk.test',
+      JITSI_APP_ID: 'studiestalk',
+      JITSI_APP_SECRET: 'test_jitsi_secret',
+      JITSI_JWT_AUDIENCE: 'jitsi',
+      JITSI_JWT_ISSUER: 'studiestalk',
+      JITSI_JWT_SUBJECT: 'meet.studiestalk.test',
       EMAIL_PROVIDER: 'disabled',
       EMAIL_FROM_EMAIL: 'no-reply@example.com'
     },
@@ -203,6 +212,28 @@ function startServer() {
   child.stdout.on('data', (chunk) => process.stdout.write(chunk));
   child.stderr.on('data', (chunk) => process.stderr.write(chunk));
   return child;
+}
+
+function assertPublicMeetJwtWarning() {
+  const result = spawnSync(process.execPath, ['scripts/preflight.js'], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      NODE_ENV: 'development',
+      JITSI_DOMAIN: 'meet.jit.si',
+      JITSI_APP_ID: 'studiestalk',
+      JITSI_APP_SECRET: 'test_jitsi_secret',
+      JITSI_JWT_AUDIENCE: 'jitsi',
+      JITSI_JWT_ISSUER: 'studiestalk',
+      JITSI_JWT_SUBJECT: 'meet.jit.si'
+    },
+    encoding: 'utf8'
+  });
+  const output = `${result.stdout || ''}\n${result.stderr || ''}`;
+  assert.ok(
+    output.includes('meet.jit.si cannot be used for StudiesTalk JWT moderator auto-host. Use 8x8.vc JaaS or self-hosted Jitsi.'),
+    'preflight should warn when meet.jit.si is configured with StudiesTalk JWT moderator auto-host'
+  );
 }
 
 async function login(baseUrl, email) {
@@ -223,6 +254,7 @@ async function acceptPolicy(baseUrl, jar, workspaceId) {
 }
 
 async function main() {
+  assertPublicMeetJwtWarning();
   if (fs.existsSync(sqlitePath)) fs.unlinkSync(sqlitePath);
   fs.rmSync(uploadsDir, { recursive: true, force: true });
 
@@ -248,6 +280,15 @@ async function main() {
     await acceptPolicy(baseUrl, studentBJar, ids.workspaceId);
     await acceptPolicy(baseUrl, outsiderJar, ids.otherWorkspaceId);
 
+    const teacherJoin = await api(baseUrl, teacherJar, 'POST', `/api/live-sessions/${encodeURIComponent(ids.sessionId)}/join`);
+    assert.strictEqual(teacherJoin.ok, true, 'teacher should join instantly');
+    assert.strictEqual(teacherJoin.jitsi?.moderator, true, 'teacher should join as moderator');
+    assert.ok(teacherJoin.jitsi?.jwt, 'teacher should receive moderator jwt');
+    assert.ok(String(teacherJoin.jitsi?.meetingUrl || '').includes('?jwt='), 'teacher join URL should include jwt');
+    const teacherClaims = jwt.verify(String(teacherJoin.jitsi.jwt), 'test_jitsi_secret');
+    assert.strictEqual(teacherClaims.moderator, true, 'teacher jwt should carry moderator privilege');
+    assert.strictEqual(teacherClaims.room, teacherJoin.jitsi?.roomName, 'teacher jwt should target session room');
+
     const requestA = await api(baseUrl, studentAJar, 'POST', `/api/live-sessions/${encodeURIComponent(ids.sessionId)}/request-join`, {
       expectedStatus: 202
     });
@@ -266,6 +307,9 @@ async function main() {
     const joinedA = await api(baseUrl, studentAJar, 'POST', `/api/live-sessions/${encodeURIComponent(ids.sessionId)}/join`);
     assert.strictEqual(joinedA.ok, true, 'approved student should join');
     assert.strictEqual(joinedA.liveControls.self.status, 'joined', 'approved student should move to joined');
+    assert.strictEqual(joinedA.jitsi?.moderator, false, 'student should not join as moderator');
+    assert.ok(!joinedA.jitsi?.jwt, 'student should not receive moderator jwt');
+    assert.ok(!String(joinedA.jitsi?.meetingUrl || '').includes('?jwt='), 'student join URL should not include moderator jwt');
 
     await api(baseUrl, studentBJar, 'POST', `/api/live-sessions/${encodeURIComponent(ids.sessionId)}/request-join`, {
       expectedStatus: 202
@@ -299,6 +343,11 @@ async function main() {
 
     const adminJoin = await api(baseUrl, adminJar, 'POST', `/api/live-sessions/${encodeURIComponent(ids.sessionId)}/join`);
     assert.strictEqual(adminJoin.ok, true, 'same-workspace admin should bypass waiting room');
+    assert.strictEqual(adminJoin.jitsi?.moderator, true, 'school admin should join as moderator');
+    assert.ok(adminJoin.jitsi?.jwt, 'school admin should receive moderator jwt');
+    assert.ok(String(adminJoin.jitsi?.meetingUrl || '').includes('?jwt='), 'school admin join URL should include jwt');
+    const adminClaims = jwt.verify(String(adminJoin.jitsi.jwt), 'test_jitsi_secret');
+    assert.strictEqual(adminClaims.moderator, true, 'school admin jwt should carry moderator privilege');
 
     console.log('[live-class-controls-smoke] passed');
   } finally {
