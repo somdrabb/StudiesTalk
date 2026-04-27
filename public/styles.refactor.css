@@ -2199,13 +2199,6 @@ html[data-theme="dark"] #toast {
   gap: 10px;
 }
 
-.attendance-qr-layout {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-}
-
 .attendance-code-header {
   display: flex;
   flex-wrap: wrap;
@@ -2245,223 +2238,40 @@ html[data-theme="dark"] #toast {
   color: #2e7d32;
 }
 
-.attendance-inline-badge.is-warning {
-  background: #fff6db;
-  border-color: #f5d585;
-  color: #a16207;
-}
-
-.attendance-inline-badge.is-danger {
-  background: #feeeee;
-  border-color: #fecaca;
-  color: #b91c1c;
-}
-
 .attendance-code-meta {
   font-size: 11px;
   color: #6c7a8a;
   line-height: 1.4;
 }
 
-.attendance-student-intro {
-  margin: 0 0 12px;
-  padding: 10px 12px;
-  border-radius: 14px;
-  border: 1px solid #e2e8f0;
-  background: #f8fbff;
-  color: #526277;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.attendance-student-scan-block {
-  display: grid;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-.attendance-guest-checkin {
-  display: grid;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-.attendance-guest-meta {
-  padding: 12px 14px;
-  border-radius: 16px;
-  border: 1px solid #dbe4f0;
-  background: #f8fbff;
-  color: #526277;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.attendance-guest-field {
-  display: grid;
-  gap: 6px;
-}
-
-.attendance-guest-field label {
-  font-size: 12px;
-  font-weight: 700;
-  color: #334155;
-}
-
-.attendance-guest-field input {
-  min-height: 40px;
-  padding: 8px 12px;
-  border-radius: 14px;
-  border: 1px solid #dbe4f0;
-  background: #ffffff;
-  color: #1e293b;
-  font-size: 13px;
-}
-
-.attendance-guest-submit {
-  min-height: 40px;
-  border-radius: 14px;
-  font-size: 13px;
-  font-weight: 800;
-}
-
-.attendance-scan-card {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 14px 16px;
-  border-radius: 18px;
-  border: 1px solid #dbe4f0;
-  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
-  color: #1e293b;
-  text-align: left;
-  cursor: pointer;
-  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.08);
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
-}
-
-.attendance-scan-card:hover,
-.attendance-scan-card:focus-visible {
-  transform: translateY(-1px);
-  border-color: #cbd5e1;
-  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.12);
-  outline: none;
-}
-
-.attendance-scan-card:disabled {
-  cursor: not-allowed;
-  opacity: 0.7;
-  transform: none;
-  box-shadow: none;
-}
-
-.attendance-scan-card-icon {
-  width: 48px;
-  height: 48px;
-  flex: 0 0 48px;
-  border-radius: 16px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%);
-  color: #ffffff;
-  font-size: 18px;
-}
-
-.attendance-scan-card-copy {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.attendance-scan-card-copy strong {
-  font-size: 14px;
-  font-weight: 800;
-  color: #1e293b;
-}
-
-.attendance-scan-card-copy span {
-  font-size: 12px;
-  line-height: 1.45;
-  color: #64748b;
-}
-
-.attendance-scan-preview {
-  display: grid;
-  gap: 10px;
-  padding: 12px;
-  border-radius: 18px;
-  border: 1px solid #dbe4f0;
-  background: #f8fbff;
-}
-
-.attendance-scan-preview video {
-  width: 100%;
-  min-height: 220px;
-  max-height: 280px;
-  object-fit: cover;
-  border-radius: 16px;
-  background: #0f172a;
-}
-
-.attendance-scan-preview-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.attendance-qr-label {
-  font-size: 12px;
-  font-weight: 700;
-  color: #1e293b;
-}
-
-.attendance-qr-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-}
-
-.attendance-qr-expiry {
-  font-size: 11px;
-  color: #6c7a8a;
-}
-
 /* QR Box - Compact */
 .attendance-qr-box {
-  width: 140px;
-  height: 140px;
+  width: 80px;
+  height: 80px;
   display: grid;
-  place-items: center;
-  padding: 10px;
+  grid-template-columns: repeat(9, 1fr);
+  gap: 1.5px;
+  padding: 6px;
   border-radius: 16px;
   background: #ffffff;
-  border: 1px solid #dbe4f0;
+  border: 1px solid #eef2f6;
+  margin-bottom: 4px;
   transition: all 0.2s ease;
-  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
 }
 
 .attendance-qr-box:hover {
-  border-color: #cbd5e1;
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.1);
+  border-color: #e2e8f0;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.02);
 }
 
-.attendance-qr-box canvas,
-.attendance-qr-box img {
-  width: 120px !important;
-  height: 120px !important;
+.attendance-qr-box span {
   display: block;
-  background: #ffffff;
+  border-radius: 2px;
+  background: #eef2f8;
 }
 
-.attendance-qr-placeholder {
-  font-size: 11px;
-  font-weight: 700;
-  color: #64748b;
+.attendance-qr-box span.is-on {
+  background: linear-gradient(135deg, #4f46e5, #7c3aed);
 }
 
 /* Code Actions */
@@ -2515,33 +2325,6 @@ html[data-theme="dark"] #toast {
   border-radius: 20px;
   padding: 0 14px;
   font-size: 11px;
-}
-
-#attendanceCopyCodeBtn {
-  min-height: 36px;
-  padding: 0 16px;
-  border-radius: 14px;
-  background: linear-gradient(180deg, #ffffff 0%, #f4f7fb 100%);
-  border: 1px solid #dbe4f0;
-  color: #334155;
-  font-size: 12px;
-  font-weight: 700;
-  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
-}
-
-#attendanceCopyCodeBtn:hover {
-  transform: translateY(-1px);
-  border-color: #c7d2e3;
-  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.12);
-}
-
-#attendanceCopyCodeBtn:focus-visible {
-  outline: none;
-  border-color: #818cf8;
-  box-shadow:
-    0 0 0 3px rgba(99, 102, 241, 0.14),
-    0 10px 20px rgba(15, 23, 42, 0.1);
 }
 
 .attendance-checkin-form .btn {
@@ -3040,59 +2823,6 @@ html[data-theme="dark"] .attendance-checkin-form input {
   color: #e2e8f0;
 }
 
-html[data-theme="dark"] .attendance-student-intro {
-  background: #172235;
-  border-color: #334155;
-  color: #cbd5e1;
-}
-
-html[data-theme="dark"] .attendance-guest-meta,
-html[data-theme="dark"] .attendance-guest-field input {
-  background: #172235;
-  border-color: #334155;
-  color: #e2e8f0;
-}
-
-html[data-theme="dark"] .attendance-guest-field label {
-  color: #cbd5e1;
-}
-
-html[data-theme="dark"] .attendance-scan-card,
-html[data-theme="dark"] .attendance-scan-preview {
-  background: #172235;
-  border-color: #334155;
-  color: #e2e8f0;
-  box-shadow: none;
-}
-
-html[data-theme="dark"] .attendance-scan-card-copy strong {
-  color: #e2e8f0;
-}
-
-html[data-theme="dark"] .attendance-scan-card-copy span {
-  color: #94a3b8;
-}
-
-html[data-theme="dark"] .attendance-qr-box {
-  background: #ffffff;
-  border-color: #475569;
-}
-
-html[data-theme="dark"] .attendance-qr-label,
-html[data-theme="dark"] .attendance-code-value {
-  color: #e2e8f0;
-}
-
-html[data-theme="dark"] .attendance-qr-expiry {
-  color: #94a3b8;
-}
-
-html[data-theme="dark"] #attendanceCopyCodeBtn {
-  background: #1e293b;
-  border-color: #475569;
-  color: #e2e8f0;
-}
-
 html[data-theme="dark"] .attendance-summary-chip {
   background: #1e293b;
   border-color: #334155;
@@ -3182,6 +2912,9 @@ html[data-theme="dark"] .att-name {
   outline: 2px solid #4f46e5;
   outline-offset: 2px;
 }
+/*END  Attendance Modal - Polished Compact Design */
+/* ============================================ */
+
 
 .class-assign-overlay.is-open .modal-card.class-assign-card{
   transform: translateY(0) scale(1);

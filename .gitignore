@@ -46,6 +46,7 @@ server/secrets/*.json
 # App data
 /uploads/
 /backup/
+storage/
 
 # Build output
 build/Release

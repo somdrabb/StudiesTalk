@@ -31,6 +31,7 @@
 
 <!-- Styles -->
 <link href="styles.refactor.css" rel="stylesheet" />
+<link href="css/homework.css" rel="stylesheet" />
 <link href="Announcements/announcements.css" rel="stylesheet" />
 <link href="PlacementTest/placement-test.css" rel="stylesheet" />
 <link rel="stylesheet" href="/AIvoicepractice/aiVoicePractice.css" />
@@ -2998,46 +2999,61 @@
             </div>
           </div>
         </section>
-        <section class="attendance-panel" id="attendanceStudentPanel">
-          <div class="section-title">Student check-in</div>
-          <div class="attendance-student-intro" id="attendanceStudentIntro">
-            Scan the QR code your teacher shared, open the attendance link, or enter the class code below.
-          </div>
-          <div class="attendance-guest-checkin hidden" id="attendanceGuestCheckIn">
-            <div class="attendance-guest-meta" id="attendanceGuestMeta"></div>
-            <div class="attendance-guest-field">
-              <label for="attendanceGuestIdentifierInput">Student ID or registered email</label>
-              <input id="attendanceGuestIdentifierInput" type="text" autocomplete="username" placeholder="student123 or student@example.com" />
-            </div>
-            <div class="attendance-guest-field">
-              <label for="attendanceGuestDobInput">Date of birth</label>
-              <input id="attendanceGuestDobInput" type="date" autocomplete="bday" />
-            </div>
-            <button type="button" class="btn secondary attendance-guest-submit" id="attendanceGuestSubmitBtn">Check in</button>
-          </div>
-          <div class="attendance-student-scan-block" id="attendanceStudentScanBlock">
-            <button type="button" class="attendance-scan-card" id="attendanceStartScannerBtn">
-              <span class="attendance-scan-card-icon"><i class="fa-solid fa-camera"></i></span>
-              <span class="attendance-scan-card-copy">
-                <strong>Scan QR code</strong>
-                <span>Use your camera to scan the teacher's attendance QR.</span>
-              </span>
-            </button>
-            <div class="attendance-scan-preview hidden" id="attendanceScanPreviewWrap">
-              <video id="attendanceScannerVideo" playsinline muted></video>
-              <canvas id="attendanceScannerCanvas" class="hidden"></canvas>
-              <div class="attendance-scan-preview-meta">
-                <div class="attendance-inline-badge is-active" id="attendanceScannerStateBadge">Scanning…</div>
-                <button type="button" class="btn secondary" id="attendanceStopScannerBtn">Stop scanning</button>
+        <section class="attendance-panel" id="attendanceStudentPanel" style="max-width: 380px; margin: 0 auto; background: transparent; padding: 0;">
+          <div class="premium-card">
+            <div class="card-header">
+              <div class="header-text">
+                <div class="card-title" id="attendanceStudentTitle">Check in to A1-Morning</div>
+                <div class="card-subtitle" id="attendanceStudentSubtitle">2026-04-26</div>
               </div>
             </div>
+
+            <div class="attendance-student-intro hidden" id="attendanceStudentIntro"></div>
+
+            <div class="attendance-guest-checkin hidden" id="attendanceGuestCheckIn">
+              <div class="attendance-guest-meta" id="attendanceGuestMeta"></div>
+              <div class="attendance-guest-field">
+                <label for="attendanceGuestIdentifierInput">Student ID or registered email</label>
+                <input id="attendanceGuestIdentifierInput" type="text" autocomplete="username" placeholder="student123 or student@example.com" />
+              </div>
+              <div class="attendance-guest-field">
+                <label for="attendanceGuestDobInput">Date of birth</label>
+                <input id="attendanceGuestDobInput" type="date" autocomplete="bday" />
+              </div>
+              <button type="button" class="btn secondary attendance-guest-submit" id="attendanceGuestSubmitBtn">Check in</button>
+            </div>
+
+            <div class="status-chip hidden" id="attendanceStudentStatusBadge"></div>
+
+            <div class="attendance-student-scan-block" id="attendanceStudentScanBlock">
+              <div class="scan-premium-btn" id="attendanceStartScannerBtn" role="button" tabindex="0">
+                <div class="scan-target-shell">
+                  <div class="scan-preview-wrapper hidden" id="attendanceScanPreviewWrap">
+                    <video id="attendanceScannerVideo" playsinline muted></video>
+                    <canvas id="attendanceScannerCanvas" class="hidden"></canvas>
+                  </div>
+                  <div class="scan-target-frame">
+                    <span class="scan-corner scan-corner--tl"></span>
+                    <span class="scan-corner scan-corner--tr"></span>
+                    <span class="scan-corner scan-corner--bl"></span>
+                    <span class="scan-corner scan-corner--br"></span>
+                    <span class="scan-target-icon" id="attendanceScanTargetIcon"><i class="fa-solid fa-qrcode"></i></span>
+                  </div>
+                </div>
+              </div>
+              <button type="button" class="scan-target-label" id="attendanceManualEntryToggleBtn">Class code</button>
+            </div>
+
+            <div class="manual-entry hidden" id="attendanceCheckinForm">
+              <div class="divider-text">or enter class code</div>
+              <div class="code-input-group">
+                <input id="attendanceStudentCodeInput" type="text" maxlength="16" placeholder="Class code" autocomplete="off" />
+                <button type="button" class="checkin-btn" id="attendanceStudentCheckInBtn">Check in</button>
+              </div>
+            </div>
+
+            <div class="info-meta hidden" id="attendanceStudentStatusMeta"></div>
           </div>
-          <div class="attendance-checkin-form" id="attendanceCheckinForm">
-            <input id="attendanceStudentCodeInput" type="text" maxlength="16" placeholder="Enter class code" />
-            <button type="button" class="btn secondary" id="attendanceStudentCheckInBtn">Check in</button>
-          </div>
-          <div class="attendance-status-badge" id="attendanceStudentStatusBadge">Not checked in</div>
-          <div class="attendance-code-meta" id="attendanceStudentStatusMeta">Students can only check in themselves.</div>
         </section>
       </div>
       <div class="attendance-list" id="attendanceList"></div>

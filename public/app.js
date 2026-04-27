@@ -303,6 +303,7 @@ function buildLiveMeetingLaunchUrl(meetingUrl, options = {}) {
   if (!rawUrl) return "";
   const jwt = String(options.jwt || "").trim();
   const startWithVideoMuted = options.startWithVideoMuted !== false;
+  const startWithAudioMuted = options.startWithAudioMuted === true;
   const disablePrejoin = options.disablePrejoin !== false;
   try {
     const url = new URL(rawUrl, window.location.origin);
@@ -317,8 +318,12 @@ function buildLiveMeetingLaunchUrl(meetingUrl, options = {}) {
     if (startWithVideoMuted) {
       hashParams.set("config.startWithVideoMuted", "true");
     }
+    if (startWithAudioMuted) {
+      hashParams.set("config.startWithAudioMuted", "true");
+    } else {
+      hashParams.set("config.startWithAudioMuted", "false");
+    }
     hashParams.set("config.disableDeepLinking", "true");
-    hashParams.set("config.startSilent", "true");
     url.hash = hashParams.toString() ? `#${hashParams.toString()}` : "";
     return url.toString();
   } catch (_err) {
@@ -7974,12 +7979,13 @@ async function openLiveSessionExternally(sessionOrId) {
   const sessionId = String(session?.id || sessionOrId || "").trim();
   let meetingUrl = String(session?.meeting_url || "").trim();
   let meetingJwt = "";
+  let publicMeetNoAutoHost = false;
   const joinState = getLiveJoinActionState(session);
 
   if (joinState.kind === "request") {
     try {
       await requestLiveSessionJoin(session);
-      showToast("Join request sent. Waiting for approval.");
+      showToast("Join request sent. Waiting for your teacher to approve.");
     } catch (err) {
       console.error("Failed to request live session join", err);
       showToast(err?.message || "Could not request access to the live session.");
@@ -7994,7 +8000,7 @@ async function openLiveSessionExternally(sessionOrId) {
     return;
   }
   if (joinState.kind === "pending") {
-    showToast("Waiting for teacher approval.");
+    showToast("Waiting for your teacher to open the class.");
     return;
   }
   if (joinState.kind === "denied") {
@@ -8008,6 +8014,7 @@ async function openLiveSessionExternally(sessionOrId) {
       const joinedSession = joinData?.session || session || null;
       meetingUrl = String(joinData?.jitsi?.meetingUrl || joinedSession?.meeting_url || meetingUrl || "").trim();
       meetingJwt = String(joinData?.jitsi?.jwt || "").trim();
+      publicMeetNoAutoHost = Boolean(joinData?.jitsi?.publicMeetNoAutoHost);
       if (joinData?.liveControls) {
         applyLiveControlsToSession(sessionId, joinData.liveControls);
         liveActiveSession = { ...(joinedSession || liveActiveSession || {}), liveControls: joinData.liveControls };
@@ -8052,6 +8059,10 @@ async function openLiveSessionExternally(sessionOrId) {
     startWithVideoMuted: isTeacherUser?.() || isAdminUser?.(),
     disablePrejoin: true
   });
+  if (publicMeetNoAutoHost) {
+    showToast("Public Jitsi requires external moderator login. Use 8x8.vc or self-hosted Jitsi for automatic host mode.");
+  }
+  showToast(meetingJwt ? "Opening host room..." : "Joining class...");
   const opened = window.open(launchUrl, "_blank", "noopener,noreferrer");
   if (!opened) {
     showToast("Popup blocked. Allow popups to open the live session.");
@@ -25239,7 +25250,9 @@ let attendanceState = {
   scannerActive: false,
   scannerRafId: null,
   scannerCodeFound: "",
-  scannerMessage: ""
+  scannerMessage: "",
+  studentEntryMode: "scan",
+  studentHeaderClockTimer: null
 };
 
 const ATTENDANCE_DEEP_LINK_STORAGE_KEY = "studiestalk_attendance_deep_link";
@@ -25251,6 +25264,13 @@ function isoDateOnlyLocal(date = new Date()) {
   const mm = String(x.getMonth() + 1).padStart(2, "0");
   const dd = String(x.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
+}
+
+function formatAttendanceLiveTime(date = new Date()) {
+  return new Intl.DateTimeFormat([], {
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
 }
 
 function getActiveChannelIdSafe() {
@@ -25408,6 +25428,7 @@ function clearAttendanceQrCache() {
 function stopAttendanceScanner() {
   const video = document.getElementById("attendanceScannerVideo");
   const preview = document.getElementById("attendanceScanPreviewWrap");
+  const icon = document.getElementById("attendanceScanTargetIcon");
   const stateBadge = document.getElementById("attendanceScannerStateBadge");
   if (attendanceState.scannerRafId) {
     cancelAnimationFrame(attendanceState.scannerRafId);
@@ -25427,6 +25448,7 @@ function stopAttendanceScanner() {
     } catch (_err) {}
   }
   if (preview) preview.classList.add("hidden");
+  if (icon) icon.classList.remove("hidden");
   if (stateBadge) {
     stateBadge.classList.remove("is-warning", "is-danger");
     stateBadge.classList.add("is-active");
@@ -25434,10 +25456,31 @@ function stopAttendanceScanner() {
   }
 }
 
+function setAttendanceStudentEntryMode(mode, options = {}) {
+  const normalized = mode === "manual" ? "manual" : "scan";
+  attendanceState.studentEntryMode = normalized;
+  const scanBlock = document.getElementById("attendanceStudentScanBlock");
+  const form = document.getElementById("attendanceCheckinForm");
+  if (scanBlock) scanBlock.classList.toggle("hidden", normalized !== "scan");
+  if (form) form.classList.toggle("hidden", normalized !== "manual");
+  if (normalized === "manual") {
+    stopAttendanceScanner();
+    if (!options.skipFocus) {
+      queueMicrotask(() => document.getElementById("attendanceStudentCodeInput")?.focus());
+    }
+  }
+}
+
 function showAttendanceModal(show) {
   const modal = document.getElementById("attendanceModal");
   if (!modal) return;
-  if (!show) stopAttendanceScanner();
+  if (!show) {
+    stopAttendanceScanner();
+    if (attendanceState.studentHeaderClockTimer) {
+      clearInterval(attendanceState.studentHeaderClockTimer);
+      attendanceState.studentHeaderClockTimer = null;
+    }
+  }
   modal.classList.toggle("hidden", !show);
   document.body.classList.toggle("modal-open", show);
 }
@@ -25536,6 +25579,7 @@ function renderAttendanceModalMode() {
   const teacherMode = !!attendanceState.managementMode;
   if (teacherMode) stopAttendanceScanner();
   const guestMode = !!attendanceState.guestMode;
+  document.getElementById("attendanceModal")?.classList.toggle("attendance-student-shell", !teacherMode);
   document.getElementById("attendanceSearchWrap")?.classList.toggle("hidden", !teacherMode);
   document.getElementById("attendanceCodePanel")?.classList.toggle("hidden", !teacherMode);
   document.getElementById("attendanceReportGrid")?.classList.toggle("hidden", !teacherMode);
@@ -25543,11 +25587,22 @@ function renderAttendanceModalMode() {
   document.getElementById("attendanceAutosaveBadge")?.classList.toggle("hidden", !teacherMode);
   document.getElementById("attendanceCounts")?.classList.toggle("hidden", !teacherMode);
   document.getElementById("attendanceSaveBtn")?.classList.toggle("hidden", !teacherMode);
+  document.querySelector("#attendanceModal .attendance-modal-header")?.classList.toggle("hidden", !teacherMode);
+  document.querySelector("#attendanceModal .attendance-footer")?.classList.toggle("hidden", !teacherMode);
   const footerSummary = document.getElementById("attendanceFooterSummary");
   if (footerSummary) footerSummary.classList.toggle("hidden", !teacherMode);
-  document.getElementById("attendanceStudentScanBlock")?.classList.toggle("hidden", teacherMode || guestMode);
-  document.getElementById("attendanceCheckinForm")?.classList.toggle("hidden", teacherMode || guestMode);
+  document.getElementById("attendanceStudentScanBlock")?.classList.toggle("hidden", teacherMode || guestMode || attendanceState.studentEntryMode !== "scan");
+  document.getElementById("attendanceCheckinForm")?.classList.toggle("hidden", teacherMode || guestMode || attendanceState.studentEntryMode !== "manual");
   document.getElementById("attendanceGuestCheckIn")?.classList.toggle("hidden", !guestMode);
+  if (!teacherMode && !guestMode && attendanceState.studentEntryMode === "scan" && !attendanceState.scannerActive) {
+    queueMicrotask(() => {
+      if (!attendanceState.managementMode && !attendanceState.guestMode && attendanceState.studentEntryMode === "scan" && !attendanceState.scannerActive) {
+        startAttendanceScanner().catch((error) => {
+          console.warn("Could not auto-start attendance scanner", error);
+        });
+      }
+    });
+  }
 }
 
 function resolveAttendanceChannelLabel(channelId) {
@@ -25558,10 +25613,22 @@ function resolveAttendanceChannelLabel(channelId) {
 }
 
 function renderAttendanceStudentModalHeading(channelId, requestedDate) {
-  const title = document.getElementById("attendanceTitle");
-  const subtitle = document.getElementById("attendanceSubtitle");
+  const title = document.getElementById("attendanceStudentTitle");
+  const subtitle = document.getElementById("attendanceStudentSubtitle");
   if (title) title.textContent = `Check in to ${resolveAttendanceChannelLabel(channelId)}`;
-  if (subtitle) subtitle.textContent = requestedDate || isoDateOnlyLocal();
+  if (subtitle) subtitle.textContent = `${requestedDate || isoDateOnlyLocal()} • ${formatAttendanceLiveTime()}`;
+  if (attendanceState.studentHeaderClockTimer) {
+    clearInterval(attendanceState.studentHeaderClockTimer);
+    attendanceState.studentHeaderClockTimer = null;
+  }
+  if (!attendanceState.managementMode) {
+    attendanceState.studentHeaderClockTimer = setInterval(() => {
+      const liveSubtitle = document.getElementById("attendanceStudentSubtitle");
+      if (liveSubtitle) {
+        liveSubtitle.textContent = `${attendanceState.date || requestedDate || isoDateOnlyLocal()} • ${formatAttendanceLiveTime()}`;
+      }
+    }, 1000);
+  }
 }
 
 function renderAttendanceCounts() {
@@ -25634,36 +25701,44 @@ function renderAttendanceStudentState() {
   const guestMeta = document.getElementById("attendanceGuestMeta");
   if (badge) {
     badge.className = `attendance-status-badge is-${attendanceState.studentStatusTone || "neutral"}`;
-    badge.textContent = attendanceState.studentStatus || (attendanceState.managementMode ? "Teacher/admin view" : "Not checked in");
+    badge.textContent = attendanceState.studentStatus || (attendanceState.managementMode ? "Teacher/admin view" : "");
+    badge.classList.toggle("hidden", !attendanceState.studentStatus && !attendanceState.managementMode);
   }
   if (intro) {
-    intro.textContent = attendanceState.managementMode
-      ? "Student self check-in is available from student accounts only."
-      : attendanceState.guestMode
-        ? "Verify your student details to finish attendance on this phone."
-      : attendanceState.pendingDeepLinkCode
-        ? "We found your attendance link. Review the code below and confirm check-in."
-        : "Scan the QR code your teacher shared, open the attendance link, or enter the class code below.";
+    intro.textContent = "";
+    intro.classList.add("hidden");
   }
   if (meta) {
     if (attendanceState.managementMode) {
       meta.textContent = "Student self check-in is available from student accounts only. Teachers use this panel to generate codes and review attendance.";
+      meta.classList.remove("hidden");
     } else if (attendanceState.guestMode) {
       meta.textContent = attendanceState.guestPublicMeta?.status === "expired"
         ? "This check-in link is invalid or expired."
         : "Enter your student ID or registered email, then confirm your date of birth.";
+      meta.classList.remove("hidden");
     } else if (attendanceState.pendingDeepLinkCode && !attendanceState.studentStatus) {
       meta.textContent = "The code from your attendance link is ready. Tap Check in to continue.";
-    } else if (!attendanceState.studentStatus) {
-      meta.textContent = "Enter the short-lived class code to check yourself in.";
+      meta.classList.remove("hidden");
+    } else if (attendanceState.studentStatus) {
+      meta.classList.remove("hidden");
+    } else {
+      meta.textContent = "";
+      meta.classList.add("hidden");
     }
   }
-  if (scanBlock) scanBlock.classList.toggle("hidden", !!attendanceState.managementMode || !!attendanceState.guestMode);
+  if (scanBlock) {
+    scanBlock.classList.toggle("hidden", !!attendanceState.managementMode || !!attendanceState.guestMode || attendanceState.studentEntryMode !== "scan");
+  }
+  const form = document.getElementById("attendanceCheckinForm");
+  if (form) {
+    form.classList.toggle("hidden", !!attendanceState.managementMode || !!attendanceState.guestMode || attendanceState.studentEntryMode !== "manual");
+  }
   if (input) input.disabled = !!attendanceState.managementMode || !!attendanceState.guestMode;
   if (button) button.disabled = !!attendanceState.managementMode || !!attendanceState.guestMode;
   if (scanButton) {
     scanButton.disabled = !!attendanceState.managementMode || !!attendanceState.guestMode;
-    scanButton.classList.toggle("hidden", !!attendanceState.scannerActive || !!attendanceState.guestMode);
+    scanButton.classList.toggle("hidden", !!attendanceState.guestMode);
   }
   if (scanStateBadge && attendanceState.scannerCodeFound) {
     scanStateBadge.textContent = `Code found: ${attendanceState.scannerCodeFound}`;
@@ -25732,7 +25807,9 @@ async function startAttendanceScanner() {
   const preview = document.getElementById("attendanceScanPreviewWrap");
   const video = document.getElementById("attendanceScannerVideo");
   const canvas = document.getElementById("attendanceScannerCanvas");
+  const icon = document.getElementById("attendanceScanTargetIcon");
   if (!navigator.mediaDevices?.getUserMedia) {
+    setAttendanceStudentEntryMode("manual");
     attendanceState.studentStatus = "Camera unavailable";
     attendanceState.studentStatusTone = "warning";
     const meta = document.getElementById("attendanceStudentStatusMeta");
@@ -25741,6 +25818,7 @@ async function startAttendanceScanner() {
     return;
   }
   if (!window.jsQR) {
+    setAttendanceStudentEntryMode("manual");
     attendanceState.studentStatus = "Scanner unavailable";
     attendanceState.studentStatusTone = "warning";
     const meta = document.getElementById("attendanceStudentStatusMeta");
@@ -25760,6 +25838,7 @@ async function startAttendanceScanner() {
     attendanceState.scannerStream = stream;
     attendanceState.scannerActive = true;
     preview.classList.remove("hidden");
+    if (icon) icon.classList.add("hidden");
     video.srcObject = stream;
     await video.play();
     setAttendanceScannerMessage("Scanning…");
@@ -25767,15 +25846,19 @@ async function startAttendanceScanner() {
     if (!context) {
       throw new Error("Camera preview unavailable.");
     }
-    attendanceState.studentStatus = "Scanner ready";
+    attendanceState.studentStatus = "";
     attendanceState.studentStatusTone = "neutral";
     const meta = document.getElementById("attendanceStudentStatusMeta");
-    if (meta) meta.textContent = "Hold the QR code steady in front of the camera.";
+    if (meta) {
+      meta.textContent = "";
+      meta.classList.add("hidden");
+    }
     renderAttendanceStudentState();
     scanAttendanceVideoFrame(video, canvas, context);
   } catch (error) {
     console.error("Attendance scanner failed", error);
     stopAttendanceScanner();
+    setAttendanceStudentEntryMode("manual", { skipFocus: true });
     attendanceState.studentStatus = "Camera blocked";
     attendanceState.studentStatusTone = "warning";
     const meta = document.getElementById("attendanceStudentStatusMeta");
@@ -25997,6 +26080,7 @@ async function loadAttendanceForChannel(channelId, requestedDate) {
       qrDataUrl: "",
       guestMode: false,
       guestPublicMeta: null,
+      studentEntryMode: "scan",
       studentStatus: "",
       studentStatusTone: "neutral",
       managementMode: true,
@@ -26097,6 +26181,7 @@ async function openAttendanceForCurrentClass() {
       qrDataUrl: "",
       guestMode: false,
       guestPublicMeta: null,
+      studentEntryMode: "scan",
       studentStatus: "",
       studentStatusTone: "neutral",
       managementMode: false,
@@ -26309,6 +26394,7 @@ async function maybeHandleAttendanceDeepLink({ afterAuth = false } = {}) {
     attendanceState.date = isoDateOnlyLocal();
     attendanceState.managementMode = false;
     attendanceState.guestMode = true;
+    attendanceState.studentEntryMode = "manual";
     attendanceState.studentStatus = "";
     attendanceState.studentStatusTone = "neutral";
     try {
@@ -26351,6 +26437,7 @@ async function maybeHandleAttendanceDeepLink({ afterAuth = false } = {}) {
   attendanceState.sessionId = target.sessionId || attendanceState.sessionId;
   attendanceState.managementMode = false;
   attendanceState.guestMode = false;
+  attendanceState.studentEntryMode = "scan";
   attendanceState.date = attendanceState.date || isoDateOnlyLocal();
   renderAttendanceStudentModalHeading(attendanceState.channelId, attendanceState.date);
   const input = document.getElementById("attendanceStudentCodeInput");
@@ -26376,12 +26463,10 @@ function wireAttendanceModal() {
   document.getElementById("attendanceStudentCheckInBtn")?.addEventListener("click", submitAttendanceStudentCheckIn);
   document.getElementById("attendanceGuestSubmitBtn")?.addEventListener("click", submitAttendanceGuestCheckIn);
   document.getElementById("attendanceStartScannerBtn")?.addEventListener("click", startAttendanceScanner);
-  document.getElementById("attendanceStopScannerBtn")?.addEventListener("click", () => {
-    stopAttendanceScanner();
-    const meta = document.getElementById("attendanceStudentStatusMeta");
-    if (meta && !attendanceState.managementMode) {
-      meta.textContent = "Camera stopped. You can restart scanning or enter the class code manually.";
-    }
+  document.getElementById("attendanceManualEntryToggleBtn")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setAttendanceStudentEntryMode("manual");
   });
   document.getElementById("attendanceCopyCodeBtn")?.addEventListener("click", async () => {
     if (!attendanceState.code) return;
