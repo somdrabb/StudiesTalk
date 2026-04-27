@@ -56,6 +56,20 @@ function isValidUrl(value = '') {
   }
 }
 
+function getUrlProtocol(value = '') {
+  try {
+    return new URL(String(value || '').trim()).protocol;
+  } catch (_err) {
+    return '';
+  }
+}
+
+function isAbsolutePath(value = '') {
+  const normalized = String(value || '').trim();
+  if (!normalized) return false;
+  return normalized.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(normalized);
+}
+
 const VALID_NODE_ENVS = new Set(['development', 'test', 'production']);
 const VALID_DB_ENGINES = new Set(['sqlite', 'postgres', 'postgresql', 'pg']);
 
@@ -133,6 +147,12 @@ const UPLOADS_DIR = optional('UPLOADS_DIR', 'uploads');
 const UPLOAD_MAX_FILE_BYTES = int('UPLOAD_MAX_FILE_BYTES', 25 * 1024 * 1024);
 const FILE_STORAGE_ADAPTER = optional('FILE_STORAGE_ADAPTER', 'local').trim().toLowerCase();
 const FILE_STORAGE_LOCAL_ROOT = optional('FILE_STORAGE_LOCAL_ROOT', '');
+const S3_ENDPOINT = optional('S3_ENDPOINT', '');
+const S3_REGION = optional('S3_REGION', '');
+const S3_BUCKET = optional('S3_BUCKET', '');
+const S3_ACCESS_KEY_ID = optional('S3_ACCESS_KEY_ID', '');
+const S3_SECRET_ACCESS_KEY = optional('S3_SECRET_ACCESS_KEY', '');
+const S3_FORCE_PATH_STYLE = bool('S3_FORCE_PATH_STYLE', false);
 const FILE_STORAGE_ENCRYPTION_ENABLED = bool('FILE_STORAGE_ENCRYPTION_ENABLED', false);
 const FILE_STORAGE_ENCRYPTION_KEY = optional('FILE_STORAGE_ENCRYPTION_KEY', '');
 const FILE_STORAGE_ENCRYPTION_KEY_ID = optional('FILE_STORAGE_ENCRYPTION_KEY_ID', 'file-key-v1');
@@ -157,6 +177,12 @@ const AI_OUTPUT_TOKEN_RATE_EUR = optional('AI_OUTPUT_TOKEN_RATE_EUR', '0.00002')
 const AI_TIME_RATE_EUR_PER_SECOND = optional('AI_TIME_RATE_EUR_PER_SECOND', '0.000166');
 const AI_IDLE_TIMEOUT_SECONDS = optional('AI_IDLE_TIMEOUT_SECONDS', '45');
 const AI_CLEANUP_SWEEP_SECONDS = optional('AI_CLEANUP_SWEEP_SECONDS', '30');
+const JITSI_DOMAIN = optional('JITSI_DOMAIN', '');
+const JITSI_APP_ID = optional('JITSI_APP_ID', '');
+const JITSI_APP_SECRET = optional('JITSI_APP_SECRET', '');
+const JITSI_JWT_AUDIENCE = optionalAny(['JITSI_JWT_AUDIENCE', 'JITSI_AUDIENCE'], 'jitsi');
+const JITSI_JWT_ISSUER = optional('JITSI_JWT_ISSUER', '');
+const JITSI_JWT_SUBJECT = optional('JITSI_JWT_SUBJECT', '');
 
 const validationWarnings = [];
 const validationErrors = [];
@@ -182,6 +208,8 @@ if (!hasNonEmpty(APP_BASE_URL)) {
 } else if (!isValidUrl(APP_BASE_URL)) {
   if (IS_PROD) addError('APP_BASE_URL (or BASE_URL) must be a valid http/https URL.');
   else addWarning('APP_BASE_URL (or BASE_URL) is not a valid http/https URL. Development fallback may be safer.');
+} else if (IS_PROD && getUrlProtocol(APP_BASE_URL) !== 'https:') {
+  addError('APP_BASE_URL (or BASE_URL) must use https in production.');
 }
 
 if (!hasNonEmpty(JWT_ACCESS_SECRET) || isLikelyDefaultSecret(JWT_ACCESS_SECRET) || String(JWT_ACCESS_SECRET).length < 16) {
@@ -195,7 +223,7 @@ if (!hasNonEmpty(JWT_REFRESH_SECRET) || isLikelyDefaultSecret(JWT_REFRESH_SECRET
 }
 
 if (!COOKIE_SECURE && IS_PROD) {
-  addWarning('COOKIE_SECURE is false in production. Secure cookies are strongly recommended behind HTTPS.');
+  addError('COOKIE_SECURE must be true in production.');
 }
 
 for (const [name, value] of Object.entries({
@@ -215,6 +243,12 @@ if (DB_ENGINE === 'sqlite') {
   if (!hasNonEmpty(DB_PATH)) {
     addError('DB_PATH is required when DB_ENGINE=sqlite.');
   }
+  if (IS_PROD) {
+    addWarning('DB_ENGINE=sqlite in production is single-instance only. PostgreSQL is recommended for staging/production.');
+    if (!isAbsolutePath(DB_PATH)) {
+      addWarning('DB_PATH should be an absolute path on persistent disk in production.');
+    }
+  }
 } else if (DB_ENGINE === 'postgres' || DB_ENGINE === 'postgresql' || DB_ENGINE === 'pg') {
   const hasPgConnectionString = hasNonEmpty(DATABASE_URL);
   const hasDiscretePgConfig = hasNonEmpty(PGHOST) && Number.isInteger(PGPORT) && hasNonEmpty(PGDATABASE) && hasNonEmpty(PGUSER);
@@ -233,6 +267,8 @@ if (!Number.isFinite(DB_BACKUP_INTERVAL_HOURS) || DB_BACKUP_INTERVAL_HOURS < 0) 
 
 if (!hasNonEmpty(DB_BACKUP_DIR)) {
   addWarning('DB_BACKUP_DIR is empty. Falling back to backup/.');
+} else if (IS_PROD && !isAbsolutePath(DB_BACKUP_DIR)) {
+  addWarning('DB_BACKUP_DIR should be an absolute path on persistent disk in production.');
 }
 
 if (!Number.isFinite(UPLOAD_MAX_FILE_BYTES) || UPLOAD_MAX_FILE_BYTES < 1_000_000) {
@@ -240,6 +276,32 @@ if (!Number.isFinite(UPLOAD_MAX_FILE_BYTES) || UPLOAD_MAX_FILE_BYTES < 1_000_000
 }
 if (!['local', 's3', 's3_compatible', 'r2'].includes(FILE_STORAGE_ADAPTER)) {
   addWarning('FILE_STORAGE_ADAPTER is not recognized. Expected local or s3-compatible placeholder.');
+}
+if (FILE_STORAGE_ADAPTER === 'local' && IS_PROD) {
+  const managedRoot = FILE_STORAGE_LOCAL_ROOT || UPLOADS_DIR;
+  if (!isAbsolutePath(managedRoot)) {
+    addWarning('Local file storage should use an absolute persistent path in production (FILE_STORAGE_LOCAL_ROOT or UPLOADS_DIR).');
+  }
+}
+if (['s3', 's3_compatible', 'r2'].includes(FILE_STORAGE_ADAPTER)) {
+  for (const [name, value] of Object.entries({
+    S3_ENDPOINT,
+    S3_REGION,
+    S3_BUCKET,
+    S3_ACCESS_KEY_ID,
+    S3_SECRET_ACCESS_KEY
+  })) {
+    if (!hasNonEmpty(value)) {
+      if (IS_PROD) addError(`${name} is required when FILE_STORAGE_ADAPTER=${FILE_STORAGE_ADAPTER}.`);
+      else addWarning(`${name} should be set when FILE_STORAGE_ADAPTER=${FILE_STORAGE_ADAPTER}.`);
+    }
+  }
+  if (hasNonEmpty(S3_ENDPOINT) && !isValidUrl(S3_ENDPOINT)) {
+    if (IS_PROD) addError('S3_ENDPOINT must be a valid http/https URL.');
+    else addWarning('S3_ENDPOINT should be a valid http/https URL.');
+  } else if (IS_PROD && hasNonEmpty(S3_ENDPOINT) && getUrlProtocol(S3_ENDPOINT) !== 'https:') {
+    addError('S3_ENDPOINT must use https in production.');
+  }
 }
 if (FILE_STORAGE_ENCRYPTION_ENABLED) {
   if (!/^[a-fA-F0-9]{64}$/.test(FILE_STORAGE_ENCRYPTION_KEY)) {
@@ -293,6 +355,21 @@ if (hasNonEmpty(MOBILE_OTP_PROXY_URL) && !isValidUrl(MOBILE_OTP_PROXY_URL)) {
   addWarning('MOBILE_OTP_PROXY_URL is not a valid http/https URL.');
 }
 
+const jitsiJwtRequested =
+  hasNonEmpty(JITSI_APP_ID) ||
+  hasNonEmpty(JITSI_APP_SECRET) ||
+  hasNonEmpty(JITSI_JWT_ISSUER) ||
+  hasNonEmpty(JITSI_JWT_SUBJECT) ||
+  Boolean(process.env.JITSI_JWT_AUDIENCE) ||
+  Boolean(process.env.JITSI_AUDIENCE);
+const jitsiPublicMeetJwtWarning =
+  'meet.jit.si cannot be used for StudiesTalk JWT moderator auto-host. Use 8x8.vc JaaS or self-hosted Jitsi.';
+
+if (String(JITSI_DOMAIN || '').trim() === 'meet.jit.si' && jitsiJwtRequested) {
+  if (IS_PROD) addError(jitsiPublicMeetJwtWarning);
+  else addWarning(jitsiPublicMeetJwtWarning);
+}
+
 const ENV_VALIDATION = {
   warnings: validationWarnings.slice(),
   errors: validationErrors.slice(),
@@ -315,9 +392,21 @@ const ENV_VALIDATION = {
         hasNonEmpty(IONOS_SMTP_PASS)),
     uploadsConfigured: hasNonEmpty(UPLOADS_DIR) && Number.isFinite(UPLOAD_MAX_FILE_BYTES) && UPLOAD_MAX_FILE_BYTES > 0,
     fileStorageAdapter: FILE_STORAGE_ADAPTER,
+    s3Configured:
+      hasNonEmpty(S3_ENDPOINT) &&
+      hasNonEmpty(S3_REGION) &&
+      hasNonEmpty(S3_BUCKET) &&
+      hasNonEmpty(S3_ACCESS_KEY_ID) &&
+      hasNonEmpty(S3_SECRET_ACCESS_KEY),
     fileStorageEncryptionEnabled: FILE_STORAGE_ENCRYPTION_ENABLED,
     openAiConfigured: hasNonEmpty(OPENAI_API_KEY),
     twilioConfigured: hasNonEmpty(TWILIO_ACCOUNT_SID) && hasNonEmpty(TWILIO_AUTH_TOKEN) && hasNonEmpty(TWILIO_PHONE_NUMBER)
+    ,
+    jitsiDomain: JITSI_DOMAIN || null,
+    jitsiJwtConfigured: hasNonEmpty(JITSI_APP_ID) && hasNonEmpty(JITSI_APP_SECRET),
+    jitsiJwtAudience: JITSI_JWT_AUDIENCE || null,
+    jitsiJwtIssuer: JITSI_JWT_ISSUER || null,
+    jitsiJwtSubject: JITSI_JWT_SUBJECT || null
   }
 };
 
@@ -382,6 +471,12 @@ module.exports = {
   UPLOAD_MAX_FILE_BYTES,
   FILE_STORAGE_ADAPTER,
   FILE_STORAGE_LOCAL_ROOT,
+  S3_ENDPOINT,
+  S3_REGION,
+  S3_BUCKET,
+  S3_ACCESS_KEY_ID,
+  S3_SECRET_ACCESS_KEY,
+  S3_FORCE_PATH_STYLE,
   FILE_STORAGE_ENCRYPTION_ENABLED,
   FILE_STORAGE_ENCRYPTION_KEY,
   FILE_STORAGE_ENCRYPTION_KEY_ID,
@@ -401,5 +496,11 @@ module.exports = {
   AI_TIME_RATE_EUR_PER_SECOND,
   AI_IDLE_TIMEOUT_SECONDS,
   AI_CLEANUP_SWEEP_SECONDS,
+  JITSI_DOMAIN,
+  JITSI_APP_ID,
+  JITSI_APP_SECRET,
+  JITSI_JWT_AUDIENCE,
+  JITSI_JWT_ISSUER,
+  JITSI_JWT_SUBJECT,
   ENV_VALIDATION
 };
