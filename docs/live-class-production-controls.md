@@ -2,9 +2,9 @@
 
 Date: 2026-04-26
 
-## Phase 1 Scope
+## Scope status
 
-This phase adds production controls for live classes without implementing recording.
+This document started as the Phase 1 hardening pass and now needs to be read together with the later live-class extensions already present in the repo.
 
 Included:
 
@@ -14,12 +14,22 @@ Included:
 - improved live attendance lifecycle data
 - tenant and role hardening for live-session access
 - minimal teacher/admin UI for waiting room and raised hands
+- breakout-room support
+- live polling / quizzes
+- whiteboard / slide-state sync
+- recording consent and recording storage foundation
+- moderator JWT join handling for JWT-capable Jitsi deployments
 
 Not included:
 
-- session recording
-- playback
-- recording retention
+- finished cross-provider recording productization
+- generic object-storage-backed media deployment
+
+Related docs:
+
+- [docs/live-class-breakout-rooms.md](/Users/jannatuladny/cat-6.1/docs/live-class-breakout-rooms.md)
+- [docs/live-class-polling-quizzes.md](/Users/jannatuladny/cat-6.1/docs/live-class-polling-quizzes.md)
+- [docs/live-recording-storage-playback.md](/Users/jannatuladny/cat-6.1/docs/live-recording-storage-playback.md)
 
 ## Waiting Room
 
@@ -44,6 +54,8 @@ Teacher/admin flow:
 
 - same-workspace teacher/admin can approve or deny participants
 - same-workspace teacher/admin can bypass the waiting room for themselves
+- `teacher`, `admin`, and `school_admin` are the moderator-capable host roles in the current app
+- public `meet.jit.si` still cannot honor StudiesTalk-issued moderator JWTs; automatic host mode requires `8x8.vc` JaaS or self-hosted Jitsi
 
 Tenant behavior:
 
@@ -85,7 +97,7 @@ Legacy `live_attendance` writes are still updated for compatibility.
 
 ## UI
 
-Phase 1 UI keeps the existing live-class layout and adds:
+Current live-class UI keeps the existing layout and adds:
 
 - request-join / pending / denied button states in the session list
 - attendance modal sections for:
@@ -95,6 +107,10 @@ Phase 1 UI keeps the existing live-class layout and adds:
 - approve / deny controls for managers
 - lower-hand controls for managers
 - student raise/lower hand action from the session list once joined
+- breakout-room controls
+- polling controls
+- whiteboard presenter flows
+- host/opening state copy for moderator-capable joins
 
 ## Audit Events
 
