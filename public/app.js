@@ -2,21 +2,6 @@
 
 // ===================== "REAL" DATA (from backend) =====================
 let channels = [];
-const homeworkNoteChannels = new Map();
-let homeworkBoardByChannel = {};
-let homeworkBoardInflight = new Map();
-let homeworkBoardUiState = {};
-let homeworkComposerExpanded = false;
-let homeworkFabDrag = null;
-let homeworkAssignmentModalState = null;
-let homeworkSubmissionModalState = null;
-let homeworkReviewModalState = null;
-let homeworkDetailModalState = null;
-let homeworkLiveSyncTimer = null;
-let homeworkLiveSyncChannelId = "";
-let homeworkLiveSyncInflight = null;
-let homeworkLiveSyncBindingsAttached = false;
-const homeworkLastSyncAtByChannel = new Map();
 let dms = [];
 let messagesByChannel = {}; // { [channelId]: Message[] }
 let savedMessagesById = {};
@@ -220,6 +205,7 @@ function renderUiState(container, options = {}) {
 const CURRENT_CHANNEL_STORAGE_KEY = "worknest_current_channel";
 const LAST_VIEW_STORAGE_KEY = "worknest_last_view";
 const LOGIN_LAND_HOMEWORK_FLAG = "worknest_login_land_homework_once";
+const AUTH_SESSION_HINT_STORAGE_KEY = "studiestalk_auth_session_hint";
 const LAST_ACTIVE_VIEW_KEY = "worknest_last_active_view";
 const SCROLL_STATE_STORAGE_KEY = "worknest_scroll_state";
 const SIDEBAR_SCROLL_KEY = "worknest_sidebar_scroll_v1";
@@ -782,6 +768,10 @@ function getCsrfToken() {
 async function apiFetch(url, opts = {}) {
   const method = (opts.method || "GET").toUpperCase();
   const needsCsrf = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
+  const normalizedUrl = String(url || "");
+  const isAuthRefreshRequest =
+    normalizedUrl === "/api/auth/refresh" ||
+    normalizedUrl.endsWith("/api/auth/refresh");
 
   const buildHeaders = () => {
     const headers = buildApiHeaders(opts);
@@ -812,7 +802,7 @@ async function apiFetch(url, opts = {}) {
 
   let res = await makeRequest();
 
-  if (res.status === 401) {
+  if (res.status === 401 && !isAuthRefreshRequest) {
     const refresh = await fetch(`${API_BASE}/api/auth/refresh`, {
       method: "POST",
       credentials: "include",
@@ -1421,12 +1411,18 @@ function persistSessionUser(user) {
     policyGateState = sessionUser.policyGate || policyGateState || null;
     policyRequired = !!(policyGateState && policyGateState.required && !policyGateState.exempt);
     policyAccepted = !!(!policyRequired || policyGateState?.accepted || policyGateState?.exempt);
+    try {
+      localStorage.setItem(AUTH_SESSION_HINT_STORAGE_KEY, "1");
+    } catch (_err) {}
   } else {
     workspaceAppHydrated = false;
     policyGateState = null;
     policyDocument = null;
     policyRequired = false;
     policyAccepted = true;
+    try {
+      localStorage.removeItem(AUTH_SESSION_HINT_STORAGE_KEY);
+    } catch (_err) {}
   }
   syncAdminStatus(sessionUser);
   updateAdminButtonState();
@@ -4462,15 +4458,16 @@ function renderHomeworkBoardItem(item, permissions = {}) {
           <div class="homework-summary-chip homework-summary-chip--submitted"><i class="fa-solid fa-paper-plane homework-ui-icon homework-stat-chip-icon" aria-hidden="true"></i><div><strong>${Number(summary.submitted || 0)}</strong><span>Submitted</span></div></div>
           <div class="homework-summary-chip homework-summary-chip--reviewed"><i class="fa-solid fa-circle-check homework-ui-icon homework-stat-chip-icon" aria-hidden="true"></i><div><strong>${Number(summary.reviewed || 0)}</strong><span>Reviewed</span></div></div>
           <div class="homework-summary-chip homework-summary-chip--returned"><i class="fa-solid fa-rotate-left homework-ui-icon homework-stat-chip-icon" aria-hidden="true"></i><div><strong>${Number(summary.returned || 0)}</strong><span>Returned</span></div></div>
+          ${item.resourceUrl ? `<a class="homework-summary-chip homework-summary-chip--resource" href="${escapeHomeworkHtml(item.resourceUrl)}" target="_blank" rel="noopener noreferrer" aria-label="Open assignment resource" title="Open resource"><i class="fa-solid fa-link homework-ui-icon homework-stat-chip-icon" aria-hidden="true"></i></a>` : ""}
         ` : `
           <div class="homework-summary-chip"><i class="fa-solid fa-flag homework-ui-icon homework-stat-chip-icon" aria-hidden="true"></i><div><strong>${escapeHomeworkHtml(getHomeworkStatusMeta(submissionStatus).label)}</strong><span>My status</span></div></div>
           <div class="homework-summary-chip"><i class="fa-solid fa-award homework-ui-icon homework-stat-chip-icon" aria-hidden="true"></i><div><strong>${mySubmission?.gradeValue ? escapeHomeworkHtml(mySubmission.gradeValue) : "—"}</strong><span>Grade</span></div></div>
           <div class="homework-summary-chip"><i class="fa-solid fa-message homework-ui-icon homework-stat-chip-icon" aria-hidden="true"></i><div><strong>${mySubmission?.feedbackText ? "Yes" : "No"}</strong><span>Feedback</span></div></div>
+          ${item.resourceUrl ? `<a class="homework-summary-chip homework-summary-chip--resource" href="${escapeHomeworkHtml(item.resourceUrl)}" target="_blank" rel="noopener noreferrer" aria-label="Open assignment resource" title="Open resource"><i class="fa-solid fa-link homework-ui-icon homework-stat-chip-icon" aria-hidden="true"></i></a>` : ""}
         `}
       </div>
       <div class="task-body homework-card-body">
         ${instructionsHtml ? `<div class="homework-card-copy">${instructionsHtml}</div>` : ""}
-        ${item.resourceUrl ? `<a class="homework-resource-link" href="${escapeHomeworkHtml(item.resourceUrl)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-link homework-ui-icon" aria-hidden="true"></i><span>${escapeHomeworkHtml(item.resourceUrl)}</span></a>` : ""}
         ${renderHomeworkFiles(item.files)}
         ${renderHomeworkFiles(item.solutionFiles || [])}
         ${mySubmission ? `
@@ -4580,8 +4577,10 @@ function renderHomeworkDashboardWorkspace(channelId, board, visibleItems, discus
       <div class="homework-dashboard-content">
         <section class="homework-workspace-panel homework-workspace-panel--board">
           <div class="homework-workspace-head">
-            <div>
+            <div class="homework-workspace-head-copy">
+              <div class="homework-workspace-kicker">${canManage ? "Homework workspace" : "Student workspace"}</div>
               <h2>${canManage ? "Assignments overview" : "Your assignments"}</h2>
+              <p>${canManage ? "Keep deadlines, files, submissions, and feedback in one clean board for the whole class." : "Track what is due, what you have submitted, and what feedback is ready to review."}</p>
             </div>
             <div class="homework-workspace-head-actions">
               ${visibleItems.length ? `<button class="tasks-btn homework-card-secondary-action" type="button" data-homework-action="open-assignments-view">Open board</button>` : ""}
@@ -4608,7 +4607,7 @@ function renderHomeworkDashboardWorkspace(channelId, board, visibleItems, discus
                       <li>Deadlines and reminders</li>
                       <li>Student submissions and feedback</li>
                     </ul>
-                    <p>Students will see everything in one place. No WhatsApp, no confusion.</p>
+                    <p>Students get one place to read the task, upload their work, and follow feedback without hunting through chat.</p>
                   </div>
                   <div class="homework-dashboard-empty-tip"><i class="fa-regular fa-lightbulb" aria-hidden="true"></i><span>Tip: You can attach PDFs, audio, or homework files.</span></div>
                   <div class="homework-dashboard-empty-actions">
@@ -4623,7 +4622,7 @@ function renderHomeworkDashboardWorkspace(channelId, board, visibleItems, discus
                 <div class="homework-dashboard-empty">
                   <div class="homework-dashboard-empty-icon"><i class="fa-regular fa-clipboard" aria-hidden="true"></i></div>
                   <h3>No homework yet</h3>
-                  <p>Assignments, instructions, and submission tasks will appear here as soon as your teacher posts them.</p>
+                  <p>Your assignments, due dates, and submission steps will appear here as soon as your teacher posts them.</p>
                   <div class="homework-dashboard-empty-actions">
                     <button class="tasks-btn homework-card-secondary-action" type="button" data-homework-action="open-discussion-view">Open discussion</button>
                   </div>
@@ -4635,6 +4634,7 @@ function renderHomeworkDashboardWorkspace(channelId, board, visibleItems, discus
         <aside class="homework-dashboard-side">
           <section class="homework-workspace-panel homework-workspace-panel--aside homework-workspace-panel--aside-actions">
             <div class="homework-workspace-kicker">Quick actions</div>
+            <p class="homework-side-panel-copy">${canManage ? "Create and organize classwork from here." : "Jump straight to the area you need."}</p>
             <div class="homework-side-actions">
               ${canManage ? `<button class="tasks-btn homework-side-action homework-side-action--primary ${quickAction === "new-item" ? "is-active" : ""}" type="button" data-homework-action="new-item"><i class="fa-solid fa-square-plus" aria-hidden="true"></i><span>New assignment</span></button>` : ""}
               ${canManage ? `<button class="tasks-btn homework-card-secondary-action homework-side-action homework-side-action--template ${quickAction === "use-template" ? "is-active" : ""}" type="button" data-homework-action="use-template"><i class="fa-solid fa-layer-group" aria-hidden="true"></i><span>Use template</span></button>` : ""}
@@ -4645,12 +4645,14 @@ function renderHomeworkDashboardWorkspace(channelId, board, visibleItems, discus
           </section>
           <section class="homework-workspace-panel homework-workspace-panel--aside homework-workspace-panel--aside-discussion homework-panel-link" role="button" tabindex="0" data-homework-action="open-discussion-view" aria-label="Open class discussion">
             <div class="homework-workspace-kicker">Class discussion</div>
+            <p class="homework-side-panel-copy">Short questions and updates from the class stay visible here.</p>
             <div class="homework-side-stack">
               ${renderHomeworkDiscussion(discussion, 3)}
             </div>
           </section>
           <section class="homework-workspace-panel homework-workspace-panel--aside homework-workspace-panel--aside-activity">
             <div class="homework-workspace-kicker">Recent activity</div>
+            <p class="homework-side-panel-copy">A quick timeline of assignments, submissions, and review updates.</p>
             <div class="homework-activity-list">
               ${activity.length ? activity.map((entry) => `
                 <article class="homework-activity-item">
@@ -4677,6 +4679,7 @@ function renderHomeworkAssignmentsView(channelId, board, visibleItems) {
       <div class="homework-assignments-toolbar">
         <div class="homework-assignments-toolbar-copy">
           <div class="homework-assignments-toolbar-title">Assignments</div>
+          <div class="homework-assignments-toolbar-subtitle">${canManage ? "Review every assignment in one board and open any item for editing or feedback." : "Open any assignment to check instructions, submit work, or review feedback."}</div>
         </div>
         <div class="homework-assignments-toolbar-actions">
           <button class="task-icon homework-view-minimize" type="button" data-homework-action="close-assignments-view" aria-label="Close assignments view" title="Close">
@@ -4706,7 +4709,7 @@ function renderHomeworkDiscussionView(channelId, board, discussion) {
       <div class="homework-assignments-toolbar">
         <div class="homework-assignments-toolbar-copy">
           <div class="homework-assignments-toolbar-title">Discussion</div>
-          <div class="homework-assignments-toolbar-subtitle">Class-wide homework discussion for this channel. It is not assignment-specific yet.</div>
+          <div class="homework-assignments-toolbar-subtitle">Use this space for class-wide homework questions, clarifications, and quick updates.</div>
         </div>
         <div class="homework-assignments-toolbar-actions">
           <button class="task-icon homework-view-minimize" type="button" data-homework-action="close-discussion-view" aria-label="Close discussion view" title="Close">
@@ -18596,7 +18599,6 @@ const channelHeaderNoteMetaAuthor = document.getElementById("channelHeaderNoteMe
 const headerMemberCountStudents = document.getElementById("headerMemberCountStudents");
 const headerMemberCountTeachers = document.getElementById("headerMemberCountTeachers");
 const headerMemberCountAdmins = document.getElementById("headerMemberCountAdmins");
-const headerHomeworkFilters = document.getElementById("headerHomeworkFilters");
 const headerDocCountBtn = document.getElementById("headerDocCountBtn");
 const headerDocCountValue = document.getElementById("headerDocCountValue");
 const channelRoleTabs = document.getElementById("channelRoleTabs");
@@ -18693,55 +18695,6 @@ const channelAssignList = document.getElementById("channelAssignList");
 const channelAssignClose = document.getElementById("channelAssignClose");
 const channelAssignSearch = document.getElementById("channelAssignSearch");
 const channelAssignSave = document.getElementById("channelAssignSave");
-const homeworkAssignmentModal = document.getElementById("homeworkAssignmentModal");
-const homeworkAssignmentModalTitle = document.getElementById("homeworkAssignmentModalTitle");
-const homeworkAssignmentModalClose = document.getElementById("homeworkAssignmentModalClose");
-const homeworkAssignmentTitleInput = document.getElementById("homeworkAssignmentTitleInput");
-const homeworkAssignmentTitleError = document.getElementById("homeworkAssignmentTitleError");
-const homeworkAssignmentDueDateInput = document.getElementById("homeworkAssignmentDueDateInput");
-const homeworkAssignmentResourceUrlInput = document.getElementById("homeworkAssignmentResourceUrlInput");
-const homeworkAssignmentDescriptionInput = document.getElementById("homeworkAssignmentDescriptionInput");
-const homeworkAssignmentUploadDropzone = document.getElementById("homeworkAssignmentUploadDropzone");
-const homeworkAssignmentSolutionUploadDropzone = document.getElementById("homeworkAssignmentSolutionUploadDropzone");
-const homeworkAssignmentFilesList = document.getElementById("homeworkAssignmentFilesList");
-const homeworkAssignmentSolutionFilesList = document.getElementById("homeworkAssignmentSolutionFilesList");
-const homeworkAssignmentAddFilesBtn = document.getElementById("homeworkAssignmentAddFilesBtn");
-const homeworkAssignmentAddSolutionFilesBtn = document.getElementById("homeworkAssignmentAddSolutionFilesBtn");
-const homeworkAssignmentCancelBtn = document.getElementById("homeworkAssignmentCancelBtn");
-const homeworkAssignmentSaveBtn = document.getElementById("homeworkAssignmentSaveBtn");
-const homeworkAssignmentFormStatus = document.getElementById("homeworkAssignmentFormStatus");
-const homeworkSubmissionModal = document.getElementById("homeworkSubmissionModal");
-const homeworkSubmissionModalTitle = document.getElementById("homeworkSubmissionModalTitle");
-const homeworkSubmissionModalClose = document.getElementById("homeworkSubmissionModalClose");
-const homeworkSubmissionContextTitle = document.getElementById("homeworkSubmissionContextTitle");
-const homeworkSubmissionContextMeta = document.getElementById("homeworkSubmissionContextMeta");
-const homeworkSubmissionTextInput = document.getElementById("homeworkSubmissionTextInput");
-const homeworkSubmissionTextError = document.getElementById("homeworkSubmissionTextError");
-const homeworkSubmissionFilesList = document.getElementById("homeworkSubmissionFilesList");
-const homeworkSubmissionAddFilesBtn = document.getElementById("homeworkSubmissionAddFilesBtn");
-const homeworkSubmissionDraftBtn = document.getElementById("homeworkSubmissionDraftBtn");
-const homeworkSubmissionCancelBtn = document.getElementById("homeworkSubmissionCancelBtn");
-const homeworkSubmissionSubmitBtn = document.getElementById("homeworkSubmissionSubmitBtn");
-const homeworkSubmissionFormStatus = document.getElementById("homeworkSubmissionFormStatus");
-const homeworkReviewModal = document.getElementById("homeworkReviewModal");
-const homeworkReviewModalClose = document.getElementById("homeworkReviewModalClose");
-const homeworkReviewContextTitle = document.getElementById("homeworkReviewContextTitle");
-const homeworkReviewContextMeta = document.getElementById("homeworkReviewContextMeta");
-const homeworkReviewStatusInput = document.getElementById("homeworkReviewStatusInput");
-const homeworkReviewGradeInput = document.getElementById("homeworkReviewGradeInput");
-const homeworkReviewFeedbackInput = document.getElementById("homeworkReviewFeedbackInput");
-const homeworkReviewFeedbackError = document.getElementById("homeworkReviewFeedbackError");
-const homeworkReviewCancelBtn = document.getElementById("homeworkReviewCancelBtn");
-const homeworkReviewSaveBtn = document.getElementById("homeworkReviewSaveBtn");
-const homeworkReviewFormStatus = document.getElementById("homeworkReviewFormStatus");
-const homeworkDetailModal = document.getElementById("homeworkDetailModal");
-const homeworkDetailModalTitle = document.getElementById("homeworkDetailModalTitle");
-const homeworkDetailModalSubtitle = document.getElementById("homeworkDetailModalSubtitle");
-const homeworkDetailTabs = document.getElementById("homeworkDetailTabs");
-const homeworkDetailModalBody = document.getElementById("homeworkDetailModalBody");
-const homeworkDetailModalFooter = document.getElementById("homeworkDetailModalFooter");
-const homeworkDetailModalClose = document.getElementById("homeworkDetailModalClose");
-
 const messagesContainer = document.getElementById("messagesContainer");
 const composer = document.getElementById("composer");
 const messageInput = document.getElementById("messageInput");
@@ -18755,7 +18708,6 @@ const fileInput = document.getElementById("fileInput");
 const audioBtn = document.getElementById("audioBtn");
 const videoBtn = document.getElementById("videoBtn");
 const recordingOverlay = document.getElementById("recordingOverlay");
-const homeworkComposerTrigger = document.getElementById("homeworkComposerTrigger");
 const composerStatus = document.getElementById("composerStatus") || recordingOverlay;
 const recLabel = document.getElementById("recLabel");
 const recTimer = document.getElementById("recTimer");
@@ -18836,200 +18788,6 @@ document.addEventListener("click", (event) => {
   }
 });
 
-if (homeworkAssignmentModalClose) {
-  homeworkAssignmentModalClose.addEventListener("click", closeHomeworkAssignmentModal);
-}
-if (homeworkAssignmentCancelBtn) {
-  homeworkAssignmentCancelBtn.addEventListener("click", closeHomeworkAssignmentModal);
-}
-if (homeworkAssignmentSaveBtn) {
-  homeworkAssignmentSaveBtn.addEventListener("click", () => {
-    submitHomeworkAssignmentModal().catch((err) => {
-      console.error("Failed to save assignment", err);
-      showToast(err?.message || "Could not save assignment");
-    });
-  });
-}
-if (homeworkAssignmentAddFilesBtn) {
-  homeworkAssignmentAddFilesBtn.addEventListener("click", () => {
-    addHomeworkAssignmentFiles().catch((err) => {
-      console.error("Failed to add assignment files", err);
-      showToast(err?.message || "Could not add files");
-    });
-  });
-}
-if (homeworkAssignmentAddSolutionFilesBtn) {
-  homeworkAssignmentAddSolutionFilesBtn.addEventListener("click", () => {
-    addHomeworkAssignmentSolutionFiles().catch((err) => {
-      console.error("Failed to add assignment solution files", err);
-      showToast(err?.message || "Could not add solution files");
-    });
-  });
-}
-if (homeworkAssignmentUploadDropzone) {
-  homeworkAssignmentUploadDropzone.addEventListener("click", (event) => {
-    if (event.target.closest("button")) return;
-    homeworkAssignmentAddFilesBtn?.click();
-  });
-  homeworkAssignmentUploadDropzone.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      homeworkAssignmentAddFilesBtn?.click();
-    }
-  });
-}
-if (homeworkAssignmentSolutionUploadDropzone) {
-  homeworkAssignmentSolutionUploadDropzone.addEventListener("click", (event) => {
-    if (event.target.closest("button")) return;
-    homeworkAssignmentAddSolutionFilesBtn?.click();
-  });
-  homeworkAssignmentSolutionUploadDropzone.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      homeworkAssignmentAddSolutionFilesBtn?.click();
-    }
-  });
-}
-if (homeworkAssignmentFilesList) {
-  homeworkAssignmentFilesList.addEventListener("click", (event) => {
-    const button = event.target.closest('[data-homework-action="remove-assignment-file"]');
-    if (!button) return;
-    const index = Number(button.dataset.fileIndex || -1);
-    if (index >= 0) removeHomeworkAssignmentFile(index);
-  });
-}
-if (homeworkAssignmentSolutionFilesList) {
-  homeworkAssignmentSolutionFilesList.addEventListener("click", (event) => {
-    const button = event.target.closest('[data-homework-action="remove-assignment-solution-file"]');
-    if (!button) return;
-    const index = Number(button.dataset.fileIndex || -1);
-    if (index >= 0) removeHomeworkAssignmentSolutionFile(index);
-  });
-}
-if (homeworkAssignmentModal) {
-  homeworkAssignmentModal.addEventListener("click", (event) => {
-    if (event.target === homeworkAssignmentModal) closeHomeworkAssignmentModal();
-  });
-}
-
-if (homeworkSubmissionModalClose) {
-  homeworkSubmissionModalClose.addEventListener("click", closeHomeworkSubmissionModal);
-}
-if (homeworkSubmissionCancelBtn) {
-  homeworkSubmissionCancelBtn.addEventListener("click", closeHomeworkSubmissionModal);
-}
-if (homeworkSubmissionDraftBtn) {
-  homeworkSubmissionDraftBtn.addEventListener("click", () => {
-    submitHomeworkSubmissionModal("draft").catch((err) => {
-      console.error("Failed to save draft", err);
-      showToast(err?.message || "Could not save draft");
-    });
-  });
-}
-if (homeworkSubmissionSubmitBtn) {
-  homeworkSubmissionSubmitBtn.addEventListener("click", () => {
-    submitHomeworkSubmissionModal("submit").catch((err) => {
-      console.error("Failed to submit homework", err);
-      showToast(err?.message || "Could not submit homework");
-    });
-  });
-}
-if (homeworkSubmissionAddFilesBtn) {
-  homeworkSubmissionAddFilesBtn.addEventListener("click", () => {
-    addHomeworkSubmissionFiles().catch((err) => {
-      console.error("Failed to add submission files", err);
-      showToast(err?.message || "Could not add files");
-    });
-  });
-}
-if (homeworkSubmissionFilesList) {
-  homeworkSubmissionFilesList.addEventListener("click", (event) => {
-    const button = event.target.closest('[data-homework-action="remove-submission-file"]');
-    if (!button) return;
-    const index = Number(button.dataset.fileIndex || -1);
-    if (index >= 0) removeHomeworkSubmissionFile(index);
-  });
-}
-if (homeworkSubmissionModal) {
-  homeworkSubmissionModal.addEventListener("click", (event) => {
-    if (event.target === homeworkSubmissionModal) closeHomeworkSubmissionModal();
-  });
-}
-
-if (homeworkReviewModalClose) {
-  homeworkReviewModalClose.addEventListener("click", closeHomeworkReviewModal);
-}
-if (homeworkReviewCancelBtn) {
-  homeworkReviewCancelBtn.addEventListener("click", closeHomeworkReviewModal);
-}
-if (homeworkReviewSaveBtn) {
-  homeworkReviewSaveBtn.addEventListener("click", () => {
-    submitHomeworkReviewModal().catch((err) => {
-      console.error("Failed to save homework review", err);
-      showToast(err?.message || "Could not save review");
-    });
-  });
-}
-if (homeworkReviewModal) {
-  homeworkReviewModal.addEventListener("click", (event) => {
-    if (event.target === homeworkReviewModal) closeHomeworkReviewModal();
-  });
-}
-
-if (homeworkDetailModalClose) {
-  homeworkDetailModalClose.addEventListener("click", closeHomeworkDetailModal);
-}
-if (homeworkDetailModal) {
-  homeworkDetailModal.addEventListener("click", (event) => {
-    if (event.target === homeworkDetailModal) closeHomeworkDetailModal();
-  });
-}
-if (homeworkDetailTabs) {
-  homeworkDetailTabs.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-homework-detail-tab]");
-    if (!button || !homeworkDetailModalState?.channelId) return;
-    const nextTab = String(button.dataset.homeworkDetailTab || "instructions");
-    homeworkDetailModalState.tab = nextTab;
-    getHomeworkBoardUiState(homeworkDetailModalState.channelId).detailTab = nextTab;
-    renderHomeworkDetailModal();
-  });
-}
-if (homeworkDetailModalFooter) {
-  homeworkDetailModalFooter.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-homework-action]");
-    if (!button || !homeworkDetailModalState?.channelId) return;
-    const action = button.dataset.homeworkAction;
-    const itemId = String(button.dataset.itemId || homeworkDetailModalState.itemId || "");
-    const board = homeworkBoardByChannel[homeworkDetailModalState.channelId] || { items: [] };
-    const item = (board.items || []).find((entry) => String(entry.id) === itemId) || null;
-    if (action === "close-detail") {
-      closeHomeworkDetailModal();
-    } else if (action === "open-submission" && item) {
-      openHomeworkSubmissionModalForItem(item);
-    } else if (action === "save-draft" && item) {
-      openHomeworkSubmissionModalForItem(item);
-    } else if (action === "edit-item" && item) {
-      openHomeworkAssignmentModalForItem(homeworkDetailModalState.channelId, item);
-    } else if (action === "review-from-detail" && item) {
-      homeworkDetailModalState.tab = "feedback";
-      renderHomeworkDetailModal();
-    }
-  });
-}
-if (homeworkDetailModalBody) {
-  homeworkDetailModalBody.addEventListener("click", (event) => {
-    const button = event.target.closest('[data-homework-action="review-submission"]');
-    if (!button || !homeworkDetailModalState?.channelId) return;
-    const itemId = String(button.dataset.itemId || "");
-    const submissionId = String(button.dataset.submissionId || "");
-    const board = homeworkBoardByChannel[homeworkDetailModalState.channelId] || { items: [] };
-    const item = (board.items || []).find((entry) => String(entry.id) === itemId) || null;
-    const submission = item ? (item.submissions || []).find((entry) => String(entry.id) === submissionId) : null;
-    if (item && submission) {
-      openHomeworkReviewModalForSubmission(item, submission);
-    }
-  });
-}
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     hideClearCulturePopup();
@@ -23967,8 +23725,6 @@ function buildChannelRow(ch) {
 
   return div;
 }
-
-const homeworkParentByChannelId = new Map();
 
 function buildHomeworkRow(hwChannel, classChannel) {
   const div = document.createElement("div");
@@ -34570,6 +34326,7 @@ function validateRegistrationFields({ refs, includePassword = true, errorEl, rol
 }
 
 async function completeLoginFlow(user) {
+  persistSessionUser(user);
   const normalizedRole = normalizeRole(user.role);
   adminLoggedIn = ADMIN_ROLE_VALUES.has(normalizedRole);
   adminLoggedInSuper = normalizedRole === "super_admin" || user.superAdmin === true;
@@ -34712,6 +34469,20 @@ async function loadWorkspace(workspaceId) {
 }
 
 async function tryAutoAuth() {
+  let shouldAttemptRefresh = !!(ACCESS_TOKEN || sessionUser);
+  if (!shouldAttemptRefresh) {
+    try {
+      shouldAttemptRefresh = localStorage.getItem(AUTH_SESSION_HINT_STORAGE_KEY) === "1";
+    } catch (_err) {
+      shouldAttemptRefresh = false;
+    }
+  }
+  if (!shouldAttemptRefresh) {
+    persistSessionUser(null);
+    showLoginOverlay();
+    return false;
+  }
+
   try {
     const refresh = await fetchJSON("/api/auth/refresh", { method: "POST" });
     setAccessToken(refresh.accessToken);
