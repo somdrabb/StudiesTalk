@@ -4216,6 +4216,18 @@ app.use(
   express.static(path.join(__dirname, 'Ai Intregration'))
 );
 
+app.get('/privacy', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'legal', 'privacy.html'));
+});
+
+app.get('/terms', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'legal', 'terms.html'));
+});
+
+app.get('/impressum', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'legal', 'impressum.html'));
+});
+
 // ---------- ADMIN FRONTEND (static) ----------
 app.use('/admin', express.static(path.join(__dirname, 'admin')));
 
