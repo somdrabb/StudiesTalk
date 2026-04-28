@@ -244,7 +244,7 @@ if (DB_ENGINE === 'sqlite') {
     addError('DB_PATH is required when DB_ENGINE=sqlite.');
   }
   if (IS_PROD) {
-    addWarning('DB_ENGINE=sqlite in production is single-instance only. PostgreSQL is recommended for staging/production.');
+    addError('DB_ENGINE=sqlite is not allowed in production. Use PostgreSQL in production.');
     if (!isAbsolutePath(DB_PATH)) {
       addWarning('DB_PATH should be an absolute path on persistent disk in production.');
     }
@@ -252,6 +252,9 @@ if (DB_ENGINE === 'sqlite') {
 } else if (DB_ENGINE === 'postgres' || DB_ENGINE === 'postgresql' || DB_ENGINE === 'pg') {
   const hasPgConnectionString = hasNonEmpty(DATABASE_URL);
   const hasDiscretePgConfig = hasNonEmpty(PGHOST) && Number.isInteger(PGPORT) && hasNonEmpty(PGDATABASE) && hasNonEmpty(PGUSER);
+  if (IS_PROD && !hasPgConnectionString) {
+    addError('DATABASE_URL is required in production when DB_ENGINE=postgres.');
+  }
   if (!hasPgConnectionString && !hasDiscretePgConfig) {
     if (IS_PROD) addError('PostgreSQL runtime requires DATABASE_URL or PGHOST/PGPORT/PGDATABASE/PGUSER.');
     else addWarning('PostgreSQL runtime is selected without a complete DATABASE_URL or PG* configuration.');
@@ -279,6 +282,7 @@ if (!['local', 's3', 's3_compatible', 'r2'].includes(FILE_STORAGE_ADAPTER)) {
 }
 if (FILE_STORAGE_ADAPTER === 'local' && IS_PROD) {
   const managedRoot = FILE_STORAGE_LOCAL_ROOT || UPLOADS_DIR;
+  addWarning('FILE_STORAGE_ADAPTER=local in production is acceptable only for a first-school demo on persistent disk. Move to S3/R2 before paid customer usage.');
   if (!isAbsolutePath(managedRoot)) {
     addWarning('Local file storage should use an absolute persistent path in production (FILE_STORAGE_LOCAL_ROOT or UPLOADS_DIR).');
   }

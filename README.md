@@ -50,8 +50,8 @@ Important constraint:
 
 ## Current runtime posture
 
-- development default: SQLite
-- production recommendation: PostgreSQL
+- local development default: SQLite on Node 20
+- production target: PostgreSQL
 - deployable file storage modes:
   - `FILE_STORAGE_ADAPTER=local`
   - `FILE_STORAGE_ADAPTER=s3|s3_compatible|r2` with S3-compatible env configured
@@ -138,9 +138,39 @@ See [docs/database-schema.md](/Users/jannatuladny/cat-6.1/docs/database-schema.m
 ## Install and run
 
 ```bash
+git clone https://github.com/somdrabb/StudiesTalk.git
+cd StudiesTalk
+
 source ~/.nvm/nvm.sh
-nvm use 20 || nvm install 20
+nvm install 20
+nvm use 20
+
 npm install
+
+mkdir -p storage uploads backup
+cp .env.example .env
+
+npm run dev
+```
+
+After copying `.env`, make sure `DB_PATH` points to an existing folder, for example:
+
+```env
+DB_PATH=storage/studiestalk.db
+```
+
+Recommended first run:
+
+```bash
+npm run preflight
+npm run test:smoke:ordered
+npm run dev
+```
+
+If `better-sqlite3` still has old Node 18 build artifacts:
+
+```bash
+npm rebuild better-sqlite3
 npm run dev
 ```
 
@@ -148,6 +178,12 @@ Normal server start:
 
 ```bash
 npm start
+```
+
+PostgreSQL migration command:
+
+```bash
+npm run db:migrate:pg
 ```
 
 ## Preflight and smoke
@@ -161,10 +197,16 @@ npm run preflight
 Current smoke bundle:
 
 ```bash
-npm run test:all:smoke
+npm run test:smoke:ordered
 ```
 
-`test:all:smoke` covers the current non-PostgreSQL smoke set:
+PostgreSQL migration smoke:
+
+```bash
+npm run test:postgres:migration
+```
+
+`test:smoke:ordered` covers the current non-PostgreSQL smoke set:
 
 - runtime
 - tasks
@@ -207,6 +249,9 @@ See [docs/database-cleanup.md](/Users/jannatuladny/cat-6.1/docs/database-cleanup
 - [docs/production-deployment-runbook.md](/Users/jannatuladny/cat-6.1/docs/production-deployment-runbook.md)
 - [docs/production-rollback-runbook.md](/Users/jannatuladny/cat-6.1/docs/production-rollback-runbook.md)
 - [docs/postgres-staging-rehearsal.md](/Users/jannatuladny/cat-6.1/docs/postgres-staging-rehearsal.md)
+- [docs/production-postgres-deployment.md](/Users/jannatuladny/cat-6.1/docs/production-postgres-deployment.md)
+- [docs/backup-restore.md](/Users/jannatuladny/cat-6.1/docs/backup-restore.md)
+- [docs/deployment-checklist.md](/Users/jannatuladny/cat-6.1/docs/deployment-checklist.md)
 
 ## High-signal feature docs
 

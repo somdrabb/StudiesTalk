@@ -1,0 +1,12 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+.env
+.env.*
+storage
+uploads
+backup
+StudiesTalk
+.DS_Store
+public/.DS_Store

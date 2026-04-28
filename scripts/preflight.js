@@ -7,6 +7,7 @@ function main() {
   console.log('[preflight] nodeEnv:', ENV.NODE_ENV);
   console.log('[preflight] appBaseUrl:', ENV.BASE_URL || '(not configured)');
   console.log('[preflight] dbEngine:', ENV.DB_ENGINE);
+  console.log('[preflight] databaseUrlConfigured:', ENV.DATABASE_URL ? 'yes' : 'no');
   console.log('[preflight] uploadsDir:', ENV.UPLOADS_DIR);
   console.log('[preflight] backupDir:', ENV.DB_BACKUP_DIR);
   console.log('[preflight] fileStorageAdapter:', ENV.FILE_STORAGE_ADAPTER);
