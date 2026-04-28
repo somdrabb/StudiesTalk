@@ -163,6 +163,12 @@ a {
   color: #46566e;
 }
 
+.legal-chip.is-active {
+  border-color: rgba(34, 197, 94, 0.22);
+  background: rgba(240, 253, 244, 0.92);
+  color: #166534;
+}
+
 .legal-banner {
   padding: 14px 16px;
   border-radius: 14px;
@@ -244,6 +250,23 @@ a {
 
 .legal-placeholder strong {
   color: #183b66;
+}
+
+.legal-runtime-copy {
+  margin-bottom: 14px;
+}
+
+.legal-multiline {
+  white-space: pre-line;
+}
+
+#legalDocumentBody {
+  display: grid;
+  gap: 12px;
+}
+
+#legalDocumentBody p {
+  margin: 0;
 }
 
 .legal-table {

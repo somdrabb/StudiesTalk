@@ -31,7 +31,6 @@
 
 <!-- Styles -->
 <link href="styles.refactor.css" rel="stylesheet" />
-<link href="css/homework.css" rel="stylesheet" />
 <link href="Announcements/announcements.css" rel="stylesheet" />
 <link href="PlacementTest/placement-test.css" rel="stylesheet" />
 <link rel="stylesheet" href="/AIvoicepractice/aiVoicePractice.css" />
@@ -316,6 +315,7 @@
       <a href="/privacy" class="app-rail-legal-link">Privacy</a>
       <a href="/terms" class="app-rail-legal-link">Terms</a>
       <a href="/impressum" class="app-rail-legal-link">Impressum</a>
+      <a href="#" class="app-rail-legal-link" id="appManageCookiesLink">Manage cookies</a>
     </div>
 
   </div>
@@ -4714,6 +4714,7 @@
     <button type="button" class="login-footer-link login-footer-contact">Contact</button>
     <a href="/terms" class="login-footer-link login-footer-terms">Terms</a>
     <a href="/privacy" class="login-footer-link login-footer-privacy">Privacy Policy</a>
+    <a href="#" class="login-footer-link login-footer-cookies" id="loginManageCookiesLink">Manage cookies</a>
   </footer>
 
   <!-- Floating actions -->
@@ -4888,193 +4889,7 @@
     </div>
   </div>
 
-  <div class="modal-overlay hidden" id="homeworkAssignmentModal" role="dialog" aria-modal="true" aria-labelledby="homeworkAssignmentModalTitle">
-    <div class="modal-card homework-modal-card homework-assignment-modal-card">
-      <div class="modal-header">
-        <h3 id="homeworkAssignmentModalTitle">New assignment</h3>
-        <button type="button" class="icon-btn" id="homeworkAssignmentModalClose" aria-label="Close assignment form">
-          <i class="fa-solid fa-xmark"></i>
-        </button>
-      </div>
-      <div class="modal-body homework-modal-body homework-assignment-modal-body">
-        <div class="homework-form-grid homework-form-grid--assignment">
-          <label class="homework-field">
-            <span class="homework-field-label">Title</span>
-            <input type="text" id="homeworkAssignmentTitleInput" maxlength="160" placeholder="Write a clear assignment title" />
-            <div class="homework-field-error" id="homeworkAssignmentTitleError" role="alert" hidden></div>
-          </label>
-          <label class="homework-field">
-            <span class="homework-field-label">Due date</span>
-            <input type="datetime-local" id="homeworkAssignmentDueDateInput" />
-          </label>
-          <label class="homework-field homework-field--resource">
-            <span class="homework-field-label">Resource URL</span>
-            <input type="url" id="homeworkAssignmentResourceUrlInput" placeholder="https://example.com/worksheet" />
-          </label>
-        </div>
-        <label class="homework-field">
-          <span class="homework-field-label">Instructions</span>
-          <textarea id="homeworkAssignmentDescriptionInput" rows="8" placeholder="Add instructions, expectations, and grading notes"></textarea>
-        </label>
-        <section class="homework-file-picker homework-assignment-upload">
-          <div class="homework-file-picker-head">
-            <div>
-              <div class="homework-field-label">Assignment files</div>
-              <div class="homework-field-help">Teachers and school admins can upload an image, PDF, worksheet, or any assignment file here.</div>
-            </div>
-          </div>
-          <div class="homework-upload-dropzone" id="homeworkAssignmentUploadDropzone" role="button" tabindex="0" aria-label="Upload assignment image, PDF, or file">
-            <div class="homework-upload-dropzone-icon">
-              <i class="fa-solid fa-cloud-arrow-up" aria-hidden="true"></i>
-            </div>
-            <div class="homework-upload-dropzone-copy">
-              <div class="homework-upload-dropzone-title">Upload image, PDF, or file</div>
-              <div class="homework-upload-dropzone-meta">PNG, JPG, PDF, DOCX, PPT, ZIP and other class materials</div>
-            </div>
-            <button type="button" class="tasks-btn homework-modal-primary" id="homeworkAssignmentAddFilesBtn">
-              <i class="fa-solid fa-paperclip" aria-hidden="true"></i>
-              Choose files
-            </button>
-          </div>
-          <div class="homework-inline-files" id="homeworkAssignmentFilesList"></div>
-        </section>
-        <section class="homework-file-picker homework-assignment-upload">
-          <div class="homework-file-picker-head">
-            <div>
-              <div class="homework-field-label">Solution files</div>
-              <div class="homework-field-help">Upload answer keys, worked examples, or teacher solutions for this assignment.</div>
-            </div>
-          </div>
-          <div class="homework-upload-dropzone" id="homeworkAssignmentSolutionUploadDropzone" role="button" tabindex="0" aria-label="Upload homework solution file">
-            <div class="homework-upload-dropzone-icon">
-              <i class="fa-solid fa-file-circle-check" aria-hidden="true"></i>
-            </div>
-            <div class="homework-upload-dropzone-copy">
-              <div class="homework-upload-dropzone-title">Upload homework solution file</div>
-              <div class="homework-upload-dropzone-meta">PDF, DOCX, image, worksheet answer key, or marked sample solution</div>
-            </div>
-            <button type="button" class="tasks-btn homework-modal-primary" id="homeworkAssignmentAddSolutionFilesBtn">
-              <i class="fa-solid fa-paperclip" aria-hidden="true"></i>
-              Choose files
-            </button>
-          </div>
-          <div class="homework-inline-files" id="homeworkAssignmentSolutionFilesList"></div>
-        </section>
-      </div>
-      <div class="modal-footer homework-modal-footer">
-        <div class="homework-form-status" id="homeworkAssignmentFormStatus" aria-live="polite"></div>
-        <button type="button" class="tasks-btn" id="homeworkAssignmentCancelBtn">Cancel</button>
-        <button type="button" class="tasks-btn homework-modal-primary" id="homeworkAssignmentSaveBtn">Save assignment</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="modal-overlay hidden" id="homeworkSubmissionModal" role="dialog" aria-modal="true" aria-labelledby="homeworkSubmissionModalTitle">
-    <div class="modal-card homework-modal-card">
-      <div class="modal-header">
-        <h3 id="homeworkSubmissionModalTitle">My submission</h3>
-        <button type="button" class="icon-btn" id="homeworkSubmissionModalClose" aria-label="Close submission form">
-          <i class="fa-solid fa-xmark"></i>
-        </button>
-      </div>
-      <div class="modal-body homework-modal-body">
-        <div class="homework-modal-context">
-          <div class="homework-modal-context-title" id="homeworkSubmissionContextTitle"></div>
-          <div class="homework-modal-context-meta" id="homeworkSubmissionContextMeta"></div>
-        </div>
-        <label class="homework-field">
-          <span class="homework-field-label">Submission notes</span>
-          <textarea id="homeworkSubmissionTextInput" rows="9" placeholder="Summarize what you completed, questions, or links to your work"></textarea>
-          <div class="homework-field-error" id="homeworkSubmissionTextError" role="alert" hidden></div>
-        </label>
-        <section class="homework-file-picker">
-          <div class="homework-file-picker-head">
-            <div>
-              <div class="homework-field-label">Submission files</div>
-              <div class="homework-field-help">Attach documents, screenshots, or supporting files.</div>
-            </div>
-            <button type="button" class="tasks-btn" id="homeworkSubmissionAddFilesBtn">
-              <i class="fa-solid fa-paperclip" aria-hidden="true"></i>
-              Add files
-            </button>
-          </div>
-          <div class="homework-inline-files" id="homeworkSubmissionFilesList"></div>
-        </section>
-      </div>
-      <div class="modal-footer homework-modal-footer homework-modal-footer-split">
-        <div class="homework-form-status" id="homeworkSubmissionFormStatus" aria-live="polite"></div>
-        <button type="button" class="tasks-btn" id="homeworkSubmissionDraftBtn">Save draft</button>
-        <div class="homework-modal-footer-actions">
-          <button type="button" class="tasks-btn" id="homeworkSubmissionCancelBtn">Cancel</button>
-          <button type="button" class="tasks-btn homework-modal-primary" id="homeworkSubmissionSubmitBtn">Submit work</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="modal-overlay hidden" id="homeworkReviewModal" role="dialog" aria-modal="true" aria-labelledby="homeworkReviewModalTitle">
-    <div class="modal-card homework-modal-card">
-      <div class="modal-header">
-        <h3 id="homeworkReviewModalTitle">Review submission</h3>
-        <button type="button" class="icon-btn" id="homeworkReviewModalClose" aria-label="Close review form">
-          <i class="fa-solid fa-xmark"></i>
-        </button>
-      </div>
-      <div class="modal-body homework-modal-body">
-        <div class="homework-modal-context">
-          <div class="homework-modal-context-title" id="homeworkReviewContextTitle"></div>
-          <div class="homework-modal-context-meta" id="homeworkReviewContextMeta"></div>
-        </div>
-        <div class="homework-form-grid">
-          <label class="homework-field">
-            <span class="homework-field-label">Outcome</span>
-            <select id="homeworkReviewStatusInput">
-              <option value="reviewed">Reviewed</option>
-              <option value="returned">Returned</option>
-            </select>
-          </label>
-          <label class="homework-field">
-            <span class="homework-field-label">Grade</span>
-            <input type="text" id="homeworkReviewGradeInput" placeholder="A, 87, Pass, etc." />
-          </label>
-        </div>
-        <label class="homework-field">
-          <span class="homework-field-label">Feedback</span>
-          <textarea id="homeworkReviewFeedbackInput" rows="8" placeholder="Add teacher feedback, corrections, and next steps"></textarea>
-          <div class="homework-field-error" id="homeworkReviewFeedbackError" role="alert" hidden></div>
-        </label>
-      </div>
-      <div class="modal-footer homework-modal-footer">
-        <div class="homework-form-status" id="homeworkReviewFormStatus" aria-live="polite"></div>
-        <button type="button" class="tasks-btn" id="homeworkReviewCancelBtn">Cancel</button>
-        <button type="button" class="tasks-btn homework-modal-primary" id="homeworkReviewSaveBtn">Save review</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="modal-overlay hidden" id="homeworkDetailModal" role="dialog" aria-modal="true" aria-labelledby="homeworkDetailModalTitle">
-    <div class="modal-card homework-modal-card homework-detail-modal-card">
-      <div class="modal-header">
-        <div>
-          <h3 id="homeworkDetailModalTitle">Assignment detail</h3>
-          <div class="homework-detail-modal-subtitle" id="homeworkDetailModalSubtitle"></div>
-        </div>
-        <button type="button" class="icon-btn" id="homeworkDetailModalClose" aria-label="Close assignment detail">
-          <i class="fa-solid fa-xmark"></i>
-        </button>
-      </div>
-      <div class="homework-detail-tabs" id="homeworkDetailTabs" role="tablist" aria-label="Homework detail sections">
-        <button type="button" class="homework-detail-tab active" data-homework-detail-tab="instructions" role="tab" aria-selected="true">Instructions</button>
-        <button type="button" class="homework-detail-tab" data-homework-detail-tab="submission" role="tab" aria-selected="false">My Submission</button>
-        <button type="button" class="homework-detail-tab" data-homework-detail-tab="feedback" role="tab" aria-selected="false">Feedback</button>
-        <button type="button" class="homework-detail-tab" data-homework-detail-tab="discussion" role="tab" aria-selected="false">Discussion</button>
-      </div>
-      <div class="modal-body homework-modal-body">
-        <div id="homeworkDetailModalBody"></div>
-      </div>
-      <div class="modal-footer homework-modal-footer" id="homeworkDetailModalFooter"></div>
-    </div>
-  </div>
+  <div id="homeworkHtmlMount"></div>
 
   <div class="confirm-overlay hidden" id="confirmOverlay" aria-hidden="true">
     <div class="confirm-card" role="dialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmMessage">
@@ -5860,6 +5675,40 @@
   }
 </script>
 <script src="vendor/jsQR.js"></script>
+<script>
+  (function loadHomeworkHtml() {
+    const mount = document.getElementById("homeworkHtmlMount");
+    if (!mount) return;
+    try {
+      const request = new XMLHttpRequest();
+      request.open("GET", "homework.html", false);
+      request.send(null);
+      if (request.status >= 200 && request.status < 300) {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(request.responseText, "text/html");
+        const styleNodes = doc.querySelectorAll("style");
+        styleNodes.forEach((styleNode) => {
+          const style = document.createElement("style");
+          style.textContent = styleNode.textContent || "";
+          document.head.appendChild(style);
+          styleNode.remove();
+        });
+        const scriptNodes = doc.querySelectorAll("script");
+        scriptNodes.forEach((scriptNode) => scriptNode.remove());
+        mount.innerHTML = doc.body.innerHTML;
+        scriptNodes.forEach((scriptNode) => {
+          const script = document.createElement("script");
+          script.textContent = scriptNode.textContent || "";
+          document.body.appendChild(script);
+        });
+      } else {
+        console.error("Failed to load homework HTML", request.status);
+      }
+    } catch (error) {
+      console.error("Failed to inject homework HTML", error);
+    }
+  })();
+</script>
 <!-- ✅ app.js must load BEFORE announcements.js (announcements uses helpers from app.js) -->
 <script src="app.js"></script>
 <script src="calendar/calendar.js"></script>
@@ -5874,5 +5723,6 @@
 <script src="/analytics/analytics.js"></script>
 <script src="/integration-assets/integration.js"></script>
 <script src="loginregister.js"></script>
+<script src="/legal/cookie-consent.js"></script>
 </body>
 </html>

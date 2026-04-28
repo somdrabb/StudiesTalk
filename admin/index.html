@@ -38,6 +38,9 @@
         <button class="tab nav-item" type="button" data-tab="settings" data-tooltip="Settings" aria-label="Settings">
           <i class="fa-solid fa-sliders" aria-hidden="true"></i><span class="nav-label">Settings</span>
         </button>
+        <button class="tab nav-item" type="button" data-tab="legal" data-tooltip="Legal / Compliance" aria-label="Legal and compliance">
+          <i class="fa-solid fa-scale-balanced" aria-hidden="true"></i><span class="nav-label">Legal / Compliance</span>
+        </button>
         <button class="tab nav-item" type="button" data-tab="audit" data-tooltip="Audit Log" aria-label="Audit log">
           <i class="fa-solid fa-shield-halved" aria-hidden="true"></i><span class="nav-label">Audit Log</span>
         </button>
@@ -425,7 +428,11 @@
 
     <div class="settings-grid">
       <div class="settings-card">
-        <div class="card-header">
+        <div class="workspace-warning" id="settingsWorkspaceWarning">
+          ⚠️ No workspace selected. Changes cannot be saved.
+        </div>
+
+        <div class="card-header settings-json-header">
           <div>
             <h3>Configuration JSON</h3>
             <p>Edit system-level behavior</p>
@@ -435,10 +442,6 @@
             <button id="btnFormatJson" class="btn btn-ghost" type="button">Format</button>
             <button id="btnResetJson" class="btn btn-ghost" type="button">Reset</button>
           </div>
-        </div>
-
-        <div class="workspace-warning" id="settingsWorkspaceWarning">
-          ⚠️ No workspace selected. Changes cannot be saved.
         </div>
 
         <textarea id="settingsJson" class="json-editor"></textarea>
@@ -453,9 +456,13 @@
           </div>
 
           <div class="right">
-            <button id="btnValidateJson" class="btn btn-ghost" type="button">Validate</button>
-            <button id="btnSaveSettings" class="btn btn-primary" type="button">💾 Save Changes</button>
-          </div>
+  <button id="btnValidateJson" class="btn btn-ghost" type="button">
+    <i class="fas fa-shield-alt" style="margin-right: 6px;"></i> Validate
+  </button>
+  <button id="btnSaveSettings" class="btn btn-primary" type="button">
+    <i class="fas fa-download" style="margin-right: 6px;"></i> Save Changes
+  </button>
+</div>
         </div>
       </div>
 
@@ -468,6 +475,193 @@
       </div>
     </div>
   </div>
+          </section>
+
+          <section class="panel legal-panel" id="panel-legal" hidden>
+            <div class="panel-head">
+              <div>
+                <h2>Legal / Compliance</h2>
+                <p class="muted">Platform legal settings, published documents, and acceptance readiness.</p>
+              </div>
+              <div class="panel-actions legal-save-bar">
+                <span class="legal-status-badge" id="legalPublishStatusBadge">Draft</span>
+                <span class="muted" id="legalLastUpdated">Last updated: —</span>
+              </div>
+            </div>
+
+            <div class="legal-grid">
+              <section class="legal-card">
+                <div class="legal-section-title">
+                  <h3>Company / Impressum</h3>
+                  <p>Controller and operator fields required for EU/Germany public legal pages.</p>
+                </div>
+                <div class="legal-form-grid">
+                  <input class="input" id="legal_company_name" placeholder="Company name" />
+                  <input class="input" id="legal_operator_name" placeholder="Operator name" />
+                  <textarea class="input legal-textarea legal-span-2" id="legal_address" placeholder="Full legal address"></textarea>
+                  <input class="input" id="legal_email" placeholder="Legal email" />
+                  <input class="input" id="legal_phone" placeholder="Phone" />
+                  <input class="input" id="legal_vat_id" placeholder="VAT ID" />
+                  <input class="input" id="legal_tax_number" placeholder="Tax number" />
+                  <input class="input" id="legal_business_registration" placeholder="Business registration" />
+                  <input class="input" id="legal_responsible_person" placeholder="Responsible person" />
+                  <input class="input" id="legal_supervisory_authority" placeholder="Supervisory authority" />
+                  <input class="input" id="legal_support_email" placeholder="Support email" />
+                  <input class="input" id="legal_privacy_email" placeholder="Privacy email" />
+                </div>
+              </section>
+
+              <section class="legal-card">
+                <div class="legal-section-title">
+                  <h3>Providers / Processors</h3>
+                  <p>Public processor/vendor disclosures used in privacy and compliance pages.</p>
+                </div>
+                <div class="legal-form-grid">
+                  <input class="input" id="legal_hosting_provider" placeholder="Hosting provider" />
+                  <input class="input" id="legal_video_provider" placeholder="Video provider" />
+                  <input class="input" id="legal_ai_provider" placeholder="AI provider" />
+                  <input class="input" id="legal_email_provider" placeholder="Email provider" />
+                  <input class="input" id="legal_sms_provider" placeholder="SMS provider" />
+                  <input class="input" id="legal_storage_provider" placeholder="Object storage provider" />
+                  <input class="input" id="legal_analytics_provider" placeholder="Analytics provider" />
+                  <input class="input" id="legal_locale_default" placeholder="Default locale (en)" />
+                </div>
+              </section>
+
+              <section class="legal-card">
+                <div class="legal-section-title">
+                  <h3>Retention Policy</h3>
+                  <p>Configured retention windows surfaced in privacy disclosures and audits.</p>
+                </div>
+                <div class="legal-form-grid">
+                  <input class="input" id="legal_recording_retention_days" type="number" min="0" placeholder="Recording retention days" />
+                  <input class="input" id="legal_security_log_retention_days" type="number" min="0" placeholder="Security log retention days" />
+                  <input class="input" id="legal_backup_retention_days" type="number" min="0" placeholder="Backup retention days" />
+                  <input class="input" id="legal_learning_data_retention_months" type="number" min="0" placeholder="Learning data retention months" />
+                </div>
+              </section>
+
+              <section class="legal-card">
+                <div class="legal-section-title">
+                  <h3>Legal Text Blocks</h3>
+                  <p>Operational/legal-product templates. Qualified lawyer review is still required before launch.</p>
+                </div>
+                <div class="legal-form-grid">
+                  <textarea class="input legal-textarea" id="legal_liability_text" placeholder="Liability text"></textarea>
+                  <textarea class="input legal-textarea" id="legal_sla_text" placeholder="SLA text"></textarea>
+                  <textarea class="input legal-textarea" id="legal_gdpr_dpa_text" placeholder="GDPR DPA text"></textarea>
+                  <textarea class="input legal-textarea" id="legal_ai_notice_text" placeholder="AI notice text"></textarea>
+                  <textarea class="input legal-textarea" id="legal_recording_notice_text" placeholder="Recording notice text"></textarea>
+                  <textarea class="input legal-textarea" id="legal_cookie_notice_text" placeholder="Cookie notice text"></textarea>
+                </div>
+              </section>
+            </div>
+
+            <section class="legal-card">
+              <div class="legal-section-title">
+                <h3>Document Versions</h3>
+                <p>Draft, update, and publish public documents per type and locale.</p>
+              </div>
+              <div class="legal-version-table" id="legalVersionCards">
+                <article class="legal-preview-card" data-document-type="privacy">
+                  <div class="legal-version-header">
+                    <strong>Privacy Policy</strong>
+                    <span class="legal-status-badge" data-role="status">Draft</span>
+                  </div>
+                  <div class="legal-form-grid">
+                    <input class="input" data-field="locale" value="en" placeholder="Locale" />
+                    <input class="input" data-field="version" placeholder="Version" />
+                    <input class="input legal-span-2" data-field="title" placeholder="Title" />
+                    <textarea class="input legal-textarea legal-span-2" data-field="body" placeholder="Document body"></textarea>
+                  </div>
+                  <div class="legal-doc-actions">
+                    <button class="btn btn-ghost" type="button" data-action="save-version">Save document</button>
+                    <button class="btn btn-primary" type="button" data-action="publish-version">Publish document</button>
+                  </div>
+                </article>
+                <article class="legal-preview-card" data-document-type="terms">
+                  <div class="legal-version-header">
+                    <strong>Terms</strong>
+                    <span class="legal-status-badge" data-role="status">Draft</span>
+                  </div>
+                  <div class="legal-form-grid">
+                    <input class="input" data-field="locale" value="en" placeholder="Locale" />
+                    <input class="input" data-field="version" placeholder="Version" />
+                    <input class="input legal-span-2" data-field="title" placeholder="Title" />
+                    <textarea class="input legal-textarea legal-span-2" data-field="body" placeholder="Document body"></textarea>
+                  </div>
+                  <div class="legal-doc-actions">
+                    <button class="btn btn-ghost" type="button" data-action="save-version">Save document</button>
+                    <button class="btn btn-primary" type="button" data-action="publish-version">Publish document</button>
+                  </div>
+                </article>
+                <article class="legal-preview-card" data-document-type="impressum">
+                  <div class="legal-version-header">
+                    <strong>Impressum</strong>
+                    <span class="legal-status-badge" data-role="status">Draft</span>
+                  </div>
+                  <div class="legal-form-grid">
+                    <input class="input" data-field="locale" value="de" placeholder="Locale" />
+                    <input class="input" data-field="version" placeholder="Version" />
+                    <input class="input legal-span-2" data-field="title" placeholder="Title" />
+                    <textarea class="input legal-textarea legal-span-2" data-field="body" placeholder="Document body"></textarea>
+                  </div>
+                  <div class="legal-doc-actions">
+                    <button class="btn btn-ghost" type="button" data-action="save-version">Save document</button>
+                    <button class="btn btn-primary" type="button" data-action="publish-version">Publish document</button>
+                  </div>
+                </article>
+                <article class="legal-preview-card" data-document-type="cookies">
+                  <div class="legal-version-header">
+                    <strong>Cookie Policy</strong>
+                    <span class="legal-status-badge" data-role="status">Draft</span>
+                  </div>
+                  <div class="legal-form-grid">
+                    <input class="input" data-field="locale" value="en" placeholder="Locale" />
+                    <input class="input" data-field="version" placeholder="Version" />
+                    <input class="input legal-span-2" data-field="title" placeholder="Title" />
+                    <textarea class="input legal-textarea legal-span-2" data-field="body" placeholder="Document body"></textarea>
+                  </div>
+                  <div class="legal-doc-actions">
+                    <button class="btn btn-ghost" type="button" data-action="save-version">Save document</button>
+                    <button class="btn btn-primary" type="button" data-action="publish-version">Publish document</button>
+                  </div>
+                </article>
+                <article class="legal-preview-card" data-document-type="dpa">
+                  <div class="legal-version-header">
+                    <strong>DPA</strong>
+                    <span class="legal-status-badge" data-role="status">Draft</span>
+                  </div>
+                  <div class="legal-form-grid">
+                    <input class="input" data-field="locale" value="en" placeholder="Locale" />
+                    <input class="input" data-field="version" placeholder="Version" />
+                    <input class="input legal-span-2" data-field="title" placeholder="Title" />
+                    <textarea class="input legal-textarea legal-span-2" data-field="body" placeholder="Document body"></textarea>
+                  </div>
+                  <div class="legal-doc-actions">
+                    <button class="btn btn-ghost" type="button" data-action="save-version">Save document</button>
+                    <button class="btn btn-primary" type="button" data-action="publish-version">Publish document</button>
+                  </div>
+                </article>
+              </div>
+            </section>
+
+            <section class="legal-card">
+              <div class="legal-section-title">
+                <h3>Actions</h3>
+                <p id="legalMissingFields">Publish requirements are complete.</p>
+              </div>
+              <div class="panel-actions">
+                <button class="btn btn-primary" type="button" id="btnLegalSaveDraft">Save Draft</button>
+                <button class="btn btn-secondary" type="button" id="btnLegalPublish">Publish Legal Settings</button>
+                <button class="btn btn-ghost" type="button" id="btnLegalPreviewPrivacy">Preview Privacy</button>
+                <button class="btn btn-ghost" type="button" id="btnLegalPreviewTerms">Preview Terms</button>
+                <button class="btn btn-ghost" type="button" id="btnLegalPreviewImpressum">Preview Impressum</button>
+              </div>
+              <div class="settings-feedback">
+                <div id="legalSaveStatus" class="error legal-inline-status"></div>
+              </div>
+            </section>
           </section>
 
           <!-- 9. AUDIT PANEL -->

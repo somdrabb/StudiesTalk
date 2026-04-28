@@ -10,80 +10,80 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
   <link rel="stylesheet" href="/legal/legal.css" />
 </head>
-<body>
+<body data-legal-document="impressum" data-legal-fallback-title="Impressum">
   <main class="legal-page">
     <div class="legal-shell">
       <header class="legal-topbar">
         <a class="legal-brand" href="/">
           <span class="legal-brand-badge"><i class="fa-solid fa-address-card" aria-hidden="true"></i></span>
-          <span>StudiesTalk Legal</span>
+          <span class="legal-brand-name">StudiesTalk Legal</span>
         </a>
         <nav class="legal-topnav" aria-label="Legal navigation">
-          <a class="legal-nav-link" href="/privacy">Privacy</a>
-          <a class="legal-nav-link" href="/terms">Terms</a>
-          <a class="legal-nav-link is-active" href="/impressum">Impressum</a>
+          <a class="legal-nav-link" data-legal-link href="/privacy">Privacy</a>
+          <a class="legal-nav-link" data-legal-link href="/terms">Terms</a>
+          <a class="legal-nav-link is-active" data-legal-link href="/impressum">Impressum</a>
         </nav>
       </header>
 
       <section class="legal-hero">
         <div class="legal-kicker"><i class="fa-solid fa-building"></i><span>Deutschland / DDG</span></div>
         <div>
-          <h1>Impressum</h1>
-          <p>Vorlage fuer Angaben gemaess § 5 DDG fuer StudiesTalk. Diese Angaben muessen vor einem oeffentlichen oder kommerziellen Launch mit den echten Unternehmensdaten vervollstaendigt werden.</p>
+          <h1 id="legalPageTitle">Impressum</h1>
+          <p>Published operator information for StudiesTalk. These templates are operational/legal-product templates and must be reviewed by a qualified legal professional before commercial launch.</p>
         </div>
-        <div class="legal-banner">Hinweis: Diese Seite enthaelt Pflichtangaben-Platzhalter und ist vor der Veroeffentlichung zu pru fen und zu vervollstaendigen.</div>
+        <div class="legal-meta">
+          <span class="legal-chip"><i class="fa-solid fa-file-signature"></i> Version <span id="legalPageVersion">—</span></span>
+          <span class="legal-chip"><i class="fa-solid fa-calendar-check"></i> Published <span id="legalPagePublishedAt">—</span></span>
+          <span class="legal-chip" id="legalPageStatus">Draft</span>
+        </div>
       </section>
 
       <div class="legal-grid">
         <aside class="legal-sidebar">
           <section class="legal-card">
-            <h2>Sofort ausfuellen</h2>
+            <h2>Operator</h2>
             <div class="legal-placeholder">
-              Vollstaendige Anschrift<br />
-              Kontakt-E-Mail<br />
-              Telefon optional<br />
-              USt-IdNr. falls vorhanden
+              <strong id="legalPageCompanyName"></strong><br />
+              <span id="legalPageOperatorName"></span><br />
+              <span id="legalPageAddress" class="legal-multiline"></span><br />
+              Email: <span id="legalPageEmail"></span><br />
+              Phone: <span id="legalPagePhone"></span><br />
+              VAT: <span id="legalPageVatId"></span>
             </div>
+          </section>
+          <section class="legal-card">
+            <h2>Providers</h2>
+            <ul id="legalPageProviders" class="legal-list-plain"></ul>
+          </section>
+          <section class="legal-card">
+            <h2>Retention</h2>
+            <ul id="legalPageRetention" class="legal-list-plain"></ul>
+          </section>
+          <section class="legal-card">
+            <h2>Support</h2>
+            <p id="legalPageSupportEmail"></p>
           </section>
         </aside>
 
         <section class="legal-content">
           <section class="legal-card">
-            <h2>Angaben gemaess § 5 DDG</h2>
-            <p><strong>Betreiber:</strong><br />Md Golam Rabbani / StudiesTalk</p>
-            <p><strong>Anschrift:</strong><br />[Full address required before production]</p>
-            <p><strong>Kontakt:</strong><br />[email]<br />[phone optional]</p>
-          </section>
-
-          <section class="legal-card">
-            <h2>Verantwortlich fuer Inhalte</h2>
-            <p>Md Golam Rabbani<br />[Full address required before production]</p>
-          </section>
-
-          <section class="legal-card">
-            <h2>Umsatzsteuer</h2>
-            <p>[Umsatzsteuer-ID / VAT ID if applicable]</p>
-          </section>
-
-          <section class="legal-card">
-            <h2>Hinweis vor Launch</h2>
-            <div class="legal-placeholder">
-              Diese Seite muss vor einem oeffentlichen oder kommerziellen Launch mit den vollstaendigen echten Betreiberangaben vervollstaendigt werden. Bitte insbesondere Anschrift, Kontakt, Vertretungsberechtigung und steuerliche Angaben pruefen.
-            </div>
+            <h2>Published text</h2>
+            <div id="legalDocumentBody"></div>
           </section>
         </section>
       </div>
 
       <footer class="legal-footer">
-        <p>Impressum-Vorlage fuer StudiesTalk.</p>
+        <p>These templates are operational/legal-product templates and must be reviewed by a qualified legal professional before commercial launch.</p>
         <nav class="legal-footnav" aria-label="Legal footer navigation">
-          <a class="legal-nav-link" href="/privacy">Privacy</a>
-          <a class="legal-nav-link" href="/terms">Terms</a>
-          <a class="legal-nav-link is-active" href="/impressum">Impressum</a>
+          <a class="legal-nav-link" data-legal-link href="/privacy">Privacy</a>
+          <a class="legal-nav-link" data-legal-link href="/terms">Terms</a>
+          <a class="legal-nav-link is-active" data-legal-link href="/impressum">Impressum</a>
         </nav>
       </footer>
     </div>
   </main>
+  <script src="/legal/legal-page.js"></script>
   <script src="/legal/cookie-consent.js"></script>
 </body>
 </html>

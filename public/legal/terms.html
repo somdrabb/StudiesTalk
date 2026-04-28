@@ -3,147 +3,87 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>StudiesTalk Terms of Service / Nutzungsbedingungen</title>
+  <title>StudiesTalk Terms</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
   <link rel="stylesheet" href="/legal/legal.css" />
 </head>
-<body>
+<body data-legal-document="terms" data-legal-fallback-title="Terms of Service / Nutzungsbedingungen">
   <main class="legal-page">
     <div class="legal-shell">
       <header class="legal-topbar">
         <a class="legal-brand" href="/">
           <span class="legal-brand-badge"><i class="fa-solid fa-scale-balanced" aria-hidden="true"></i></span>
-          <span>StudiesTalk Legal</span>
+          <span class="legal-brand-name">StudiesTalk Legal</span>
         </a>
         <nav class="legal-topnav" aria-label="Legal navigation">
-          <a class="legal-nav-link" href="/privacy">Privacy</a>
-          <a class="legal-nav-link is-active" href="/terms">Terms</a>
-          <a class="legal-nav-link" href="/impressum">Impressum</a>
+          <a class="legal-nav-link" data-legal-link href="/privacy">Privacy</a>
+          <a class="legal-nav-link is-active" data-legal-link href="/terms">Terms</a>
+          <a class="legal-nav-link" data-legal-link href="/impressum">Impressum</a>
         </nav>
       </header>
 
       <section class="legal-hero">
         <div class="legal-kicker"><i class="fa-solid fa-file-signature"></i><span>SaaS terms</span></div>
         <div>
-          <h1>Terms of Service / Nutzungsbedingungen</h1>
-          <p>Professional template terms for StudiesTalk as a school-focused SaaS platform. These terms must be reviewed and completed with the actual business details, service commitments, and liability position before production use.</p>
+          <h1 id="legalPageTitle">Terms of Service / Nutzungsbedingungen</h1>
+          <p>Published legal and compliance information for StudiesTalk. These templates are operational/legal-product templates and must be reviewed by a qualified legal professional before commercial launch.</p>
         </div>
         <div class="legal-meta">
-          <span class="legal-chip"><i class="fa-solid fa-user-shield"></i> Roles and responsibilities defined</span>
-          <span class="legal-chip"><i class="fa-solid fa-video"></i> Recording consent requirements included</span>
-          <span class="legal-chip"><i class="fa-solid fa-robot"></i> AI assistance limitations included</span>
+          <span class="legal-chip"><i class="fa-solid fa-file-signature"></i> Version <span id="legalPageVersion">—</span></span>
+          <span class="legal-chip"><i class="fa-solid fa-calendar-check"></i> Published <span id="legalPagePublishedAt">—</span></span>
+          <span class="legal-chip" id="legalPageStatus">Draft</span>
         </div>
-        <div class="legal-banner">This page is a legal template, not legal advice. Company identity, governing law wording, service commitments, and limitation of liability language must be completed before launch.</div>
       </section>
 
       <div class="legal-grid">
         <aside class="legal-sidebar">
           <section class="legal-card">
-            <h2>Operator placeholder</h2>
+            <h2>Operator</h2>
             <div class="legal-placeholder">
-              StudiesTalk<br />
-              Md Golam Rabbani<br />
-              [Full address required before production]<br />
-              Email: [legal contact email]
+              <strong id="legalPageCompanyName"></strong><br />
+              <span id="legalPageOperatorName"></span><br />
+              <span id="legalPageAddress" class="legal-multiline"></span><br />
+              Email: <span id="legalPageEmail"></span><br />
+              Phone: <span id="legalPagePhone"></span><br />
+              VAT: <span id="legalPageVatId"></span>
             </div>
           </section>
           <section class="legal-card">
-            <h2>Service scope</h2>
-            <ul class="legal-list-plain">
-              <li><strong>Core modules:</strong> accounts, classes, attendance, homework, live sessions, messaging, AI support, uploads.</li>
-              <li><strong>Customer type:</strong> schools, school administrators, teachers, students, and invited users.</li>
-              <li><strong>Data responsibility:</strong> schools remain responsible for their student data workflows and legal basis.</li>
-            </ul>
+            <h2>Providers</h2>
+            <ul id="legalPageProviders" class="legal-list-plain"></ul>
+          </section>
+          <section class="legal-card">
+            <h2>Retention</h2>
+            <ul id="legalPageRetention" class="legal-list-plain"></ul>
+          </section>
+          <section class="legal-card">
+            <h2>Support</h2>
+            <p id="legalPageSupportEmail"></p>
           </section>
         </aside>
 
         <section class="legal-content">
           <section class="legal-card">
-            <h2>1. Scope and Acceptance</h2>
-            <p>These terms govern access to and use of StudiesTalk. By creating or using an account, the customer, school, or user agrees to these terms as applicable to their role. Schools may accept these terms on behalf of their institution and their authorized users.</p>
-          </section>
-
-          <section class="legal-card">
-            <h2>2. Accounts and Roles</h2>
-            <p>StudiesTalk supports role-based access, including school administrators, teachers, students, and other invited users. Users must keep their credentials confidential and must not share accounts. Schools are responsible for assigning appropriate roles and removing access that is no longer required.</p>
-          </section>
-
-          <section class="legal-card">
-            <h2>3. Acceptable Use</h2>
-            <ul>
-              <li>No unlawful, abusive, infringing, deceptive, or harmful use.</li>
-              <li>No attempts to bypass permissions, interfere with platform security, or access other tenants or workspaces without authorization.</li>
-              <li>No upload or distribution of malicious files, prohibited content, or material that violates third-party rights.</li>
-              <li>No misuse of communications, live class tools, AI features, or recording features.</li>
-            </ul>
-          </section>
-
-          <section class="legal-card">
-            <h2>4. School Responsibility for Data</h2>
-            <p>Each school or educational institution is responsible for ensuring it has a lawful basis for the student, teacher, guardian, and staff data it uses in StudiesTalk. This includes any guardian consent requirements, school policies, and local education law requirements that apply to the use of attendance, homework, messaging, recordings, and AI tools.</p>
-          </section>
-
-          <section class="legal-card">
-            <h2>5. Recordings and Live Class Features</h2>
-            <p>Recording features should only be used where a lawful basis exists and any required consent or notice has been obtained. Schools are responsible for configuring retention, deletion, and access permissions for recordings and related metadata.</p>
-          </section>
-
-          <section class="legal-card">
-            <h2>6. AI Features</h2>
-            <p>AI outputs are provided as assistance only. They may be inaccurate, incomplete, outdated, or unsuitable for a specific educational, legal, disciplinary, or safeguarding decision. Human review remains required. Users should avoid submitting sensitive personal data unless necessary and lawfully permitted.</p>
-          </section>
-
-          <section class="legal-card">
-            <h2>7. Availability and Service Levels</h2>
-            <p>Service availability commitments, maintenance windows, support levels, and uptime targets should be specified in the applicable commercial agreement or service schedule.</p>
-            <div class="legal-placeholder"><strong>Placeholder:</strong> Add the actual availability statement, maintenance notice policy, support channel, and any SLA or service credit wording here.</div>
-          </section>
-
-          <section class="legal-card">
-            <h2>8. Fees and Commercial Terms</h2>
-            <p>Commercial plans, billing cycles, renewals, taxes, and payment terms should be set out in the applicable order form, subscription agreement, or pricing schedule.</p>
-          </section>
-
-          <section class="legal-card">
-            <h2>9. Intellectual Property</h2>
-            <p>StudiesTalk and its platform materials remain the property of the operator or its licensors. Customer and school content remains the responsibility of the respective uploader or institution, subject to the rights needed to operate the service.</p>
-          </section>
-
-          <section class="legal-card">
-            <h2>10. Suspension and Termination</h2>
-            <p>StudiesTalk may suspend or restrict access where necessary for security, abuse prevention, unpaid fees, legal compliance, or material breach. Schools and authorized customers may request account or workspace deletion subject to contract, legal retention duties, and backup limits.</p>
-          </section>
-
-          <section class="legal-card">
-            <h2>11. Warranties and Liability</h2>
-            <div class="legal-placeholder">
-              <strong>Placeholder:</strong> Insert reviewed warranty disclaimer, exclusion language, and limitation of liability text appropriate for German/EU SaaS contracts. This section should be completed by qualified counsel before commercial launch.
-            </div>
-          </section>
-
-          <section class="legal-card">
-            <h2>12. Governing Law and Contact</h2>
-            <div class="legal-placeholder">
-              <strong>Placeholder:</strong> Add the governing law, venue, and dispute resolution wording that applies to the operator and the target customer market.
-            </div>
-            <p>Legal contact: [legal contact email]</p>
+            <h2>Published text</h2>
+            <div id="legalDocumentBody"></div>
           </section>
         </section>
       </div>
 
       <footer class="legal-footer">
-        <p>Terms template status: editable before production launch.</p>
+        <p>These templates are operational/legal-product templates and must be reviewed by a qualified legal professional before commercial launch.</p>
         <nav class="legal-footnav" aria-label="Legal footer navigation">
-          <a class="legal-nav-link" href="/privacy">Privacy</a>
-          <a class="legal-nav-link is-active" href="/terms">Terms</a>
-          <a class="legal-nav-link" href="/impressum">Impressum</a>
+          <a class="legal-nav-link" data-legal-link href="/privacy">Privacy</a>
+          <a class="legal-nav-link is-active" data-legal-link href="/terms">Terms</a>
+          <a class="legal-nav-link" data-legal-link href="/impressum">Impressum</a>
         </nav>
       </footer>
     </div>
   </main>
+  <script src="/legal/legal-page.js"></script>
   <script src="/legal/cookie-consent.js"></script>
 </body>
 </html>

@@ -29,6 +29,11 @@ const state = {
     invoices: [],
     payments: []
   },
+  legal: {
+    settings: null,
+    versions: [],
+    publishRequirements: []
+  },
   requests: {
     status: "pending",
     q: "",
@@ -45,8 +50,43 @@ const state = {
   }
 };
 
+let settingsEditorSnapshot = {};
+
 const REQUESTS_DEBOUNCE_MS = 320;
 let requestSearchTimer = null;
+const LEGAL_DOCUMENT_TYPES = ["privacy", "terms", "impressum", "cookies", "dpa"];
+const LEGAL_PANEL_FIELD_IDS = [
+  "legal_company_name",
+  "legal_operator_name",
+  "legal_address",
+  "legal_email",
+  "legal_phone",
+  "legal_vat_id",
+  "legal_tax_number",
+  "legal_business_registration",
+  "legal_responsible_person",
+  "legal_supervisory_authority",
+  "legal_hosting_provider",
+  "legal_video_provider",
+  "legal_ai_provider",
+  "legal_email_provider",
+  "legal_sms_provider",
+  "legal_storage_provider",
+  "legal_analytics_provider",
+  "legal_recording_retention_days",
+  "legal_security_log_retention_days",
+  "legal_backup_retention_days",
+  "legal_learning_data_retention_months",
+  "legal_support_email",
+  "legal_privacy_email",
+  "legal_liability_text",
+  "legal_sla_text",
+  "legal_gdpr_dpa_text",
+  "legal_ai_notice_text",
+  "legal_recording_notice_text",
+  "legal_cookie_notice_text",
+  "legal_locale_default"
+];
 
 function formatEUR(n) {
   return `€${Number(n || 0).toFixed(2)}`;
@@ -79,6 +119,10 @@ const TAB_HEADERS = {
   settings: {
     title: "Settings",
     subtitle: "Workspace configuration and policies."
+  },
+  legal: {
+    title: "Legal / Compliance",
+    subtitle: "Published legal settings, document versions, and acceptance readiness."
   },
   audit: {
     title: "Audit log",
@@ -1082,6 +1126,7 @@ async function refreshAll() {
   await refreshBilling();
   await refreshMessages();
   await refreshSettings();
+  await refreshLegalPanel();
   await refreshAudit();
   await refreshSchoolRequestCounts();
   await refreshSchoolRequests({ reset: true });
@@ -1109,6 +1154,9 @@ async function refreshActiveTab() {
       break;
     case "settings":
       await refreshSettings().catch(() => {});
+      break;
+    case "legal":
+      await refreshLegalPanel().catch(() => {});
       break;
     case "audit":
       await refreshAudit().catch(() => {});
@@ -2068,6 +2116,109 @@ function updateWorkspaceWarning() {
   }
 }
 
+function cloneSettingsObject(value) {
+  try {
+    return JSON.parse(JSON.stringify(value && typeof value === "object" ? value : {}));
+  } catch {
+    return {};
+  }
+}
+
+function normalizeLegalSettings(legal = {}, fallbackCompanyName = "") {
+  const source = legal && typeof legal === "object" ? legal : {};
+  const providers = source.providers && typeof source.providers === "object" ? source.providers : {};
+  const read = (value) => (typeof value === "string" ? value : "");
+  return {
+    company_name: read(source.company_name) || fallbackCompanyName || "",
+    address: read(source.address),
+    email: read(source.email),
+    phone: read(source.phone),
+    vat_id: read(source.vat_id),
+    providers: {
+      hosting: read(providers.hosting),
+      video: read(providers.video),
+      ai: read(providers.ai),
+      email: read(providers.email),
+      sms: read(providers.sms),
+      storage: read(providers.storage)
+    },
+    retention: read(source.retention),
+    liability: read(source.liability)
+  };
+}
+
+function getSettingsWorkspaceName() {
+  const ws = state.workspaceId;
+  const selected = (state.workspaces || []).find((workspace) => String(workspace.id) === String(ws));
+  return selected?.name || (ws && ws !== "all" ? ws : "");
+}
+
+function writeSettingsJson(settings = {}) {
+  const editor = $("settingsJson");
+  if (!editor) return;
+  const snapshot = cloneSettingsObject(settings);
+  settingsEditorSnapshot = snapshot;
+  editor.value = JSON.stringify(snapshot, null, 2);
+}
+
+function loadLegalSettings(settings = {}) {
+  const legal = normalizeLegalSettings(settings.legal || {}, getSettingsWorkspaceName());
+  const fields = {
+    legal_company: legal.company_name,
+    legal_address: legal.address,
+    legal_email: legal.email,
+    legal_phone: legal.phone,
+    legal_vat: legal.vat_id,
+    legal_hosting: legal.providers.hosting,
+    legal_ai: legal.providers.ai,
+    legal_email_provider: legal.providers.email,
+    legal_storage: legal.providers.storage,
+    legal_retention: legal.retention,
+    legal_liability: legal.liability
+  };
+  Object.entries(fields).forEach(([id, value]) => {
+    const node = $(id);
+    if (node) node.value = value || "";
+  });
+}
+
+function buildLegalSettingsFromForm() {
+  return {
+    company_name: ($("legal_company")?.value || "").trim(),
+    address: ($("legal_address")?.value || "").trim(),
+    email: ($("legal_email")?.value || "").trim(),
+    phone: ($("legal_phone")?.value || "").trim(),
+    vat_id: ($("legal_vat")?.value || "").trim(),
+    providers: {
+      hosting: ($("legal_hosting")?.value || "").trim(),
+      video: "",
+      ai: ($("legal_ai")?.value || "").trim(),
+      email: ($("legal_email_provider")?.value || "").trim(),
+      sms: "",
+      storage: ($("legal_storage")?.value || "").trim()
+    },
+    retention: ($("legal_retention")?.value || "").trim(),
+    liability: ($("legal_liability")?.value || "").trim()
+  };
+}
+
+function mergeLegalSettingsIntoEditor() {
+  const error = $("settingsError");
+  let baseSettings = cloneSettingsObject(settingsEditorSnapshot);
+  const editor = $("settingsJson");
+  if (editor) {
+    try {
+      baseSettings = JSON.parse(editor.value || "{}");
+    } catch (_err) {}
+  }
+  baseSettings.legal = buildLegalSettingsFromForm();
+  writeSettingsJson(baseSettings);
+  if (error) {
+    error.textContent = "";
+    error.hidden = true;
+  }
+}
+
 async function refreshSettings() {
   const ws = state.workspaceId;
   const status = $("settingsSaveStatus");
@@ -2080,18 +2231,284 @@ async function refreshSettings() {
     error.hidden = true;
   }
   if (workspaceName) {
-    const selected = (state.workspaces || []).find((workspace) => String(workspace.id) === String(ws));
-    workspaceName.textContent = ws === "all" ? "All workspaces" : selected?.name || ws || "No workspace selected";
+    workspaceName.textContent = ws === "all" ? "All workspaces" : getSettingsWorkspaceName() || "No workspace selected";
   }
   updateWorkspaceWarning();
 
   if (ws === "all") {
-    $("settingsJson").value = JSON.stringify({ note: "Select a specific workspace to edit settings." }, null, 2);
+    writeSettingsJson({ note: "Select a specific workspace to edit settings." });
+    loadLegalSettings({});
     if (status) status.textContent = "Select a workspace before saving.";
     return;
   }
   const data = await api(`/api/admin/workspace-settings/${encodeURIComponent(ws)}`);
-  $("settingsJson").value = JSON.stringify(data.settings || {}, null, 2);
+  writeSettingsJson(data.settings || {});
+  loadLegalSettings(data.settings || {});
+}
+
+function showLegalStatus(message = "", tone = "info") {
+  const node = $("legalSaveStatus");
+  if (!node) return;
+  node.textContent = message;
+  node.hidden = !message;
+  node.style.color = tone === "error" ? "#991b1b" : tone === "success" ? "#166534" : "#475569";
+}
+
+function normalizeLegalAdminSettings(settings = {}) {
+  const source = settings && typeof settings === "object" ? settings : {};
+  return {
+    company_name: source.company_name || "",
+    operator_name: source.operator_name || "",
+    legal_address: source.legal_address || "",
+    legal_email: source.legal_email || "",
+    phone: source.phone || "",
+    vat_id: source.vat_id || "",
+    tax_number: source.tax_number || "",
+    business_registration: source.business_registration || "",
+    responsible_person: source.responsible_person || "",
+    supervisory_authority: source.supervisory_authority || "",
+    hosting_provider: source.hosting_provider || "",
+    video_provider: source.video_provider || "",
+    ai_provider: source.ai_provider || "",
+    email_provider: source.email_provider || "",
+    sms_provider: source.sms_provider || "",
+    storage_provider: source.storage_provider || "",
+    analytics_provider: source.analytics_provider || "",
+    recording_retention_days: source.recording_retention_days ?? "",
+    security_log_retention_days: source.security_log_retention_days ?? "",
+    backup_retention_days: source.backup_retention_days ?? "",
+    learning_data_retention_months: source.learning_data_retention_months ?? "",
+    support_email: source.support_email || "",
+    privacy_email: source.privacy_email || "",
+    terms_version: source.terms_version || "",
+    privacy_version: source.privacy_version || "",
+    impressum_version: source.impressum_version || "",
+    liability_text: source.liability_text || "",
+    sla_text: source.sla_text || "",
+    gdpr_dpa_text: source.gdpr_dpa_text || "",
+    ai_notice_text: source.ai_notice_text || "",
+    recording_notice_text: source.recording_notice_text || "",
+    cookie_notice_text: source.cookie_notice_text || "",
+    locale_default: source.locale_default || "en",
+    is_published: !!source.is_published,
+    published_at: source.published_at || "",
+    updated_at: source.updated_at || ""
+  };
+}
+
+function collectLegalPanelSettings() {
+  return normalizeLegalAdminSettings({
+    company_name: $("legal_company_name")?.value.trim() || "",
+    operator_name: $("legal_operator_name")?.value.trim() || "",
+    legal_address: $("legal_address")?.value.trim() || "",
+    legal_email: $("legal_email")?.value.trim() || "",
+    phone: $("legal_phone")?.value.trim() || "",
+    vat_id: $("legal_vat_id")?.value.trim() || "",
+    tax_number: $("legal_tax_number")?.value.trim() || "",
+    business_registration: $("legal_business_registration")?.value.trim() || "",
+    responsible_person: $("legal_responsible_person")?.value.trim() || "",
+    supervisory_authority: $("legal_supervisory_authority")?.value.trim() || "",
+    hosting_provider: $("legal_hosting_provider")?.value.trim() || "",
+    video_provider: $("legal_video_provider")?.value.trim() || "",
+    ai_provider: $("legal_ai_provider")?.value.trim() || "",
+    email_provider: $("legal_email_provider")?.value.trim() || "",
+    sms_provider: $("legal_sms_provider")?.value.trim() || "",
+    storage_provider: $("legal_storage_provider")?.value.trim() || "",
+    analytics_provider: $("legal_analytics_provider")?.value.trim() || "",
+    recording_retention_days: $("legal_recording_retention_days")?.value || "",
+    security_log_retention_days: $("legal_security_log_retention_days")?.value || "",
+    backup_retention_days: $("legal_backup_retention_days")?.value || "",
+    learning_data_retention_months: $("legal_learning_data_retention_months")?.value || "",
+    support_email: $("legal_support_email")?.value.trim() || "",
+    privacy_email: $("legal_privacy_email")?.value.trim() || "",
+    liability_text: $("legal_liability_text")?.value || "",
+    sla_text: $("legal_sla_text")?.value || "",
+    gdpr_dpa_text: $("legal_gdpr_dpa_text")?.value || "",
+    ai_notice_text: $("legal_ai_notice_text")?.value || "",
+    recording_notice_text: $("legal_recording_notice_text")?.value || "",
+    cookie_notice_text: $("legal_cookie_notice_text")?.value || "",
+    locale_default: $("legal_locale_default")?.value.trim() || "en"
+  });
+}
+
+function populateLegalPanel(settings = {}) {
+  const normalized = normalizeLegalAdminSettings(settings);
+  const fields = {
+    legal_company_name: normalized.company_name,
+    legal_operator_name: normalized.operator_name,
+    legal_address: normalized.legal_address,
+    legal_email: normalized.legal_email,
+    legal_phone: normalized.phone,
+    legal_vat_id: normalized.vat_id,
+    legal_tax_number: normalized.tax_number,
+    legal_business_registration: normalized.business_registration,
+    legal_responsible_person: normalized.responsible_person,
+    legal_supervisory_authority: normalized.supervisory_authority,
+    legal_hosting_provider: normalized.hosting_provider,
+    legal_video_provider: normalized.video_provider,
+    legal_ai_provider: normalized.ai_provider,
+    legal_email_provider: normalized.email_provider,
+    legal_sms_provider: normalized.sms_provider,
+    legal_storage_provider: normalized.storage_provider,
+    legal_analytics_provider: normalized.analytics_provider,
+    legal_recording_retention_days: normalized.recording_retention_days,
+    legal_security_log_retention_days: normalized.security_log_retention_days,
+    legal_backup_retention_days: normalized.backup_retention_days,
+    legal_learning_data_retention_months: normalized.learning_data_retention_months,
+    legal_support_email: normalized.support_email,
+    legal_privacy_email: normalized.privacy_email,
+    legal_liability_text: normalized.liability_text,
+    legal_sla_text: normalized.sla_text,
+    legal_gdpr_dpa_text: normalized.gdpr_dpa_text,
+    legal_ai_notice_text: normalized.ai_notice_text,
+    legal_recording_notice_text: normalized.recording_notice_text,
+    legal_cookie_notice_text: normalized.cookie_notice_text,
+    legal_locale_default: normalized.locale_default
+  };
+  Object.entries(fields).forEach(([id, value]) => {
+    const node = $(id);
+    if (node) node.value = value ?? "";
+  });
+}
+
+function getLegalVersionCard(documentType) {
+  return document.querySelector(`.legal-preview-card[data-document-type="${documentType}"]`);
+}
+
+function renderLegalVersionCards(versions = []) {
+  LEGAL_DOCUMENT_TYPES.forEach((documentType) => {
+    const card = getLegalVersionCard(documentType);
+    if (!card) return;
+    const active = versions.find((item) => item.document_type === documentType && item.is_active);
+    const latest = active || versions.find((item) => item.document_type === documentType) || null;
+    card.dataset.versionId = latest?.id || "";
+    const status = card.querySelector('[data-role="status"]');
+    if (status) {
+      status.textContent = latest?.is_active ? "Published" : "Draft";
+      status.classList.toggle("is-published", !!latest?.is_active);
+    }
+    ["locale", "version", "title", "body"].forEach((field) => {
+      const input = card.querySelector(`[data-field="${field}"]`);
+      if (!input) return;
+      input.value = latest?.[field] ?? "";
+    });
+  });
+}
+
+function updateLegalPublishUi() {
+  const settings = collectLegalPanelSettings();
+  const versions = state.legal.versions || [];
+  const requiredDocs = ["privacy", "terms", "impressum"].filter(
+    (type) => !versions.some((item) => item.document_type === type && item.is_active)
+  );
+  const missing = [];
+  if (!settings.company_name) missing.push("company_name");
+  if (!settings.operator_name) missing.push("operator_name");
+  if (!settings.legal_address) missing.push("legal_address");
+  if (!settings.legal_email) missing.push("legal_email");
+  requiredDocs.forEach((type) => missing.push(`${type} document`));
+  state.legal.publishRequirements = missing;
+  const copy = $("legalMissingFields");
+  if (copy) {
+    copy.textContent = missing.length
+      ? `Publish blocked until these are filled: ${missing.join(", ")}`
+      : "Publish requirements are complete.";
+  }
+  const publishBtn = $("btnLegalPublish");
+  if (publishBtn) publishBtn.disabled = missing.length > 0;
+  const badge = $("legalPublishStatusBadge");
+  const published = !!state.legal.settings?.is_published;
+  if (badge) {
+    badge.textContent = published ? "Published" : "Draft";
+    badge.classList.toggle("is-published", published);
+  }
+  const updated = $("legalLastUpdated");
+  if (updated) {
+    updated.textContent = `Last updated: ${state.legal.settings?.updated_at ? formatAdminTimestamp(state.legal.settings.updated_at) : "—"}`;
+  }
+}
+
+async function refreshLegalPanel() {
+  showLegalStatus("");
+  const [settingsPayload, versionsPayload] = await Promise.all([
+    api("/api/admin/legal-settings"),
+    api("/api/admin/legal-versions")
+  ]);
+  state.legal.settings = normalizeLegalAdminSettings(settingsPayload.settings || {});
+  state.legal.versions = Array.isArray(versionsPayload.versions) ? versionsPayload.versions : [];
+  state.legal.publishRequirements = Array.isArray(settingsPayload.publishRequirements) ? settingsPayload.publishRequirements : [];
+  populateLegalPanel(state.legal.settings);
+  renderLegalVersionCards(state.legal.versions);
+  updateLegalPublishUi();
+}
+
+async function saveLegalDraft() {
+  showLegalStatus("Saving legal draft…", "info");
+  const payload = collectLegalPanelSettings();
+  const result = await api("/api/admin/legal-settings", {
+    method: "PUT",
+    body: payload
+  });
+  state.legal.settings = normalizeLegalAdminSettings(result.settings || payload);
+  updateLegalPublishUi();
+  showLegalStatus("Legal draft saved.", "success");
+}
+
+async function publishLegalSettings() {
+  showLegalStatus("Publishing legal settings…", "info");
+  const result = await api("/api/admin/legal-settings/publish", {
+    method: "POST",
+    body: {}
+  });
+  state.legal.settings = normalizeLegalAdminSettings(result.settings || {});
+  updateLegalPublishUi();
+  showLegalStatus("Legal settings published.", "success");
+}
+
+function readLegalVersionCard(card) {
+  return {
+    document_type: String(card?.dataset.documentType || "").trim(),
+    locale: card?.querySelector('[data-field="locale"]')?.value.trim() || "en",
+    version: card?.querySelector('[data-field="version"]')?.value.trim() || "",
+    title: card?.querySelector('[data-field="title"]')?.value.trim() || "",
+    body: card?.querySelector('[data-field="body"]')?.value || ""
+  };
+}
+
+async function saveLegalVersionCard(card) {
+  if (!card) return;
+  const payload = readLegalVersionCard(card);
+  const versionId = String(card.dataset.versionId || "").trim();
+  showLegalStatus(`Saving ${payload.document_type} document…`, "info");
+  const result = versionId
+    ? await api(`/api/admin/legal-versions/${encodeURIComponent(versionId)}`, {
+        method: "PUT",
+        body: payload
+      })
+    : await api("/api/admin/legal-versions", {
+        method: "POST",
+        body: payload
+      });
+  card.dataset.versionId = result.version?.id || versionId;
+  await refreshLegalPanel();
+  showLegalStatus(`${payload.document_type} document saved.`, "success");
+}
+
+async function publishLegalVersionCard(card) {
+  if (!card) return;
+  const versionId = String(card.dataset.versionId || "").trim();
+  if (!versionId) {
+    showLegalStatus("Save the document before publishing it.", "error");
+    return;
+  }
+  const payload = readLegalVersionCard(card);
+  showLegalStatus(`Publishing ${payload.document_type} document…`, "info");
+  await api(`/api/admin/legal-versions/${encodeURIComponent(versionId)}/publish`, {
+    method: "POST",
+    body: {}
+  });
+  await refreshLegalPanel();
+  showLegalStatus(`${payload.document_type} document published.`, "success");
 }
 function getAuditGroup(action = "") {
   const value = String(action || "").toLowerCase();
@@ -3056,12 +3473,48 @@ function showSchoolRequestDetails(row) {
 // SETTINGS PAGE UX IMPROVEMENTS
 // ===============================
 
+[
+  "legal_company",
+  "legal_address",
+  "legal_email",
+  "legal_phone",
+  "legal_vat",
+  "legal_hosting",
+  "legal_ai",
+  "legal_email_provider",
+  "legal_storage",
+  "legal_retention",
+  "legal_liability"
+].forEach((id) => {
+  $(id)?.addEventListener("input", mergeLegalSettingsIntoEditor);
+});
+
+$("settingsJson")?.addEventListener("change", () => {
+  try {
+    const parsed = JSON.parse($("settingsJson").value || "{}");
+    settingsEditorSnapshot = cloneSettingsObject(parsed);
+    loadLegalSettings(parsed);
+    const error = $("settingsError");
+    if (error) {
+      error.textContent = "";
+      error.hidden = true;
+    }
+  } catch (e) {
+    const error = $("settingsError");
+    if (error) {
+      error.textContent = e.message;
+      error.hidden = false;
+    }
+  }
+});
+
 // Format JSON
 $("btnFormatJson")?.addEventListener("click", () => {
   try {
     const raw = $("settingsJson").value;
     const parsed = JSON.parse(raw);
-    $("settingsJson").value = JSON.stringify(parsed, null, 2);
+    writeSettingsJson(parsed);
+    loadLegalSettings(parsed);
   } catch {
     alert("Invalid JSON");
   }
@@ -3070,7 +3523,9 @@ $("btnFormatJson")?.addEventListener("click", () => {
 // Validate JSON
 $("btnValidateJson")?.addEventListener("click", () => {
   try {
-    JSON.parse($("settingsJson").value);
+    const parsed = JSON.parse($("settingsJson").value);
+    settingsEditorSnapshot = cloneSettingsObject(parsed);
+    loadLegalSettings(parsed);
     alert("✅ JSON is valid");
   } catch (e) {
     alert("❌ Invalid JSON:\n" + e.message);
@@ -3103,6 +3558,8 @@ $("btnSaveSettings")?.addEventListener("click", async () => {
       body: { settings: parsed }
     });
 
+    settingsEditorSnapshot = cloneSettingsObject(parsed);
+    loadLegalSettings(parsed);
     if (status) status.textContent = "✅ Saved successfully";
   } catch (e) {
     if (error) {
@@ -3110,6 +3567,55 @@ $("btnSaveSettings")?.addEventListener("click", async () => {
       error.hidden = false;
     }
     if (status) status.textContent = "Save failed";
+  }
+});
+
+LEGAL_PANEL_FIELD_IDS.forEach((id) => {
+  $(id)?.addEventListener("input", updateLegalPublishUi);
+});
+
+$("btnLegalSaveDraft")?.addEventListener("click", async () => {
+  try {
+    await saveLegalDraft();
+  } catch (err) {
+    showLegalStatus(err.message || "Could not save legal draft.", "error");
+  }
+});
+
+$("btnLegalPublish")?.addEventListener("click", async () => {
+  try {
+    await publishLegalSettings();
+  } catch (err) {
+    showLegalStatus(err.message || "Could not publish legal settings.", "error");
+  }
+});
+
+$("btnLegalPreviewPrivacy")?.addEventListener("click", () => {
+  window.open("/privacy", "_blank", "noopener");
+});
+
+$("btnLegalPreviewTerms")?.addEventListener("click", () => {
+  window.open("/terms", "_blank", "noopener");
+});
+
+$("btnLegalPreviewImpressum")?.addEventListener("click", () => {
+  window.open("/impressum", "_blank", "noopener");
+});
+
+document.getElementById("legalVersionCards")?.addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-action]");
+  if (!button) return;
+  const card = button.closest(".legal-preview-card");
+  if (!card) return;
+  try {
+    if (button.dataset.action === "save-version") {
+      await saveLegalVersionCard(card);
+    } else if (button.dataset.action === "publish-version") {
+      await saveLegalVersionCard(card);
+      await publishLegalVersionCard(card);
+    }
+  } catch (err) {
+    showLegalStatus(err.message || "Legal document action failed.", "error");
   }
 });
 // initial view

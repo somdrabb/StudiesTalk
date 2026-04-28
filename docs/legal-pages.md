@@ -12,7 +12,38 @@ This project now includes production-oriented legal page templates for a Germany
 - `public/legal/terms.html`
 - `public/legal/impressum.html`
 - `public/legal/legal.css`
+- `public/legal/legal-page.js`
 - `public/legal/cookie-consent.js`
+
+## Workspace legal settings
+
+The legal pages now read from `workspace_settings_admin.settings_json.legal` through the existing workspace settings pipeline.
+
+Expected structure:
+
+```json
+{
+  "legal": {
+    "company_name": "Your Company GmbH",
+    "address": "Street 1, 45127 Essen, Germany",
+    "email": "legal@yourdomain.com",
+    "phone": "+49 123 456789",
+    "vat_id": "DE123456789",
+    "providers": {
+      "hosting": "Vercel / AWS",
+      "video": "Jitsi / 8x8",
+      "ai": "OpenAI",
+      "email": "SendGrid",
+      "sms": "Twilio optional",
+      "storage": "AWS S3"
+    },
+    "retention": "Data is stored for 12 months...",
+    "liability": "We are not liable for..."
+  }
+}
+```
+
+Super admins can edit these fields from the Admin settings panel. The raw JSON editor remains available and stays synchronized with the structured legal form.
 
 ## Required placeholders before public launch
 

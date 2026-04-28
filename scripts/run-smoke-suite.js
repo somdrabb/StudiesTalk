@@ -11,6 +11,7 @@ const SMOKE_SCRIPTS = [
   'test:attendance:smoke',
   'test:onboarding:smoke',
   'test:policy:smoke',
+  'test:legal:smoke',
   'test:live-controls:smoke',
   'test:live-whiteboard:smoke',
   'test:live-breakout:smoke',

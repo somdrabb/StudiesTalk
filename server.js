@@ -1492,6 +1492,88 @@ CREATE TABLE IF NOT EXISTS workspace_settings_admin (
 );
 `);
 
+db.exec(`
+CREATE TABLE IF NOT EXISTS platform_legal_settings (
+  id TEXT PRIMARY KEY,
+  company_name TEXT,
+  operator_name TEXT,
+  legal_address TEXT,
+  legal_email TEXT,
+  phone TEXT,
+  vat_id TEXT,
+  tax_number TEXT,
+  business_registration TEXT,
+  responsible_person TEXT,
+  supervisory_authority TEXT,
+  hosting_provider TEXT,
+  video_provider TEXT,
+  ai_provider TEXT,
+  email_provider TEXT,
+  sms_provider TEXT,
+  storage_provider TEXT,
+  analytics_provider TEXT,
+  recording_retention_days INTEGER,
+  security_log_retention_days INTEGER,
+  backup_retention_days INTEGER,
+  learning_data_retention_months INTEGER,
+  support_email TEXT,
+  privacy_email TEXT,
+  terms_version TEXT,
+  privacy_version TEXT,
+  impressum_version TEXT,
+  liability_text TEXT,
+  sla_text TEXT,
+  gdpr_dpa_text TEXT,
+  ai_notice_text TEXT,
+  recording_notice_text TEXT,
+  cookie_notice_text TEXT,
+  locale_default TEXT DEFAULT 'en',
+  is_published INTEGER DEFAULT 0,
+  published_at TEXT,
+  updated_by TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+`);
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS platform_legal_versions (
+  id TEXT PRIMARY KEY,
+  legal_settings_id TEXT,
+  document_type TEXT NOT NULL CHECK (document_type IN ('privacy','terms','impressum','cookies','dpa')),
+  version TEXT,
+  locale TEXT DEFAULT 'en',
+  title TEXT,
+  body TEXT,
+  is_active INTEGER DEFAULT 0,
+  published_at TEXT,
+  created_by TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (legal_settings_id) REFERENCES platform_legal_settings(id) ON DELETE CASCADE
+);
+`);
+db.exec(`
+CREATE INDEX IF NOT EXISTS idx_platform_legal_versions_doc_locale
+  ON platform_legal_versions(document_type, locale, is_active);
+`);
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS legal_acceptances (
+  id TEXT PRIMARY KEY,
+  user_id TEXT,
+  workspace_id TEXT,
+  document_type TEXT,
+  version TEXT,
+  accepted_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  ip_address TEXT,
+  user_agent TEXT
+);
+`);
+db.exec(`
+CREATE INDEX IF NOT EXISTS idx_legal_acceptances_user_workspace
+  ON legal_acceptances(user_id, workspace_id, document_type, version);
+`);
+
 try {
   const onboardingTable = db
     .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'workspace_onboarding'")
@@ -1638,6 +1720,11 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
 
 safeAlter(`ALTER TABLE refresh_tokens ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0;`);
 safeAlter(`ALTER TABLE refresh_tokens ADD COLUMN issued_at INTEGER;`);
+safeAlter(`ALTER TABLE refresh_tokens ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0;`);
+safeAlter(`ALTER TABLE refresh_tokens ADD COLUMN revoked_at INTEGER;`);
+safeAlter(`ALTER TABLE refresh_tokens ADD COLUMN replaced_by TEXT;`);
+safeAlter(`ALTER TABLE refresh_tokens ADD COLUMN ip TEXT;`);
+safeAlter(`ALTER TABLE refresh_tokens ADD COLUMN user_agent TEXT;`);
 try {
   db.prepare(
     `UPDATE refresh_tokens SET created_at = issued_at WHERE (created_at IS NULL OR created_at = 0) AND issued_at IS NOT NULL`
@@ -4216,6 +4303,452 @@ app.use(
   express.static(path.join(__dirname, 'Ai Intregration'))
 );
 
+function sanitizeLegalSettings(raw = {}, fallbackCompanyName = 'StudiesTalk') {
+  const legal = raw && typeof raw === 'object' ? raw : {};
+  const providers = legal.providers && typeof legal.providers === 'object' ? legal.providers : {};
+  const read = (value, fallback = '') => (typeof value === 'string' ? value.trim() : fallback);
+  return {
+    company_name: read(legal.company_name, fallbackCompanyName),
+    address: read(legal.address, '[Full address required before production]'),
+    email: read(legal.email, '[privacy contact email]'),
+    phone: read(legal.phone, '[phone optional]'),
+    vat_id: read(legal.vat_id, '[Umsatzsteuer-ID / VAT ID if applicable]'),
+    providers: {
+      hosting: read(providers.hosting, '[Hetzner/AWS/etc.]'),
+      video: read(providers.video, '[Jitsi/8x8/self-hosted]'),
+      ai: read(providers.ai, '[OpenAI]'),
+      email: read(providers.email, '[SMTP provider]'),
+      sms: read(providers.sms, '[Twilio optional]'),
+      storage: read(providers.storage, '[Cloudflare R2/S3/etc.]')
+    },
+    retention: read(
+      legal.retention,
+      'Account data is generally stored until account deletion. Attendance and learning records are retained according to the school retention policy. Security logs, recordings, and backups are retained only for limited operational periods.'
+    ),
+    liability: read(
+      legal.liability,
+      'This section must be completed with reviewed warranty disclaimer and limitation of liability wording before production launch.'
+    )
+  };
+}
+
+async function resolveLegalWorkspaceId(req) {
+  const requested =
+    String(req.query.workspaceId || req.query.workspace || req.auth?.workspaceId || req.auth?.workspace_id || 'default').trim() ||
+    'default';
+  if (await workspaceRepository.workspaceExists(requested)) return requested;
+  return 'default';
+}
+
+const PLATFORM_LEGAL_SETTINGS_ID = 'default';
+const LEGAL_DOCUMENT_TYPES = ['privacy', 'terms', 'impressum', 'cookies', 'dpa'];
+
+function legalNowText() {
+  return new Date().toISOString();
+}
+
+function boolToInt(value) {
+  return value ? 1 : 0;
+}
+
+function normalizeLegalInteger(value) {
+  if (value === '' || value == null) return null;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function textOrEmpty(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function sanitizeLegalSettingsAdminInput(payload = {}) {
+  return {
+    id: PLATFORM_LEGAL_SETTINGS_ID,
+    company_name: textOrEmpty(payload.company_name),
+    operator_name: textOrEmpty(payload.operator_name),
+    legal_address: textOrEmpty(payload.legal_address),
+    legal_email: textOrEmpty(payload.legal_email),
+    phone: textOrEmpty(payload.phone),
+    vat_id: textOrEmpty(payload.vat_id),
+    tax_number: textOrEmpty(payload.tax_number),
+    business_registration: textOrEmpty(payload.business_registration),
+    responsible_person: textOrEmpty(payload.responsible_person),
+    supervisory_authority: textOrEmpty(payload.supervisory_authority),
+    hosting_provider: textOrEmpty(payload.hosting_provider),
+    video_provider: textOrEmpty(payload.video_provider),
+    ai_provider: textOrEmpty(payload.ai_provider),
+    email_provider: textOrEmpty(payload.email_provider),
+    sms_provider: textOrEmpty(payload.sms_provider),
+    storage_provider: textOrEmpty(payload.storage_provider),
+    analytics_provider: textOrEmpty(payload.analytics_provider),
+    recording_retention_days: normalizeLegalInteger(payload.recording_retention_days),
+    security_log_retention_days: normalizeLegalInteger(payload.security_log_retention_days),
+    backup_retention_days: normalizeLegalInteger(payload.backup_retention_days),
+    learning_data_retention_months: normalizeLegalInteger(payload.learning_data_retention_months),
+    support_email: textOrEmpty(payload.support_email),
+    privacy_email: textOrEmpty(payload.privacy_email),
+    terms_version: textOrEmpty(payload.terms_version),
+    privacy_version: textOrEmpty(payload.privacy_version),
+    impressum_version: textOrEmpty(payload.impressum_version),
+    liability_text: textOrEmpty(payload.liability_text),
+    sla_text: textOrEmpty(payload.sla_text),
+    gdpr_dpa_text: textOrEmpty(payload.gdpr_dpa_text),
+    ai_notice_text: textOrEmpty(payload.ai_notice_text),
+    recording_notice_text: textOrEmpty(payload.recording_notice_text),
+    cookie_notice_text: textOrEmpty(payload.cookie_notice_text),
+    locale_default: textOrEmpty(payload.locale_default) || 'en',
+    is_published: boolToInt(!!payload.is_published),
+    published_at: textOrEmpty(payload.published_at) || null,
+    updated_by: textOrEmpty(payload.updated_by) || null,
+    created_at: textOrEmpty(payload.created_at) || null,
+    updated_at: textOrEmpty(payload.updated_at) || null
+  };
+}
+
+function normalizeLegalSettingsRow(row = {}) {
+  const normalized = sanitizeLegalSettingsAdminInput(row);
+  normalized.is_published = !!Number(row.is_published ?? normalized.is_published);
+  normalized.published_at = row.published_at || normalized.published_at;
+  normalized.created_at = row.created_at || normalized.created_at;
+  normalized.updated_at = row.updated_at || normalized.updated_at;
+  return normalized;
+}
+
+function defaultLegalSettingsRecord() {
+  return normalizeLegalSettingsRow({});
+}
+
+function normalizeLegalVersionInput(payload = {}) {
+  return {
+    id: textOrEmpty(payload.id),
+    legal_settings_id: textOrEmpty(payload.legal_settings_id) || PLATFORM_LEGAL_SETTINGS_ID,
+    document_type: LEGAL_DOCUMENT_TYPES.includes(textOrEmpty(payload.document_type)) ? textOrEmpty(payload.document_type) : 'privacy',
+    version: textOrEmpty(payload.version),
+    locale: textOrEmpty(payload.locale) || 'en',
+    title: textOrEmpty(payload.title),
+    body: typeof payload.body === 'string' ? payload.body : '',
+    is_active: !!Number(payload.is_active || 0),
+    published_at: textOrEmpty(payload.published_at) || null,
+    created_by: textOrEmpty(payload.created_by) || null,
+    created_at: textOrEmpty(payload.created_at) || null
+  };
+}
+
+function normalizeLegalVersionRow(row = {}) {
+  const normalized = normalizeLegalVersionInput(row);
+  normalized.is_active = !!Number(row.is_active ?? normalized.is_active);
+  normalized.published_at = row.published_at || normalized.published_at;
+  normalized.created_at = row.created_at || normalized.created_at;
+  return normalized;
+}
+
+function mapPublicLegalSettings(record = {}) {
+  return {
+    company_name: record.company_name || '',
+    operator_name: record.operator_name || '',
+    legal_address: record.legal_address || '',
+    legal_email: record.legal_email || '',
+    phone: record.phone || '',
+    vat_id: record.vat_id || '',
+    tax_number: record.tax_number || '',
+    business_registration: record.business_registration || '',
+    responsible_person: record.responsible_person || '',
+    supervisory_authority: record.supervisory_authority || '',
+    providers: {
+      hosting: record.hosting_provider || '',
+      video: record.video_provider || '',
+      ai: record.ai_provider || '',
+      email: record.email_provider || '',
+      sms: record.sms_provider || '',
+      storage: record.storage_provider || '',
+      analytics: record.analytics_provider || ''
+    },
+    retention: {
+      recording_retention_days: record.recording_retention_days,
+      security_log_retention_days: record.security_log_retention_days,
+      backup_retention_days: record.backup_retention_days,
+      learning_data_retention_months: record.learning_data_retention_months
+    },
+    support_email: record.support_email || '',
+    privacy_email: record.privacy_email || '',
+    liability_text: record.liability_text || '',
+    sla_text: record.sla_text || '',
+    gdpr_dpa_text: record.gdpr_dpa_text || '',
+    ai_notice_text: record.ai_notice_text || '',
+    recording_notice_text: record.recording_notice_text || '',
+    cookie_notice_text: record.cookie_notice_text || '',
+    locale_default: record.locale_default || 'en',
+    is_published: !!record.is_published,
+    published_at: record.published_at || null,
+    versions: {
+      terms: record.terms_version || '',
+      privacy: record.privacy_version || '',
+      impressum: record.impressum_version || ''
+    },
+    updated_at: record.updated_at || null
+  };
+}
+
+function buildLegalPublishRequirements(settings, versions) {
+  const missing = [];
+  if (!textOrEmpty(settings.company_name)) missing.push('company_name');
+  if (!textOrEmpty(settings.operator_name)) missing.push('operator_name');
+  if (!textOrEmpty(settings.legal_address)) missing.push('legal_address');
+  if (!textOrEmpty(settings.legal_email)) missing.push('legal_email');
+  const hasActiveDoc = (type) => versions.some((item) => item.document_type === type && item.is_active);
+  if (!hasActiveDoc('privacy')) missing.push('privacy document');
+  if (!hasActiveDoc('terms')) missing.push('terms document');
+  if (!hasActiveDoc('impressum')) missing.push('impressum document');
+  return missing;
+}
+
+function legalRequestUser(req) {
+  return req.auth || getAuthedUser(req) || null;
+}
+
+function legalViewerWorkspaceId(req) {
+  const user = legalRequestUser(req);
+  return String(user?.workspaceId || user?.workspace_id || resolveRequestedWorkspaceId(req) || 'default').trim() || 'default';
+}
+
+function sqlNowText() {
+  return legalNowText();
+}
+
+function getLegalSettingsRecordSync(id = PLATFORM_LEGAL_SETTINGS_ID) {
+  const row = db.prepare(`SELECT * FROM platform_legal_settings WHERE id = ? LIMIT 1`).get(id);
+  return row ? normalizeLegalSettingsRow(row) : defaultLegalSettingsRecord();
+}
+
+function upsertLegalSettingsRecordSync(input = {}) {
+  const record = normalizeLegalSettingsRow(input);
+  const now = sqlNowText();
+  const existing = db.prepare(`SELECT id, created_at AS created_at FROM platform_legal_settings WHERE id = ? LIMIT 1`).get(record.id);
+  db.prepare(`
+    INSERT INTO platform_legal_settings (
+      id, company_name, operator_name, legal_address, legal_email, phone, vat_id, tax_number,
+      business_registration, responsible_person, supervisory_authority, hosting_provider, video_provider,
+      ai_provider, email_provider, sms_provider, storage_provider, analytics_provider,
+      recording_retention_days, security_log_retention_days, backup_retention_days, learning_data_retention_months,
+      support_email, privacy_email, terms_version, privacy_version, impressum_version,
+      liability_text, sla_text, gdpr_dpa_text, ai_notice_text, recording_notice_text, cookie_notice_text,
+      locale_default, is_published, published_at, updated_by, created_at, updated_at
+    ) VALUES (
+      @id, @company_name, @operator_name, @legal_address, @legal_email, @phone, @vat_id, @tax_number,
+      @business_registration, @responsible_person, @supervisory_authority, @hosting_provider, @video_provider,
+      @ai_provider, @email_provider, @sms_provider, @storage_provider, @analytics_provider,
+      @recording_retention_days, @security_log_retention_days, @backup_retention_days, @learning_data_retention_months,
+      @support_email, @privacy_email, @terms_version, @privacy_version, @impressum_version,
+      @liability_text, @sla_text, @gdpr_dpa_text, @ai_notice_text, @recording_notice_text, @cookie_notice_text,
+      @locale_default, @is_published, @published_at, @updated_by, @created_at, @updated_at
+    )
+    ON CONFLICT(id) DO UPDATE SET
+      company_name = excluded.company_name,
+      operator_name = excluded.operator_name,
+      legal_address = excluded.legal_address,
+      legal_email = excluded.legal_email,
+      phone = excluded.phone,
+      vat_id = excluded.vat_id,
+      tax_number = excluded.tax_number,
+      business_registration = excluded.business_registration,
+      responsible_person = excluded.responsible_person,
+      supervisory_authority = excluded.supervisory_authority,
+      hosting_provider = excluded.hosting_provider,
+      video_provider = excluded.video_provider,
+      ai_provider = excluded.ai_provider,
+      email_provider = excluded.email_provider,
+      sms_provider = excluded.sms_provider,
+      storage_provider = excluded.storage_provider,
+      analytics_provider = excluded.analytics_provider,
+      recording_retention_days = excluded.recording_retention_days,
+      security_log_retention_days = excluded.security_log_retention_days,
+      backup_retention_days = excluded.backup_retention_days,
+      learning_data_retention_months = excluded.learning_data_retention_months,
+      support_email = excluded.support_email,
+      privacy_email = excluded.privacy_email,
+      terms_version = excluded.terms_version,
+      privacy_version = excluded.privacy_version,
+      impressum_version = excluded.impressum_version,
+      liability_text = excluded.liability_text,
+      sla_text = excluded.sla_text,
+      gdpr_dpa_text = excluded.gdpr_dpa_text,
+      ai_notice_text = excluded.ai_notice_text,
+      recording_notice_text = excluded.recording_notice_text,
+      cookie_notice_text = excluded.cookie_notice_text,
+      locale_default = excluded.locale_default,
+      is_published = excluded.is_published,
+      published_at = excluded.published_at,
+      updated_by = excluded.updated_by,
+      updated_at = excluded.updated_at
+  `).run({
+    ...record,
+    is_published: boolToInt(!!record.is_published),
+    created_at: existing?.created_at || record.created_at || now,
+    updated_at: now
+  });
+  return getLegalSettingsRecordSync(record.id);
+}
+
+function listLegalVersionsSync() {
+  return db.prepare(`
+    SELECT * FROM platform_legal_versions
+    ORDER BY document_type ASC, locale ASC, created_at DESC
+  `).all().map(normalizeLegalVersionRow);
+}
+
+function getLegalVersionByIdSync(id) {
+  const row = db.prepare(`SELECT * FROM platform_legal_versions WHERE id = ? LIMIT 1`).get(id);
+  return row ? normalizeLegalVersionRow(row) : null;
+}
+
+function createLegalVersionSync(input = {}) {
+  const record = normalizeLegalVersionRow({
+    ...input,
+    id: input.id || `legalv_${crypto.randomBytes(8).toString('hex')}`
+  });
+  db.prepare(`
+    INSERT INTO platform_legal_versions (
+      id, legal_settings_id, document_type, version, locale, title, body, is_active, published_at, created_by, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    record.id,
+    record.legal_settings_id,
+    record.document_type,
+    record.version,
+    record.locale,
+    record.title,
+    record.body,
+    boolToInt(record.is_active),
+    record.published_at,
+    record.created_by,
+    record.created_at || sqlNowText()
+  );
+  return getLegalVersionByIdSync(record.id);
+}
+
+function updateLegalVersionSync(id, input = {}) {
+  const existing = getLegalVersionByIdSync(id);
+  if (!existing) return null;
+  const record = normalizeLegalVersionRow({
+    ...existing,
+    ...input,
+    id
+  });
+  db.prepare(`
+    UPDATE platform_legal_versions
+    SET legal_settings_id = ?, document_type = ?, version = ?, locale = ?, title = ?, body = ?, is_active = ?, published_at = ?, created_by = ?
+    WHERE id = ?
+  `).run(
+    record.legal_settings_id,
+    record.document_type,
+    record.version,
+    record.locale,
+    record.title,
+    record.body,
+    boolToInt(record.is_active),
+    record.published_at,
+    record.created_by,
+    id
+  );
+  return getLegalVersionByIdSync(id);
+}
+
+function publishLegalVersionSync(id, actorId = '') {
+  const existing = getLegalVersionByIdSync(id);
+  if (!existing) return null;
+  const publishedAt = sqlNowText();
+  const tx = db.transaction(() => {
+    db.prepare(`
+      UPDATE platform_legal_versions
+      SET is_active = 0
+      WHERE document_type = ? AND locale = ?
+    `).run(existing.document_type, existing.locale);
+    db.prepare(`
+      UPDATE platform_legal_versions
+      SET is_active = 1, published_at = ?, created_by = COALESCE(created_by, ?)
+      WHERE id = ?
+    `).run(publishedAt, actorId || existing.created_by || null, id);
+    const settings = getLegalSettingsRecordSync();
+    const patch = {};
+    if (existing.document_type === 'terms') patch.terms_version = existing.version;
+    if (existing.document_type === 'privacy') patch.privacy_version = existing.version;
+    if (existing.document_type === 'impressum') patch.impressum_version = existing.version;
+    if (Object.keys(patch).length) {
+      upsertLegalSettingsRecordSync({
+        ...settings,
+        ...patch,
+        updated_by: actorId || settings.updated_by || null
+      });
+    }
+  });
+  tx();
+  return getLegalVersionByIdSync(id);
+}
+
+function getPublishedLegalSettingsSync() {
+  const record = getLegalSettingsRecordSync();
+  if (!record.is_published) return null;
+  return record;
+}
+
+function getPublicLegalDocumentSync(documentType, locale = 'en') {
+  const normalizedType = LEGAL_DOCUMENT_TYPES.includes(documentType) ? documentType : '';
+  if (!normalizedType) return null;
+  const preferredLocale = textOrEmpty(locale) || 'en';
+  const row =
+    db.prepare(`
+      SELECT * FROM platform_legal_versions
+      WHERE document_type = ? AND locale = ? AND is_active = 1
+      ORDER BY published_at DESC, created_at DESC
+      LIMIT 1
+    `).get(normalizedType, preferredLocale) ||
+    db.prepare(`
+      SELECT * FROM platform_legal_versions
+      WHERE document_type = ? AND locale = 'en' AND is_active = 1
+      ORDER BY published_at DESC, created_at DESC
+      LIMIT 1
+    `).get(normalizedType);
+  return row ? normalizeLegalVersionRow(row) : null;
+}
+
+function listActiveLegalDocumentsSync(locale = 'en') {
+  const result = [];
+  for (const type of LEGAL_DOCUMENT_TYPES) {
+    const doc = getPublicLegalDocumentSync(type, locale);
+    if (doc?.is_active) result.push(doc);
+  }
+  return result;
+}
+
+function listAllActiveLegalDocumentsSync() {
+  return db.prepare(`
+    SELECT * FROM platform_legal_versions
+    WHERE is_active = 1
+    ORDER BY document_type ASC, locale ASC, published_at DESC, created_at DESC
+  `).all().map(normalizeLegalVersionRow);
+}
+
+function getLegalAcceptanceSync({ userId, workspaceId, documentType, version }) {
+  const row = db.prepare(`
+    SELECT * FROM legal_acceptances
+    WHERE user_id = ? AND workspace_id = ? AND document_type = ? AND version = ?
+    LIMIT 1
+  `).get(userId, workspaceId, documentType, version);
+  return row || null;
+}
+
+function createLegalAcceptanceSync({ userId, workspaceId, documentType, version, ipAddress, userAgent }) {
+  const existing = getLegalAcceptanceSync({ userId, workspaceId, documentType, version });
+  if (existing) return existing;
+  const id = `legalacc_${crypto.randomBytes(8).toString('hex')}`;
+  db.prepare(`
+    INSERT INTO legal_acceptances (
+      id, user_id, workspace_id, document_type, version, accepted_at, ip_address, user_agent
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, userId, workspaceId, documentType, version, sqlNowText(), ipAddress || null, userAgent || null);
+  return db.prepare(`SELECT * FROM legal_acceptances WHERE id = ? LIMIT 1`).get(id) || null;
+}
+
 app.get('/privacy', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'legal', 'privacy.html'));
 });
@@ -4226,6 +4759,250 @@ app.get('/terms', (_req, res) => {
 
 app.get('/impressum', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'legal', 'impressum.html'));
+});
+
+app.get('/api/legal/settings', async (req, res) => {
+  const workspaceId = await resolveLegalWorkspaceId(req);
+  const workspaceName = (await workspaceRepository.getWorkspaceName(workspaceId)) || 'StudiesTalk';
+  let settings = {};
+  try {
+    settings = await workspaceRepository.getWorkspaceSettings(workspaceId);
+  } catch (err) {
+    console.error('[Legal] Could not read workspace settings', { workspaceId, error: err?.message || err });
+  }
+
+  return res.json({
+    workspaceId,
+    workspaceName,
+    legal: sanitizeLegalSettings(settings?.legal, workspaceName)
+  });
+});
+
+app.get('/api/admin/legal-settings', authRequired, (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  const settings = getLegalSettingsRecordSync();
+  const versions = listLegalVersionsSync();
+  const publishRequirements = buildLegalPublishRequirements(settings, versions);
+  return res.json({
+    settings,
+    publishRequirements,
+    lastUpdated: settings.updated_at || null
+  });
+});
+
+app.put('/api/admin/legal-settings', authRequired, csrfRequired, express.json(), (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  const saved = upsertLegalSettingsRecordSync({
+    ...req.body,
+    id: PLATFORM_LEGAL_SETTINGS_ID,
+    updated_by: user.id || user.sub || ''
+  });
+  legacyAuditLog({
+    workspaceId: null,
+    actor: user.id,
+    action: 'legal_settings.updated',
+    target: PLATFORM_LEGAL_SETTINGS_ID,
+    payload: { settings: saved }
+  });
+  return res.json({ ok: true, settings: saved });
+});
+
+app.post('/api/admin/legal-settings/publish', authRequired, csrfRequired, express.json(), (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  const current = getLegalSettingsRecordSync();
+  const versions = listLegalVersionsSync();
+  const missing = buildLegalPublishRequirements(current, versions);
+  if (missing.length) {
+    return res.status(400).json({ error: 'Required legal fields or documents are missing', missing });
+  }
+  const published = upsertLegalSettingsRecordSync({
+    ...current,
+    is_published: 1,
+    published_at: sqlNowText(),
+    updated_by: user.id || user.sub || ''
+  });
+  legacyAuditLog({
+    workspaceId: null,
+    actor: user.id,
+    action: 'legal_settings.published',
+    target: PLATFORM_LEGAL_SETTINGS_ID,
+    payload: { publishedAt: published.published_at }
+  });
+  return res.json({ ok: true, settings: published });
+});
+
+app.get('/api/admin/legal-versions', authRequired, (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  return res.json({ versions: listLegalVersionsSync() });
+});
+
+app.post('/api/admin/legal-versions', authRequired, csrfRequired, express.json(), (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  const payload = normalizeLegalVersionInput(req.body || {});
+  if (!payload.document_type || !LEGAL_DOCUMENT_TYPES.includes(payload.document_type)) {
+    return res.status(400).json({ error: 'Valid document_type is required' });
+  }
+  const created = createLegalVersionSync({
+    ...payload,
+    created_by: user.id || user.sub || '',
+    created_at: sqlNowText()
+  });
+  legacyAuditLog({
+    workspaceId: null,
+    actor: user.id,
+    action: 'legal_version.created',
+    target: created.id,
+    payload: created
+  });
+  return res.status(201).json({ ok: true, version: created });
+});
+
+app.put('/api/admin/legal-versions/:id', authRequired, csrfRequired, express.json(), (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  const updated = updateLegalVersionSync(String(req.params.id || '').trim(), req.body || {});
+  if (!updated) return res.status(404).json({ error: 'Legal version not found' });
+  legacyAuditLog({
+    workspaceId: null,
+    actor: user.id,
+    action: 'legal_version.updated',
+    target: updated.id,
+    payload: updated
+  });
+  return res.json({ ok: true, version: updated });
+});
+
+app.post('/api/admin/legal-versions/:id/publish', authRequired, csrfRequired, express.json(), (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  const published = publishLegalVersionSync(String(req.params.id || '').trim(), user.id || user.sub || '');
+  if (!published) return res.status(404).json({ error: 'Legal version not found' });
+  legacyAuditLog({
+    workspaceId: null,
+    actor: user.id,
+    action: 'legal_version.published',
+    target: published.id,
+    payload: {
+      documentType: published.document_type,
+      locale: published.locale,
+      version: published.version,
+      publishedAt: published.published_at
+    }
+  });
+  return res.json({ ok: true, version: published });
+});
+
+app.get('/api/public/legal-settings', (_req, res) => {
+  const published = getPublishedLegalSettingsSync();
+  if (!published) return res.status(404).json({ error: 'No published legal settings available' });
+  return res.json({
+    settings: mapPublicLegalSettings(published)
+  });
+});
+
+app.get('/api/public/legal/:documentType', (req, res) => {
+  const documentType = String(req.params.documentType || '').trim().toLowerCase();
+  const locale = String(req.query.locale || 'en').trim() || 'en';
+  if (!LEGAL_DOCUMENT_TYPES.includes(documentType)) {
+    return res.status(404).json({ error: 'Legal document not found' });
+  }
+  const settings = getPublishedLegalSettingsSync();
+  if (!settings) return res.status(404).json({ error: 'No published legal settings available' });
+  const document = getPublicLegalDocumentSync(documentType, locale);
+  if (!document || !document.is_active) {
+    return res.status(404).json({ error: 'No published legal document available' });
+  }
+  return res.json({
+    document: {
+      id: document.id,
+      documentType: document.document_type,
+      locale: document.locale,
+      version: document.version,
+      title: document.title,
+      body: document.body,
+      publishedAt: document.published_at || null
+    },
+    settings: mapPublicLegalSettings(settings)
+  });
+});
+
+app.get('/api/public/settings', async (_req, res) => {
+  try {
+    const settings = await workspaceRepository.getWorkspaceSettings('default');
+    return res.json(settings || {});
+  } catch (err) {
+    console.error('[Public settings] Could not read workspace settings', { error: err?.message || err });
+    return res.json({});
+  }
+});
+
+app.get('/api/legal/required-acceptance', authRequired, (req, res) => {
+  const user = legalRequestUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const workspaceId = legalViewerWorkspaceId(req);
+  const activeDocs = listAllActiveLegalDocumentsSync()
+    .filter((doc) => ['privacy', 'terms', 'impressum'].includes(doc.document_type));
+  const missing = activeDocs
+    .filter((doc) => !getLegalAcceptanceSync({
+      userId: user.id || user.sub || '',
+      workspaceId,
+      documentType: doc.document_type,
+      version: doc.version
+    }))
+    .map((doc) => ({
+      documentType: doc.document_type,
+      locale: doc.locale,
+      version: doc.version,
+      title: doc.title,
+      publishedAt: doc.published_at || null
+    }));
+  return res.json({ required: missing });
+});
+
+app.post('/api/legal/:documentType/accept', authRequired, csrfRequired, express.json(), (req, res) => {
+  const user = legalRequestUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const documentType = String(req.params.documentType || '').trim().toLowerCase();
+  const locale = textOrEmpty(req.body?.locale || req.query.locale) || 'en';
+  if (!LEGAL_DOCUMENT_TYPES.includes(documentType)) {
+    return res.status(404).json({ error: 'Legal document not found' });
+  }
+  const activeDoc = getPublicLegalDocumentSync(documentType, locale);
+  if (!activeDoc || !activeDoc.is_active) {
+    return res.status(404).json({ error: 'No active legal document to accept' });
+  }
+  const acceptance = createLegalAcceptanceSync({
+    userId: user.id || user.sub || '',
+    workspaceId: legalViewerWorkspaceId(req),
+    documentType: activeDoc.document_type,
+    version: activeDoc.version,
+    ipAddress: req.ip || null,
+    userAgent: req.get('user-agent') || null
+  });
+  legacyAuditLog({
+    workspaceId: legalViewerWorkspaceId(req),
+    actor: user.id || user.sub || '',
+    action: 'legal_document.accepted',
+    target: activeDoc.document_type,
+    payload: {
+      version: activeDoc.version,
+      locale: activeDoc.locale,
+      acceptanceId: acceptance?.id || null
+    }
+  });
+  return res.json({
+    ok: true,
+    accepted: {
+      documentType: activeDoc.document_type,
+      version: activeDoc.version,
+      acceptedAt: acceptance?.accepted_at || null
+    }
+  });
 });
 
 // ---------- ADMIN FRONTEND (static) ----------

@@ -16,6 +16,7 @@
     "test:onboarding:smoke": "node scripts/onboarding-smoke.js",
     "test:onboarding:guard:smoke": "node scripts/onboarding-smoke.js",
     "test:policy:smoke": "node scripts/policy-acceptance-smoke.js",
+    "test:legal:smoke": "node scripts/legal-settings-smoke.js",
     "test:security:smoke": "node scripts/security-smoke.js",
     "test:account-security:smoke": "node scripts/account-security-smoke.js",
     "test:tenant-isolation:smoke": "node scripts/tenant-isolation-smoke.js",

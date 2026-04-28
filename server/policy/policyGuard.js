@@ -17,7 +17,9 @@ const POLICY_ROUTE_ALLOWLIST = [
   { methods: ['GET'], pattern: /^\/api\/workspaces\/[^/]+\/policy$/, reason: 'policy checkpoint read' },
   { methods: ['POST'], pattern: /^\/api\/workspaces\/[^/]+\/policy\/accept$/, reason: 'policy checkpoint accept' },
   { methods: ['GET'], pattern: /^\/api\/policy\/acceptance$/, reason: 'legacy policy acceptance read' },
-  { methods: ['POST'], pattern: /^\/api\/policy\/accept$/, reason: 'legacy policy acceptance write' }
+  { methods: ['POST'], pattern: /^\/api\/policy\/accept$/, reason: 'legacy policy acceptance write' },
+  { methods: ['GET'], pattern: /^\/api\/legal\/required-acceptance$/, reason: 'legal acceptance read' },
+  { methods: ['POST'], pattern: /^\/api\/legal\/[^/]+\/accept$/, reason: 'legal acceptance write' }
 ];
 
 function buildPolicyGateResponse(gate = {}) {
