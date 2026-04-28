@@ -2398,7 +2398,7 @@ function renderLegalVersionCards(versions = []) {
 function updateLegalPublishUi() {
   const settings = collectLegalPanelSettings();
   const versions = state.legal.versions || [];
-  const requiredDocs = ["privacy", "terms", "impressum"].filter(
+  const requiredDocs = ["privacy", "terms", "impressum", "dpa", "cookies"].filter(
     (type) => !versions.some((item) => item.document_type === type && item.is_active)
   );
   const missing = [];
@@ -2412,7 +2412,7 @@ function updateLegalPublishUi() {
   if (copy) {
     copy.textContent = missing.length
       ? `Publish blocked until these are filled: ${missing.join(", ")}`
-      : "Publish requirements are complete.";
+      : "Before real launch, publish privacy, terms, impressum, dpa, and cookies.";
   }
   const publishBtn = $("btnLegalPublish");
   if (publishBtn) publishBtn.disabled = missing.length > 0;
@@ -3600,6 +3600,14 @@ $("btnLegalPreviewTerms")?.addEventListener("click", () => {
 
 $("btnLegalPreviewImpressum")?.addEventListener("click", () => {
   window.open("/impressum", "_blank", "noopener");
+});
+
+$("btnLegalPreviewDpa")?.addEventListener("click", () => {
+  window.open("/dpa", "_blank", "noopener");
+});
+
+$("btnLegalPreviewTrust")?.addEventListener("click", () => {
+  window.open("/trust", "_blank", "noopener");
 });
 
 document.getElementById("legalVersionCards")?.addEventListener("click", async (event) => {

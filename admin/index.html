@@ -158,6 +158,15 @@
               </div>
 
               <div class="alert" id="loginError" hidden></div>
+
+              <nav class="admin-legal-links" aria-label="Admin legal links">
+                <a href="/privacy" target="_blank" rel="noopener">Privacy</a>
+                <a href="/terms" target="_blank" rel="noopener">Terms</a>
+                <a href="/impressum" target="_blank" rel="noopener">Impressum</a>
+                <a href="/dpa" target="_blank" rel="noopener">DPA</a>
+                <a href="/trust" target="_blank" rel="noopener">Trust</a>
+                <a href="#" id="adminManageCookiesLink">Cookie settings</a>
+              </nav>
             </div>
           </div>
         </section>
@@ -649,7 +658,14 @@
             <section class="legal-card">
               <div class="legal-section-title">
                 <h3>Actions</h3>
-                <p id="legalMissingFields">Publish requirements are complete.</p>
+                <p id="legalMissingFields">Before real launch, publish privacy, terms, impressum, dpa, and cookies.</p>
+              </div>
+              <div class="legal-inline-note">
+                <i class="fa-solid fa-shield-halved" aria-hidden="true"></i>
+                <div>
+                  <strong>Trust / Security page</strong>
+                  <span>The Trust page is a public overview generated from published legal settings. It is read-only and should not claim any certification unless you actually hold it.</span>
+                </div>
               </div>
               <div class="panel-actions">
                 <button class="btn btn-primary" type="button" id="btnLegalSaveDraft">Save Draft</button>
@@ -657,6 +673,8 @@
                 <button class="btn btn-ghost" type="button" id="btnLegalPreviewPrivacy">Preview Privacy</button>
                 <button class="btn btn-ghost" type="button" id="btnLegalPreviewTerms">Preview Terms</button>
                 <button class="btn btn-ghost" type="button" id="btnLegalPreviewImpressum">Preview Impressum</button>
+                <button class="btn btn-ghost" type="button" id="btnLegalPreviewDpa">Preview DPA</button>
+                <button class="btn btn-ghost" type="button" id="btnLegalPreviewTrust">Preview Trust</button>
               </div>
               <div class="settings-feedback">
                 <div id="legalSaveStatus" class="error legal-inline-status"></div>
@@ -936,9 +954,17 @@
       <button class="admin-footer-btn admin-footer-icon-btn" type="button" aria-label="Super admin"><i class="fa-solid fa-crown"></i></button>
     </div>
 
-
+    <footer class="admin-legal-footer" aria-label="Admin legal footer">
+      <a href="/privacy" target="_blank" rel="noopener">Privacy</a>
+      <a href="/terms" target="_blank" rel="noopener">Terms</a>
+      <a href="/impressum" target="_blank" rel="noopener">Impressum</a>
+      <a href="/dpa" target="_blank" rel="noopener">DPA</a>
+      <a href="/trust" target="_blank" rel="noopener">Trust</a>
+      <a href="#" id="adminManageCookiesFooterLink">Cookie settings</a>
+    </footer>
   </div>
 
+  <script src="/legal/cookie-consent.js"></script>
   <script src="/admin/admin.js"></script>
 </body>
 </html>

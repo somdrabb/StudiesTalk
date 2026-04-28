@@ -176,7 +176,9 @@ async function main() {
     const docs = [
       ['privacy', '2026.04', 'Privacy Policy'],
       ['terms', '2026.04', 'Terms of Service'],
-      ['impressum', '2026.04', 'Impressum']
+      ['impressum', '2026.04', 'Impressum'],
+      ['cookies', '2026.04', 'Cookie Policy'],
+      ['dpa', '2026.04', 'Data Processing Agreement']
     ];
 
     const createdDocs = [];
@@ -215,6 +217,16 @@ async function main() {
     const publicPrivacy = await request('GET', '/api/public/legal/privacy?locale=en');
     assert.strictEqual(publicPrivacy.document.documentType, 'privacy');
     assert.strictEqual(publicPrivacy.document.version, '2026.04');
+
+    const publicDpa = await request('GET', '/api/public/legal/dpa?locale=en');
+    assert.strictEqual(publicDpa.document.documentType, 'dpa');
+    assert.strictEqual(publicDpa.document.version, '2026.04');
+
+    const dpaPage = await request('GET', '/dpa');
+    assert.ok(String(dpaPage.raw || '').includes('Data Processing Agreement'));
+
+    const trustPage = await request('GET', '/trust');
+    assert.ok(String(trustPage.raw || '').includes('StudiesTalk Trust &amp; Security'));
 
     const requiredBefore = await request('GET', '/api/legal/required-acceptance', { token: teacherToken });
     assert.ok(Array.isArray(requiredBefore.required));

@@ -4499,6 +4499,8 @@ function buildLegalPublishRequirements(settings, versions) {
   if (!hasActiveDoc('privacy')) missing.push('privacy document');
   if (!hasActiveDoc('terms')) missing.push('terms document');
   if (!hasActiveDoc('impressum')) missing.push('impressum document');
+  if (!hasActiveDoc('dpa')) missing.push('dpa document');
+  if (!hasActiveDoc('cookies')) missing.push('cookies document');
   return missing;
 }
 
@@ -4759,6 +4761,14 @@ app.get('/terms', (_req, res) => {
 
 app.get('/impressum', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'legal', 'impressum.html'));
+});
+
+app.get('/dpa', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'legal', 'dpa.html'));
+});
+
+app.get('/trust', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'legal', 'trust.html'));
 });
 
 app.get('/api/legal/settings', async (req, res) => {

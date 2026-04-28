@@ -256,6 +256,14 @@ a {
   margin-bottom: 14px;
 }
 
+.legal-runtime-copy:last-child {
+  margin-bottom: 0;
+}
+
+.legal-runtime-copy h3 {
+  margin: 0 0 8px;
+}
+
 .legal-multiline {
   white-space: pre-line;
 }
