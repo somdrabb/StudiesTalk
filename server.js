@@ -38,6 +38,7 @@ const { createFileStorageService, getTypeMaxBytes } = require('./server/services
 const { createLiveRecordingService } = require('./server/services/liveRecording.service');
 const { createLocalDiskStorageAdapter } = require('./server/services/storage/localDiskStorage.adapter');
 const { createS3CompatibleStorageAdapter } = require('./server/services/storage/s3CompatibleStorage.adapter');
+const { createPlatformSecretsService } = require('./server/services/platformSecrets.service');
 const aiSpeakingScenarioConfig = require('./public/AIvoicepractice/scenarioConfig.js');
 const { createBillingRepository } = require('./server/repositories/billingRepository');
 const { createTasksRepository } = require('./server/repositories/tasksRepository');
@@ -859,6 +860,8 @@ function isPromiseLike(value) {
   if (FILE_STORAGE_ADAPTER === 'local') {
     ensureDir(FILE_STORAGE_LOCAL_ROOT);
   }
+  // open / create SQLite DB
+  const db = new Database(DB_PATH);
 
   const fileStorageAdapter = (() => {
     if (FILE_STORAGE_ADAPTER === 'local') {
@@ -874,8 +877,24 @@ function isPromiseLike(value) {
       providerName: FILE_STORAGE_ADAPTER === 'r2' ? 'r2' : 's3_compatible'
     });
   })();
-  // open / create SQLite DB
-  const db = new Database(DB_PATH);
+  const platformSecretsService = createPlatformSecretsService({
+    db,
+    masterKey: ENV.PLATFORM_SECRETS_MASTER_KEY,
+    env: process.env,
+    writeAudit(action, { target = null, meta = null, user = null } = {}) {
+      const fakeReq = {
+        auth: user || null,
+        ctx: null,
+        headers: {},
+        socket: {},
+        connection: {},
+        get() {
+          return '';
+        }
+      };
+      audit(action, fakeReq, { target, meta, user });
+    }
+  });
   const fileStorageService = createFileStorageService({
     adapter: fileStorageAdapter,
     globalMaxBytes: UPLOAD_MAX_FILE_BYTES,
@@ -1808,6 +1827,43 @@ CREATE INDEX IF NOT EXISTS idx_audit_at ON audit_logs(at);
 db.exec(`
 CREATE INDEX IF NOT EXISTS idx_audit_workspace ON audit_logs(workspace_id);
 `);
+db.exec(`
+CREATE TABLE IF NOT EXISTS platform_secrets (
+  id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  key_name TEXT NOT NULL,
+  encrypted_value TEXT NOT NULL,
+  iv TEXT NOT NULL,
+  auth_tag TEXT NOT NULL,
+  value_hash TEXT,
+  masked_value TEXT,
+  enabled INTEGER DEFAULT 1,
+  environment TEXT DEFAULT 'production',
+  last_test_status TEXT,
+  last_test_message TEXT,
+  last_tested_at TEXT,
+  rotated_at TEXT,
+  updated_by TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(provider, key_name, environment)
+);
+`);
+db.exec(`
+CREATE TABLE IF NOT EXISTS platform_secret_audit (
+  id TEXT PRIMARY KEY,
+  provider TEXT,
+  key_name TEXT,
+  environment TEXT,
+  action TEXT,
+  actor_user_id TEXT,
+  ip_address TEXT,
+  user_agent TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_platform_secrets_provider_env ON platform_secrets(provider, environment);`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_platform_secret_audit_provider_env ON platform_secret_audit(provider, environment, created_at);`);
 
 // =========================
 // TASK CHANNELS (Aufgaben)
@@ -2020,6 +2076,104 @@ function audit(action, req, { target = null, meta = null, workspaceId = null, us
       console.warn('[audit] failed:', e?.message || e);
     }
   })();
+}
+
+function getPlatformSecretProviderEnvironment(req) {
+  return String(req?.query?.environment || req?.body?.environment || 'production').trim().toLowerCase() || 'production';
+}
+
+function getRuntimeSecret(provider, keyName, envName = keyName, environment = 'production') {
+  try {
+    return platformSecretsService.getRuntimeSecret(provider, keyName, envName, environment);
+  } catch (_err) {
+    return String(process.env[String(envName || keyName)] || '').trim();
+  }
+}
+
+function getGoogleTranslateClientForRuntime(environment = 'production') {
+  const inlineJson = getRuntimeSecret('google', 'GOOGLE_TRANSLATE_KEY_JSON', 'GOOGLE_TRANSLATE_KEY_JSON', environment);
+  const credentialsPath = getRuntimeSecret('google', 'GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_APPLICATION_CREDENTIALS', environment);
+  if (inlineJson) {
+    const parsed = JSON.parse(inlineJson);
+    return new Translate({ credentials: parsed });
+  }
+  if (credentialsPath) {
+    return new Translate({ keyFilename: credentialsPath });
+  }
+  return googleTranslateClient;
+}
+
+function getTwilioRuntimeConfig(environment = 'production') {
+  const accountSid = getRuntimeSecret('twilio', 'TWILIO_ACCOUNT_SID', 'TWILIO_ACCOUNT_SID', environment);
+  const authToken = getRuntimeSecret('twilio', 'TWILIO_AUTH_TOKEN', 'TWILIO_AUTH_TOKEN', environment);
+  const phoneNumber = getRuntimeSecret('twilio', 'TWILIO_PHONE_NUMBER', 'TWILIO_PHONE_NUMBER', environment);
+  const verifyServiceSid = getRuntimeSecret('twilio', 'TWILIO_VERIFY_SERVICE_SID', 'TWILIO_VERIFY_SERVICE_SID', environment);
+  const mobileOtpProxyUrl = String(ENV.MOBILE_OTP_PROXY_URL || '').trim();
+  const enabled = Boolean(accountSid && authToken && phoneNumber);
+  return {
+    accountSid,
+    authToken,
+    phoneNumber,
+    verifyServiceSid,
+    mobileOtpProxyUrl,
+    client: enabled ? twilio(accountSid, authToken) : null
+  };
+}
+
+function getEmailRuntimeConfig(environment = 'production') {
+  const host = getRuntimeSecret('email', 'IONOS_SMTP_HOST', 'IONOS_SMTP_HOST', environment);
+  const port = Number(getRuntimeSecret('email', 'IONOS_SMTP_PORT', 'IONOS_SMTP_PORT', environment) || ENV.IONOS_SMTP_PORT || 465);
+  const secure = String(getRuntimeSecret('email', 'IONOS_SMTP_SECURE', 'IONOS_SMTP_SECURE', environment) || ENV.IONOS_SMTP_SECURE || 'true').toLowerCase() === 'true';
+  const user = getRuntimeSecret('email', 'IONOS_SMTP_USER', 'IONOS_SMTP_USER', environment);
+  const pass = getRuntimeSecret('email', 'IONOS_SMTP_PASS', 'IONOS_SMTP_PASS', environment);
+  return { host, port, secure, user, pass };
+}
+
+function getRuntimeTransporter(environment = 'production') {
+  const runtime = getEmailRuntimeConfig(environment);
+  if (!runtime.host || !runtime.user || !runtime.pass) return transporter;
+  return nodemailer.createTransport({
+    host: runtime.host,
+    port: runtime.port,
+    secure: runtime.secure,
+    auth: { user: runtime.user, pass: runtime.pass }
+  });
+}
+
+function getRuntimeJitsiConfig(environment = 'production') {
+  const domain = getRuntimeSecret('jitsi', 'JITSI_DOMAIN', 'JITSI_DOMAIN', environment) || jitsiConfig.domain;
+  const appId = getRuntimeSecret('jitsi', 'JITSI_APP_ID', 'JITSI_APP_ID', environment) || jitsiConfig.appId;
+  const appSecret = getRuntimeSecret('jitsi', 'JITSI_APP_SECRET', 'JITSI_APP_SECRET', environment) || jitsiConfig.appSecret;
+  const audience = getRuntimeSecret('jitsi', 'JITSI_JWT_AUDIENCE', 'JITSI_JWT_AUDIENCE', environment) || jitsiConfig.audience;
+  const issuer = getRuntimeSecret('jitsi', 'JITSI_JWT_ISSUER', 'JITSI_JWT_ISSUER', environment) || jitsiConfig.issuer || appId;
+  const subject = getRuntimeSecret('jitsi', 'JITSI_JWT_SUBJECT', 'JITSI_JWT_SUBJECT', environment) || jitsiConfig.subject || domain;
+  const isPublicMeetDomain = domain === 'meet.jit.si';
+  const isJaasDomain = domain === '8x8.vc';
+  const secureDomain = jitsiConfig.secureDomain;
+  const publicOrigin = `${secureDomain ? 'https' : 'http'}://${domain}`;
+  const canGenerateTokens = Boolean(appId && appSecret && !isPublicMeetDomain);
+  return {
+    domain,
+    appId,
+    appSecret,
+    audience,
+    issuer,
+    subject,
+    isPublicMeetDomain,
+    isJaasDomain,
+    secureDomain,
+    publicOrigin,
+    canGenerateTokens,
+    buildMeetingUrl(roomName = '') {
+      const normalizedRoomName = String(roomName || '').trim();
+      if (!normalizedRoomName) return '';
+      const encodedRoom = encodeURIComponent(normalizedRoomName);
+      if (isJaasDomain) {
+        return `${publicOrigin}/${encodeURIComponent(appId || '')}/${encodedRoom}`;
+      }
+      return `${publicOrigin}/${encodedRoom}`;
+    }
+  };
 }
 
 function makeId(prefix = 't') {
@@ -3009,17 +3163,21 @@ function scheduleIdleRuntimeCleanup() {
 }
 
 async function createOpenAIRealtimeSession(options = {}) {
-  if (!ENV.OPENAI_API_KEY) {
+  const environment = String(options.environment || 'production').trim().toLowerCase() || 'production';
+  const apiKey = getRuntimeSecret('openai', 'OPENAI_API_KEY', 'OPENAI_API_KEY', environment);
+  const realtimeUrl = getRuntimeSecret('openai', 'OPENAI_REALTIME_URL', 'OPENAI_REALTIME_URL', environment) || ENV.OPENAI_REALTIME_URL;
+  const realtimeModel = getRuntimeSecret('openai', 'OPENAI_REALTIME_MODEL', 'OPENAI_REALTIME_MODEL', environment) || ENV.OPENAI_REALTIME_MODEL;
+  if (!apiKey) {
     throw new Error('OpenAI API key is not configured');
   }
   const { model, instructions } = options;
-  const endpoint = String(ENV.OPENAI_REALTIME_URL || '').trim()
+  const endpoint = String(realtimeUrl || '').trim()
     .replace('https://api.openai.com/realtime/client_secrets', 'https://api.openai.com/v1/realtime/client_secrets')
     .replace('https://api.openai.com/realtime/sessions', 'https://api.openai.com/v1/realtime/sessions');
   const payload = {
     session: {
       type: 'realtime',
-      model: model || ENV.OPENAI_REALTIME_MODEL,
+      model: model || realtimeModel,
       instructions: instructions || undefined
     }
   };
@@ -3030,7 +3188,7 @@ async function createOpenAIRealtimeSession(options = {}) {
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${ENV.OPENAI_API_KEY}`,
+      Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify(payload)
@@ -3246,11 +3404,11 @@ function buildAutomatedEmailSenderName(schoolName = '', templateKey = 'automated
 }
 
 function getPlatformContactEmail() {
-  return String(process.env.IONOS_SMTP_USER || 'info@studiestalk.com').trim();
+  return String(getRuntimeSecret('email', 'IONOS_SMTP_USER', 'IONOS_SMTP_USER') || 'info@studiestalk.com').trim();
 }
 
 function getInboundMailboxEmail() {
-  return String(process.env.IONOS_IMAP_USER || process.env.IONOS_SMTP_USER || '').trim();
+  return String(process.env.IONOS_IMAP_USER || getRuntimeSecret('email', 'IONOS_SMTP_USER', 'IONOS_SMTP_USER') || '').trim();
 }
 
 function normalizeEmailMessageId(value = '') {
@@ -5275,6 +5433,7 @@ app.post('/api/register/otp/verify', strictLimiter, async (req, res) => {
 
 app.post('/api/register/mobile-otp/send', strictLimiter, async (req, res) => {
   try {
+    const twilioRuntime = getTwilioRuntimeConfig();
     const phone = normalizePhoneValue(req.body?.phone);
     const channel = req.body?.channel === 'call' ? 'call' : 'sms';
 
@@ -5289,7 +5448,7 @@ app.post('/api/register/mobile-otp/send', strictLimiter, async (req, res) => {
         mobile_verified: currentPhone && currentPhone === phone ? session.mobile_verified : 0
       });
     }
-    if (!twilioClient || !twilioVerifyServiceSid) {
+    if (!twilioRuntime.client || !twilioRuntime.verifyServiceSid) {
       try {
         const payload = await callMobileOtpProxy('/otp/start', { phone, channel });
         return res.json({ ok: true, status: payload?.status });
@@ -5299,8 +5458,8 @@ app.post('/api/register/mobile-otp/send', strictLimiter, async (req, res) => {
       }
     }
 
-    const v = await twilioClient.verify.v2
-      .services(twilioVerifyServiceSid)
+    const v = await twilioRuntime.client.verify.v2
+      .services(twilioRuntime.verifyServiceSid)
       .verifications.create({ to: phone, channel });
 
     return res.json({ ok: true, status: v.status });
@@ -5311,13 +5470,14 @@ app.post('/api/register/mobile-otp/send', strictLimiter, async (req, res) => {
 
 app.post('/api/register/mobile-otp/verify', strictLimiter, async (req, res) => {
   try {
+    const twilioRuntime = getTwilioRuntimeConfig();
     const phone = normalizePhoneValue(req.body?.phone);
     const code = String(req.body?.code || '').trim();
 
     if (!phone || !code) {
       return res.status(400).json({ error: 'phone and code are required' });
     }
-    if (!twilioClient || !twilioVerifyServiceSid) {
+    if (!twilioRuntime.client || !twilioRuntime.verifyServiceSid) {
       try {
         const payload = await callMobileOtpProxy('/otp/check', { phone, code });
         if (!payload?.valid) {
@@ -5339,8 +5499,8 @@ app.post('/api/register/mobile-otp/verify', strictLimiter, async (req, res) => {
       }
     }
 
-    const check = await twilioClient.verify.v2
-      .services(twilioVerifyServiceSid)
+    const check = await twilioRuntime.client.verify.v2
+      .services(twilioRuntime.verifyServiceSid)
       .verificationChecks.create({ to: phone, code });
 
     const valid = check.status === 'approved';
@@ -7185,8 +7345,9 @@ function normalizeTranslatedText(text = '') {
 }
 
 async function translateViaGoogle({ text, sourceLang, targetLang }) {
-  if (!googleTranslateClient) throw new Error('google translate client missing');
-  const [out] = await googleTranslateClient.translate(text, {
+  const client = getGoogleTranslateClientForRuntime();
+  if (!client) throw new Error('google translate client missing');
+  const [out] = await client.translate(text, {
     from: sourceLang,
     to: targetLang
   });
@@ -7238,8 +7399,9 @@ async function translateSmart({ text, sourceLang, targetLang }) {
 }
 
 async function detectViaGoogle(text) {
-  if (!googleTranslateClient) throw new Error('google translate client missing');
-  const [detections] = await googleTranslateClient.detect(text);
+  const client = getGoogleTranslateClientForRuntime();
+  if (!client) throw new Error('google translate client missing');
+  const [detections] = await client.detect(text);
   const det = Array.isArray(detections) ? detections[0] : detections;
   return normalizeLanguageCode(det?.language || 'en');
 }
@@ -14552,10 +14714,11 @@ app.post(
 
       const finalText = `${replyText}${buildQuotedText(row)}`;
       const finalHtml = buildReplyHtml(replyText, row);
-      if (!transporter) {
+      const runtimeTransporter = getRuntimeTransporter();
+      if (!runtimeTransporter) {
         return res.status(500).json({ error: 'SMTP transport not configured' });
       }
-      const info = await transporter.sendMail({
+      const info = await runtimeTransporter.sendMail({
         from: fromHeader,
         to,
         subject,
@@ -21353,7 +21516,7 @@ function buildLiveRoomName(session) {
 
 function buildLiveMeetingUrl(session) {
   const roomName = buildLiveRoomName(session);
-  return jitsiConfig.buildMeetingUrl(roomName);
+  return getRuntimeJitsiConfig().buildMeetingUrl(roomName);
 }
 
 function buildJitsiMeetingJoinUrl(meetingUrl, token) {
@@ -21649,7 +21812,7 @@ function buildLiveBreakoutRoomName(session, room) {
 
 function buildLiveBreakoutMeetingUrl(session, room) {
   const roomName = buildLiveBreakoutRoomName(session, room);
-  return jitsiConfig.buildMeetingUrl(roomName);
+  return getRuntimeJitsiConfig().buildMeetingUrl(roomName);
 }
 
 function getLiveBreakoutRoomById(roomId) {
@@ -24093,19 +24256,21 @@ app.post('/api/live-breakout-rooms/:roomId/join', authRequired, async (req, res)
   const member = joinLiveBreakoutRoom({ room: access.room, user: access.user });
   const breakoutRoomName = buildLiveBreakoutRoomName(access.session, access.room);
   const canModerate = canUserAutoJoinJitsiAsModerator(access.user, access.session);
+  const runtimeJitsiConfig = getRuntimeJitsiConfig();
   let token = null;
   let meetingUrl = buildLiveBreakoutMeetingUrl(access.session, access.room);
-  if (jitsiConfig.canGenerateTokens && canModerate) {
+  if (runtimeJitsiConfig.canGenerateTokens && canModerate) {
     token = generateJitsiToken({
       user: access.user,
       room: breakoutRoomName,
       moderator: true,
-      ttlSeconds: 2 * 60 * 60
+      ttlSeconds: 2 * 60 * 60,
+      runtimeConfig: runtimeJitsiConfig
     });
     meetingUrl = buildJitsiMeetingJoinUrl(meetingUrl, token);
   }
   logJitsiJoinPayloadDebug({
-    domain: jitsiConfig.domain,
+    domain: runtimeJitsiConfig.domain,
     hasJwt: Boolean(token),
     isModerator: canModerate,
     roomName: breakoutRoomName,
@@ -24124,12 +24289,12 @@ app.post('/api/live-breakout-rooms/:roomId/join', authRequired, async (req, res)
     }),
     member: formatLiveBreakoutMemberForClient(member),
     jitsi: {
-      domain: jitsiConfig.domain,
+      domain: runtimeJitsiConfig.domain,
       roomName: breakoutRoomName,
       meetingUrl,
       jwt: token,
       moderator: canModerate,
-      publicMeetNoAutoHost: jitsiConfig.isPublicMeetDomain && canModerate
+      publicMeetNoAutoHost: runtimeJitsiConfig.isPublicMeetDomain && canModerate
     },
     liveControls: buildLiveSessionControlState(access.session, access.user)
   });
@@ -24851,19 +25016,21 @@ app.post('/api/live-sessions/:sessionId/join', authRequired, async (req, res) =>
   });
   const hydratedSession = hydrateLiveSession(access.session);
   const canModerate = canUserAutoJoinJitsiAsModerator(access.user, access.session);
+  const runtimeJitsiConfig = getRuntimeJitsiConfig();
   let token = null;
   let meetingUrl = hydratedSession.meeting_url;
-  if (jitsiConfig.canGenerateTokens && canModerate) {
+  if (runtimeJitsiConfig.canGenerateTokens && canModerate) {
     token = generateJitsiToken({
       user: access.user,
       room: hydratedSession.room_name,
       moderator: true,
-      ttlSeconds: 2 * 60 * 60
+      ttlSeconds: 2 * 60 * 60,
+      runtimeConfig: runtimeJitsiConfig
     });
     meetingUrl = buildJitsiMeetingJoinUrl(meetingUrl, token);
   }
   logJitsiJoinPayloadDebug({
-    domain: jitsiConfig.domain,
+    domain: runtimeJitsiConfig.domain,
     hasJwt: Boolean(token),
     isModerator: canModerate,
     roomName: hydratedSession.room_name,
@@ -24878,12 +25045,12 @@ app.post('/api/live-sessions/:sessionId/join', authRequired, async (req, res) =>
     session: hydratedSession,
     liveControls: buildLiveSessionControlState(access.session, access.user),
     jitsi: {
-      domain: jitsiConfig.domain,
+      domain: runtimeJitsiConfig.domain,
       roomName: hydratedSession.room_name,
       meetingUrl,
       jwt: token,
       moderator: canModerate,
-      publicMeetNoAutoHost: jitsiConfig.isPublicMeetDomain && canModerate,
+      publicMeetNoAutoHost: runtimeJitsiConfig.isPublicMeetDomain && canModerate,
     },
   });
 });
@@ -27914,7 +28081,7 @@ app.post(
       if (!workspaceId) {
         return res.status(400).json({ error: "workspaceId required" });
       }
-      if (!ENV.OPENAI_API_KEY) {
+      if (!getRuntimeSecret('openai', 'OPENAI_API_KEY', 'OPENAI_API_KEY')) {
         return res.status(500).json({
           error: "OPENAI_API_KEY is not configured on the server"
         });
@@ -27936,7 +28103,7 @@ app.post(
       const voice = getAiSpeakingScenarioVoice(scenario);
 
       const session = await createOpenAIRealtimeSession({
-        model: ENV.OPENAI_REALTIME_MODEL || "gpt-realtime-mini",
+        model: getRuntimeSecret('openai', 'OPENAI_REALTIME_MODEL', 'OPENAI_REALTIME_MODEL') || "gpt-realtime-mini",
         instructions
       });
 
@@ -28725,6 +28892,119 @@ app.get('/api/admin/audit', async (req, res) => {
 
   const ws = String(req.query.workspaceId || 'all');
   return res.json(await auditRepository.listLegacyAudit({ workspaceId: ws, limit: 500 }));
+});
+
+app.get('/api/admin/secrets', (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  const environment = getPlatformSecretProviderEnvironment(req);
+  return res.json({
+    enabled: platformSecretsService.isEnabled(),
+    environment,
+    providers: platformSecretsService.listSecrets({ environment })
+  });
+});
+
+app.get('/api/admin/secrets/:provider', (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  const environment = getPlatformSecretProviderEnvironment(req);
+  const provider = String(req.params.provider || '').trim().toLowerCase();
+  const providers = platformSecretsService.listSecrets({ environment });
+  const match = providers.find((entry) => entry.provider === provider);
+  if (!match) {
+    return res.status(404).json({ error: 'Provider not found' });
+  }
+  return res.json({
+    enabled: platformSecretsService.isEnabled(),
+    environment,
+    provider: match
+  });
+});
+
+app.put('/api/admin/secrets/:provider/:keyName', express.json(), (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  try {
+    const record = platformSecretsService.upsertSecret({
+      provider: req.params.provider,
+      keyName: req.params.keyName,
+      value: req.body?.value,
+      environment: getPlatformSecretProviderEnvironment(req),
+      actor: user,
+      enabled: req.body?.enabled !== false,
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent') || ''
+    });
+    return res.json(record);
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({ error: error.message || 'Failed to update secret' });
+  }
+});
+
+app.post('/api/admin/secrets/:provider/:keyName/rotate', express.json(), (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  try {
+    const record = platformSecretsService.rotateSecret({
+      provider: req.params.provider,
+      keyName: req.params.keyName,
+      value: req.body?.value,
+      environment: getPlatformSecretProviderEnvironment(req),
+      actor: user,
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent') || ''
+    });
+    return res.json(record);
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({ error: error.message || 'Failed to rotate secret' });
+  }
+});
+
+app.delete('/api/admin/secrets/:provider/:keyName', (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  try {
+    const result = platformSecretsService.deleteSecret({
+      provider: req.params.provider,
+      keyName: req.params.keyName,
+      environment: getPlatformSecretProviderEnvironment(req),
+      actor: user,
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent') || ''
+    });
+    return res.json(result);
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({ error: error.message || 'Failed to delete secret' });
+  }
+});
+
+app.post('/api/admin/secrets/:provider/test', express.json(), async (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  try {
+    const result = await platformSecretsService.testProvider(
+      req.params.provider,
+      getPlatformSecretProviderEnvironment(req),
+      {
+        actor: user,
+        ipAddress: req.ip,
+        userAgent: req.get('user-agent') || ''
+      }
+    );
+    audit('platform_secret.tested', req, {
+      target: String(req.params.provider || '').trim().toLowerCase(),
+      meta: {
+        provider: String(req.params.provider || '').trim().toLowerCase(),
+        environment: getPlatformSecretProviderEnvironment(req),
+        status: result.status
+      },
+      user
+    });
+    return res.json(result);
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({ error: error.message || 'Failed to test provider' });
+  }
 });
 
 function checkWritableDirectory(dirPath) {

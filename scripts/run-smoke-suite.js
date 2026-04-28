@@ -6,6 +6,7 @@ const { spawn } = require('child_process');
 const SMOKE_SCRIPTS = [
   'test:file-storage:smoke',
   'test:security:smoke',
+  'test:secrets:smoke',
   'test:tenant-isolation:smoke',
   'test:account-security:smoke',
   'test:attendance:smoke',

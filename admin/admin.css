@@ -258,6 +258,42 @@ a{color:inherit}
 #panel-overview .table table{min-width:720px}
 #panel-overview .table th{white-space:nowrap}
 @media (max-width:1400px){.health-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+
+/* =========================================================
+   Secrets / Integrations
+========================================================= */
+.secrets-panel{display:grid;gap:16px}
+.secret-provider-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.secret-card{border:1px solid rgba(15,23,42,.08);border-radius:18px;background:#fff;padding:16px;box-shadow:0 10px 28px rgba(15,23,42,.04);display:grid;gap:14px}
+.secret-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.secret-card-head h3{margin:0;font-size:16px;font-weight:800;color:#0f172a}
+.secret-card-head p{margin:4px 0 0;font-size:12px;color:#64748b}
+.secret-status-badge,.secret-environment-badge{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:5px 10px;border-radius:999px;font-size:11px;font-weight:800;border:1px solid rgba(15,23,42,.08);background:#f8fafc;color:#334155}
+.secret-status-badge.is-ok{background:rgba(22,163,74,.1);border-color:rgba(22,163,74,.18);color:#166534}
+.secret-status-badge.is-warn{background:rgba(245,158,11,.1);border-color:rgba(245,158,11,.18);color:#92400e}
+.secret-status-badge.is-failed{background:rgba(239,68,68,.1);border-color:rgba(239,68,68,.18);color:#991b1b}
+.secret-field-list{display:grid;gap:12px}
+.secret-field-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(200px,1.25fr) auto;gap:12px;align-items:end;padding:12px;border:1px solid rgba(15,23,42,.06);border-radius:14px;background:#fbfdff}
+.secret-field-row label{display:grid;gap:6px;font-weight:700;color:#0f172a}
+.secret-field-row small{font-size:11px;color:#64748b;font-weight:600}
+.secret-mask{font-size:12px;color:#64748b;word-break:break-all}
+.secret-mask code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+.secret-field-input{width:100%}
+.secret-row-actions,.secret-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.secret-card-status{min-height:20px;font-size:12px;color:#64748b}
+.secret-card-status.is-success{color:#166534}
+.secret-card-status.is-error{color:#b91c1c}
+.secret-card-status.is-info{color:#1d4ed8}
+.secret-warning{display:flex;align-items:flex-start;gap:10px;padding:14px 16px;border-radius:16px;border:1px solid rgba(245,158,11,.24);background:rgba(255,251,235,.96);color:#92400e}
+.secret-warning i{margin-top:2px}
+.secret-card-warning{font-size:12px;color:#64748b;line-height:1.5}
+.secret-card-warning strong{color:#0f172a}
+.secret-source-pill{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:999px;background:#eef2ff;color:#3730a3;font-size:11px;font-weight:800}
+.secret-source-pill.is-env{background:#eff6ff;color:#1d4ed8}
+.secret-source-pill.is-unset{background:#f8fafc;color:#64748b}
+.secret-toggle{display:flex;align-items:center;gap:8px;font-size:12px;color:#475569;font-weight:700}
+@media (max-width:1200px){.secret-provider-grid{grid-template-columns:1fr}}
+@media (max-width:720px){.secret-field-row{grid-template-columns:1fr}.secret-row-actions{justify-content:flex-start}}
 @media (max-width:1100px){.kpi-grid-lg{grid-template-columns:repeat(2,minmax(0,1fr))}.overview-row-2col{grid-template-columns:1fr}}
 @media (max-width:760px){.health-grid,.kpi-grid-lg,.quick-actions-grid{grid-template-columns:1fr}.section-head,#panel-overview .card-head.small{flex-direction:column;align-items:flex-start}.health-card,.kpi-strong{min-height:auto}}
 

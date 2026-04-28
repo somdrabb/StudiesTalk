@@ -29,6 +29,12 @@ const state = {
     invoices: [],
     payments: []
   },
+  secrets: {
+    enabled: false,
+    environment: "production",
+    providers: [],
+    statuses: {}
+  },
   legal: {
     settings: null,
     versions: [],
@@ -119,6 +125,10 @@ const TAB_HEADERS = {
   settings: {
     title: "Settings",
     subtitle: "Workspace configuration and policies."
+  },
+  secrets: {
+    title: "Secrets / Integrations",
+    subtitle: "Encrypted provider credentials with runtime env fallback."
   },
   legal: {
     title: "Legal / Compliance",
@@ -443,6 +453,197 @@ async function refreshMessages() {
   }
 }
 
+function getSecretStatusState(provider) {
+  return state.secrets.statuses[provider] || { message: "", tone: "" };
+}
+
+function setSecretStatusState(provider, message = "", tone = "") {
+  state.secrets.statuses[provider] = { message, tone };
+  const statusEl = document.querySelector(`[data-secret-status="${provider}"]`);
+  if (!statusEl) return;
+  statusEl.textContent = message;
+  statusEl.className = "secret-card-status";
+  if (tone) {
+    statusEl.classList.add(`is-${tone}`);
+  }
+}
+
+function getSecretSourcePill(source) {
+  const normalized = String(source || "").toLowerCase();
+  if (normalized === "db") return `<span class="secret-source-pill">DB override</span>`;
+  if (normalized === "env") return `<span class="secret-source-pill is-env">Env fallback</span>`;
+  return `<span class="secret-source-pill is-unset">Unset</span>`;
+}
+
+function getSecretProviderBadge(provider) {
+  const lastStatuses = (provider.secrets || [])
+    .map((entry) => String(entry.lastTestStatus || "").toLowerCase())
+    .filter(Boolean);
+  if (lastStatuses.includes("failed")) return { label: "Test failed", tone: "failed" };
+  if (lastStatuses.includes("ok")) return { label: "Tested", tone: "ok" };
+  if (provider.enabled) return { label: "Configured", tone: "ok" };
+  return { label: "Needs setup", tone: "warn" };
+}
+
+function renderSecretsPanel() {
+  const grid = $("secretProviderGrid");
+  const warning = $("secretsMasterWarning");
+  const envBadge = $("secretsEnvironmentBadge");
+  if (!grid) return;
+
+  if (envBadge) {
+    envBadge.textContent = state.secrets.environment || "production";
+  }
+  if (warning) {
+    warning.hidden = !!state.secrets.enabled;
+  }
+
+  const providers = Array.isArray(state.secrets.providers) ? state.secrets.providers : [];
+  if (!providers.length) {
+    grid.innerHTML = `<div class="card"><div class="muted" style="padding:16px;">No secrets data available.</div></div>`;
+    return;
+  }
+
+  grid.innerHTML = providers.map((provider) => {
+    const badge = getSecretProviderBadge(provider);
+    const status = getSecretStatusState(provider.provider);
+    const fieldRows = (provider.secrets || []).map((field) => {
+      const inputType = field.secret ? "password" : "text";
+      const placeholder = field.secret
+        ? "Enter new value to update"
+        : (field.displayValue || "");
+      const displayValue = field.secret
+        ? (field.maskedValue || "Not stored")
+        : (field.displayValue || field.maskedValue || "Not stored");
+      const rotateButton = field.secret
+        ? `<button class="btn btn-ghost" type="button" data-secret-action="rotate" data-provider="${provider.provider}" data-key-name="${field.keyName}">Rotate</button>`
+        : "";
+      const deleteButton = field.enabled || field.source === "db"
+        ? `<button class="btn btn-ghost" type="button" data-secret-action="delete" data-provider="${provider.provider}" data-key-name="${field.keyName}">Delete</button>`
+        : "";
+      return `
+        <div class="secret-field-row">
+          <label>
+            <span>${escapeHtml(field.label || field.keyName)}</span>
+            <small>${escapeHtml(field.keyName)}</small>
+            <div class="secret-mask">Current: <code>${escapeHtml(displayValue)}</code> ${getSecretSourcePill(field.source)}</div>
+          </label>
+          <input
+            class="input secret-field-input"
+            type="${inputType}"
+            autocomplete="off"
+            data-secret-input="true"
+            data-provider="${provider.provider}"
+            data-key-name="${field.keyName}"
+            placeholder="${escapeHtml(placeholder)}"
+          />
+          <div class="secret-row-actions">
+            ${rotateButton}
+            ${deleteButton}
+          </div>
+        </div>
+      `;
+    }).join("");
+    return `
+      <article class="secret-card" data-provider-card="${provider.provider}">
+        <div class="secret-card-head">
+          <div>
+            <h3>${escapeHtml(provider.label || provider.provider)}</h3>
+            <p>Encrypted at rest. Raw secrets are never returned by the API.</p>
+          </div>
+          <span class="secret-status-badge is-${badge.tone}">${escapeHtml(badge.label)}</span>
+        </div>
+        <div class="secret-field-list">${fieldRows}</div>
+        <div class="secret-card-warning">
+          <strong>Warning:</strong> after save or rotate, only masked status remains visible. Changing the platform master key without re-encryption makes stored secrets unreadable.
+        </div>
+        <div class="secret-actions">
+          <button class="btn btn-primary" type="button" data-secret-action="save-provider" data-provider="${provider.provider}">Save changes</button>
+          <button class="btn btn-secondary" type="button" data-secret-action="test-provider" data-provider="${provider.provider}">Test connection</button>
+        </div>
+        <div class="secret-card-status${status.tone ? ` is-${status.tone}` : ""}" data-secret-status="${provider.provider}">${escapeHtml(status.message || "")}</div>
+      </article>
+    `;
+  }).join("");
+}
+
+async function refreshSecrets() {
+  const payload = await api("/api/admin/secrets");
+  state.secrets.enabled = !!payload?.enabled;
+  state.secrets.environment = payload?.environment || "production";
+  state.secrets.providers = Array.isArray(payload?.providers) ? payload.providers : [];
+  renderSecretsPanel();
+}
+
+async function saveSecretProvider(provider) {
+  const card = document.querySelector(`[data-provider-card="${provider}"]`);
+  if (!card) return;
+  const inputs = [...card.querySelectorAll('[data-secret-input="true"]')];
+  const changed = inputs
+    .map((input) => ({
+      keyName: input.dataset.keyName,
+      value: String(input.value || "")
+    }))
+    .filter((entry) => entry.value.trim());
+
+  if (!changed.length) {
+    setSecretStatusState(provider, "No changes to save.", "info");
+    return;
+  }
+
+  setSecretStatusState(provider, "Saving secrets...", "info");
+  for (const entry of changed) {
+    await api(`/api/admin/secrets/${encodeURIComponent(provider)}/${encodeURIComponent(entry.keyName)}`, {
+      method: "PUT",
+      body: { value: entry.value, enabled: true }
+    });
+  }
+  inputs.forEach((input) => {
+    input.value = "";
+  });
+  await refreshSecrets();
+  setSecretStatusState(provider, "Saved successfully.", "success");
+}
+
+async function rotateSecretField(provider, keyName) {
+  const input = document.querySelector(`[data-secret-input="true"][data-provider="${provider}"][data-key-name="${keyName}"]`);
+  const value = String(input?.value || "").trim();
+  if (!value) {
+    setSecretStatusState(provider, `Enter a new value for ${keyName} before rotating.`, "error");
+    return;
+  }
+  setSecretStatusState(provider, `Rotating ${keyName}...`, "info");
+  await api(`/api/admin/secrets/${encodeURIComponent(provider)}/${encodeURIComponent(keyName)}/rotate`, {
+    method: "POST",
+    body: { value }
+  });
+  if (input) input.value = "";
+  await refreshSecrets();
+  setSecretStatusState(provider, `${keyName} rotated.`, "success");
+}
+
+async function deleteSecretField(provider, keyName) {
+  setSecretStatusState(provider, `Deleting ${keyName}...`, "info");
+  await api(`/api/admin/secrets/${encodeURIComponent(provider)}/${encodeURIComponent(keyName)}`, {
+    method: "DELETE"
+  });
+  await refreshSecrets();
+  setSecretStatusState(provider, `${keyName} deleted. Env fallback remains if present.`, "success");
+}
+
+async function testSecretProvider(provider) {
+  setSecretStatusState(provider, "Testing provider...", "info");
+  const result = await api(`/api/admin/secrets/${encodeURIComponent(provider)}/test`, {
+    method: "POST"
+  });
+  await refreshSecrets();
+  setSecretStatusState(
+    provider,
+    `${result?.status || "unknown"}: ${result?.message || "No test message."}`,
+    String(result?.status || "").toLowerCase() === "ok" ? "success" : "error"
+  );
+}
+
 async function api(path, { method = "GET", body = null } = {}) {
   const headers = {};
   if (body) headers["Content-Type"] = "application/json";
@@ -623,6 +824,13 @@ if (btnRefreshEl) {
   });
 }
 
+const btnSecretsRefreshEl = $("btnSecretsRefresh");
+if (btnSecretsRefreshEl) {
+  btnSecretsRefreshEl.addEventListener("click", () => {
+    refreshSecrets().catch((e) => setError($("globalError"), e.message));
+  });
+}
+
 const btnLogoutEl = $("btnLogout");
 if (btnLogoutEl) {
   btnLogoutEl.addEventListener("click", () => {
@@ -685,6 +893,35 @@ if (workspaceSelect) {
     await refreshAll();
   });
 }
+
+document.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-secret-action]");
+  if (!button) return;
+
+  const action = button.dataset.secretAction;
+  const provider = button.dataset.provider;
+  const keyName = button.dataset.keyName;
+
+  const run = async () => {
+    if (action === "save-provider") {
+      await saveSecretProvider(provider);
+    } else if (action === "test-provider") {
+      await testSecretProvider(provider);
+    } else if (action === "rotate") {
+      await rotateSecretField(provider, keyName);
+    } else if (action === "delete") {
+      await deleteSecretField(provider, keyName);
+    }
+  };
+
+  run().catch((error) => {
+    if (provider) {
+      setSecretStatusState(provider, error.message || "Secrets action failed.", "error");
+    } else {
+      setError($("globalError"), error.message || "Secrets action failed.");
+    }
+  });
+});
 
 const btnUpsertWorkspaceEl = $("btnUpsertWorkspace");
 if (btnUpsertWorkspaceEl) {
@@ -1126,6 +1363,7 @@ async function refreshAll() {
   await refreshBilling();
   await refreshMessages();
   await refreshSettings();
+  await refreshSecrets();
   await refreshLegalPanel();
   await refreshAudit();
   await refreshSchoolRequestCounts();
@@ -1154,6 +1392,9 @@ async function refreshActiveTab() {
       break;
     case "settings":
       await refreshSettings().catch(() => {});
+      break;
+    case "secrets":
+      await refreshSecrets().catch(() => {});
       break;
     case "legal":
       await refreshLegalPanel().catch(() => {});

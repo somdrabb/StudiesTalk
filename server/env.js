@@ -160,6 +160,8 @@ const FILE_UPLOAD_IMAGE_MAX_BYTES = int('FILE_UPLOAD_IMAGE_MAX_BYTES', 10 * 1024
 const FILE_UPLOAD_DOCUMENT_MAX_BYTES = int('FILE_UPLOAD_DOCUMENT_MAX_BYTES', 25 * 1024 * 1024);
 const FILE_UPLOAD_AUDIO_MAX_BYTES = int('FILE_UPLOAD_AUDIO_MAX_BYTES', 50 * 1024 * 1024);
 const FILE_UPLOAD_VIDEO_MAX_BYTES = int('FILE_UPLOAD_VIDEO_MAX_BYTES', 200 * 1024 * 1024);
+const PLATFORM_SECRETS_MASTER_KEY = optional('PLATFORM_SECRETS_MASTER_KEY', '');
+const PLATFORM_SECRETS_EXPECT_DB = bool('PLATFORM_SECRETS_EXPECT_DB', false);
 
 const FFMPEG_MODE = optional('FFMPEG_MODE', 'auto').trim().toLowerCase();
 const FFMPEG_PATH = optional('FFMPEG_PATH', '');
@@ -224,6 +226,12 @@ if (!hasNonEmpty(JWT_REFRESH_SECRET) || isLikelyDefaultSecret(JWT_REFRESH_SECRET
 
 if (!COOKIE_SECURE && IS_PROD) {
   addError('COOKIE_SECURE must be true in production.');
+}
+
+if (IS_PROD && PLATFORM_SECRETS_EXPECT_DB && !hasNonEmpty(PLATFORM_SECRETS_MASTER_KEY)) {
+  addError('PLATFORM_SECRETS_MASTER_KEY is required when PLATFORM_SECRETS_EXPECT_DB=true in production.');
+} else if (!hasNonEmpty(PLATFORM_SECRETS_MASTER_KEY)) {
+  addWarning('PLATFORM_SECRETS_MASTER_KEY is not set. Secrets / Integrations management will stay disabled and env fallback will be used.');
 }
 
 for (const [name, value] of Object.entries({
@@ -403,6 +411,8 @@ const ENV_VALIDATION = {
       hasNonEmpty(S3_ACCESS_KEY_ID) &&
       hasNonEmpty(S3_SECRET_ACCESS_KEY),
     fileStorageEncryptionEnabled: FILE_STORAGE_ENCRYPTION_ENABLED,
+    platformSecretsEnabled: hasNonEmpty(PLATFORM_SECRETS_MASTER_KEY),
+    platformSecretsExpectDb: PLATFORM_SECRETS_EXPECT_DB,
     openAiConfigured: hasNonEmpty(OPENAI_API_KEY),
     twilioConfigured: hasNonEmpty(TWILIO_ACCOUNT_SID) && hasNonEmpty(TWILIO_AUTH_TOKEN) && hasNonEmpty(TWILIO_PHONE_NUMBER)
     ,
@@ -488,6 +498,8 @@ module.exports = {
   FILE_UPLOAD_DOCUMENT_MAX_BYTES,
   FILE_UPLOAD_AUDIO_MAX_BYTES,
   FILE_UPLOAD_VIDEO_MAX_BYTES,
+  PLATFORM_SECRETS_MASTER_KEY,
+  PLATFORM_SECRETS_EXPECT_DB,
   FFMPEG_MODE,
   FFMPEG_PATH,
   FFMPEG_STRICT,

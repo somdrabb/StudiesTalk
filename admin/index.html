@@ -38,6 +38,9 @@
         <button class="tab nav-item" type="button" data-tab="settings" data-tooltip="Settings" aria-label="Settings">
           <i class="fa-solid fa-sliders" aria-hidden="true"></i><span class="nav-label">Settings</span>
         </button>
+        <button class="tab nav-item" type="button" data-tab="secrets" data-tooltip="Secrets / Integrations" aria-label="Secrets and integrations">
+          <i class="fa-solid fa-key" aria-hidden="true"></i><span class="nav-label">Secrets / Integrations</span>
+        </button>
         <button class="tab nav-item" type="button" data-tab="legal" data-tooltip="Legal / Compliance" aria-label="Legal and compliance">
           <i class="fa-solid fa-scale-balanced" aria-hidden="true"></i><span class="nav-label">Legal / Compliance</span>
         </button>
@@ -484,6 +487,35 @@
       </div>
     </div>
   </div>
+          </section>
+
+          <section class="panel secrets-panel" id="panel-secrets" hidden>
+            <div class="panel-head">
+              <div>
+                <h2>Secrets / Integrations</h2>
+                <p class="muted">Rotatable provider credentials encrypted at rest. Raw secrets are never shown again.</p>
+              </div>
+              <div class="panel-actions secret-actions">
+                <span class="secret-environment-badge" id="secretsEnvironmentBadge">production</span>
+                <button class="btn btn-ghost" type="button" id="btnSecretsRefresh">
+                  <i class="fa-solid fa-rotate-right" aria-hidden="true"></i><span>Refresh</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="secret-warning" id="secretsMasterWarning" hidden>
+              <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
+              <div>
+                <strong>Secrets management is disabled.</strong>
+                <span>Set <code>PLATFORM_SECRETS_MASTER_KEY</code> to enable encrypted writes. Env fallback stays active.</span>
+              </div>
+            </div>
+
+            <div class="secret-provider-grid" id="secretProviderGrid">
+              <div class="card">
+                <div class="muted" style="padding: 16px;">No provider data loaded yet.</div>
+              </div>
+            </div>
           </section>
 
           <section class="panel legal-panel" id="panel-legal" hidden>

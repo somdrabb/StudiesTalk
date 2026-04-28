@@ -1,9 +1,69 @@
 #!/usr/bin/env node
 'use strict';
 
+const fs = require('fs');
+const Database = require('better-sqlite3');
+const { Client } = require('pg');
 const ENV = require('../server/env');
 
-function main() {
+async function listDbManagedSecretRows() {
+  const rowsSql = `
+    SELECT provider, key_name AS "keyName", environment, enabled
+    FROM platform_secrets
+    WHERE enabled = 1
+    ORDER BY provider ASC, key_name ASC
+  `;
+
+  if (ENV.DB_ENGINE === 'sqlite') {
+    if (!ENV.DB_PATH || !fs.existsSync(ENV.DB_PATH)) {
+      return { rows: [], note: 'SQLite database does not exist yet; DB secret override check skipped.' };
+    }
+    const db = new Database(ENV.DB_PATH, { readonly: true });
+    try {
+      const rows = db.prepare(rowsSql).all();
+      return { rows, note: '' };
+    } catch (error) {
+      return { rows: [], note: `SQLite DB secret override check skipped: ${error.message}` };
+    } finally {
+      db.close();
+    }
+  }
+
+  if (!ENV.DATABASE_URL) {
+    return { rows: [], note: 'DATABASE_URL is not configured; DB secret override check skipped.' };
+  }
+
+  const client = new Client({
+    connectionString: ENV.DATABASE_URL,
+    ssl: ENV.PGSSL ? { rejectUnauthorized: false } : false
+  });
+
+  try {
+    await client.connect();
+    const result = await client.query(rowsSql);
+    return { rows: result.rows || [], note: '' };
+  } catch (error) {
+    return { rows: [], note: `PostgreSQL DB secret override check skipped: ${error.message}` };
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+function getDbSecretOverrideWarnings(rows = []) {
+  const warnings = [];
+  for (const row of rows) {
+    const keyName = String(row?.keyName || '').trim();
+    if (!keyName) continue;
+    if (process.env[keyName] && String(process.env[keyName]).trim()) {
+      warnings.push(
+        `DB secret override active for ${row.provider}.${keyName} (${row.environment || 'production'}). Database value will override env ${keyName}.`
+      );
+    }
+  }
+  return warnings;
+}
+
+async function main() {
   console.log('[preflight] nodeEnv:', ENV.NODE_ENV);
   console.log('[preflight] appBaseUrl:', ENV.BASE_URL || '(not configured)');
   console.log('[preflight] dbEngine:', ENV.DB_ENGINE);
@@ -12,28 +72,50 @@ function main() {
   console.log('[preflight] backupDir:', ENV.DB_BACKUP_DIR);
   console.log('[preflight] fileStorageAdapter:', ENV.FILE_STORAGE_ADAPTER);
   console.log('[preflight] jitsiDomain:', ENV.JITSI_DOMAIN || '(not configured)');
-  if (ENV.ENV_VALIDATION?.warnings?.length) {
+  console.log('[preflight] platformSecretsMasterKey:', ENV.PLATFORM_SECRETS_MASTER_KEY ? 'configured' : 'missing');
+  console.log('[preflight] platformSecretsExpectDb:', ENV.PLATFORM_SECRETS_EXPECT_DB ? 'true' : 'false');
+
+  const envWarnings = [...(ENV.ENV_VALIDATION?.warnings || [])];
+  const envErrors = [...(ENV.ENV_VALIDATION?.errors || [])];
+
+  const dbSecretCheck = await listDbManagedSecretRows();
+  if (dbSecretCheck.note) {
+    envWarnings.push(dbSecretCheck.note);
+  }
+  envWarnings.push(...getDbSecretOverrideWarnings(dbSecretCheck.rows));
+
+  if (dbSecretCheck.rows.length) {
+    console.log('[preflight] db managed secrets detected:', dbSecretCheck.rows.length);
+  } else {
+    console.log('[preflight] db managed secrets detected: 0');
+  }
+
+  if (envWarnings.length) {
     console.log('[preflight] env warnings:');
-    for (const warning of ENV.ENV_VALIDATION.warnings) {
+    for (const warning of envWarnings) {
       console.log(`- ${warning}`);
     }
   } else {
     console.log('[preflight] env warnings: none');
   }
-  if (ENV.ENV_VALIDATION?.errors?.length) {
+
+  if (envErrors.length) {
     console.log('[preflight] env blockers:');
-    for (const error of ENV.ENV_VALIDATION.errors) {
+    for (const error of envErrors) {
       console.log(`- ${error}`);
     }
   } else {
     console.log('[preflight] env blockers: none');
   }
+
   console.log('[preflight] summary:', JSON.stringify(ENV.ENV_VALIDATION?.summary || {}, null, 2));
+
+  if (envErrors.length) {
+    process.exitCode = 1;
+  }
 }
 
-try {
-  main();
-} catch (err) {
+main().catch((err) => {
   console.error('[preflight] failed:', err?.message || err);
   process.exit(1);
-}
+});
