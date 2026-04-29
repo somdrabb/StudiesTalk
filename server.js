@@ -236,6 +236,7 @@ let googleTranslateClient = null;
 try {
   const { Translate } = require('@google-cloud/translate').v2;
 
+  const inlineGoogleJson = (process.env.GOOGLE_TRANSLATE_KEY_JSON || '').trim();
   const explicitKeyFilename =
     (process.env.GOOGLE_TRANSLATE_KEYFILE || '').trim() ||
     (process.env.GOOGLE_APPLICATION_CREDENTIALS || '').trim();
@@ -243,7 +244,11 @@ try {
   const fallbackKeyFilename =
     !explicitKeyFilename && fs.existsSync(defaultKeyPath) ? defaultKeyPath : '';
 
-  if (explicitKeyFilename || fallbackKeyFilename) {
+  if (inlineGoogleJson) {
+    const parsed = JSON.parse(inlineGoogleJson);
+    console.log('[Translate] Using inline Google key JSON');
+    googleTranslateClient = new Translate({ credentials: parsed });
+  } else if (explicitKeyFilename || fallbackKeyFilename) {
     const selectedKeyFilename = explicitKeyFilename || fallbackKeyFilename;
     console.log('[Translate] Using key file:', selectedKeyFilename);
     googleTranslateClient = new Translate({ keyFilename: selectedKeyFilename });
@@ -2091,14 +2096,13 @@ function getRuntimeSecret(provider, keyName, envName = keyName, environment = 'p
 }
 
 function getGoogleTranslateClientForRuntime(environment = 'production') {
-  const inlineJson = getRuntimeSecret('google', 'GOOGLE_TRANSLATE_KEY_JSON', 'GOOGLE_TRANSLATE_KEY_JSON', environment);
-  const credentialsPath = getRuntimeSecret('google', 'GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_APPLICATION_CREDENTIALS', environment);
-  if (inlineJson) {
-    const parsed = JSON.parse(inlineJson);
+  const effective = platformSecretsService.resolveGoogleCredentialSource(environment);
+  if (effective.source === 'db_json' || effective.source === 'env_json') {
+    const parsed = JSON.parse(effective.value);
     return new Translate({ credentials: parsed });
   }
-  if (credentialsPath) {
-    return new Translate({ keyFilename: credentialsPath });
+  if (effective.source === 'db_path' || effective.source === 'env_path') {
+    return new Translate({ keyFilename: effective.value });
   }
   return googleTranslateClient;
 }

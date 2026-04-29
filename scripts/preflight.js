@@ -63,6 +63,35 @@ function getDbSecretOverrideWarnings(rows = []) {
   return warnings;
 }
 
+function looksLikeLocalMachinePath(value = '') {
+  const raw = String(value || '').trim();
+  if (!raw) return false;
+  return /^\/Users\//.test(raw) || /^[A-Za-z]:\\/.test(raw);
+}
+
+function getGoogleCredentialWarnings(rows = []) {
+  const warnings = [];
+  const byKey = new Map(
+    rows.map((row) => [String(row?.keyName || '').trim(), row])
+  );
+  const hasDbGoogleJson = byKey.has('GOOGLE_TRANSLATE_KEY_JSON');
+  const envGoogleJson = String(process.env.GOOGLE_TRANSLATE_KEY_JSON || '').trim();
+  const effectiveJson = hasDbGoogleJson || Boolean(envGoogleJson);
+  const credentialsPath = String(process.env.GOOGLE_APPLICATION_CREDENTIALS || '').trim();
+
+  if (effectiveJson) {
+    return warnings;
+  }
+
+  if (looksLikeLocalMachinePath(credentialsPath)) {
+    warnings.push(
+      `GOOGLE_APPLICATION_CREDENTIALS points to a local machine path (${credentialsPath}). File path credentials are deprecated for staging/production. Prefer GOOGLE_TRANSLATE_KEY_JSON.`
+    );
+  }
+
+  return warnings;
+}
+
 async function main() {
   console.log('[preflight] nodeEnv:', ENV.NODE_ENV);
   console.log('[preflight] appBaseUrl:', ENV.BASE_URL || '(not configured)');
@@ -83,6 +112,7 @@ async function main() {
     envWarnings.push(dbSecretCheck.note);
   }
   envWarnings.push(...getDbSecretOverrideWarnings(dbSecretCheck.rows));
+  envWarnings.push(...getGoogleCredentialWarnings(dbSecretCheck.rows));
 
   if (dbSecretCheck.rows.length) {
     console.log('[preflight] db managed secrets detected:', dbSecretCheck.rows.length);

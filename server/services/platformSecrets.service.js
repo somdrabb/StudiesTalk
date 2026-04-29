@@ -254,6 +254,15 @@ function createPlatformSecretsService({
     return String(env[normalizeKeyName(keyName)] || '').trim();
   }
 
+  function getSecretSource(provider, keyName, environment = DEFAULT_ENVIRONMENT) {
+    const record = getSecret(provider, keyName, environment);
+    if (record && Number(record.enabled || 0) === 1) {
+      return 'db';
+    }
+    const fallbackKey = normalizeKeyName(keyName);
+    return String(env[fallbackKey] || '').trim() ? 'env' : 'unset';
+  }
+
   function getRuntimeSecret(provider, keyName, envName, environment = DEFAULT_ENVIRONMENT) {
     const fallbackKey = normalizeKeyName(envName || keyName);
     const record = getSecret(provider, keyName, environment);
@@ -261,6 +270,67 @@ function createPlatformSecretsService({
       return decryptSecret(record);
     }
     return String(env[fallbackKey] || '').trim();
+  }
+
+  function resolveGoogleCredentialSource(environment = DEFAULT_ENVIRONMENT) {
+    const normalizedEnvironment = normalizeEnvironment(environment);
+    const jsonDbRecord = getSecret('google', 'GOOGLE_TRANSLATE_KEY_JSON', normalizedEnvironment);
+    const jsonDbValue = jsonDbRecord && masterKeyBuffer && Number(jsonDbRecord.enabled || 0) === 1
+      ? decryptSecret(jsonDbRecord)
+      : '';
+    if (String(jsonDbValue || '').trim()) {
+      return {
+        source: 'db_json',
+        keyName: 'GOOGLE_TRANSLATE_KEY_JSON',
+        value: String(jsonDbValue || '').trim(),
+        ignorePath: true
+      };
+    }
+    const jsonEnvValue = String(env.GOOGLE_TRANSLATE_KEY_JSON || '').trim();
+    if (jsonEnvValue) {
+      return {
+        source: 'env_json',
+        keyName: 'GOOGLE_TRANSLATE_KEY_JSON',
+        value: jsonEnvValue,
+        ignorePath: true
+      };
+    }
+    const pathDbRecord = getSecret('google', 'GOOGLE_APPLICATION_CREDENTIALS', normalizedEnvironment);
+    const pathDbValue = pathDbRecord && masterKeyBuffer && Number(pathDbRecord.enabled || 0) === 1
+      ? decryptSecret(pathDbRecord)
+      : '';
+    if (String(pathDbValue || '').trim()) {
+      return {
+        source: 'db_path',
+        keyName: 'GOOGLE_APPLICATION_CREDENTIALS',
+        value: String(pathDbValue || '').trim(),
+        ignorePath: false
+      };
+    }
+    const pathEnvValue = String(env.GOOGLE_APPLICATION_CREDENTIALS || '').trim();
+    if (pathEnvValue) {
+      return {
+        source: 'env_path',
+        keyName: 'GOOGLE_APPLICATION_CREDENTIALS',
+        value: pathEnvValue,
+        ignorePath: false
+      };
+    }
+    return {
+      source: 'unset',
+      keyName: '',
+      value: '',
+      ignorePath: false
+    };
+  }
+
+  function serializeGoogleEffectiveSource(environment = DEFAULT_ENVIRONMENT) {
+    const resolved = resolveGoogleCredentialSource(environment);
+    return {
+      source: resolved.source,
+      keyName: resolved.keyName,
+      ignorePath: Boolean(resolved.ignorePath)
+    };
   }
 
   function auditSecretAction({
@@ -442,7 +512,13 @@ function createPlatformSecretsService({
       ipAddress,
       userAgent
     });
-    return { ok: true, deleted: Number(result.changes || 0) };
+    const fallbackValue = String(env[normalizedKeyName] || '').trim();
+    const response = { ok: true, deleted: Number(result.changes || 0) };
+    if (fallbackValue) {
+      response.envFallbackExists = true;
+      response.message = `Deleted DB value. Env fallback still exists in .env. Remove ${normalizedKeyName} from .env to fully clear it.`;
+    }
+    return response;
   }
 
   function listSecrets({ environment = DEFAULT_ENVIRONMENT } = {}) {
@@ -457,7 +533,7 @@ function createPlatformSecretsService({
       rows.map((row) => [`${row.provider}:${row.key_name}:${row.environment}`, row])
     );
     return Object.entries(PROVIDER_DEFINITIONS).map(([provider, definition]) => {
-      const secrets = definition.fields.map((field) => {
+      let secrets = definition.fields.map((field) => {
         const key = `${provider}:${field.keyName}:${normalizedEnvironment}`;
         const row = rowsByKey.get(key);
         if (row) {
@@ -486,16 +562,35 @@ function createPlatformSecretsService({
           lastTestMessage: '',
           lastTestedAt: null,
           rotatedAt: null,
-          updatedAt: null,
-          updatedBy: null,
-          source: envRecord ? 'env' : 'unset'
-        };
+            updatedAt: null,
+            updatedBy: null,
+            source: envRecord ? 'env' : 'unset'
+          };
       });
+      if (provider === 'google') {
+        const effectiveSource = resolveGoogleCredentialSource(normalizedEnvironment);
+        const hasJsonOverride = effectiveSource.source === 'db_json' || effectiveSource.source === 'env_json';
+        secrets = secrets.map((entry) => {
+          if (entry.keyName !== 'GOOGLE_APPLICATION_CREDENTIALS') return entry;
+          const next = { ...entry, deprecated: true };
+          if (hasJsonOverride) {
+            next.enabled = false;
+            next.source = 'ignored';
+            next.maskedValue = 'Ignored because JSON key is configured';
+            next.displayValue = '';
+            next.ignored = true;
+            next.ignoredReason = 'Ignored because JSON key is configured';
+            next.hideInput = true;
+          }
+          return next;
+        });
+      }
       return {
         provider,
         label: definition.label,
         environment: normalizedEnvironment,
         enabled: secrets.some((entry) => entry.enabled),
+        effectiveSource: provider === 'google' ? serializeGoogleEffectiveSource(normalizedEnvironment) : null,
         secrets
       };
     });
@@ -547,15 +642,18 @@ function createPlatformSecretsService({
         const transporter = nodemailer.createTransport({ host, port, secure, auth: { user, pass } });
         await transporter.verify();
       } else if (normalizedProvider === 'google') {
-        const rawJson = getRuntimeSecret('google', 'GOOGLE_TRANSLATE_KEY_JSON', 'GOOGLE_TRANSLATE_KEY_JSON', normalizedEnvironment);
-        const credentialsPath = getRuntimeSecret('google', 'GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_APPLICATION_CREDENTIALS', normalizedEnvironment);
-        if (!rawJson && !credentialsPath) throw new Error('Google Translate credentials are missing.');
-        if (rawJson) {
-          const parsed = JSON.parse(rawJson);
+        const effective = resolveGoogleCredentialSource(normalizedEnvironment);
+        if (!effective.value) throw new Error('Google Translate credentials are missing.');
+        if (effective.source === 'db_json' || effective.source === 'env_json') {
+          const parsed = JSON.parse(effective.value);
           if (!parsed.client_email || !parsed.private_key) {
             throw new Error('Google Translate key JSON is incomplete.');
           }
           new Translate({ credentials: parsed });
+          message = `Google Translate credentials valid (${effective.source}).`;
+        } else if (effective.source === 'db_path' || effective.source === 'env_path') {
+          new Translate({ keyFilename: effective.value });
+          message = `Google Translate credentials valid (${effective.source}).`;
         }
       } else if (normalizedProvider === 'jitsi') {
         const domain = getRuntimeSecret('jitsi', 'JITSI_DOMAIN', 'JITSI_DOMAIN', normalizedEnvironment);
@@ -617,7 +715,10 @@ function createPlatformSecretsService({
       environment: normalizedEnvironment,
       status,
       message,
-      testedAt: startedAt
+      testedAt: startedAt,
+      effectiveSource: normalizedProvider === 'google'
+        ? resolveGoogleCredentialSource(normalizedEnvironment).source
+        : null
     };
   }
 
@@ -630,7 +731,10 @@ function createPlatformSecretsService({
     listSecrets,
     getSecret,
     getSecretValue,
+    getSecretSource,
     getRuntimeSecret,
+    resolveGoogleCredentialSource,
+    serializeGoogleEffectiveSource,
     rotateSecret,
     deleteSecret,
     testProvider,

@@ -16,6 +16,7 @@ const uploadsDir = path.join(os.tmpdir(), `${runId}_uploads`);
 const backupDir = path.join(os.tmpdir(), `${runId}_backup`);
 const masterKey = crypto.randomBytes(32).toString('hex');
 const basePort = 4650 + Math.floor(Math.random() * 80);
+const fakeGoogleCredentialsPath = '/Users/fake-user/local-google-key.json';
 
 const ids = {
   workspaceId: `ws_${runId}`,
@@ -137,12 +138,13 @@ function startServer({ port, includeMasterKey }) {
     UPLOADS_DIR: uploadsDir,
     DB_BACKUP_DIR: backupDir,
     EMAIL_PROVIDER: 'disabled',
-    EMAIL_FROM_EMAIL: 'no-reply@example.com'
+    EMAIL_FROM_EMAIL: 'no-reply@example.com',
+    GOOGLE_APPLICATION_CREDENTIALS: fakeGoogleCredentialsPath
   };
   if (includeMasterKey) {
     env.PLATFORM_SECRETS_MASTER_KEY = masterKey;
   } else {
-    delete env.PLATFORM_SECRETS_MASTER_KEY;
+    env.PLATFORM_SECRETS_MASTER_KEY = '';
   }
 
   const child = spawn(process.execPath, ['server.js'], {
@@ -198,12 +200,15 @@ function seedUsers() {
   }
 }
 
-function openServiceForAssertions() {
+function openServiceForAssertions(envOverrides = {}) {
   const db = new Database(sqlitePath);
   const service = createPlatformSecretsService({
     db,
     masterKey,
-    env: process.env
+    env: {
+      ...process.env,
+      ...envOverrides
+    }
   });
   return { db, service };
 }
@@ -306,6 +311,64 @@ async function main() {
 
     const auditCountAfterWrites = countSecretAuditRows();
     assert.ok(auditCountAfterWrites >= 3, 'secret audit rows should be written for create/rotate/test');
+
+    const googleJson = JSON.stringify({
+      type: 'service_account',
+      client_email: 'translate-smoke@example.iam.gserviceaccount.com',
+      private_key: '-----BEGIN PRIVATE KEY-----\\nabc123\\n-----END PRIVATE KEY-----\\n'
+    });
+    await api(baseUrl, superJar, 'PUT', '/api/admin/secrets/google/GOOGLE_TRANSLATE_KEY_JSON', {
+      json: { value: googleJson }
+    });
+
+    const googleProvider = await api(baseUrl, superJar, 'GET', '/api/admin/secrets/google');
+    const googleFields = googleProvider?.provider?.secrets || [];
+    const googleJsonField = googleFields.find((entry) => entry.keyName === 'GOOGLE_TRANSLATE_KEY_JSON');
+    const googlePathField = googleFields.find((entry) => entry.keyName === 'GOOGLE_APPLICATION_CREDENTIALS');
+    assert.ok(googleJsonField?.source === 'db', 'GOOGLE_TRANSLATE_KEY_JSON should be stored as DB override');
+    assert.ok(googleProvider?.provider?.effectiveSource?.source === 'db_json', 'Google effective source should prefer DB JSON');
+    assert.ok(googlePathField?.source === 'ignored', 'GOOGLE_APPLICATION_CREDENTIALS should be marked ignored when JSON exists');
+    assert.strictEqual(googlePathField?.displayValue || '', '', 'ignored path fallback should not show env path as current value');
+    assert.ok(
+      !JSON.stringify(googleProvider).includes(fakeGoogleCredentialsPath),
+      'Google provider response should not present the env path as active current secret'
+    );
+
+    const googleTest = await api(baseUrl, superJar, 'POST', '/api/admin/secrets/google/test');
+    assert.strictEqual(googleTest.provider, 'google');
+    assert.strictEqual(googleTest.effectiveSource, 'db_json', 'Google test should use DB JSON effective source');
+
+    const googlePathDelete = await api(baseUrl, superJar, 'DELETE', '/api/admin/secrets/google/GOOGLE_APPLICATION_CREDENTIALS');
+    assert.strictEqual(googlePathDelete.ok, true);
+    assert.ok(
+      String(googlePathDelete.message || '').includes('Env fallback still exists in .env'),
+      'Deleting GOOGLE_APPLICATION_CREDENTIALS should mention env fallback still exists'
+    );
+
+    const googleProviderAfterDelete = await api(baseUrl, superJar, 'GET', '/api/admin/secrets/google');
+    const googlePathFieldAfterDelete = (googleProviderAfterDelete?.provider?.secrets || []).find((entry) => entry.keyName === 'GOOGLE_APPLICATION_CREDENTIALS');
+    assert.ok(googleProviderAfterDelete?.provider?.effectiveSource?.source === 'db_json', 'Google effective source should remain DB JSON after deleting path');
+    assert.ok(googlePathFieldAfterDelete?.source === 'ignored', 'Ignored Google path should remain ignored after delete while JSON exists');
+    assert.ok(
+      !JSON.stringify(googleProviderAfterDelete).includes(fakeGoogleCredentialsPath),
+      'Deleted Google path should still not be shown as active when DB JSON exists'
+    );
+
+    const googleTestAfterDelete = await api(baseUrl, superJar, 'POST', '/api/admin/secrets/google/test');
+    assert.strictEqual(googleTestAfterDelete.effectiveSource, 'db_json', 'Deleting path should not affect Google JSON test source');
+
+    const { db: googleDb, service: googleService } = openServiceForAssertions({
+      GOOGLE_APPLICATION_CREDENTIALS: fakeGoogleCredentialsPath
+    });
+    try {
+      assert.strictEqual(
+        googleService.resolveGoogleCredentialSource('production').source,
+        'db_json',
+        'server-side Google credential resolution should prefer DB JSON over env path'
+      );
+    } finally {
+      googleDb.close();
+    }
 
     const deleted = await api(baseUrl, superJar, 'DELETE', '/api/admin/secrets/openai/OPENAI_API_KEY');
     assert.strictEqual(deleted.ok, true);

@@ -33,6 +33,7 @@ const state = {
     enabled: false,
     environment: "production",
     providers: [],
+    activeProvider: "",
     statuses: {}
   },
   legal: {
@@ -472,6 +473,7 @@ function getSecretSourcePill(source) {
   const normalized = String(source || "").toLowerCase();
   if (normalized === "db") return `<span class="secret-source-pill">DB override</span>`;
   if (normalized === "env") return `<span class="secret-source-pill is-env">Env fallback</span>`;
+  if (normalized === "ignored") return `<span class="secret-source-pill is-ignored">Ignored</span>`;
   return `<span class="secret-source-pill is-unset">Unset</span>`;
 }
 
@@ -483,6 +485,24 @@ function getSecretProviderBadge(provider) {
   if (lastStatuses.includes("ok")) return { label: "Tested", tone: "ok" };
   if (provider.enabled) return { label: "Configured", tone: "ok" };
   return { label: "Needs setup", tone: "warn" };
+}
+
+function getProviderScopedWarning(provider) {
+  if (String(provider?.provider || '') !== 'google') return '';
+  return 'File path credentials are deprecated for production. Use GOOGLE_TRANSLATE_KEY_JSON.';
+}
+
+function ensureActiveSecretProvider(providers) {
+  const list = Array.isArray(providers) ? providers : [];
+  if (!list.length) {
+    state.secrets.activeProvider = "";
+    return null;
+  }
+  const current = String(state.secrets.activeProvider || "").trim();
+  const matched = list.find((provider) => String(provider.provider || "") === current);
+  if (matched) return matched;
+  state.secrets.activeProvider = String(list[0].provider || "");
+  return list[0];
 }
 
 function renderSecretsPanel() {
@@ -504,39 +524,67 @@ function renderSecretsPanel() {
     return;
   }
 
-  grid.innerHTML = providers.map((provider) => {
+  const activeProvider = ensureActiveSecretProvider(providers);
+  const listMarkup = providers.map((provider) => {
     const badge = getSecretProviderBadge(provider);
-    const status = getSecretStatusState(provider.provider);
-    const fieldRows = (provider.secrets || []).map((field) => {
+    const isActive = activeProvider && provider.provider === activeProvider.provider;
+    const configuredCount = Array.isArray(provider.secrets)
+      ? provider.secrets.filter((field) => field.enabled || field.source === "env" || field.source === "db").length
+      : 0;
+    return `
+      <button
+        class="secret-provider-nav${isActive ? " is-active" : ""}"
+        type="button"
+        data-secret-nav="${escapeHtml(provider.provider)}"
+        aria-pressed="${isActive ? "true" : "false"}"
+      >
+        <span class="secret-provider-nav-copy">
+          <span class="secret-provider-nav-title">${escapeHtml(provider.label || provider.provider)}</span>
+          <span class="secret-provider-nav-meta">${configuredCount} fields</span>
+        </span>
+        <span class="secret-status-badge is-${badge.tone}">${escapeHtml(badge.label)}</span>
+      </button>
+    `;
+  }).join("");
+
+  let detailMarkup = "";
+  if (activeProvider) {
+    const badge = getSecretProviderBadge(activeProvider);
+    const status = getSecretStatusState(activeProvider.provider);
+    const fieldRows = (activeProvider.secrets || []).map((field) => {
       const inputType = field.secret ? "password" : "text";
       const placeholder = field.secret
         ? "Enter new value to update"
         : (field.displayValue || "");
+      const isIgnored = !!field.ignored;
       const displayValue = field.secret
         ? (field.maskedValue || "Not stored")
         : (field.displayValue || field.maskedValue || "Not stored");
       const rotateButton = field.secret
-        ? `<button class="btn btn-ghost" type="button" data-secret-action="rotate" data-provider="${provider.provider}" data-key-name="${field.keyName}">Rotate</button>`
+        ? `<button class="btn btn-ghost" type="button" data-secret-action="rotate" data-provider="${activeProvider.provider}" data-key-name="${field.keyName}">Rotate</button>`
         : "";
       const deleteButton = field.enabled || field.source === "db"
-        ? `<button class="btn btn-ghost" type="button" data-secret-action="delete" data-provider="${provider.provider}" data-key-name="${field.keyName}">Delete</button>`
+        ? `<button class="btn btn-ghost" type="button" data-secret-action="delete" data-provider="${activeProvider.provider}" data-key-name="${field.keyName}">Delete</button>`
         : "";
+      const inputMarkup = field.hideInput
+        ? `<div class="secret-field-note is-muted">${escapeHtml(field.ignoredReason || "Ignored.")}</div>`
+        : `<input
+            class="input secret-field-input"
+            type="${inputType}"
+            autocomplete="off"
+            data-secret-input="true"
+            data-provider="${activeProvider.provider}"
+            data-key-name="${field.keyName}"
+            placeholder="${escapeHtml(placeholder)}"
+          />`;
       return `
-        <div class="secret-field-row">
+        <div class="secret-field-row${isIgnored ? " is-ignored" : ""}">
           <label>
             <span>${escapeHtml(field.label || field.keyName)}</span>
             <small>${escapeHtml(field.keyName)}</small>
             <div class="secret-mask">Current: <code>${escapeHtml(displayValue)}</code> ${getSecretSourcePill(field.source)}</div>
           </label>
-          <input
-            class="input secret-field-input"
-            type="${inputType}"
-            autocomplete="off"
-            data-secret-input="true"
-            data-provider="${provider.provider}"
-            data-key-name="${field.keyName}"
-            placeholder="${escapeHtml(placeholder)}"
-          />
+          ${inputMarkup}
           <div class="secret-row-actions">
             ${rotateButton}
             ${deleteButton}
@@ -544,27 +592,39 @@ function renderSecretsPanel() {
         </div>
       `;
     }).join("");
-    return `
-      <article class="secret-card" data-provider-card="${provider.provider}">
+    const providerWarning = getProviderScopedWarning(activeProvider);
+
+    detailMarkup = `
+      <article class="secret-card" data-provider-card="${activeProvider.provider}">
         <div class="secret-card-head">
           <div>
-            <h3>${escapeHtml(provider.label || provider.provider)}</h3>
+            <h3>${escapeHtml(activeProvider.label || activeProvider.provider)}</h3>
             <p>Encrypted at rest. Raw secrets are never returned by the API.</p>
           </div>
           <span class="secret-status-badge is-${badge.tone}">${escapeHtml(badge.label)}</span>
         </div>
         <div class="secret-field-list">${fieldRows}</div>
+        ${providerWarning ? `<div class="secret-field-note is-warning">${escapeHtml(providerWarning)}</div>` : ""}
         <div class="secret-card-warning">
           <strong>Warning:</strong> after save or rotate, only masked status remains visible. Changing the platform master key without re-encryption makes stored secrets unreadable.
         </div>
         <div class="secret-actions">
-          <button class="btn btn-primary" type="button" data-secret-action="save-provider" data-provider="${provider.provider}">Save changes</button>
-          <button class="btn btn-secondary" type="button" data-secret-action="test-provider" data-provider="${provider.provider}">Test connection</button>
+          <button class="btn btn-primary" type="button" data-secret-action="save-provider" data-provider="${activeProvider.provider}">Save changes</button>
+          <button class="btn btn-secondary" type="button" data-secret-action="test-provider" data-provider="${activeProvider.provider}">Test connection</button>
         </div>
-        <div class="secret-card-status${status.tone ? ` is-${status.tone}` : ""}" data-secret-status="${provider.provider}">${escapeHtml(status.message || "")}</div>
+        <div class="secret-card-status${status.tone ? ` is-${status.tone}` : ""}" data-secret-status="${activeProvider.provider}">${escapeHtml(status.message || "")}</div>
       </article>
     `;
-  }).join("");
+  }
+
+  grid.innerHTML = `
+    <aside class="secret-provider-list" aria-label="Secret providers">
+      ${listMarkup}
+    </aside>
+    <div class="secret-provider-detail">
+      ${detailMarkup}
+    </div>
+  `;
 }
 
 async function refreshSecrets() {
@@ -624,11 +684,11 @@ async function rotateSecretField(provider, keyName) {
 
 async function deleteSecretField(provider, keyName) {
   setSecretStatusState(provider, `Deleting ${keyName}...`, "info");
-  await api(`/api/admin/secrets/${encodeURIComponent(provider)}/${encodeURIComponent(keyName)}`, {
+  const result = await api(`/api/admin/secrets/${encodeURIComponent(provider)}/${encodeURIComponent(keyName)}`, {
     method: "DELETE"
   });
   await refreshSecrets();
-  setSecretStatusState(provider, `${keyName} deleted. Env fallback remains if present.`, "success");
+  setSecretStatusState(provider, result?.message || `${keyName} deleted. Env fallback remains if present.`, "success");
 }
 
 async function testSecretProvider(provider) {
@@ -895,6 +955,13 @@ if (workspaceSelect) {
 }
 
 document.addEventListener("click", (event) => {
+  const providerNav = event.target.closest("[data-secret-nav]");
+  if (providerNav) {
+    state.secrets.activeProvider = String(providerNav.dataset.secretNav || "").trim();
+    renderSecretsPanel();
+    return;
+  }
+
   const button = event.target.closest("[data-secret-action]");
   if (!button) return;
 
