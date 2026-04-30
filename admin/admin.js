@@ -29,12 +29,58 @@ const state = {
     invoices: [],
     payments: []
   },
+  costControl: {
+    period: "monthly",
+    overview: null,
+    providerRows: [],
+    workspaceRows: [],
+    limits: [],
+    alerts: [],
+    providers: [],
+    feedback: { message: "", tone: "" },
+    loadError: ""
+  },
+  platformControl: {
+    activeTab: "overview",
+    globalSettings: null,
+    workspaceOverride: null,
+    effectiveSettings: null,
+    selectedWorkspaceId: "",
+    updatedAt: "",
+    feedback: { message: "", tone: "" }
+  },
   secrets: {
     enabled: false,
     environment: "production",
     providers: [],
     activeProvider: "",
-    statuses: {}
+    statuses: {},
+    aiBudget: {
+      defaultBudget: null,
+      workspaceBudget: null,
+      feedback: { message: "", tone: "" },
+      loadError: ""
+    },
+    ownerEmail: {
+      ownerSettings: null,
+      workspaceSettings: null,
+      feedback: { message: "", tone: "" },
+      loadError: ""
+    },
+    emailControl: {
+      activeTab: "overview",
+      overview: null,
+      settings: null,
+      logs: [],
+      templates: [],
+      filters: {
+        workspaceId: "",
+        status: "all",
+        limit: 50
+      },
+      feedback: { message: "", tone: "" },
+      loadError: ""
+    }
   },
   legal: {
     settings: null,
@@ -54,10 +100,103 @@ const state = {
     counts: { pending: 0, approved: 0, rejected: 0, flagged: 0, all: 0 },
     selected: new Set(),
     loading: false
+  },
+  ownerControls: {
+    operations: null,
+    backups: null,
+    lifecycle: null,
+    support: null,
+    incidents: null,
+    dataGovernance: null,
+    notifications: [],
+    branding: null,
+    reports: null
   }
 };
 
 let settingsEditorSnapshot = {};
+const PLATFORM_SETTINGS_KEY = "platform_admin_config";
+const SETTINGS_FIELD_IDS = [
+  "settings_defaults_ai_budget",
+  "settings_defaults_max_users",
+  "settings_workspaceDefaults_defaultStorageGb",
+  "settings_workspaceDefaults_defaultEmailDailyLimit",
+  "settings_workspaceDefaults_defaultSmsDailyLimit",
+  "settings_costGovernance_platformMonthlyBudgetEur",
+  "settings_costGovernance_workspaceMonthlyHardLimitEur",
+  "settings_costGovernance_workspaceMonthlySoftLimitEur",
+  "settings_costGovernance_alertThresholdPercent",
+  "settings_costGovernance_blockOnHardLimit",
+  "settings_provider_openai_enabled",
+  "settings_provider_openai_monthlyLimitEur",
+  "settings_provider_twilio_enabled",
+  "settings_provider_twilio_dailySmsLimit",
+  "settings_provider_twilio_monthlyLimitEur",
+  "settings_provider_googleTranslate_enabled",
+  "settings_provider_googleTranslate_monthlyCharacterLimit",
+  "settings_provider_googleTranslate_monthlyLimitEur",
+  "settings_provider_ionosEmail_enabled",
+  "settings_provider_ionosEmail_dailyEmailLimit",
+  "settings_provider_ionosEmail_monthlyLimitEur",
+  "settings_provider_storage_enabled",
+  "settings_provider_storage_maxGbPerWorkspace",
+  "settings_provider_storage_monthlyLimitEur",
+  "settings_provider_jitsi_enabled",
+  "settings_provider_jitsi_monthlyLimitEur",
+  "settings_ai_provider",
+  "settings_ai_enabled",
+  "settings_ai_realtime_enabled",
+  "settings_ai_defaultModel",
+  "settings_ai_realtimeVoice",
+  "settings_ai_maxTokensPerRequest",
+  "settings_ai_maxSessionSeconds",
+  "settings_ai_idleTimeoutSeconds",
+  "settings_ai_allowAiForNewWorkspaces",
+  "settings_communication_email_enabled",
+  "settings_communication_sms_enabled",
+  "settings_communication_default_sender_name",
+  "settings_communication_default_reply_to",
+  "settings_communication_maxOtpPerUserPerDay",
+  "settings_communication_maxEmailsPerWorkspacePerDay",
+  "settings_communication_useOwnerEmailFallback",
+  "settings_storage_default_adapter",
+  "settings_storage_uploadEnabled",
+  "settings_storage_max_upload_mb",
+  "settings_storage_maxVideoMb",
+  "settings_storage_retention_days",
+  "settings_storage_allowedTypes",
+  "settings_security_session_timeout_min",
+  "settings_security_audit_retention_days",
+  "settings_security_require_admin_2fa",
+  "settings_security_requireEmailVerification",
+  "settings_security_maxLoginAttempts",
+  "settings_security_lockoutMinutes",
+  "settings_security_requireStrongPasswords",
+  "settings_security_allowDevBypass",
+  "settings_features_ai",
+  "settings_features_sms",
+  "settings_features_email",
+  "settings_features_liveClasses",
+  "settings_features_recording",
+  "settings_features_analytics",
+  "settings_features_payments",
+  "settings_subscriptions_defaultPlan",
+  "settings_subscriptions_trialDays",
+  "settings_subscriptions_autoSuspendOnFailedPayment",
+  "settings_plan_starter_monthlyPriceEur",
+  "settings_plan_starter_maxUsers",
+  "settings_plan_starter_aiBudgetEur",
+  "settings_plan_starter_storageGb",
+  "settings_plan_professional_monthlyPriceEur",
+  "settings_plan_professional_maxUsers",
+  "settings_plan_professional_aiBudgetEur",
+  "settings_plan_professional_storageGb",
+  "settings_plan_enterprise_monthlyPriceEur",
+  "settings_plan_enterprise_maxUsers",
+  "settings_plan_enterprise_aiBudgetEur",
+  "settings_plan_enterprise_storageGb",
+  "settings_features_beta"
+];
 
 const REQUESTS_DEBOUNCE_MS = 320;
 let requestSearchTimer = null;
@@ -106,6 +245,92 @@ function formatAdminTimestamp(value) {
   return date.toLocaleString();
 }
 
+const COST_CONTROL_PROVIDER_ORDER = [
+  "openai",
+  "twilio",
+  "google_translate",
+  "ionos_email",
+  "storage",
+  "jitsi",
+  "custom"
+];
+
+function getCostProviderLabel(providerKey) {
+  const normalized = String(providerKey || "").trim().toLowerCase();
+  const fromOverview = (state.costControl.providers || []).find((row) => row.provider_key === normalized);
+  if (fromOverview?.display_name) return fromOverview.display_name;
+  const known = {
+    openai: "OpenAI",
+    twilio: "Twilio",
+    google_translate: "Google Translate",
+    ionos_email: "IONOS Email",
+    storage: "Storage",
+    jitsi: "Jitsi",
+    custom: "Custom"
+  };
+  return known[normalized] || normalized || "Provider";
+}
+
+function setCostControlFeedback(message = "", tone = "") {
+  state.costControl.feedback = { message, tone };
+  const el = $("costControlFeedback");
+  if (!el) return;
+  el.textContent = message;
+  el.className = `cost-control-feedback${tone ? ` is-${tone}` : ""}`;
+}
+
+function getAlertTone(alertType = "") {
+  const normalized = String(alertType || "").trim().toLowerCase();
+  if (normalized === "hard_limit" || normalized === "anomaly") return "failed";
+  if (normalized === "soft_limit") return "warn";
+  return "ok";
+}
+
+function getCostWorkspaceLabel(workspaceId) {
+  if (!workspaceId) return "Platform default";
+  return getWorkspaceLabelById(workspaceId);
+}
+
+function getCostLimitFor(workspaceId, providerKey, period = "monthly") {
+  const normalizedProvider = String(providerKey || "").trim().toLowerCase();
+  const normalizedPeriod = String(period || "monthly").trim().toLowerCase();
+  const rows = Array.isArray(state.costControl.limits) ? state.costControl.limits : [];
+  return rows.find((row) =>
+    String(row.provider_key || "").trim().toLowerCase() === normalizedProvider &&
+    String(row.period || "").trim().toLowerCase() === normalizedPeriod &&
+    String(row.workspace_id || "") === String(workspaceId || "")
+  ) || rows.find((row) =>
+    String(row.provider_key || "").trim().toLowerCase() === normalizedProvider &&
+    String(row.period || "").trim().toLowerCase() === normalizedPeriod &&
+    row.workspace_id == null
+  ) || null;
+}
+
+function getCostLimitStatus(limit, used = 0) {
+  if (!limit || !limit.enabled) {
+    return { label: "No limit", tone: "neutral" };
+  }
+  const hard = Number(limit.hard_limit_eur || 0);
+  const soft = Number(limit.soft_limit_eur || 0);
+  const value = Number(used || 0);
+  if (hard > 0 && value >= hard) {
+    return { label: "Hard cap reached", tone: "warn" };
+  }
+  if (soft > 0 && value >= soft) {
+    return { label: "Soft alert", tone: "failed" };
+  }
+  return { label: "Within limit", tone: "ok" };
+}
+
+function renderCostMiniList(el, rows, renderer, emptyText) {
+  if (!el) return;
+  if (!rows || !rows.length) {
+    el.innerHTML = `<div class="muted">${escapeHtml(emptyText || "No data")}</div>`;
+    return;
+  }
+  el.innerHTML = rows.map(renderer).join("");
+}
+
 const TAB_HEADERS = {
   overview: {
     title: "Overview",
@@ -123,9 +348,37 @@ const TAB_HEADERS = {
     title: "Billing",
     subtitle: "Invoices, payments and lifecycle."
   },
+  "cost-control": {
+    title: "Cost Control",
+    subtitle: "Usage governance, provider limits, alerts, and workspace cost visibility."
+  },
   settings: {
-    title: "Settings",
+    title: "Platform Control",
     subtitle: "Workspace configuration and policies."
+  },
+  operations: {
+    title: "Operations Center",
+    subtitle: "Production health, providers, uptime, backups, and failed jobs."
+  },
+  backups: {
+    title: "Backup / Restore",
+    subtitle: "Backup readiness, backup history, and restore dry-runs."
+  },
+  lifecycle: {
+    title: "Workspace Lifecycle",
+    subtitle: "Suspend, archive, transfer ownership, force logout, and reset overrides."
+  },
+  support: {
+    title: "Support Mode",
+    subtitle: "Audited read-only support impersonation sessions."
+  },
+  incidents: {
+    title: "Incident / Maintenance",
+    subtitle: "Maintenance mode, feature freeze, and incident history."
+  },
+  "data-governance": {
+    title: "Data Governance",
+    subtitle: "Retention, exports, deletion queue, legal, and DPA readiness."
   },
   secrets: {
     title: "Secrets / Integrations",
@@ -146,6 +399,18 @@ const TAB_HEADERS = {
   messages: {
     title: "Messages",
     subtitle: "Manage inbox, outgoing email, and communication settings."
+  },
+  notifications: {
+    title: "Notifications",
+    subtitle: "Platform announcements and operational notices."
+  },
+  branding: {
+    title: "Branding / Domains",
+    subtitle: "Platform identity, workspace branding, and custom domains."
+  },
+  reports: {
+    title: "Reports",
+    subtitle: "Owner-level SaaS reports and exports."
   }
 };
 
@@ -252,7 +517,7 @@ function setAiLimitsVisible(visible) {
   if (!aiLimitsPanel) return;
   aiLimitsPanel.hidden = !visible;
   if (visible) {
-    loadAiDefaultCap();
+    loadAIBudget();
   }
 }
 if (aiLimitsBtn) {
@@ -300,11 +565,212 @@ async function fetchAiBudgetDefault() {
   return response.json();
 }
 
+function setAiBudgetFeedback(message = "", tone = "") {
+  state.secrets.aiBudget.feedback = { message, tone };
+  const el = $("aiBudgetFeedback");
+  if (!el) return;
+  el.textContent = message;
+  el.classList.remove("is-success", "is-error", "is-info");
+  if (tone) el.classList.add(`is-${tone}`);
+}
+
+function setOwnerEmailFeedback(message = "", tone = "") {
+  state.secrets.ownerEmail.feedback = { message, tone };
+}
+
+function setEmailControlFeedback(message = "", tone = "") {
+  state.secrets.emailControl.feedback = { message, tone };
+}
+
+function getWorkspaceLabelById(workspaceId) {
+  const match = (Array.isArray(state.workspaces) ? state.workspaces : []).find((workspace) => workspace.id === workspaceId);
+  return match?.name || workspaceId || "Default Workspace";
+}
+
+async function refreshSecretsOwnerEmail() {
+  state.secrets.ownerEmail.loadError = "";
+  const workspaceId = getWorkspaceForAiBudget();
+  try {
+    const [ownerSettings, workspaceSettings] = await Promise.all([
+      api("/api/admin/owner-email-settings"),
+      workspaceId && workspaceId !== "all"
+        ? api(`/api/admin/workspace-email-settings/${encodeURIComponent(workspaceId)}`).catch(() => null)
+        : Promise.resolve(null)
+    ]);
+    state.secrets.ownerEmail.ownerSettings = ownerSettings || null;
+    state.secrets.ownerEmail.workspaceSettings = workspaceSettings || null;
+  } catch (error) {
+    state.secrets.ownerEmail.loadError = error.message || "Failed to load owner email settings.";
+  }
+}
+
+async function refreshSecretsEmailControl() {
+  state.secrets.emailControl.loadError = "";
+  const workspaceId = getWorkspaceForAiBudget();
+  const status = state.secrets.emailControl.filters?.status || "all";
+  const limit = state.secrets.emailControl.filters?.limit || 50;
+  const workspaceQuery = workspaceId ? `workspaceId=${encodeURIComponent(workspaceId)}` : "";
+  const joinQuery = (extra) => [workspaceQuery, extra].filter(Boolean).join("&");
+
+  try {
+    const [overview, settings, logsPayload, templatesPayload] = await Promise.all([
+      api(`/api/admin/email-control/overview${workspaceQuery ? `?${workspaceQuery}` : ""}`),
+      api(`/api/admin/email-control/settings${workspaceQuery ? `?${workspaceQuery}` : ""}`),
+      api(`/api/admin/email-control/logs?${joinQuery(`status=${encodeURIComponent(status)}&limit=${encodeURIComponent(limit)}`)}`),
+      api(`/api/admin/email-control/templates${workspaceQuery ? `?${workspaceQuery}` : ""}`)
+    ]);
+    state.secrets.emailControl.overview = overview || null;
+    state.secrets.emailControl.settings = settings || null;
+    state.secrets.emailControl.logs = Array.isArray(logsPayload?.logs) ? logsPayload.logs : [];
+    state.secrets.emailControl.templates = Array.isArray(templatesPayload?.templates) ? templatesPayload.templates : [];
+    state.secrets.emailControl.filters.workspaceId = workspaceId || "";
+  } catch (error) {
+    state.secrets.emailControl.loadError = error.message || "Failed to load Email Control Center.";
+  }
+}
+
+function renderSecretsAiBudgetCard() {
+  const mount = $("secretsAiBudgetMount");
+  if (!mount) return;
+
+  const workspaceId = getWorkspaceForAiBudget();
+  const workspaceLabel = workspaceId && workspaceId !== "all" ? workspaceId : "No workspace selected";
+  const budgetState = state.secrets.aiBudget || {};
+  const defaultBudget = budgetState.defaultBudget || {};
+  const workspaceBudget = budgetState.workspaceBudget || {};
+  const feedback = budgetState.feedback || { message: "", tone: "" };
+  const loadError = budgetState.loadError || "";
+  const effectiveLimit = Number(
+    workspaceBudget.monthly_limit_eur
+      ?? workspaceBudget.monthly_cap_eur
+      ?? defaultBudget.monthly_limit_eur
+      ?? defaultBudget.monthly_cap_eur
+      ?? 5
+  );
+  const used = Number(workspaceBudget.used_eur ?? workspaceBudget.used ?? 0);
+  const remaining = Math.max(0, effectiveLimit - used);
+  const hasWorkspaceOverride = workspaceBudget.workspace_id && workspaceBudget.workspace_id !== "all";
+  const currentDefault = Number(defaultBudget.monthly_limit_eur ?? defaultBudget.monthly_cap_eur ?? 5);
+  const currentWorkspaceCap = Number(workspaceBudget.monthly_limit_eur ?? workspaceBudget.monthly_cap_eur ?? 0);
+  const percent = effectiveLimit > 0 ? Math.min(100, (used / effectiveLimit) * 100) : 0;
+
+  mount.innerHTML = `
+    <section class="secret-card ai-budget-secret-card" aria-label="AI budget governance">
+      <div class="secret-card-head ai-budget-card-head">
+        <div>
+          <h3>AI Budget / Governance</h3>
+          <p>Budget control, usage tracking, and hard-cap enforcement for every workspace.</p>
+        </div>
+        <span class="secret-status-badge is-${used >= effectiveLimit ? "warn" : "good"}">${used >= effectiveLimit ? "Cap reached" : "Active"}</span>
+      </div>
+
+      <div class="ai-budget-summary-grid">
+        <div class="ai-budget-stat">
+          <span class="ai-budget-stat-label">Global default</span>
+          <strong>${formatEUR(currentDefault)}</strong>
+          <small>Monthly default for all schools</small>
+        </div>
+        <div class="ai-budget-stat">
+          <span class="ai-budget-stat-label">Workspace cap</span>
+          <strong>${formatEUR(effectiveLimit)}</strong>
+          <small>${hasWorkspaceOverride ? "Override active" : "Using global default"}</small>
+        </div>
+        <div class="ai-budget-stat">
+          <span class="ai-budget-stat-label">Used this month</span>
+          <strong>${formatEUR(used)}</strong>
+          <small>Tracked from AI usage ledger</small>
+        </div>
+        <div class="ai-budget-stat">
+          <span class="ai-budget-stat-label">Remaining</span>
+          <strong>${formatEUR(remaining)}</strong>
+          <small>${used >= effectiveLimit ? "New AI calls are blocked" : "Budget available"}</small>
+        </div>
+      </div>
+
+      <div class="ai-budget-progress" aria-hidden="true">
+        <span class="ai-budget-progress-bar" style="width:${percent}%"></span>
+      </div>
+
+      <div class="ai-budget-governance-list">
+        <div><i class="fa-solid fa-circle-check" aria-hidden="true"></i><span>Global AI budget is enforced across all schools.</span></div>
+        <div><i class="fa-solid fa-circle-check" aria-hidden="true"></i><span>Per-school override applies by workspace.</span></div>
+        <div><i class="fa-solid fa-circle-check" aria-hidden="true"></i><span>Usage tracking reads from <code>ai_usage_ledger</code> with ISO timestamps.</span></div>
+        <div><i class="fa-solid fa-circle-check" aria-hidden="true"></i><span>Hard limit enforcement blocks OpenAI realtime session creation when the cap is exceeded.</span></div>
+        <div><i class="fa-solid fa-circle-check" aria-hidden="true"></i><span>Cost tracking is written through <code>/api/ai/usage</code> and <code>/api/ai/runtime/end</code>.</span></div>
+      </div>
+
+      <div class="ai-budget-form-grid">
+        <div class="secret-field-row ai-budget-field-row">
+          <label for="secretsAiDefaultBudget">
+            <span>Default monthly cap</span>
+            <small>Applies to all workspaces unless overridden.</small>
+            <div class="secret-mask">Current: <code>${escapeHtml(formatEUR(currentDefault))}</code></div>
+          </label>
+          <input
+            class="input secret-field-input"
+            id="secretsAiDefaultBudget"
+            type="number"
+            min="0"
+            step="0.10"
+            value="${escapeHtml(currentDefault.toFixed(2))}"
+            placeholder="5.00"
+          />
+          <div class="secret-row-actions">
+            <button class="btn btn-primary" type="button" data-ai-budget-action="save-default">Save default</button>
+          </div>
+        </div>
+
+        <div class="secret-field-row ai-budget-field-row">
+          <label for="secretsAiWorkspaceBudget">
+            <span>Workspace override</span>
+            <small>Selected workspace: ${escapeHtml(workspaceLabel)}</small>
+            <div class="secret-mask">Current: <code>${escapeHtml(formatEUR(currentWorkspaceCap || effectiveLimit))}</code> ${hasWorkspaceOverride ? '<span class="secret-source-pill is-db">Override</span>' : '<span class="secret-source-pill is-env">Default</span>'}</div>
+          </label>
+          <input
+            class="input secret-field-input"
+            id="secretsAiWorkspaceBudget"
+            type="number"
+            min="0"
+            step="0.10"
+            value="${workspaceId && workspaceId !== "all" ? escapeHtml((currentWorkspaceCap || effectiveLimit).toFixed(2)) : ""}"
+            placeholder="${workspaceId && workspaceId !== "all" ? "1.00" : "Select a workspace first"}"
+            ${workspaceId && workspaceId !== "all" ? "" : "disabled"}
+          />
+          <div class="secret-row-actions">
+            <button class="btn btn-secondary" type="button" data-ai-budget-action="save-workspace" ${workspaceId && workspaceId !== "all" ? "" : "disabled"}>Save override</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="secret-card-warning">
+        <strong>Implementation note:</strong> cost tracking uses structured server-side usage endpoints with workspace attribution instead of ad hoc client inserts. That keeps billing and governance data consistent.
+      </div>
+
+      ${loadError ? `<div class="secret-card-status is-error">${escapeHtml(loadError)}</div>` : ""}
+      <div class="ai-budget-feedback${feedback.tone ? ` is-${feedback.tone}` : ""}" id="secretsAiBudgetFeedback">${escapeHtml(feedback.message || "")}</div>
+    </section>
+  `;
+}
+
+async function refreshSecretsAiBudget() {
+  state.secrets.aiBudget.loadError = "";
+  try {
+    const [defaultBudget, workspaceBudget] = await Promise.all([
+      fetchAiBudgetDefault(),
+      fetchAiBudgetData().catch(() => null)
+    ]);
+    state.secrets.aiBudget.defaultBudget = defaultBudget || null;
+    state.secrets.aiBudget.workspaceBudget = workspaceBudget || null;
+  } catch (error) {
+    state.secrets.aiBudget.loadError = error.message || "Failed to load AI budget controls.";
+  }
+}
+
 async function refreshAiLimitsPanel() {
   const workspaceId = getWorkspaceForAiBudget();
-  const workspaceInput = $("aiCapInput");
-  const capCur = $("aiCapCurrent");
-  const usedCur = $("aiCapUsed");
+  const workspaceInput = $("workspaceBudget");
+  const capCur = $("workspaceBudgetCurrent");
+  const usedCur = $("workspaceBudgetUsed");
 
   if (!workspaceId) return;
 
@@ -326,7 +792,7 @@ async function refreshAiLimitsPanel() {
   }
 }
 
-async function loadAiDefaultCap() {
+async function loadAIBudget() {
   const panel = $("panel-ai-limits");
   if (panel?.hasAttribute("hidden")) return;
 
@@ -350,33 +816,45 @@ async function loadAiDefaultCap() {
 
   if (!response.ok) return;
   const data = await response.json().catch(() => ({}));
-  const defaultInput = $("aiDefaultCapInput");
-  const defaultCurrent = $("aiDefaultCapCurrent");
+  const defaultInput = $("aiDefaultBudget");
+  const defaultCurrent = $("aiDefaultBudgetCurrent");
+  const defaultUpdated = $("aiDefaultBudgetUpdated");
 
-  const value = Number(data.monthly_cap_eur || 0).toFixed(2);
+  const value = Number(data.monthly_limit_eur ?? data.monthly_cap_eur ?? 5).toFixed(2);
   if (defaultInput) defaultInput.value = value;
   if (defaultCurrent) defaultCurrent.textContent = `€${value}`;
+  if (defaultUpdated) defaultUpdated.textContent = data.updated_at || "—";
+
+  await refreshAiLimitsPanel();
 }
 
-$("aiCapSaveBtn")?.addEventListener("click", async () => {
+async function saveWorkspaceBudget() {
   const workspaceId = getWorkspaceForAiBudget();
   if (!workspaceId) {
-    alert("Select a workspace first.");
-    return;
+    setAiBudgetFeedback("Select a workspace first.", "error");
+    return false;
   }
-  const input = $("aiCapInput");
+  const input = $("workspaceBudget");
   const v = Number(input?.value ?? 0);
   try {
-    await api(`/api/admin/ai-budget?workspaceId=${encodeURIComponent(workspaceId)}`, {
+    const response = await fetch(`/api/admin/ai-budget/workspace/${encodeURIComponent(workspaceId)}`, {
       method: "POST",
-      body: { workspaceId, monthly_cap_eur: Math.max(0, v) }
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ amount: Math.max(0, v) })
     });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || "Could not save workspace budget.");
+    }
     await refreshAiLimitsPanel();
-    alert("Workspace override saved.");
+    setAiBudgetFeedback("Workspace override saved.", "success");
+    return true;
   } catch (err) {
-    alert(err.message || "Could not save AI budget.");
+    setAiBudgetFeedback(err.message || "Could not save AI budget.", "error");
+    return false;
   }
-});
+}
 
 $("btnResetJson")?.addEventListener("click", async () => {
   try {
@@ -397,60 +875,69 @@ $("btnResetJson")?.addEventListener("click", async () => {
   }
 });
 
-$("aiDefaultCapSaveBtn")?.addEventListener("click", async () => {
-  const input = $("aiDefaultCapInput");
+async function saveDefaultBudget() {
+  const input = $("aiDefaultBudget");
   const value = Number(input?.value || 0);
   if (Number.isNaN(value) || value < 0) {
-    alert("Enter a non-negative amount.");
-    return;
+    setAiBudgetFeedback("Enter a non-negative amount.", "error");
+    return false;
   }
   const response = await fetch("/api/admin/ai-budget/default", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
-    body: JSON.stringify({ monthly_cap_eur: value })
+    body: JSON.stringify({ amount: value })
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    alert(data.error || "Failed to save AI budget");
-    return;
+    setAiBudgetFeedback(data.error || "Failed to save AI budget", "error");
+    return false;
   }
-  const defaultCurrent = $("aiDefaultCapCurrent");
-  const formatted = `€${Number(data.monthly_cap_eur || 0).toFixed(2)}`;
+  const defaultCurrent = $("aiDefaultBudgetCurrent");
+  const formatted = `€${Number(data.amount ?? data.monthly_limit_eur ?? data.monthly_cap_eur ?? 0).toFixed(2)}`;
   if (defaultCurrent) defaultCurrent.textContent = formatted;
-  alert("Default AI budget saved.");
-});
+  const defaultUpdated = $("aiDefaultBudgetUpdated");
+  if (defaultUpdated) defaultUpdated.textContent = data.updated_at || "just now";
+  setAiBudgetFeedback("Default budget saved.", "success");
+  return true;
+}
 
-$("aiCapResetUsageBtn")?.addEventListener("click", async () => {
-  const workspaceId = getWorkspaceForAiBudget();
-  if (!workspaceId) {
-    alert("Select a workspace first.");
-    return;
-  }
-  try {
-    await api(`/api/admin/ai-budget/reset?workspaceId=${encodeURIComponent(workspaceId)}`, {
-      method: "POST",
-      body: { workspaceId }
-    });
-    await refreshAiLimitsPanel();
-    alert("AI usage reset.");
-  } catch (err) {
-    alert(err.message || "Could not reset AI usage.");
-  }
-});
+$("aiDefaultBudgetSaveBtn")?.addEventListener("click", saveDefaultBudget);
+$("workspaceBudgetSaveBtn")?.addEventListener("click", saveWorkspaceBudget);
+
+window.loadAIBudget = loadAIBudget;
+window.saveDefaultBudget = saveDefaultBudget;
+window.saveWorkspaceBudget = saveWorkspaceBudget;
 
 refreshAiLimitsPanel();
 
 async function refreshMessages() {
-  setText("messagesInboxCount", 0);
-  setText("messagesSentCount", 0);
-  setText("messagesFailedCount", 0);
-  setText("messagesTemplateCount", 0);
-  setText("messagesTableMeta", "0 rows");
+  const workspaceId = getWorkspaceForAiBudget();
+  const workspaceQuery = workspaceId ? `workspaceId=${encodeURIComponent(workspaceId)}` : "";
+  const [overview, logsPayload] = await Promise.all([
+    api(`/api/admin/email-control/overview${workspaceQuery ? `?${workspaceQuery}` : ""}`).catch(() => null),
+    api(`/api/admin/email-control/logs?${[workspaceQuery, "status=all", "limit=12"].filter(Boolean).join("&")}`).catch(() => ({ logs: [] }))
+  ]);
+  setText("messagesInboxCount", overview?.inboxCount ?? 0);
+  setText("messagesSentCount", overview?.sentCount ?? 0);
+  setText("messagesFailedCount", overview?.failedCount ?? 0);
+  setText("messagesTemplateCount", overview?.templatesCount ?? 0);
+  const logs = Array.isArray(logsPayload?.logs) ? logsPayload.logs : [];
+  setText("messagesTableMeta", `${logs.length} rows`);
 
   const table = $("messagesActivityTable");
   if (table) {
-    table.innerHTML = `<div class="muted" style="padding:14px;">No message activity loaded yet.</div>`;
+    renderTable(table, {
+      columns: [
+        { label: "Time", key: "createdAt", width: "170px", render: (row) => escapeHtml(formatAdminTimestamp(row.createdAt)) },
+        { label: "Workspace", key: "workspaceName", width: "160px", render: (row) => escapeHtml(row.workspaceName || row.workspaceId || "Workspace") },
+        { label: "Direction", key: "direction", width: "100px", align: "center", render: (row) => escapeHtml(row.direction || "outbound") },
+        { label: "Subject", key: "subject", render: (row) => escapeHtml(row.subject || "—") },
+        { label: "Status", key: "status", width: "120px", align: "center", render: (row) => `<span class="secret-status-badge is-${row.status === "failed" ? "failed" : row.status === "sent" ? "ok" : "warn"}">${escapeHtml(row.status || "—")}</span>` }
+      ],
+      rows: logs,
+      emptyText: "No message activity loaded yet."
+    });
   }
 }
 
@@ -492,21 +979,266 @@ function getProviderScopedWarning(provider) {
   return 'File path credentials are deprecated for production. Use GOOGLE_TRANSLATE_KEY_JSON.';
 }
 
+function getEmailControlStatusBadge() {
+  const overview = state.secrets.emailControl.overview || {};
+  const alertCount = Array.isArray(overview.activeAlerts) ? overview.activeAlerts.length : 0;
+  if (alertCount > 0) return { label: `${alertCount} alerts`, tone: "warn" };
+  const providerTone = overview.providerStatus?.tone || "good";
+  return {
+    label: overview.providerStatus?.label || "Ready",
+    tone: providerTone === "failed" ? "failed" : providerTone === "warn" ? "warn" : "good"
+  };
+}
+
+function renderEmailControlTabs(activeTab) {
+  const tabs = [
+    ["overview", "Overview"],
+    ["operations", "Operations"],
+    ["configuration", "Configuration"]
+  ];
+  return tabs.map(([key, label]) => `
+    <button
+      class="email-control-tab${activeTab === key ? " is-active" : ""}"
+      type="button"
+      data-email-control-tab="${key}"
+    >${escapeHtml(label)}</button>
+  `).join("");
+}
+
+function renderEmailControlOverviewTab(emailControl) {
+  const overview = emailControl.overview || {};
+  const alerts = Array.isArray(overview.activeAlerts) ? overview.activeAlerts : [];
+  const providerStatus = overview.providerStatus || { label: "Unknown", tone: "neutral" };
+  const topProviders = [
+    { label: "Inbox", value: String(overview.inboxCount ?? 0), meta: "Inbound messages" },
+    { label: "Sent", value: String(overview.sentCount ?? 0), meta: "Outbound delivered" },
+    { label: "Failed", value: String(overview.failedCount ?? 0), meta: "Need review" },
+    { label: "Templates", value: String(overview.templatesCount ?? 0), meta: "Saved templates" },
+    { label: "Success rate", value: `${Number(overview.successRate ?? 0)}%`, meta: "Sent vs failed" },
+    { label: "Provider", value: providerStatus.label || "Unknown", meta: "Current delivery provider" }
+  ];
+  return `
+    <section class="email-control-tab-panel">
+      <div class="email-control-stat-grid">
+        ${topProviders.map((item) => `
+          <div class="email-control-stat-card">
+            <span>${escapeHtml(item.label)}</span>
+            <strong>${escapeHtml(item.value)}</strong>
+            <small>${escapeHtml(item.meta)}</small>
+          </div>
+        `).join("")}
+      </div>
+      <div class="email-control-overview-grid">
+        <div class="email-control-panel-card">
+          <h4>Last activity</h4>
+          <div class="email-control-meta-list">
+            <div><span>Last sent</span><strong>${escapeHtml(formatAdminTimestamp(overview.lastSentAt))}</strong></div>
+            <div><span>Last failed</span><strong>${escapeHtml(formatAdminTimestamp(overview.lastFailedAt))}</strong></div>
+            <div><span>Provider status</span><strong class="email-control-tone-${escapeHtml(providerStatus.tone || "neutral")}">${escapeHtml(providerStatus.label || "Unknown")}</strong></div>
+          </div>
+        </div>
+        <div class="email-control-panel-card">
+          <h4>Active alerts</h4>
+          <div class="email-control-alert-list">
+            ${alerts.length ? alerts.map((alert) => `
+              <div class="email-control-alert-item is-${escapeHtml(alert.tone || "warn")}">
+                <i class="fa-solid ${alert.tone === "failed" ? "fa-triangle-exclamation" : "fa-circle-info"}" aria-hidden="true"></i>
+                <span>${escapeHtml(alert.message || "")}</span>
+              </div>
+            `).join("") : `<div class="muted">No active alerts.</div>`}
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderEmailControlOperationsTab(emailControl) {
+  const filters = emailControl.filters || {};
+  const logs = Array.isArray(emailControl.logs) ? emailControl.logs : [];
+  const templates = Array.isArray(emailControl.templates) ? emailControl.templates : [];
+  const logTable = buildTableHtml({
+    columns: [
+      { label: "Time", key: "createdAt", width: "170px", render: (row) => escapeHtml(formatAdminTimestamp(row.createdAt)) },
+      { label: "Workspace", key: "workspaceName", width: "160px", render: (row) => `<div style="font-weight:700">${escapeHtml(row.workspaceName || row.workspaceId || "Workspace")}</div><div class="muted" style="font-size:12px">${escapeHtml(row.workspaceId || "")}</div>` },
+      { label: "Direction", key: "direction", width: "90px", render: (row) => escapeHtml(row.direction || "outbound"), align: "center" },
+      { label: "To / From", key: "toEmail", width: "220px", render: (row) => `<div>${escapeHtml(row.toEmail || "—")}</div><div class="muted" style="font-size:12px">${escapeHtml(row.fromEmail || "")}</div>` },
+      { label: "Subject", key: "subject", render: (row) => escapeHtml(row.subject || "—") },
+      { label: "Status", key: "status", width: "110px", align: "center", render: (row) => `<span class="secret-status-badge is-${row.status === "failed" ? "failed" : row.status === "sent" ? "ok" : "warn"}">${escapeHtml(row.status || "—")}</span>` },
+      { label: "Provider", key: "providerKey", width: "120px", align: "center", render: (row) => escapeHtml(getCostProviderLabel(row.providerKey || "")) },
+      { label: "Error", key: "errorMessage", width: "170px", render: (row) => escapeHtml(row.errorMessage || "—") },
+      {
+        label: "Action",
+        key: "_action",
+        width: "120px",
+        align: "center",
+        render: (row) => row.retryable
+          ? `<button class="btn btn-ghost" type="button" data-email-control-action="retry-log" data-log-id="${escapeHtml(row.id)}">Retry</button>`
+          : `<button class="btn btn-ghost" type="button" disabled>Retry</button>`
+      }
+    ],
+    rows: logs,
+    emptyText: "No delivery logs recorded."
+  });
+  const templateTable = buildTableHtml({
+    columns: [
+      { label: "Workspace", key: "workspaceName", width: "180px", render: (row) => escapeHtml(row.workspaceName || row.workspaceId || "Workspace") },
+      { label: "Template", key: "templateKey", width: "180px", render: (row) => escapeHtml(row.templateKey || "template") },
+      { label: "Subject", key: "subject", render: (row) => escapeHtml(row.subject || "—") },
+      { label: "Status", key: "enabled", width: "110px", align: "center", render: (row) => `<span class="secret-status-badge is-${row.enabled ? "ok" : "warn"}">${row.enabled ? "Enabled" : "Disabled"}</span>` },
+      { label: "Updated", key: "updatedAt", width: "160px", render: (row) => escapeHtml(formatAdminTimestamp(row.updatedAt)) }
+    ],
+    rows: templates,
+    emptyText: "No templates available."
+  });
+  return `
+    <section class="email-control-tab-panel">
+      <div class="email-control-toolbar">
+        <select class="input secret-field-input" id="emailControlWorkspaceFilter" data-email-control-filter="workspace">
+          <option value="">All workspaces</option>
+          ${(Array.isArray(state.workspaces) ? state.workspaces : []).map((workspace) => `
+            <option value="${escapeHtml(workspace.id)}" ${filters.workspaceId === workspace.id ? "selected" : ""}>${escapeHtml(workspace.name || workspace.id)}</option>
+          `).join("")}
+        </select>
+        <select class="input secret-field-input" id="emailControlStatusFilter" data-email-control-filter="status">
+          ${["all", "sent", "failed", "pending", "inbound", "outbound"].map((value) => `
+            <option value="${value}" ${filters.status === value ? "selected" : ""}>${escapeHtml(value)}</option>
+          `).join("")}
+        </select>
+        <div class="email-control-quick-links">
+          <button class="btn btn-ghost" type="button" data-email-control-action="show-failed">Failed mail</button>
+          <button class="btn btn-ghost" type="button" data-email-control-action="open-configuration">Email settings</button>
+        </div>
+      </div>
+      <div class="email-control-panel-card">
+        <h4>Delivery logs / message activity</h4>
+        <div class="table">${logTable}</div>
+      </div>
+      <div class="email-control-panel-card">
+        <h4>Templates</h4>
+        <div class="table">${templateTable}</div>
+      </div>
+    </section>
+  `;
+}
+
+function renderEmailControlConfigurationTab(emailControl) {
+  const settings = emailControl.settings || {};
+  const owner = settings.ownerSettings || {};
+  const workspace = settings.workspaceSettings || {};
+  const effective = settings.effectiveSender || {};
+  const lastTest = settings.lastTestResult || null;
+  const workspaceId = getWorkspaceForAiBudget();
+  const workspaceLabel = workspaceId ? getWorkspaceLabelById(workspaceId) : "No workspace selected";
+  return `
+    <section class="email-control-tab-panel">
+      <div class="email-control-preview-card">
+        <div>
+          <strong>Current effective sender</strong>
+          <div class="muted">${escapeHtml(effective.senderName || "Not configured")} • ${escapeHtml(effective.fromEmail || "No email")}</div>
+          <div class="muted">${escapeHtml(settings.helperText || "")}</div>
+        </div>
+        <div class="email-control-preview-badges">
+          <span class="secret-status-badge is-${effective.mode === "workspace" ? "ok" : "warn"}">${escapeHtml(effective.mode === "workspace" ? "Workspace override" : "Owner fallback")}</span>
+        </div>
+      </div>
+      <div class="ai-budget-form-grid">
+        <div class="secret-field-row ai-budget-field-row owner-email-block">
+          <label class="owner-email-section-title" for="emailControlOwnerName">
+            <span>Owner Email</span>
+            <small>Main platform email identity.</small>
+          </label>
+          <label class="toggle owner-email-toggle">
+            <input id="emailControlOwnerEnabled" type="checkbox" ${owner.owner_enabled ? "checked" : ""} />
+            <span>Enabled</span>
+          </label>
+          <input class="input secret-field-input" id="emailControlOwnerName" value="${escapeHtml(owner.owner_name || "Platform Owner")}" placeholder="Platform Owner" />
+          <input class="input secret-field-input" id="emailControlOwnerEmail" type="email" value="${escapeHtml(owner.owner_email || "")}" placeholder="owner@example.com" />
+          <input class="input secret-field-input" id="emailControlOwnerPrefix" value="${escapeHtml(owner.owner_subject_prefix || "[StudiesTalk Owner]")}" placeholder="[StudiesTalk Owner]" />
+          <textarea class="input secret-field-input" id="emailControlOwnerSignature" rows="4" placeholder="Kind regards,&#10;Platform Owner">${escapeHtml(owner.owner_signature || "")}</textarea>
+          <div class="secret-row-actions owner-email-actions">
+            <button class="btn btn-primary" type="button" data-email-control-action="save-owner">Save owner email</button>
+          </div>
+        </div>
+        <div class="secret-field-row ai-budget-field-row owner-email-block">
+          <label class="owner-email-section-title" for="emailControlWorkspaceEmail">
+            <span>Workspace Email</span>
+            <small>Selected workspace: ${escapeHtml(workspaceLabel)}</small>
+          </label>
+          <select class="input secret-field-input" id="emailControlConfigurationWorkspace" data-email-control-filter="workspace">
+            <option value="">Select workspace</option>
+            ${(Array.isArray(state.workspaces) ? state.workspaces : []).map((entry) => `
+              <option value="${escapeHtml(entry.id)}" ${workspaceId === entry.id ? "selected" : ""}>${escapeHtml(entry.name || entry.id)}</option>
+            `).join("")}
+          </select>
+          <label class="toggle owner-email-toggle">
+            <input id="emailControlWorkspaceEnabled" type="checkbox" ${workspace.workspace_email_enabled ? "checked" : ""} ${workspaceId ? "" : "disabled"} />
+            <span>Enable workspace email</span>
+          </label>
+          <input class="input secret-field-input" id="emailControlWorkspaceEmail" type="email" value="${escapeHtml(workspace.workspace_email || "")}" placeholder="school-admin@example.com" ${workspaceId ? "" : "disabled"} />
+          <input class="input secret-field-input" id="emailControlWorkspaceSender" value="${escapeHtml(workspace.workspace_sender_name || workspaceLabel)}" placeholder="School sender name" ${workspaceId ? "" : "disabled"} />
+          <input class="input secret-field-input" id="emailControlWorkspacePrefix" value="${escapeHtml(workspace.workspace_subject_prefix || "[School]")}" placeholder="[School]" ${workspaceId ? "" : "disabled"} />
+          <textarea class="input secret-field-input" id="emailControlWorkspaceSignature" rows="4" placeholder="Signature / footer" ${workspaceId ? "" : "disabled"}>${escapeHtml(workspace.workspace_signature || "")}</textarea>
+          <label class="toggle owner-email-toggle">
+            <input id="emailControlWorkspaceFallback" type="checkbox" ${workspace.use_owner_fallback ? "checked" : ""} ${workspaceId ? "" : "disabled"} />
+            <span>Use owner fallback</span>
+          </label>
+          <div class="secret-row-actions owner-email-actions">
+            <button class="btn btn-primary" type="button" data-email-control-action="save-workspace" ${workspaceId ? "" : "disabled"}>Save workspace email</button>
+          </div>
+        </div>
+      </div>
+      <div class="secret-field-row ai-budget-field-row owner-email-block owner-email-block--test">
+        <label class="owner-email-section-title" for="emailControlTestTo">
+          <span>Send Test Email</span>
+          <small>Owner fallback vs workspace override is applied based on the selected mode.</small>
+        </label>
+        <select class="input secret-field-input" id="emailControlTestMode">
+          <option value="owner">Owner</option>
+          <option value="workspace" ${workspaceId ? "" : "disabled"}>Selected workspace</option>
+        </select>
+        <input class="input secret-field-input" id="emailControlTestTo" type="email" placeholder="recipient@example.com" />
+        <input class="input secret-field-input" id="emailControlTestSubject" placeholder="Test subject" />
+        <textarea class="input secret-field-input" id="emailControlTestMessage" rows="4" placeholder="Write a test message..."></textarea>
+        <div class="secret-row-actions owner-email-actions">
+          <button class="btn btn-secondary" type="button" data-email-control-action="send-test">Send test</button>
+          ${lastTest ? `<button class="btn btn-ghost" type="button" data-email-control-action="open-operations">Delivery logs</button>` : ""}
+        </div>
+        <div class="email-control-last-test">
+          <strong>Last test result</strong>
+          <span>${lastTest ? `${escapeHtml(formatAdminTimestamp(lastTest.createdAt))} • ${escapeHtml(lastTest.status || "sent")} • ${escapeHtml(lastTest.toEmail || "")}` : "No test email sent yet."}</span>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
 function ensureActiveSecretProvider(providers) {
   const list = Array.isArray(providers) ? providers : [];
-  if (!list.length) {
-    state.secrets.activeProvider = "";
-    return null;
-  }
   const current = String(state.secrets.activeProvider || "").trim();
+  if (current === "email-control" || current === "owner-email") {
+    if (current === "owner-email") {
+      state.secrets.emailControl.activeTab = "configuration";
+      state.secrets.activeProvider = "email-control";
+    }
+    return { provider: "email-control", label: "Email Control Center", secrets: [] };
+  }
+  if (current === "ai-budget") {
+    return { provider: "ai-budget", label: "AI Budget / Governance", secrets: [] };
+  }
+  if (!list.length) {
+    state.secrets.activeProvider = "email-control";
+    return { provider: "email-control", label: "Email Control Center", secrets: [] };
+  }
   const matched = list.find((provider) => String(provider.provider || "") === current);
   if (matched) return matched;
-  state.secrets.activeProvider = String(list[0].provider || "");
-  return list[0];
+  state.secrets.activeProvider = "email-control";
+  return { provider: "email-control", label: "Email Control Center", secrets: [] };
 }
 
 function renderSecretsPanel() {
   const grid = $("secretProviderGrid");
+  const aiBudgetMount = $("secretsAiBudgetMount");
   const warning = $("secretsMasterWarning");
   const envBadge = $("secretsEnvironmentBadge");
   if (!grid) return;
@@ -517,41 +1249,310 @@ function renderSecretsPanel() {
   if (warning) {
     warning.hidden = !!state.secrets.enabled;
   }
-
-  const providers = Array.isArray(state.secrets.providers) ? state.secrets.providers : [];
-  if (!providers.length) {
-    grid.innerHTML = `<div class="card"><div class="muted" style="padding:16px;">No secrets data available.</div></div>`;
-    return;
+  if (aiBudgetMount) {
+    aiBudgetMount.innerHTML = "";
   }
 
+  const providers = Array.isArray(state.secrets.providers) ? state.secrets.providers : [];
   const activeProvider = ensureActiveSecretProvider(providers);
-  const listMarkup = providers.map((provider) => {
-    const badge = getSecretProviderBadge(provider);
-    const isActive = activeProvider && provider.provider === activeProvider.provider;
-    const configuredCount = Array.isArray(provider.secrets)
-      ? provider.secrets.filter((field) => field.enabled || field.source === "env" || field.source === "db").length
-      : 0;
+  const aiBudgetState = state.secrets.aiBudget || {};
+  const ownerEmailState = state.secrets.ownerEmail || {};
+  const emailControlState = state.secrets.emailControl || {};
+  const aiBudgetLimit = Number(
+    aiBudgetState.workspaceBudget?.monthly_limit_eur
+      ?? aiBudgetState.workspaceBudget?.monthly_cap_eur
+      ?? aiBudgetState.defaultBudget?.monthly_limit_eur
+      ?? aiBudgetState.defaultBudget?.monthly_cap_eur
+      ?? 5
+  );
+  const aiBudgetUsed = Number(aiBudgetState.workspaceBudget?.used_eur ?? 0);
+  const providerOrder = ["openai", "twilio", "email", "google", "jitsi", "storage", "analytics"];
+  const orderedProviders = [...providers].sort((a, b) => {
+    const aIndex = providerOrder.indexOf(String(a.provider || ""));
+    const bIndex = providerOrder.indexOf(String(b.provider || ""));
+    return (aIndex === -1 ? 999 : aIndex) - (bIndex === -1 ? 999 : bIndex);
+  });
+  const emailControlBadge = getEmailControlStatusBadge();
+  const listMarkup = [
+    {
+      provider: "email-control",
+      label: "Email Control Center",
+      meta: "3 tabs",
+      badge: emailControlBadge
+    },
+    {
+      provider: "ai-budget",
+      label: "AI Budget / Governance",
+      meta: "5 controls",
+      badge: {
+        label: aiBudgetUsed >= aiBudgetLimit ? "Cap reached" : "Active",
+        tone: aiBudgetUsed >= aiBudgetLimit ? "warn" : "good"
+      }
+    },
+    ...orderedProviders.map((provider) => {
+      const badge = getSecretProviderBadge(provider);
+      const configuredCount = Array.isArray(provider.secrets)
+        ? provider.secrets.filter((field) => field.enabled || field.source === "env" || field.source === "db").length
+        : 0;
+      return {
+        provider: provider.provider,
+        label: provider.label || provider.provider,
+        meta: `${configuredCount} fields`,
+        badge
+      };
+    })
+  ].map((item) => {
+    const isActive = activeProvider && item.provider === activeProvider.provider;
     return `
       <button
         class="secret-provider-nav${isActive ? " is-active" : ""}"
         type="button"
-        data-secret-nav="${escapeHtml(provider.provider)}"
+        data-secret-nav="${escapeHtml(item.provider)}"
         aria-pressed="${isActive ? "true" : "false"}"
       >
         <span class="secret-provider-nav-copy">
-          <span class="secret-provider-nav-title">${escapeHtml(provider.label || provider.provider)}</span>
-          <span class="secret-provider-nav-meta">${configuredCount} fields</span>
+          <span class="secret-provider-nav-title">${escapeHtml(item.label)}</span>
+          <span class="secret-provider-nav-meta">${escapeHtml(item.meta)}</span>
         </span>
-        <span class="secret-status-badge is-${badge.tone}">${escapeHtml(badge.label)}</span>
+        <span class="secret-status-badge is-${item.badge.tone}">${escapeHtml(item.badge.label)}</span>
       </button>
     `;
   }).join("");
 
   let detailMarkup = "";
-  if (activeProvider) {
-    const badge = getSecretProviderBadge(activeProvider);
-    const status = getSecretStatusState(activeProvider.provider);
-    const fieldRows = (activeProvider.secrets || []).map((field) => {
+  if (activeProvider?.provider === "email-control") {
+    detailMarkup = `
+      <section class="secret-card ai-budget-secret-card email-control-shell" aria-label="Email Control Center">
+        <div class="secret-card-head ai-budget-card-head">
+          <div>
+            <h3>Email Control Center</h3>
+            <p>Operational email usage, sender behavior, logs, templates, and test sending.</p>
+          </div>
+          <span class="secret-status-badge is-${emailControlBadge.tone}">${escapeHtml(emailControlBadge.label)}</span>
+        </div>
+        <div class="email-control-tabs" role="tablist" aria-label="Email Control Center tabs">
+          ${renderEmailControlTabs(emailControlState.activeTab || "overview")}
+        </div>
+        ${emailControlState.loadError ? `<div class="secret-card-status is-error">${escapeHtml(emailControlState.loadError)}</div>` : ""}
+        ${emailControlState.activeTab === "operations"
+          ? renderEmailControlOperationsTab(emailControlState)
+          : emailControlState.activeTab === "configuration"
+            ? renderEmailControlConfigurationTab(emailControlState)
+            : renderEmailControlOverviewTab(emailControlState)}
+        <div class="ai-budget-feedback${emailControlState.feedback?.tone ? ` is-${emailControlState.feedback.tone}` : ""}" id="emailControlFeedbackInline">${escapeHtml(emailControlState.feedback?.message || "")}</div>
+      </section>
+    `;
+  } else if (activeProvider?.provider === "ai-budget") {
+    const workspaceId = getWorkspaceForAiBudget();
+    const workspaceLabel = workspaceId && workspaceId !== "all" ? workspaceId : "No workspace selected";
+    const budgetState = state.secrets.aiBudget || {};
+    const defaultBudget = budgetState.defaultBudget || {};
+    const workspaceBudget = budgetState.workspaceBudget || {};
+    const feedback = budgetState.feedback || { message: "", tone: "" };
+    const loadError = budgetState.loadError || "";
+    const effectiveLimit = Number(
+      workspaceBudget.monthly_limit_eur
+        ?? workspaceBudget.monthly_cap_eur
+        ?? defaultBudget.monthly_limit_eur
+        ?? defaultBudget.monthly_cap_eur
+        ?? 5
+    );
+    const used = Number(workspaceBudget.used_eur ?? workspaceBudget.used ?? 0);
+    const remaining = Math.max(0, effectiveLimit - used);
+    const hasWorkspaceOverride = workspaceBudget.workspace_id && workspaceBudget.workspace_id !== "all";
+    const currentDefault = Number(defaultBudget.monthly_limit_eur ?? defaultBudget.monthly_cap_eur ?? 5);
+    const currentWorkspaceCap = Number(workspaceBudget.monthly_limit_eur ?? workspaceBudget.monthly_cap_eur ?? 0);
+    const percent = effectiveLimit > 0 ? Math.min(100, (used / effectiveLimit) * 100) : 0;
+
+    detailMarkup = `
+      <section class="secret-card ai-budget-secret-card" aria-label="AI budget governance">
+        <div class="secret-card-head ai-budget-card-head">
+          <div>
+            <h3>AI Budget / Governance</h3>
+            <p>Budget control, usage tracking, and hard-cap enforcement for every workspace.</p>
+          </div>
+          <span class="secret-status-badge is-${used >= effectiveLimit ? "warn" : "good"}">${used >= effectiveLimit ? "Cap reached" : "Active"}</span>
+        </div>
+
+        <div class="ai-budget-summary-grid">
+          <div class="ai-budget-stat">
+            <span class="ai-budget-stat-label">Global default</span>
+            <strong>${formatEUR(currentDefault)}</strong>
+            <small>Monthly default for all schools</small>
+          </div>
+          <div class="ai-budget-stat">
+            <span class="ai-budget-stat-label">Workspace cap</span>
+            <strong>${formatEUR(effectiveLimit)}</strong>
+            <small>${hasWorkspaceOverride ? "Override active" : "Using global default"}</small>
+          </div>
+          <div class="ai-budget-stat">
+            <span class="ai-budget-stat-label">Used this month</span>
+            <strong>${formatEUR(used)}</strong>
+            <small>Tracked from AI usage ledger</small>
+          </div>
+          <div class="ai-budget-stat">
+            <span class="ai-budget-stat-label">Remaining</span>
+            <strong>${formatEUR(remaining)}</strong>
+            <small>${used >= effectiveLimit ? "New AI calls are blocked" : "Budget available"}</small>
+          </div>
+        </div>
+
+        <div class="ai-budget-progress" aria-hidden="true">
+          <span class="ai-budget-progress-bar" style="width:${percent}%"></span>
+        </div>
+
+        <div class="ai-budget-governance-list">
+          <div><i class="fa-solid fa-circle-check" aria-hidden="true"></i><span>Global AI budget is enforced across all schools.</span></div>
+          <div><i class="fa-solid fa-circle-check" aria-hidden="true"></i><span>Per-school override applies by workspace.</span></div>
+          <div><i class="fa-solid fa-circle-check" aria-hidden="true"></i><span>Usage tracking reads from <code>ai_usage_ledger</code> with ISO timestamps.</span></div>
+          <div><i class="fa-solid fa-circle-check" aria-hidden="true"></i><span>Hard limit enforcement blocks OpenAI realtime session creation when the cap is exceeded.</span></div>
+          <div><i class="fa-solid fa-circle-check" aria-hidden="true"></i><span>Cost tracking is written through <code>/api/ai/usage</code> and <code>/api/ai/runtime/end</code>.</span></div>
+        </div>
+
+        <div class="ai-budget-form-grid">
+          <div class="secret-field-row ai-budget-field-row">
+            <label for="secretsAiDefaultBudget">
+              <span>Default monthly cap</span>
+              <small>Applies to all workspaces unless overridden.</small>
+              <div class="secret-mask">Current: <code>${escapeHtml(formatEUR(currentDefault))}</code></div>
+            </label>
+            <input
+              class="input secret-field-input"
+              id="secretsAiDefaultBudget"
+              type="number"
+              min="0"
+              step="0.10"
+              value="${escapeHtml(currentDefault.toFixed(2))}"
+              placeholder="5.00"
+            />
+            <div class="secret-row-actions">
+              <button class="btn btn-primary" type="button" data-ai-budget-action="save-default">Save default</button>
+            </div>
+          </div>
+
+          <div class="secret-field-row ai-budget-field-row">
+            <label for="secretsAiWorkspaceBudget">
+              <span>Workspace override</span>
+              <small>Selected workspace: ${escapeHtml(workspaceLabel)}</small>
+              <div class="secret-mask">Current: <code>${escapeHtml(formatEUR(currentWorkspaceCap || effectiveLimit))}</code> ${hasWorkspaceOverride ? '<span class="secret-source-pill is-db">Override</span>' : '<span class="secret-source-pill is-env">Default</span>'}</div>
+            </label>
+            <input
+              class="input secret-field-input"
+              id="secretsAiWorkspaceBudget"
+              type="number"
+              min="0"
+              step="0.10"
+              value="${workspaceId && workspaceId !== "all" ? escapeHtml((currentWorkspaceCap || effectiveLimit).toFixed(2)) : ""}"
+              placeholder="${workspaceId && workspaceId !== "all" ? "1.00" : "Select a workspace first"}"
+              ${workspaceId && workspaceId !== "all" ? "" : "disabled"}
+            />
+            <div class="secret-row-actions">
+              <button class="btn btn-secondary" type="button" data-ai-budget-action="save-workspace" ${workspaceId && workspaceId !== "all" ? "" : "disabled"}>Save override</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="secret-card-warning">
+          <strong>Implementation note:</strong> cost tracking uses structured server-side usage endpoints with workspace attribution instead of ad hoc client inserts. That keeps billing and governance data consistent.
+        </div>
+
+        ${loadError ? `<div class="secret-card-status is-error">${escapeHtml(loadError)}</div>` : ""}
+        <div class="ai-budget-feedback${feedback.tone ? ` is-${feedback.tone}` : ""}" id="secretsAiBudgetFeedback">${escapeHtml(feedback.message || "")}</div>
+      </section>
+    `;
+  } else if (activeProvider?.provider === "owner-email") {
+    const workspaceId = getWorkspaceForAiBudget();
+    const workspaceLabel = workspaceId && workspaceId !== "all" ? getWorkspaceLabelById(workspaceId) : "Default Workspace";
+    const ownerState = state.secrets.ownerEmail || {};
+    const ownerSettings = ownerState.ownerSettings || {};
+    const workspaceSettings = ownerState.workspaceSettings || {};
+    const feedback = ownerState.feedback || { message: "", tone: "" };
+    const loadError = ownerState.loadError || "";
+    const ownerEnabled = !!ownerSettings.enabled;
+    const workspaceEnabled = !!workspaceSettings.enabled;
+
+    detailMarkup = `
+      <section class="secret-card ai-budget-secret-card owner-email-detail-card" aria-label="Owner email setup">
+        <div class="secret-card-head ai-budget-card-head">
+          <div>
+            <h3>Owner Email Setup</h3>
+            <p>Manage system-wide and workspace email behavior.</p>
+          </div>
+          <span class="secret-status-badge is-${ownerEnabled ? "good" : "warn"}">${ownerEnabled ? "Enabled" : "Needs setup"}</span>
+        </div>
+
+        <div class="ai-budget-form-grid">
+          <div class="secret-field-row ai-budget-field-row owner-email-block">
+            <label class="owner-email-section-title" for="ownerEmailDisplayNameInline">
+              <span>Owner Email</span>
+              <small>Main platform email identity</small>
+              <div class="secret-mask">Current: <code>${escapeHtml(ownerSettings.owner_email || "owner@example.com")}</code></div>
+            </label>
+            <label class="toggle owner-email-toggle">
+              <input id="ownerEmailEnabledInline" type="checkbox" ${ownerEnabled ? "checked" : ""} />
+              <span>Enabled</span>
+            </label>
+            <input class="input secret-field-input" id="ownerEmailDisplayNameInline" value="${escapeHtml(ownerSettings.display_name || "Platform Owner")}" placeholder="Platform Owner" />
+            <input class="input secret-field-input" id="ownerEmailAddressInline" type="email" value="${escapeHtml(ownerSettings.owner_email || "")}" placeholder="owner@example.com" />
+            <input class="input secret-field-input" id="ownerEmailSubjectPrefixInline" value="${escapeHtml(ownerSettings.subject_prefix || "[StudiesTalk Owner]")}" placeholder="[StudiesTalk Owner]" />
+            <textarea class="input secret-field-input" id="ownerEmailFooterInline" rows="4" placeholder="Kind regards,&#10;Platform Owner">${escapeHtml(ownerSettings.footer_text || "")}</textarea>
+            <div class="secret-row-actions owner-email-actions">
+              <button class="btn btn-primary" type="button" data-owner-email-action="save-owner">Save owner email</button>
+            </div>
+          </div>
+
+          <div class="secret-field-row ai-budget-field-row owner-email-block">
+            <label class="owner-email-section-title" for="workspaceEmailBrandInline">
+              <span>Workspace Email</span>
+              <small>Override email per school</small>
+              <div class="secret-mask">Current: <code>${escapeHtml(workspaceLabel)}</code> ${workspaceId && workspaceId !== "all" ? '<span class="secret-source-pill is-db">Workspace</span>' : '<span class="secret-source-pill is-env">Select workspace</span>'}</div>
+            </label>
+            <label class="toggle owner-email-toggle">
+              <input id="workspaceEmailEnabledInline" type="checkbox" ${workspaceEnabled ? "checked" : ""} ${workspaceId && workspaceId !== "all" ? "" : "disabled"} />
+              <span>Enable workspace email</span>
+            </label>
+            <input class="input secret-field-input" id="workspaceEmailBrandInline" value="${escapeHtml(workspaceSettings.brand_school_name || workspaceLabel)}" placeholder="Default Workspace" ${workspaceId && workspaceId !== "all" ? "" : "disabled"} />
+            <div class="secret-inline-actions">
+              <input class="input secret-field-input" id="workspaceEmailReplyToInline" type="email" value="${escapeHtml(workspaceSettings.reply_to_email || "")}" placeholder="school-admin@example.com" ${workspaceId && workspaceId !== "all" ? "" : "disabled"} />
+              <button class="btn btn-ghost" type="button" data-owner-email-action="use-owner" ${workspaceId && workspaceId !== "all" ? "" : "disabled"}>Use owner</button>
+            </div>
+            <input class="input secret-field-input" id="workspaceEmailSubjectPrefixInline" value="${escapeHtml(workspaceSettings.subject_prefix || "[School]")}" placeholder="[School]" ${workspaceId && workspaceId !== "all" ? "" : "disabled"} />
+            <textarea class="input secret-field-input" id="workspaceEmailFooterInline" rows="4" placeholder="Signature / footer" ${workspaceId && workspaceId !== "all" ? "" : "disabled"}>${escapeHtml(workspaceSettings.footer_text || "")}</textarea>
+            <div class="secret-row-actions owner-email-actions">
+              <button class="btn btn-primary" type="button" data-owner-email-action="save-workspace" ${workspaceId && workspaceId !== "all" ? "" : "disabled"}>Save workspace email</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="secret-field-row ai-budget-field-row owner-email-block owner-email-block--test">
+          <label class="owner-email-section-title" for="ownerEmailTestToInline">
+            <span>Send Test Email</span>
+            <small>Use the effective owner or workspace identity to validate delivery.</small>
+          </label>
+          <input class="input secret-field-input" id="ownerEmailTestToInline" type="email" placeholder="recipient@example.com" />
+          <input class="input secret-field-input" id="ownerEmailTestSubjectInline" placeholder="Test subject" />
+          <select class="input secret-field-input" id="ownerEmailTestScopeInline">
+            <option value="owner">Owner email</option>
+            <option value="workspace">Workspace email</option>
+          </select>
+          <textarea class="input secret-field-input" id="ownerEmailTestBodyInline" rows="4" placeholder="Write a test message..."></textarea>
+          <div class="secret-row-actions owner-email-actions">
+            <button class="btn btn-secondary" type="button" data-owner-email-action="send-test">Send test</button>
+          </div>
+        </div>
+
+        ${loadError ? `<div class="secret-card-status is-error">${escapeHtml(loadError)}</div>` : ""}
+        <div class="ai-budget-feedback${feedback.tone ? ` is-${feedback.tone}` : ""}" id="ownerEmailStatusInline">${escapeHtml(feedback.message || "")}</div>
+      </section>
+    `;
+  } else if (activeProvider) {
+    const resolvedProvider = providers.find((provider) => provider.provider === activeProvider.provider);
+    if (!resolvedProvider) {
+      detailMarkup = `<div class="card"><div class="muted" style="padding:16px;">Provider not found.</div></div>`;
+    } else {
+      const badge = getSecretProviderBadge(resolvedProvider);
+      const status = getSecretStatusState(resolvedProvider.provider);
+      const fieldRows = (resolvedProvider.secrets || []).map((field) => {
       const inputType = field.secret ? "password" : "text";
       const placeholder = field.secret
         ? "Enter new value to update"
@@ -561,10 +1562,10 @@ function renderSecretsPanel() {
         ? (field.maskedValue || "Not stored")
         : (field.displayValue || field.maskedValue || "Not stored");
       const rotateButton = field.secret
-        ? `<button class="btn btn-ghost" type="button" data-secret-action="rotate" data-provider="${activeProvider.provider}" data-key-name="${field.keyName}">Rotate</button>`
+        ? `<button class="btn btn-ghost" type="button" data-secret-action="rotate" data-provider="${resolvedProvider.provider}" data-key-name="${field.keyName}">Rotate</button>`
         : "";
       const deleteButton = field.enabled || field.source === "db"
-        ? `<button class="btn btn-ghost" type="button" data-secret-action="delete" data-provider="${activeProvider.provider}" data-key-name="${field.keyName}">Delete</button>`
+        ? `<button class="btn btn-ghost" type="button" data-secret-action="delete" data-provider="${resolvedProvider.provider}" data-key-name="${field.keyName}">Delete</button>`
         : "";
       const inputMarkup = field.hideInput
         ? `<div class="secret-field-note is-muted">${escapeHtml(field.ignoredReason || "Ignored.")}</div>`
@@ -573,7 +1574,7 @@ function renderSecretsPanel() {
             type="${inputType}"
             autocomplete="off"
             data-secret-input="true"
-            data-provider="${activeProvider.provider}"
+            data-provider="${resolvedProvider.provider}"
             data-key-name="${field.keyName}"
             placeholder="${escapeHtml(placeholder)}"
           />`;
@@ -592,13 +1593,13 @@ function renderSecretsPanel() {
         </div>
       `;
     }).join("");
-    const providerWarning = getProviderScopedWarning(activeProvider);
+      const providerWarning = getProviderScopedWarning(resolvedProvider);
 
-    detailMarkup = `
-      <article class="secret-card" data-provider-card="${activeProvider.provider}">
+      detailMarkup = `
+      <article class="secret-card" data-provider-card="${resolvedProvider.provider}">
         <div class="secret-card-head">
           <div>
-            <h3>${escapeHtml(activeProvider.label || activeProvider.provider)}</h3>
+            <h3>${escapeHtml(resolvedProvider.label || resolvedProvider.provider)}</h3>
             <p>Encrypted at rest. Raw secrets are never returned by the API.</p>
           </div>
           <span class="secret-status-badge is-${badge.tone}">${escapeHtml(badge.label)}</span>
@@ -609,12 +1610,13 @@ function renderSecretsPanel() {
           <strong>Warning:</strong> after save or rotate, only masked status remains visible. Changing the platform master key without re-encryption makes stored secrets unreadable.
         </div>
         <div class="secret-actions">
-          <button class="btn btn-primary" type="button" data-secret-action="save-provider" data-provider="${activeProvider.provider}">Save changes</button>
-          <button class="btn btn-secondary" type="button" data-secret-action="test-provider" data-provider="${activeProvider.provider}">Test connection</button>
+          <button class="btn btn-primary" type="button" data-secret-action="save-provider" data-provider="${resolvedProvider.provider}">Save changes</button>
+          <button class="btn btn-secondary" type="button" data-secret-action="test-provider" data-provider="${resolvedProvider.provider}">Test connection</button>
         </div>
-        <div class="secret-card-status${status.tone ? ` is-${status.tone}` : ""}" data-secret-status="${activeProvider.provider}">${escapeHtml(status.message || "")}</div>
+        <div class="secret-card-status${status.tone ? ` is-${status.tone}` : ""}" data-secret-status="${resolvedProvider.provider}">${escapeHtml(status.message || "")}</div>
       </article>
     `;
+    }
   }
 
   grid.innerHTML = `
@@ -632,7 +1634,419 @@ async function refreshSecrets() {
   state.secrets.enabled = !!payload?.enabled;
   state.secrets.environment = payload?.environment || "production";
   state.secrets.providers = Array.isArray(payload?.providers) ? payload.providers : [];
+  await refreshSecretsAiBudget();
+  await refreshSecretsOwnerEmail();
+  await refreshSecretsEmailControl();
   renderSecretsPanel();
+}
+
+function renderCostControlPanel() {
+  const statsEl = $("costOverviewStats");
+  const topProvidersEl = $("costTopProviders");
+  const topSchoolsEl = $("costTopSchools");
+  const activeAlertsEl = $("costActiveAlerts");
+  const providerTableEl = $("costProviderTable");
+  const workspaceTableEl = $("costWorkspaceTable");
+  const limitsTableEl = $("costLimitsTable");
+  const alertsTableEl = $("costAlertsTable");
+  const errorEl = $("costControlError");
+  const periodSelect = $("costControlPeriod");
+  const workspaceSelect = $("costLimitWorkspace");
+  const providerSelect = $("costLimitProvider");
+  const limitPeriodSelect = $("costLimitPeriodSelect");
+  const overview = state.costControl.overview || {
+    totals: {},
+    top_providers: [],
+    top_workspaces: [],
+    active_alerts: [],
+    provider_breakdown: []
+  };
+  const limits = Array.isArray(state.costControl.limits) ? state.costControl.limits : [];
+  const alerts = Array.isArray(state.costControl.alerts) ? state.costControl.alerts : [];
+  const providerRows = Array.isArray(state.costControl.providerRows) ? state.costControl.providerRows : [];
+  const workspaceRows = Array.isArray(state.costControl.workspaceRows) ? state.costControl.workspaceRows : [];
+
+  if (periodSelect) periodSelect.value = state.costControl.period || "monthly";
+  if (limitPeriodSelect) limitPeriodSelect.value = state.costControl.period || "monthly";
+
+  if (errorEl) {
+    setError(errorEl, state.costControl.loadError || "");
+  }
+
+  if (workspaceSelect) {
+    const selected = String(workspaceSelect.value || "platform");
+    workspaceSelect.innerHTML = [
+      `<option value="platform">Platform default</option>`,
+      ...(Array.isArray(state.workspaces) ? state.workspaces : []).map((workspace) => (
+        `<option value="${escapeHtml(workspace.id)}">${escapeHtml(workspace.name || workspace.id)}</option>`
+      ))
+    ].join("");
+    workspaceSelect.value = selected && [...workspaceSelect.options].some((option) => option.value === selected)
+      ? selected
+      : "platform";
+  }
+
+  if (providerSelect) {
+    const options = providerRows.length
+      ? providerRows.map((row) => ({ provider_key: row.provider_key, display_name: row.display_name }))
+      : COST_CONTROL_PROVIDER_ORDER.map((provider_key) => ({ provider_key, display_name: getCostProviderLabel(provider_key) }));
+    const selected = String(providerSelect.value || "openai");
+    providerSelect.innerHTML = options.map((row) => (
+      `<option value="${escapeHtml(row.provider_key)}">${escapeHtml(row.display_name || row.provider_key)}</option>`
+    )).join("");
+    providerSelect.value = selected && [...providerSelect.options].some((option) => option.value === selected)
+      ? selected
+      : (providerSelect.options[0]?.value || "openai");
+  }
+
+  if (statsEl) {
+    statsEl.innerHTML = `
+      <div class="cost-stat-card is-neutral">
+        <span>Total today</span>
+        <strong>${formatEUR(overview.totals?.today_cost_eur || 0)}</strong>
+      </div>
+      <div class="cost-stat-card is-good">
+        <span>Total this month</span>
+        <strong>${formatEUR(overview.totals?.monthly_cost_eur || 0)}</strong>
+      </div>
+      <div class="cost-stat-card is-info">
+        <span>Total this year</span>
+        <strong>${formatEUR(overview.totals?.yearly_cost_eur || 0)}</strong>
+      </div>
+      <div class="cost-stat-card ${(overview.active_alerts || []).length ? "is-warn" : "is-good"}">
+        <span>Active alerts</span>
+        <strong>${Number((overview.active_alerts || []).length || 0)}</strong>
+      </div>
+    `;
+  }
+
+  renderCostMiniList(
+    topProvidersEl,
+    overview.top_providers || [],
+    (row) => `
+      <div class="cost-mini-row">
+        <div>
+          <strong>${escapeHtml(row.display_name || getCostProviderLabel(row.provider_key))}</strong>
+          <span>${escapeHtml(row.provider_key || "")}</span>
+        </div>
+        <strong>${formatEUR(row.total_cost_eur || 0)}</strong>
+      </div>
+    `,
+    "No provider usage recorded."
+  );
+
+  renderCostMiniList(
+    topSchoolsEl,
+    overview.top_workspaces || [],
+    (row) => `
+      <div class="cost-mini-row">
+        <div>
+          <strong>${escapeHtml(getCostWorkspaceLabel(row.workspace_id))}</strong>
+          <span>${escapeHtml(row.workspace_id || "")}</span>
+        </div>
+        <strong>${formatEUR(row.total_cost_eur || 0)}</strong>
+      </div>
+    `,
+    "No workspace usage recorded."
+  );
+
+  renderCostMiniList(
+    activeAlertsEl,
+    (overview.active_alerts || []).slice(0, 6),
+    (row) => `
+      <div class="cost-mini-row is-${getAlertTone(row.alert_type)}">
+        <div>
+          <strong>${escapeHtml(getCostWorkspaceLabel(row.workspace_id))}</strong>
+          <span>${escapeHtml(`${row.provider_key || "platform"} • ${row.alert_type || "alert"}`)}</span>
+        </div>
+        <strong>${formatEUR(row.current_cost_eur || 0)}</strong>
+      </div>
+    `,
+    "No active alerts."
+  );
+
+  if (providerTableEl) {
+    const providerPeriodField = state.costControl.period === "daily"
+      ? "today_cost_eur"
+      : state.costControl.period === "yearly"
+        ? "yearly_cost_eur"
+        : "monthly_cost_eur";
+    renderTable(providerTableEl, {
+      columns: [
+        {
+          label: "Provider",
+          key: "provider_key",
+          width: "220px",
+          align: "left",
+          render: (row) => `
+            <div style="font-weight:800">${escapeHtml(row.display_name || getCostProviderLabel(row.provider_key))}</div>
+            <div class="muted" style="font-size:12px">${escapeHtml(row.provider_key || "")}</div>
+          `
+        },
+        { label: "Today", key: "today_cost_eur", width: "140px", align: "center", render: (row) => escapeHtml(formatEUR(row.today_cost_eur || 0)) },
+        { label: "This month", key: "monthly_cost_eur", width: "140px", align: "center", render: (row) => escapeHtml(formatEUR(row.monthly_cost_eur || 0)) },
+        { label: "This year", key: "yearly_cost_eur", width: "140px", align: "center", render: (row) => escapeHtml(formatEUR(row.yearly_cost_eur || 0)) },
+        {
+          label: "Scope",
+          key: "_scope",
+          width: "160px",
+          align: "center",
+          render: (row) => {
+            const limit = getCostLimitFor(null, row.provider_key, state.costControl.period);
+            return escapeHtml(limit ? getCostWorkspaceLabel(limit.workspace_id) : "No limit");
+          }
+        },
+        {
+          label: "Period",
+          key: "_period",
+          width: "100px",
+          align: "center",
+          render: (row) => {
+            const limit = getCostLimitFor(null, row.provider_key, state.costControl.period);
+            return escapeHtml(limit?.period || "—");
+          }
+        },
+        {
+          label: "Soft",
+          key: "_soft",
+          width: "110px",
+          align: "center",
+          render: (row) => {
+            const limit = getCostLimitFor(null, row.provider_key, state.costControl.period);
+            return escapeHtml(limit?.soft_limit_eur != null ? formatEUR(limit.soft_limit_eur) : "—");
+          }
+        },
+        {
+          label: "Hard",
+          key: "_hard",
+          width: "110px",
+          align: "center",
+          render: (row) => {
+            const limit = getCostLimitFor(null, row.provider_key, state.costControl.period);
+            return escapeHtml(limit?.hard_limit_eur != null ? formatEUR(limit.hard_limit_eur) : "—");
+          }
+        },
+        {
+          label: "Units",
+          key: "_units",
+          width: "100px",
+          align: "center",
+          render: (row) => {
+            const limit = getCostLimitFor(null, row.provider_key, state.costControl.period);
+            return escapeHtml(limit?.unit_limit != null ? String(limit.unit_limit) : "—");
+          }
+        },
+        {
+          label: "Status",
+          key: "_status",
+          width: "160px",
+          align: "center",
+          render: (row) => {
+            const status = getCostLimitStatus(
+              getCostLimitFor(null, row.provider_key, state.costControl.period),
+              row[providerPeriodField]
+            );
+            return `<span class="secret-status-badge is-${status.tone}">${escapeHtml(status.label)}</span>`;
+          }
+        },
+        {
+          label: "Action",
+          key: "_action",
+          width: "110px",
+          align: "center",
+          render: (row) => {
+            const limit = getCostLimitFor(null, row.provider_key, state.costControl.period);
+            return limit
+              ? `<button class="btn btn-ghost" type="button" data-cost-control-action="delete-limit" data-limit-id="${escapeHtml(limit.id)}">Delete</button>`
+              : "—";
+          }
+        }
+      ],
+      rows: providerRows,
+      emptyText: "No provider cost data loaded yet."
+    });
+  }
+
+  if (workspaceTableEl) {
+    renderTable(workspaceTableEl, {
+      columns: [
+        {
+          label: "School",
+          key: "workspace_id",
+          width: "220px",
+          render: (row) => `
+            <div style="font-weight:800">${escapeHtml(row.workspace_name || getCostWorkspaceLabel(row.workspace_id))}</div>
+            <div class="muted" style="font-size:12px">${escapeHtml(row.workspace_id || "")}</div>
+          `
+        },
+        { label: "Selected period", key: "total_cost_eur", width: "130px", render: (row) => escapeHtml(formatEUR(row.total_cost_eur || 0)) },
+        ...COST_CONTROL_PROVIDER_ORDER.slice(0, 6).map((providerKey) => ({
+          label: getCostProviderLabel(providerKey),
+          key: providerKey,
+          width: "120px",
+          render: (row) => {
+            const providerCosts = row.provider_costs || {};
+            return escapeHtml(formatEUR(providerCosts[providerKey] || 0));
+          }
+        })),
+        {
+          label: "Limit status",
+          key: "_status",
+          render: (row) => {
+            const openaiLimit = getCostLimitFor(row.workspace_id, "openai", state.costControl.period);
+            const providerCosts = row.provider_costs || {};
+            const status = getCostLimitStatus(openaiLimit, providerCosts.openai || 0);
+            return `<span class="secret-status-badge is-${status.tone}">${escapeHtml(status.label)}</span>`;
+          }
+        }
+      ],
+      rows: workspaceRows,
+      emptyText: "No workspace cost breakdown loaded yet."
+    });
+  }
+
+  if (alertsTableEl) {
+    renderTable(alertsTableEl, {
+      columns: [
+        { label: "School", key: "workspace_id", width: "180px", render: (row) => escapeHtml(getCostWorkspaceLabel(row.workspace_id)) },
+        { label: "Provider", key: "provider_key", width: "140px", render: (row) => escapeHtml(getCostProviderLabel(row.provider_key)) },
+        { label: "Type", key: "alert_type", width: "120px", render: (row) => escapeHtml(row.alert_type || "alert") },
+        { label: "Period", key: "period", width: "100px", render: (row) => escapeHtml(row.period || "monthly") },
+        { label: "Threshold", key: "threshold_eur", width: "110px", render: (row) => escapeHtml(row.threshold_eur != null ? formatEUR(row.threshold_eur) : "—") },
+        { label: "Current", key: "current_cost_eur", width: "110px", render: (row) => escapeHtml(formatEUR(row.current_cost_eur || 0)) },
+        { label: "Created", key: "created_at", width: "180px", render: (row) => escapeHtml(formatAdminTimestamp(row.created_at)) },
+        {
+          label: "Action",
+          key: "_action",
+          render: (row) => row.acknowledged
+            ? `<span class="secret-status-badge is-ok">Acknowledged</span>`
+            : `<button class="btn btn-ghost" type="button" data-cost-control-action="ack-alert" data-alert-id="${escapeHtml(row.id)}">Acknowledge</button>`
+        }
+      ],
+      rows: alerts,
+      emptyText: "No cost alerts recorded."
+    });
+  }
+
+  const feedback = state.costControl.feedback || { message: "", tone: "" };
+  setCostControlFeedback(feedback.message || "", feedback.tone || "");
+}
+
+async function refreshCostControl() {
+  state.costControl.loadError = "";
+  try {
+    const period = state.costControl.period || "monthly";
+    const [overview, limitsPayload, alertsPayload] = await Promise.all([
+      api(`/api/admin/cost-control/overview?period=${encodeURIComponent(period)}`),
+      api("/api/admin/cost-control/limits"),
+      api("/api/admin/cost-control/alerts")
+    ]);
+    state.costControl.overview = overview || null;
+    state.costControl.providers = Array.isArray(overview?.provider_breakdown) ? overview.provider_breakdown : [];
+    state.costControl.providerRows = state.costControl.providers;
+    state.costControl.limits = Array.isArray(limitsPayload?.rows) ? limitsPayload.rows : [];
+    state.costControl.alerts = Array.isArray(alertsPayload?.rows) ? alertsPayload.rows : [];
+
+    const workspaces = Array.isArray(state.workspaces) ? state.workspaces : [];
+    const summaries = await Promise.all(workspaces.map(async (workspace) => {
+      try {
+        const summary = await api(`/api/admin/cost-control/workspaces/${encodeURIComponent(workspace.id)}/summary?period=${encodeURIComponent(period)}`);
+        return { workspace, summary };
+      } catch (_err) {
+        return { workspace, summary: null };
+      }
+    }));
+    state.costControl.workspaceRows = summaries.map(({ workspace, summary }) => {
+      const providerCosts = {};
+      for (const row of summary?.providers || []) {
+        providerCosts[row.provider_key] = Number(row.total_cost_eur || 0);
+      }
+      return {
+        workspace_id: workspace.id,
+        workspace_name: workspace.name || workspace.id,
+        total_cost_eur: Number(summary?.total_cost_eur || 0),
+        provider_costs: providerCosts
+      };
+    });
+  } catch (error) {
+    state.costControl.loadError = error.message || "Failed to load cost control data.";
+  }
+  renderCostControlPanel();
+}
+
+async function saveCostControlLimit() {
+  const workspaceId = $("costLimitWorkspace")?.value || "platform";
+  const providerKey = $("costLimitProvider")?.value || "openai";
+  const period = $("costLimitPeriodSelect")?.value || "monthly";
+  const softLimitEur = $("costLimitSoft")?.value ? Number($("costLimitSoft").value) : null;
+  const hardLimitEur = $("costLimitHard")?.value ? Number($("costLimitHard").value) : null;
+  const unitLimit = $("costLimitUnits")?.value ? Number($("costLimitUnits").value) : null;
+  try {
+    await api("/api/admin/cost-control/limits", {
+      method: "POST",
+      body: {
+        workspaceId,
+        providerKey,
+        period,
+        softLimitEur,
+        hardLimitEur,
+        unitLimit,
+        enabled: true
+      }
+    });
+    setCostControlFeedback("Limit saved.", "success");
+    await refreshCostControl();
+  } catch (error) {
+    setCostControlFeedback(error.message || "Failed to save limit.", "error");
+  }
+}
+
+async function deleteCostControlLimit(limitId) {
+  try {
+    await api(`/api/admin/cost-control/limits/${encodeURIComponent(limitId)}`, {
+      method: "DELETE"
+    });
+    setCostControlFeedback("Limit deleted.", "success");
+    await refreshCostControl();
+  } catch (error) {
+    setCostControlFeedback(error.message || "Failed to delete limit.", "error");
+  }
+}
+
+async function acknowledgeCostAlert(alertId) {
+  try {
+    await api(`/api/admin/cost-control/alerts/${encodeURIComponent(alertId)}/acknowledge`, {
+      method: "POST"
+    });
+    setCostControlFeedback("Alert acknowledged.", "success");
+    await refreshCostControl();
+  } catch (error) {
+    setCostControlFeedback(error.message || "Failed to acknowledge alert.", "error");
+  }
+}
+
+async function exportCostControlCsv() {
+  try {
+    const period = state.costControl.period || "monthly";
+    const response = await fetch(`/api/admin/cost-control/export.csv?period=${encodeURIComponent(period)}`, {
+      credentials: "same-origin"
+    });
+    if (!response.ok) {
+      const data = await response.text().catch(() => "");
+      throw new Error(data || "Failed to export CSV.");
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `cost-control-${period}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    setCostControlFeedback(error.message || "Failed to export CSV.", "error");
+  }
 }
 
 async function saveSecretProvider(provider) {
@@ -741,14 +2155,281 @@ async function api(path, { method = "GET", body = null } = {}) {
   return isJson ? data : { ok: true, text: data };
 }
 
-function renderTable(el, { columns, rows, emptyText = "No data" }) {
+const OWNER_TABS = new Set([
+  "operations",
+  "backups",
+  "lifecycle",
+  "support",
+  "incidents",
+  "data-governance",
+  "notifications",
+  "branding",
+  "reports"
+]);
+
+function ownerErrorId(tab) {
+  return `${String(tab || "").replace(/-([a-z])/g, (_, c) => c.toUpperCase())}Error`;
+}
+
+function renderOwnerSummary(el, cards = []) {
+  if (!el) return;
+  el.innerHTML = cards.map((card) => `
+    <div class="owner-summary-card${card.tone ? ` is-${escapeHtml(card.tone)}` : ""}">
+      <span>${escapeHtml(card.label)}</span>
+      <strong>${escapeHtml(card.value)}</strong>
+      ${card.note ? `<small>${escapeHtml(card.note)}</small>` : ""}
+    </div>
+  `).join("") || `<div class="table-empty">No owner-control data loaded yet.</div>`;
+}
+
+function workspaceOptions({ includeAll = false } = {}) {
+  const rows = Array.isArray(state.workspaces) ? state.workspaces : [];
+  const options = includeAll ? [`<option value="">All workspaces</option>`] : [];
+  for (const workspace of rows) {
+    const id = workspace.id || "";
+    options.push(`<option value="${escapeHtml(id)}">${escapeHtml(workspace.name || id)}</option>`);
+  }
+  return options.join("");
+}
+
+function syncOwnerWorkspaceSelects() {
+  const ids = [
+    "lifecycleWorkspace",
+    "supportWorkspace",
+    "governanceWorkspace",
+    "brandingWorkspace",
+    "reportsWorkspace"
+  ];
+  ids.forEach((id) => {
+    const el = $(id);
+    if (el) el.innerHTML = workspaceOptions({ includeAll: id === "reportsWorkspace" });
+  });
+  const notificationWorkspace = $("notificationWorkspace");
+  if (notificationWorkspace) notificationWorkspace.innerHTML = `<option value="">All schools</option>${workspaceOptions()}`;
+}
+
+function formatOwnerStatus(value) {
+  const text = String(value == null ? "unknown" : value);
+  const tone = ["ok", "completed", "active", "ready", "configured", "sent"].includes(text.toLowerCase())
+    ? "ok"
+    : ["failed", "critical", "blocked_missing_stripe_key"].includes(text.toLowerCase())
+      ? "failed"
+      : "warn";
+  return `<span class="secret-status-badge is-${tone}">${escapeHtml(text)}</span>`;
+}
+
+function renderOperations(data) {
+  renderOwnerSummary($("operationsSummary"), [
+    { label: "Database", value: data.databaseMode || "unknown", tone: "ok" },
+    { label: "Uptime", value: `${Math.round(Number(data.uptimeSeconds || 0) / 60)} min`, tone: "ok" },
+    { label: "Active sessions", value: data.activeSessions ?? 0, tone: "ok" },
+    { label: "Failed jobs", value: data.failedJobs ?? 0, tone: Number(data.failedJobs || 0) ? "failed" : "ok" },
+    { label: "Error rate", value: data.errorRate ?? 0, tone: "ok" },
+    { label: "Last backup", value: data.lastBackup?.status || "none", tone: data.lastBackup ? "ok" : "warn" },
+    { label: "Storage", value: data.diskUsage?.available === false ? "check failed" : "available", tone: data.diskUsage?.available === false ? "warn" : "ok" },
+    { label: "Generated", value: formatAdminTimestamp(data.generatedAt), tone: "ok" }
+  ]);
+  renderTable($("operationsTable"), {
+    columns: [
+      { label: "Provider", key: "label", render: (row) => escapeHtml(row.label || row.key) },
+      { label: "Status", key: "status", render: (row) => formatOwnerStatus(row.status) },
+      { label: "Message", key: "message", render: (row) => escapeHtml(row.message || "") },
+      { label: "Action", key: "_action", render: (row) => `<button class="btn btn-ghost" type="button" data-owner-action="provider-test" data-provider="${escapeHtml(row.key)}">Test</button>` }
+    ],
+    rows: data.providers || [],
+    emptyText: "No provider health data loaded."
+  });
+}
+
+function renderBackups(status, history) {
+  renderOwnerSummary($("backupsSummary"), [
+    { label: "Backup health", value: status.health || "unknown", tone: status.health === "ok" ? "ok" : "warn" },
+    { label: "Last DB backup", value: status.latest?.status || "none", tone: status.latest ? "ok" : "warn" },
+    { label: "Location", value: status.location || "backup", note: "Secret files are never exposed." },
+    { label: "Retention", value: `${status.retentionDays || 30} days` }
+  ]);
+  renderTable($("backupsTable"), {
+    columns: [
+      { label: "Type", key: "type", render: (row) => escapeHtml(row.type || "manual") },
+      { label: "Status", key: "status", render: (row) => formatOwnerStatus(row.status) },
+      { label: "File", key: "file_path", render: (row) => escapeHtml(row.file_path || "metadata only") },
+      { label: "Started", key: "started_at", render: (row) => escapeHtml(formatAdminTimestamp(row.started_at)) }
+    ],
+    rows: history || [],
+    emptyText: "No backup runs recorded yet."
+  });
+}
+
+function renderLifecycle(data) {
+  syncOwnerWorkspaceSelects();
+  renderTable($("lifecycleTable"), {
+    columns: [
+      { label: "Workspace", key: "workspace_id", render: (row) => escapeHtml(row.workspace_id || "") },
+      { label: "Action", key: "action", render: (row) => escapeHtml(row.action || "") },
+      { label: "Reason", key: "reason", render: (row) => escapeHtml(row.reason || "") },
+      { label: "Created", key: "created_at", render: (row) => escapeHtml(formatAdminTimestamp(row.created_at)) }
+    ],
+    rows: data.events || [],
+    emptyText: "No lifecycle events recorded."
+  });
+}
+
+function renderSupport(data) {
+  syncOwnerWorkspaceSelects();
+  renderTable($("supportTable"), {
+    columns: [
+      { label: "Target user", key: "target_user_id", render: (row) => escapeHtml(row.target_user_id || "") },
+      { label: "Workspace", key: "workspace_id", render: (row) => escapeHtml(row.workspace_id || "") },
+      { label: "Mode", key: "read_only", render: (row) => Number(row.read_only || 0) === 1 ? "Read-only" : "Write-enabled" },
+      { label: "Expires", key: "expires_at", render: (row) => escapeHtml(formatAdminTimestamp(row.expires_at)) }
+    ],
+    rows: data.rows || [],
+    emptyText: "No active support sessions."
+  });
+}
+
+function renderIncidents(data) {
+  const maintenance = data.maintenance || {};
+  const enabled = $("maintenanceEnabled");
+  const message = $("maintenanceMessage");
+  if (enabled) enabled.checked = Number(maintenance.enabled || 0) === 1;
+  if (message) message.value = maintenance.public_message || "";
+  const disabled = (() => {
+    try { return new Set(JSON.parse(maintenance.disabled_features_json || "[]")); } catch { return new Set(); }
+  })();
+  document.querySelectorAll("[data-maint-feature]").forEach((input) => {
+    input.checked = disabled.has(input.dataset.maintFeature);
+  });
+  renderTable($("incidentsTable"), {
+    columns: [
+      { label: "Title", key: "title", render: (row) => escapeHtml(row.title || "") },
+      { label: "Severity", key: "severity", render: (row) => formatOwnerStatus(row.severity || "info") },
+      { label: "Status", key: "status", render: (row) => formatOwnerStatus(row.status || "open") },
+      { label: "Created", key: "created_at", render: (row) => escapeHtml(formatAdminTimestamp(row.created_at)) }
+    ],
+    rows: data.incidents || [],
+    emptyText: "No incidents recorded."
+  });
+}
+
+function renderDataGovernance(overview, rows) {
+  syncOwnerWorkspaceSelects();
+  renderOwnerSummary($("dataGovernanceSummary"), [
+    { label: "Recording retention", value: `${overview.retention?.recordingsDays || 365} days` },
+    { label: "Backup retention", value: `${overview.retention?.backupsDays || 30} days` },
+    { label: "Audit retention", value: `${overview.retention?.auditDays || 365} days` },
+    { label: "Pending queue", value: overview.pendingRequests || 0, tone: Number(overview.pendingRequests || 0) ? "warn" : "ok" }
+  ]);
+  renderTable($("dataGovernanceTable"), {
+    columns: [
+      { label: "Workspace", key: "workspace_id", render: (row) => escapeHtml(row.workspace_id || "") },
+      { label: "Type", key: "request_type", render: (row) => escapeHtml(row.request_type || "") },
+      { label: "Status", key: "status", render: (row) => formatOwnerStatus(row.status || "pending") },
+      { label: "Created", key: "created_at", render: (row) => escapeHtml(formatAdminTimestamp(row.created_at)) }
+    ],
+    rows,
+    emptyText: "No data governance requests."
+  });
+}
+
+function renderNotifications(rows) {
+  syncOwnerWorkspaceSelects();
+  renderTable($("notificationsTable"), {
+    columns: [
+      { label: "Title", key: "title", render: (row) => escapeHtml(row.title || "") },
+      { label: "Channel", key: "channel", render: (row) => escapeHtml(row.channel || "") },
+      { label: "Status", key: "status", render: (row) => formatOwnerStatus(row.status || "draft") },
+      { label: "Action", key: "_action", render: (row) => row.status === "sent" ? "—" : `<button class="btn btn-ghost" type="button" data-owner-action="notification-send" data-id="${escapeHtml(row.id)}">Send</button>` }
+    ],
+    rows,
+    emptyText: "No platform notifications yet."
+  });
+}
+
+function renderBranding(data) {
+  syncOwnerWorkspaceSelects();
+  const settings = data.platform?.settings || {};
+  if ($("brandingPlatformName")) $("brandingPlatformName").value = settings.platformName || "StudiesTalk";
+  if ($("brandingSupportEmail")) $("brandingSupportEmail").value = settings.supportEmail || "";
+  if ($("brandingLogoUrl")) $("brandingLogoUrl").value = settings.logoUrl || "";
+  if ($("brandingDefaultTheme")) $("brandingDefaultTheme").value = settings.defaultTheme || "default";
+  renderTable($("brandingTable"), {
+    columns: [
+      { label: "Workspace", key: "workspace_id", render: (row) => escapeHtml(row.workspace_id || "") },
+      { label: "Domain", key: "domain", render: (row) => escapeHtml(row.domain || "") },
+      { label: "Status", key: "status", render: (row) => formatOwnerStatus(row.status || "pending") },
+      { label: "Token", key: "verification_token", render: (row) => escapeHtml(row.verification_token || "") }
+    ],
+    rows: data.domains || [],
+    emptyText: "No custom domains configured."
+  });
+}
+
+function renderReports(data) {
+  syncOwnerWorkspaceSelects();
+  renderOwnerSummary($("reportsSummary"), (data.cards || []).map((card) => ({
+    label: card.label,
+    value: card.value,
+    tone: "ok"
+  })));
+}
+
+async function refreshOwnerControl(tab = state.currentTab) {
+  const errorEl = $(ownerErrorId(tab));
+  setError(errorEl, "");
+  try {
+    if (tab === "operations") {
+      const data = await api("/api/admin/operations/health");
+      state.ownerControls.operations = data;
+      renderOperations(data);
+    } else if (tab === "backups") {
+      const [status, history] = await Promise.all([
+        api("/api/admin/backups/status"),
+        api("/api/admin/backups/history")
+      ]);
+      renderBackups(status, history.rows || []);
+    } else if (tab === "lifecycle") {
+      const data = await api("/api/admin/workspaces/lifecycle");
+      renderLifecycle(data);
+    } else if (tab === "support") {
+      const data = await api("/api/admin/support/impersonation/active");
+      renderSupport(data);
+    } else if (tab === "incidents") {
+      const data = await api("/api/admin/incidents");
+      renderIncidents(data);
+    } else if (tab === "data-governance") {
+      const [overview, requests] = await Promise.all([
+        api("/api/admin/data-governance/overview"),
+        api("/api/admin/data-governance/delete-requests")
+      ]);
+      renderDataGovernance(overview, requests.rows || []);
+    } else if (tab === "notifications") {
+      const data = await api("/api/admin/notifications");
+      renderNotifications(data.rows || []);
+    } else if (tab === "branding") {
+      const data = await api("/api/admin/branding");
+      renderBranding(data);
+    } else if (tab === "reports") {
+      const data = await api("/api/admin/reports/overview");
+      renderReports(data);
+    }
+  } catch (error) {
+    setError(errorEl, error.message || "Failed to load owner controls.");
+  }
+}
+
+function buildTableHtml({ columns, rows, emptyText = "No data" }) {
   if (!rows || !rows.length) {
-    el.innerHTML = `<div style="padding:12px" class="muted">${emptyText}</div>`;
-    return;
+    return `<div class="table-empty muted">${emptyText}</div>`;
   }
 
   const thead = columns
-    .map((c) => `<th style="${c.width ? `width:${c.width}` : ""}">${escapeHtml(c.label)}</th>`)
+    .map((c) => {
+      const styles = [];
+      if (c.width) styles.push(`width:${c.width}`);
+      if (c.align) styles.push(`text-align:${c.align}`);
+      return `<th style="${styles.join(";")}">${escapeHtml(c.label)}</th>`;
+    })
     .join("");
 
   const tbody = rows
@@ -756,14 +2437,20 @@ function renderTable(el, { columns, rows, emptyText = "No data" }) {
       const tds = columns
         .map((c) => {
           const v = typeof c.render === "function" ? c.render(r) : r[c.key];
-          return `<td>${v ?? ""}</td>`;
+          const styles = [];
+          if (c.align) styles.push(`text-align:${c.align}`);
+          return `<td${styles.length ? ` style="${styles.join(";")}"` : ""}>${v ?? ""}</td>`;
         })
         .join("");
       return `<tr>${tds}</tr>`;
     })
     .join("");
 
-  el.innerHTML = `<table class="table"><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody></table>`;
+  return `<table class="table"><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody></table>`;
+}
+
+function renderTable(el, { columns, rows, emptyText = "No data" }) {
+  el.innerHTML = buildTableHtml({ columns, rows, emptyText });
 }
 
 function escapeHtml(str) {
@@ -955,6 +2642,148 @@ if (workspaceSelect) {
 }
 
 document.addEventListener("click", (event) => {
+  const costActionButton = event.target.closest("[data-cost-control-action]");
+  if (costActionButton) {
+    const action = costActionButton.dataset.costControlAction;
+    const limitId = costActionButton.dataset.limitId;
+    const alertId = costActionButton.dataset.alertId;
+    const run = async () => {
+      if (action === "save-limit") {
+        await saveCostControlLimit();
+      } else if (action === "delete-limit") {
+        await deleteCostControlLimit(limitId);
+      } else if (action === "ack-alert") {
+        await acknowledgeCostAlert(alertId);
+      }
+    };
+    run().catch((error) => setCostControlFeedback(error.message || "Cost control action failed.", "error"));
+    return;
+  }
+
+  const ownerActionButton = event.target.closest("[data-owner-action]");
+  if (ownerActionButton) {
+    const action = ownerActionButton.dataset.ownerAction;
+    const run = async () => {
+      if (action === "refresh") {
+        await refreshOwnerControl(ownerActionButton.dataset.ownerTarget || state.currentTab);
+      } else if (action === "provider-test") {
+        await api(`/api/admin/operations/test-provider/${encodeURIComponent(ownerActionButton.dataset.provider || "")}`, { method: "POST", body: {} });
+        await refreshOwnerControl("operations");
+      } else if (action === "backup-run") {
+        await api("/api/admin/backups/run", { method: "POST", body: {} });
+        await refreshOwnerControl("backups");
+      } else if (action === "restore-dry-run") {
+        await api("/api/admin/backups/restore-dry-run", { method: "POST", body: {} });
+        await refreshOwnerControl("backups");
+      } else if (action === "lifecycle-run") {
+        const workspaceId = $("lifecycleWorkspace")?.value || "";
+        const lifecycleAction = $("lifecycleAction")?.value || "suspend";
+        await api(`/api/admin/workspaces/${encodeURIComponent(workspaceId)}/${encodeURIComponent(lifecycleAction)}`, {
+          method: "POST",
+          body: {
+            reason: $("lifecycleReason")?.value || "",
+            ownerUserId: $("lifecycleOwnerUserId")?.value || ""
+          }
+        });
+        await refreshOwnerControl("lifecycle");
+      } else if (action === "support-start") {
+        await api("/api/admin/support/impersonation/start", {
+          method: "POST",
+          body: {
+            workspaceId: $("supportWorkspace")?.value || "",
+            targetUserId: $("supportTargetUser")?.value || "",
+            readOnly: $("supportReadOnly")?.checked !== false,
+            reason: $("supportReason")?.value || ""
+          }
+        });
+        await refreshOwnerControl("support");
+      } else if (action === "support-end") {
+        await api("/api/admin/support/impersonation/end", { method: "POST", body: {} });
+        await refreshOwnerControl("support");
+      } else if (action === "maintenance-save") {
+        const disabledFeatures = [...document.querySelectorAll("[data-maint-feature]:checked")].map((input) => input.dataset.maintFeature);
+        await api("/api/admin/maintenance", {
+          method: "POST",
+          body: {
+            enabled: $("maintenanceEnabled")?.checked || false,
+            publicMessage: $("maintenanceMessage")?.value || "",
+            disabledFeatures
+          }
+        });
+        await refreshOwnerControl("incidents");
+      } else if (action === "incident-create") {
+        await api("/api/admin/incidents", {
+          method: "POST",
+          body: {
+            title: $("incidentTitle")?.value || "",
+            severity: $("incidentSeverity")?.value || "info",
+            publicMessage: $("incidentPublicMessage")?.value || "",
+            internalNote: $("incidentInternalNote")?.value || ""
+          }
+        });
+        await refreshOwnerControl("incidents");
+      } else if (action === "governance-create") {
+        const workspaceId = $("governanceWorkspace")?.value || "";
+        const type = $("governanceType")?.value || "export";
+        if (type === "export") {
+          await api(`/api/admin/data-governance/export/${encodeURIComponent(workspaceId)}`, {
+            method: "POST",
+            body: { reason: $("governanceReason")?.value || "Platform owner export" }
+          });
+        } else {
+          await api("/api/admin/data-governance/delete-request", {
+            method: "POST",
+            body: { workspaceId, reason: $("governanceReason")?.value || "" }
+          });
+        }
+        await refreshOwnerControl("data-governance");
+      } else if (action === "notification-create") {
+        const workspaceId = $("notificationWorkspace")?.value || "";
+        await api("/api/admin/notifications", {
+          method: "POST",
+          body: {
+            title: $("notificationTitle")?.value || "",
+            body: $("notificationBody")?.value || "",
+            channel: $("notificationChannel")?.value || "in_app",
+            targetScope: workspaceId ? "workspace" : "all",
+            workspaceId,
+            scheduledAt: $("notificationScheduledAt")?.value || null
+          }
+        });
+        await refreshOwnerControl("notifications");
+      } else if (action === "notification-send") {
+        await api(`/api/admin/notifications/${encodeURIComponent(ownerActionButton.dataset.id || "")}/send`, { method: "POST", body: {} });
+        await refreshOwnerControl("notifications");
+      } else if (action === "branding-save") {
+        await api("/api/admin/branding/platform", {
+          method: "PATCH",
+          body: {
+            settings: {
+              platformName: $("brandingPlatformName")?.value || "StudiesTalk",
+              supportEmail: $("brandingSupportEmail")?.value || "",
+              logoUrl: $("brandingLogoUrl")?.value || "",
+              defaultTheme: $("brandingDefaultTheme")?.value || "default"
+            }
+          }
+        });
+        await refreshOwnerControl("branding");
+      } else if (action === "branding-workspace-save") {
+        await api(`/api/admin/branding/workspaces/${encodeURIComponent($("brandingWorkspace")?.value || "")}`, {
+          method: "PATCH",
+          body: { settings: { domain: $("brandingDomain")?.value || "" } }
+        });
+        await refreshOwnerControl("branding");
+      } else if (action === "branding-domain-verify") {
+        await api(`/api/admin/branding/domains/${encodeURIComponent($("brandingWorkspace")?.value || "")}/verify`, { method: "POST", body: {} });
+        await refreshOwnerControl("branding");
+      } else if (action === "reports-export") {
+        window.location.href = "/api/admin/reports/export.csv?type=overview";
+      }
+    };
+    run().catch((error) => setError($(ownerErrorId(state.currentTab)), error.message || "Owner-control action failed."));
+    return;
+  }
+
   const providerNav = event.target.closest("[data-secret-nav]");
   if (providerNav) {
     state.secrets.activeProvider = String(providerNav.dataset.secretNav || "").trim();
@@ -962,32 +2791,317 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  const emailControlTabButton = event.target.closest("[data-email-control-tab]");
+  if (emailControlTabButton) {
+    state.secrets.emailControl.activeTab = String(emailControlTabButton.dataset.emailControlTab || "overview");
+    renderSecretsPanel();
+    return;
+  }
+
+  const emailControlAction = event.target.closest("[data-email-control-action]");
+  if (emailControlAction) {
+    const action = emailControlAction.dataset.emailControlAction;
+    const logId = emailControlAction.dataset.logId;
+    const run = async () => {
+      const workspaceId = getWorkspaceForAiBudget();
+      if (action === "open-configuration") {
+        state.secrets.emailControl.activeTab = "configuration";
+        renderSecretsPanel();
+        return;
+      }
+      if (action === "open-operations") {
+        state.secrets.emailControl.activeTab = "operations";
+        await refreshSecrets();
+        return;
+      }
+      if (action === "show-failed") {
+        state.secrets.emailControl.activeTab = "operations";
+        state.secrets.emailControl.filters.status = "failed";
+        await refreshSecrets();
+        return;
+      }
+      if (action === "save-owner") {
+        setEmailControlFeedback("Saving owner email...", "info");
+        await api("/api/admin/email-control/owner", {
+          method: "POST",
+          body: {
+            owner_enabled: $("emailControlOwnerEnabled")?.checked ? 1 : 0,
+            owner_name: $("emailControlOwnerName")?.value || "",
+            owner_email: $("emailControlOwnerEmail")?.value || "",
+            owner_subject_prefix: $("emailControlOwnerPrefix")?.value || "",
+            owner_signature: $("emailControlOwnerSignature")?.value || ""
+          }
+        });
+        setEmailControlFeedback("Owner email saved.", "success");
+        await refreshSecrets();
+        state.secrets.emailControl.activeTab = "configuration";
+        return;
+      }
+      if (action === "save-workspace") {
+        if (!workspaceId) {
+          setEmailControlFeedback("Select a workspace first.", "error");
+          renderSecretsPanel();
+          return;
+        }
+        setEmailControlFeedback("Saving workspace email...", "info");
+        await api("/api/admin/email-control/workspace", {
+          method: "POST",
+          body: {
+            workspaceId,
+            workspace_email_enabled: $("emailControlWorkspaceEnabled")?.checked ? 1 : 0,
+            workspace_email: $("emailControlWorkspaceEmail")?.value || "",
+            workspace_sender_name: $("emailControlWorkspaceSender")?.value || "",
+            workspace_subject_prefix: $("emailControlWorkspacePrefix")?.value || "",
+            workspace_signature: $("emailControlWorkspaceSignature")?.value || "",
+            use_owner_fallback: $("emailControlWorkspaceFallback")?.checked ? 1 : 0
+          }
+        });
+        setEmailControlFeedback("Workspace email saved.", "success");
+        await refreshSecrets();
+        state.secrets.emailControl.activeTab = "configuration";
+        return;
+      }
+      if (action === "send-test") {
+        setEmailControlFeedback("Sending test email...", "info");
+        const response = await api("/api/admin/email-control/test-send", {
+          method: "POST",
+          body: {
+            mode: $("emailControlTestMode")?.value || "owner",
+            workspaceId: workspaceId || "",
+            to: $("emailControlTestTo")?.value || "",
+            subject: $("emailControlTestSubject")?.value || "",
+            message: $("emailControlTestMessage")?.value || ""
+          }
+        });
+        setEmailControlFeedback(response?.mock ? "Test email logged in mock mode." : "Test email sent.", "success");
+        await refreshSecrets();
+        state.secrets.emailControl.activeTab = "configuration";
+        return;
+      }
+      if (action === "retry-log") {
+        setEmailControlFeedback("Retrying failed email...", "info");
+        await api(`/api/admin/email-control/logs/${encodeURIComponent(logId)}/retry`, {
+          method: "POST"
+        });
+        setEmailControlFeedback("Retry sent.", "success");
+        state.secrets.emailControl.activeTab = "operations";
+        await refreshSecrets();
+      }
+    };
+
+    run().catch((error) => {
+      setEmailControlFeedback(error.message || "Email control action failed.", "error");
+      renderSecretsPanel();
+    });
+    return;
+  }
+
   const button = event.target.closest("[data-secret-action]");
-  if (!button) return;
+  if (button) {
+    const action = button.dataset.secretAction;
+    const provider = button.dataset.provider;
+    const keyName = button.dataset.keyName;
 
-  const action = button.dataset.secretAction;
-  const provider = button.dataset.provider;
-  const keyName = button.dataset.keyName;
+    const run = async () => {
+      if (action === "save-provider") {
+        await saveSecretProvider(provider);
+      } else if (action === "test-provider") {
+        await testSecretProvider(provider);
+      } else if (action === "rotate") {
+        await rotateSecretField(provider, keyName);
+      } else if (action === "delete") {
+        await deleteSecretField(provider, keyName);
+      }
+    };
 
-  const run = async () => {
-    if (action === "save-provider") {
-      await saveSecretProvider(provider);
-    } else if (action === "test-provider") {
-      await testSecretProvider(provider);
-    } else if (action === "rotate") {
-      await rotateSecretField(provider, keyName);
-    } else if (action === "delete") {
-      await deleteSecretField(provider, keyName);
+    run().catch((error) => {
+      if (provider) {
+        setSecretStatusState(provider, error.message || "Secrets action failed.", "error");
+      } else {
+        setError($("globalError"), error.message || "Secrets action failed.");
+      }
+    });
+    return;
+  }
+
+  const aiBudgetButton = event.target.closest("[data-ai-budget-action]");
+  if (aiBudgetButton) {
+    const action = aiBudgetButton.dataset.aiBudgetAction;
+    const run = async () => {
+      if (action === "save-default") {
+        const input = $("secretsAiDefaultBudget");
+        const value = Number(input?.value || 0);
+        if (Number.isNaN(value) || value < 0) {
+          setAiBudgetFeedback("Enter a non-negative amount.", "error");
+          renderSecretsPanel();
+          return;
+        }
+        const response = await fetch("/api/admin/ai-budget/default", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ amount: value })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(data.error || "Failed to save default AI budget.");
+        }
+        setAiBudgetFeedback("Default budget saved.", "success");
+        await refreshSecrets();
+      } else if (action === "save-workspace") {
+        const workspaceId = getWorkspaceForAiBudget();
+        if (!workspaceId || workspaceId === "all") {
+          setAiBudgetFeedback("Select a workspace first.", "error");
+          renderSecretsPanel();
+          return;
+        }
+        const input = $("secretsAiWorkspaceBudget");
+        const value = Number(input?.value || 0);
+        if (Number.isNaN(value) || value < 0) {
+          setAiBudgetFeedback("Enter a non-negative amount.", "error");
+          renderSecretsPanel();
+          return;
+        }
+        const response = await fetch(`/api/admin/ai-budget/workspace/${encodeURIComponent(workspaceId)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ amount: value })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(data.error || "Failed to save workspace override.");
+        }
+        setAiBudgetFeedback("Workspace override saved.", "success");
+        await refreshSecrets();
+      }
+    };
+
+    run().catch((error) => {
+      setAiBudgetFeedback(error.message || "AI budget action failed.", "error");
+      renderSecretsPanel();
+    });
+    return;
+  }
+
+  const ownerEmailButton = event.target.closest("[data-owner-email-action]");
+  if (ownerEmailButton) {
+    const action = ownerEmailButton.dataset.ownerEmailAction;
+    const run = async () => {
+      const workspaceId = getWorkspaceForAiBudget();
+      if (action === "use-owner") {
+        const ownerInput = $("ownerEmailAddressInline");
+        const workspaceReplyTo = $("workspaceEmailReplyToInline");
+        if (workspaceReplyTo) {
+          workspaceReplyTo.value = String(ownerInput?.value || "").trim();
+        }
+        return;
+      }
+
+      if (action === "save-owner") {
+        setOwnerEmailFeedback("Saving owner email...", "info");
+        await api("/api/admin/owner-email-settings", {
+          method: "POST",
+          body: {
+            enabled: $("ownerEmailEnabledInline")?.checked ? 1 : 0,
+            display_name: $("ownerEmailDisplayNameInline")?.value || "",
+            owner_email: $("ownerEmailAddressInline")?.value || "",
+            subject_prefix: $("ownerEmailSubjectPrefixInline")?.value || "",
+            footer_text: $("ownerEmailFooterInline")?.value || ""
+          }
+        });
+        setOwnerEmailFeedback("Owner email saved.", "success");
+        await refreshSecrets();
+        return;
+      }
+
+      if (action === "save-workspace") {
+        if (!workspaceId || workspaceId === "all") {
+          setOwnerEmailFeedback("Select a workspace first.", "error");
+          renderSecretsPanel();
+          return;
+        }
+        setOwnerEmailFeedback("Saving workspace email...", "info");
+        await api(`/api/admin/workspace-email-settings/${encodeURIComponent(workspaceId)}`, {
+          method: "POST",
+          body: {
+            enabled: $("workspaceEmailEnabledInline")?.checked ? 1 : 0,
+            brand_school_name: $("workspaceEmailBrandInline")?.value || "",
+            reply_to_email: $("workspaceEmailReplyToInline")?.value || "",
+            subject_prefix: $("workspaceEmailSubjectPrefixInline")?.value || "",
+            footer_text: $("workspaceEmailFooterInline")?.value || "",
+            manual_body_text: ""
+          }
+        });
+        setOwnerEmailFeedback("Workspace email saved.", "success");
+        await refreshSecrets();
+        return;
+      }
+
+      if (action === "send-test") {
+        const scope = $("ownerEmailTestScopeInline")?.value || "owner";
+        if (scope === "workspace" && (!workspaceId || workspaceId === "all")) {
+          setOwnerEmailFeedback("Select a workspace first.", "error");
+          renderSecretsPanel();
+          return;
+        }
+        setOwnerEmailFeedback("Sending test email...", "info");
+        const path = scope === "workspace"
+          ? `/api/admin/workspace-email-settings/${encodeURIComponent(workspaceId)}/test`
+          : "/api/admin/owner-email-settings/test";
+        await api(path, {
+          method: "POST",
+          body: {
+            to: $("ownerEmailTestToInline")?.value || "",
+            subject: $("ownerEmailTestSubjectInline")?.value || "",
+            body: $("ownerEmailTestBodyInline")?.value || ""
+          }
+        });
+        setOwnerEmailFeedback("Test email sent.", "success");
+        renderSecretsPanel();
+      }
+    };
+
+    run().catch((error) => {
+      setOwnerEmailFeedback(error.message || "Owner email action failed.", "error");
+      renderSecretsPanel();
+    });
+    return;
+  }
+});
+
+document.addEventListener("change", (event) => {
+  const filter = event.target.closest("[data-email-control-filter]");
+  if (!filter) return;
+  const key = filter.dataset.emailControlFilter;
+  if (key === "workspace") {
+    state.secrets.emailControl.filters.workspaceId = String(filter.value || "").trim();
+    const topWorkspace = getWorkspaceSelectElement();
+    if (topWorkspace) {
+      topWorkspace.value = state.secrets.emailControl.filters.workspaceId || "all";
+      state.workspaceId = topWorkspace.value;
+      updateWorkspaceMeta();
     }
-  };
-
-  run().catch((error) => {
-    if (provider) {
-      setSecretStatusState(provider, error.message || "Secrets action failed.", "error");
-    } else {
-      setError($("globalError"), error.message || "Secrets action failed.");
-    }
+  } else if (key === "status") {
+    state.secrets.emailControl.filters.status = String(filter.value || "all").trim().toLowerCase();
+  }
+  refreshSecrets().catch((error) => {
+    setEmailControlFeedback(error.message || "Failed to refresh Email Control Center.", "error");
+    renderSecretsPanel();
   });
+});
+
+$("btnCostControlRefresh")?.addEventListener("click", () => {
+  refreshCostControl().catch((error) => setCostControlFeedback(error.message || "Failed to refresh cost control.", "error"));
+});
+
+$("btnCostControlExport")?.addEventListener("click", () => {
+  exportCostControlCsv().catch((error) => setCostControlFeedback(error.message || "Failed to export CSV.", "error"));
+});
+
+$("costControlPeriod")?.addEventListener("change", async (event) => {
+  state.costControl.period = String(event.target?.value || "monthly").trim().toLowerCase();
+  await refreshCostControl();
 });
 
 const btnUpsertWorkspaceEl = $("btnUpsertWorkspace");
@@ -1176,29 +3290,50 @@ if (btnCreateInvoiceEl) {
 // End-Create Invoice POPUP Card // Billing-Section- INPU-1
 
 $("msgGoEmailSettingsPage")?.addEventListener("click", () => {
-  setTab("settings");
-  persistTab("settings");
+  state.secrets.activeProvider = "email-control";
+  state.secrets.emailControl.activeTab = "configuration";
+  setTab("secrets");
+  persistTab("secrets");
+  refreshSecrets().catch((err) => setError($("globalError"), err.message));
 });
 
 $("msgGoEmailSettingsPageTop")?.addEventListener("click", () => {
-  setTab("settings");
-  persistTab("settings");
+  state.secrets.activeProvider = "email-control";
+  state.secrets.emailControl.activeTab = "configuration";
+  setTab("secrets");
+  persistTab("secrets");
+  refreshSecrets().catch((err) => setError($("globalError"), err.message));
 });
 
 $("msgOpenInboxPage")?.addEventListener("click", () => {
-  alert("Inbox page is not built yet.");
+  state.secrets.activeProvider = "email-control";
+  state.secrets.emailControl.activeTab = "operations";
+  state.secrets.emailControl.filters.status = "inbound";
+  setTab("secrets");
+  persistTab("secrets");
+  refreshSecrets().catch((err) => setError($("globalError"), err.message));
 });
 
 $("msgOpenSentPage")?.addEventListener("click", () => {
-  alert("Sent mail page is not built yet.");
+  state.secrets.activeProvider = "email-control";
+  state.secrets.emailControl.activeTab = "operations";
+  state.secrets.emailControl.filters.status = "sent";
+  setTab("secrets");
+  persistTab("secrets");
+  refreshSecrets().catch((err) => setError($("globalError"), err.message));
 });
 
 $("msgOpenFailedPage")?.addEventListener("click", () => {
-  alert("Failed mail page is not built yet.");
+  state.secrets.activeProvider = "email-control";
+  state.secrets.emailControl.activeTab = "operations";
+  state.secrets.emailControl.filters.status = "failed";
+  setTab("secrets");
+  persistTab("secrets");
+  refreshSecrets().catch((err) => setError($("globalError"), err.message));
 });
 
 $("btnMessagesRefresh")?.addEventListener("click", () => {
-  alert("Messages refresh is not connected yet.");
+  refreshMessages().catch((err) => setError($("globalError"), err.message));
 });
 $("btnCreateInvoiceTop")?.addEventListener("click", () => {
   $("btnCreateInvoice")?.click();
@@ -1237,7 +3372,11 @@ $("billingWorkspaceFilter")?.addEventListener("change", async (e) => {
 });
 
 $("btnOwnerEmailSettings")?.addEventListener("click", () => {
-  openOwnerEmailSettingsModal().catch((err) => alert(err.message));
+  state.secrets.activeProvider = "email-control";
+  state.secrets.emailControl.activeTab = "configuration";
+  setTab("secrets");
+  persistTab("secrets");
+  refreshSecrets().catch((err) => setError($("globalError"), err.message));
 });
 
 const schoolSearchEl = $("schoolSearch");
@@ -1428,6 +3567,7 @@ async function refreshAll() {
   await refreshApprovedMissingWorkspaces();
   await refreshUsers();
   await refreshBilling();
+  await refreshCostControl();
   await refreshMessages();
   await refreshSettings();
   await refreshSecrets();
@@ -1457,6 +3597,20 @@ async function refreshActiveTab() {
     case "billing":
       await refreshBilling().catch(() => {});
       break;
+    case "cost-control":
+      await refreshCostControl().catch(() => {});
+      break;
+    case "operations":
+    case "backups":
+    case "lifecycle":
+    case "support":
+    case "incidents":
+    case "data-governance":
+    case "notifications":
+    case "branding":
+    case "reports":
+      await refreshOwnerControl(tab).catch(() => {});
+      break;
     case "settings":
       await refreshSettings().catch(() => {});
       break;
@@ -1478,25 +3632,6 @@ async function refreshActiveTab() {
       break;
   }
 }
-
-$("btnResetJson")?.addEventListener("click", async () => {
-  try {
-    await refreshSettings();
-    const status = $("settingsSaveStatus");
-    const error = $("settingsError");
-    if (status) status.textContent = "Editor reset to saved version.";
-    if (error) {
-      error.textContent = "";
-      error.hidden = true;
-    }
-  } catch (e) {
-    const error = $("settingsError");
-    if (error) {
-      error.textContent = e.message;
-      error.hidden = false;
-    }
-  }
-});
 
 function wireLoginEnter() {
   const u = $("loginUserId");
@@ -2416,12 +4551,7 @@ function updateWorkspaceWarning() {
   const warning = $("settingsWorkspaceWarning");
 
   if (!warning) return;
-
-  if (!state.workspaceId || state.workspaceId === "all") {
-    warning.style.display = "block";
-  } else {
-    warning.style.display = "none";
-  }
+  warning.style.display = "none";
 }
 
 function cloneSettingsObject(value) {
@@ -2429,6 +4559,568 @@ function cloneSettingsObject(value) {
     return JSON.parse(JSON.stringify(value && typeof value === "object" ? value : {}));
   } catch {
     return {};
+  }
+}
+
+function isPlainSettingsObject(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function buildSettingsDiff(base, next) {
+  if (Array.isArray(base) || Array.isArray(next)) {
+    const baseJson = JSON.stringify(base ?? null);
+    const nextJson = JSON.stringify(next ?? null);
+    return baseJson === nextJson ? undefined : cloneSettingsObject(next);
+  }
+  if (!isPlainSettingsObject(base) || !isPlainSettingsObject(next)) {
+    return JSON.stringify(base ?? null) === JSON.stringify(next ?? null) ? undefined : next;
+  }
+
+  const diff = {};
+  const keys = new Set([...Object.keys(base || {}), ...Object.keys(next || {})]);
+  for (const key of keys) {
+    const valueDiff = buildSettingsDiff(base?.[key], next?.[key]);
+    if (valueDiff !== undefined) {
+      diff[key] = valueDiff;
+    }
+  }
+  return Object.keys(diff).length ? diff : undefined;
+}
+
+function getDefaultPlatformSettings() {
+  return {
+    workspaceDefaults: {
+      maxUsersPerWorkspace: 50,
+      defaultAiBudgetEur: 5,
+      defaultStorageGb: 5,
+      defaultEmailDailyLimit: 500,
+      defaultSmsDailyLimit: 50
+    },
+    features: {
+      aiEnabled: true,
+      smsEnabled: true,
+      emailEnabled: true,
+      liveClassesEnabled: true,
+      recordingEnabled: false,
+      analyticsEnabled: true,
+      paymentsEnabled: false,
+      beta: false
+    },
+    costGovernance: {
+      platformMonthlyBudgetEur: 100,
+      workspaceMonthlyHardLimitEur: 20,
+      workspaceMonthlySoftLimitEur: 15,
+      alertThresholdPercent: 80,
+      blockOnHardLimit: true
+    },
+    providerLimits: {
+      openai: {
+        monthlyLimitEur: 10,
+        enabled: true
+      },
+      twilio: {
+        dailySmsLimit: 50,
+        monthlyLimitEur: 10,
+        enabled: true
+      },
+      googleTranslate: {
+        monthlyCharacterLimit: 500000,
+        monthlyLimitEur: 10,
+        enabled: true
+      },
+      ionosEmail: {
+        dailyEmailLimit: 500,
+        monthlyLimitEur: 5,
+        enabled: true
+      },
+      storage: {
+        maxGbPerWorkspace: 5,
+        monthlyLimitEur: 5,
+        enabled: true
+      },
+      jitsi: {
+        monthlyLimitEur: 20,
+        enabled: false
+      }
+    },
+    ai: {
+      provider: "openai",
+      enabled: true,
+      realtimeEnabled: true,
+      defaultModel: "gpt-4o-mini",
+      realtimeVoice: "alloy",
+      maxTokensPerRequest: 4000,
+      maxSessionSeconds: 1800,
+      idleTimeoutSeconds: 45,
+      allowAiForNewWorkspaces: true
+    },
+    communication: {
+      emailEnabled: true,
+      smsEnabled: true,
+      defaultSenderName: "StudiesTalk",
+      defaultReplyTo: "",
+      maxOtpPerUserPerDay: 5,
+      maxEmailsPerWorkspacePerDay: 500,
+      useOwnerEmailFallback: true
+    },
+    storage: {
+      defaultAdapter: "local",
+      uploadEnabled: true,
+      maxFileMb: 25,
+      maxVideoMb: 200,
+      retentionDays: 365,
+      allowedTypes: ["pdf", "docx", "png", "jpg", "jpeg", "mp3", "mp4"]
+    },
+    security: {
+      sessionTimeoutMinutes: 60,
+      auditRetentionDays: 365,
+      requireAdmin2fa: false,
+      requireEmailVerification: true,
+      maxLoginAttempts: 8,
+      lockoutMinutes: 15,
+      requireStrongPasswords: true,
+      allowDevBypass: false
+    },
+    subscriptions: {
+      defaultPlan: "starter",
+      trialDays: 14,
+      autoSuspendOnFailedPayment: false,
+      plans: {
+        starter: {
+          monthlyPriceEur: 49,
+          maxUsers: 50,
+          aiBudgetEur: 5,
+          storageGb: 5
+        },
+        professional: {
+          monthlyPriceEur: 149,
+          maxUsers: 200,
+          aiBudgetEur: 25,
+          storageGb: 50
+        },
+        enterprise: {
+          monthlyPriceEur: 499,
+          maxUsers: 1000,
+          aiBudgetEur: 100,
+          storageGb: 250
+        }
+      }
+    }
+  };
+}
+
+function toNumberOrFallback(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function normalizePlatformSettings(settings = {}) {
+  const defaults = getDefaultPlatformSettings();
+  const source = settings && typeof settings === "object" ? settings : {};
+  return {
+    workspaceDefaults: {
+      maxUsersPerWorkspace: Math.max(1, Math.round(toNumberOrFallback(source.workspaceDefaults?.maxUsersPerWorkspace, defaults.workspaceDefaults.maxUsersPerWorkspace))),
+      defaultAiBudgetEur: Math.max(0, toNumberOrFallback(source.workspaceDefaults?.defaultAiBudgetEur, defaults.workspaceDefaults.defaultAiBudgetEur)),
+      defaultStorageGb: Math.max(0, toNumberOrFallback(source.workspaceDefaults?.defaultStorageGb, defaults.workspaceDefaults.defaultStorageGb)),
+      defaultEmailDailyLimit: Math.max(0, Math.round(toNumberOrFallback(source.workspaceDefaults?.defaultEmailDailyLimit, defaults.workspaceDefaults.defaultEmailDailyLimit))),
+      defaultSmsDailyLimit: Math.max(0, Math.round(toNumberOrFallback(source.workspaceDefaults?.defaultSmsDailyLimit, defaults.workspaceDefaults.defaultSmsDailyLimit)))
+    },
+    features: {
+      aiEnabled: source.features?.aiEnabled !== false,
+      smsEnabled: source.features?.smsEnabled !== false,
+      emailEnabled: source.features?.emailEnabled !== false,
+      liveClassesEnabled: source.features?.liveClassesEnabled !== false,
+      recordingEnabled: !!source.features?.recordingEnabled,
+      analyticsEnabled: source.features?.analyticsEnabled !== false,
+      paymentsEnabled: !!source.features?.paymentsEnabled,
+      beta: !!source.features?.beta
+    },
+    costGovernance: {
+      platformMonthlyBudgetEur: Math.max(0, toNumberOrFallback(source.costGovernance?.platformMonthlyBudgetEur, defaults.costGovernance.platformMonthlyBudgetEur)),
+      workspaceMonthlyHardLimitEur: Math.max(0, toNumberOrFallback(source.costGovernance?.workspaceMonthlyHardLimitEur, defaults.costGovernance.workspaceMonthlyHardLimitEur)),
+      workspaceMonthlySoftLimitEur: Math.max(0, toNumberOrFallback(source.costGovernance?.workspaceMonthlySoftLimitEur, defaults.costGovernance.workspaceMonthlySoftLimitEur)),
+      alertThresholdPercent: Math.min(100, Math.max(0, Math.round(toNumberOrFallback(source.costGovernance?.alertThresholdPercent, defaults.costGovernance.alertThresholdPercent)))),
+      blockOnHardLimit: source.costGovernance?.blockOnHardLimit !== false
+    },
+    providerLimits: {
+      openai: {
+        enabled: source.providerLimits?.openai?.enabled !== false,
+        monthlyLimitEur: Math.max(0, toNumberOrFallback(source.providerLimits?.openai?.monthlyLimitEur, defaults.providerLimits.openai.monthlyLimitEur))
+      },
+      twilio: {
+        enabled: source.providerLimits?.twilio?.enabled !== false,
+        dailySmsLimit: Math.max(0, Math.round(toNumberOrFallback(source.providerLimits?.twilio?.dailySmsLimit, defaults.providerLimits.twilio.dailySmsLimit))),
+        monthlyLimitEur: Math.max(0, toNumberOrFallback(source.providerLimits?.twilio?.monthlyLimitEur, defaults.providerLimits.twilio.monthlyLimitEur))
+      },
+      googleTranslate: {
+        enabled: source.providerLimits?.googleTranslate?.enabled !== false,
+        monthlyCharacterLimit: Math.max(0, Math.round(toNumberOrFallback(source.providerLimits?.googleTranslate?.monthlyCharacterLimit, defaults.providerLimits.googleTranslate.monthlyCharacterLimit))),
+        monthlyLimitEur: Math.max(0, toNumberOrFallback(source.providerLimits?.googleTranslate?.monthlyLimitEur, defaults.providerLimits.googleTranslate.monthlyLimitEur))
+      },
+      ionosEmail: {
+        enabled: source.providerLimits?.ionosEmail?.enabled !== false,
+        dailyEmailLimit: Math.max(0, Math.round(toNumberOrFallback(source.providerLimits?.ionosEmail?.dailyEmailLimit, defaults.providerLimits.ionosEmail.dailyEmailLimit))),
+        monthlyLimitEur: Math.max(0, toNumberOrFallback(source.providerLimits?.ionosEmail?.monthlyLimitEur, defaults.providerLimits.ionosEmail.monthlyLimitEur))
+      },
+      storage: {
+        enabled: source.providerLimits?.storage?.enabled !== false,
+        maxGbPerWorkspace: Math.max(0, toNumberOrFallback(source.providerLimits?.storage?.maxGbPerWorkspace, defaults.providerLimits.storage.maxGbPerWorkspace)),
+        monthlyLimitEur: Math.max(0, toNumberOrFallback(source.providerLimits?.storage?.monthlyLimitEur, defaults.providerLimits.storage.monthlyLimitEur))
+      },
+      jitsi: {
+        enabled: !!source.providerLimits?.jitsi?.enabled,
+        monthlyLimitEur: Math.max(0, toNumberOrFallback(source.providerLimits?.jitsi?.monthlyLimitEur, defaults.providerLimits.jitsi.monthlyLimitEur))
+      }
+    },
+    ai: {
+      provider: String(source.ai?.provider || defaults.ai.provider || "openai"),
+      enabled: source.ai?.enabled !== false,
+      realtimeEnabled: source.ai?.realtimeEnabled !== false,
+      defaultModel: String(source.ai?.defaultModel || defaults.ai.defaultModel || ""),
+      realtimeVoice: String(source.ai?.realtimeVoice || defaults.ai.realtimeVoice || ""),
+      maxTokensPerRequest: Math.max(1, Math.round(toNumberOrFallback(source.ai?.maxTokensPerRequest, defaults.ai.maxTokensPerRequest))),
+      maxSessionSeconds: Math.max(1, Math.round(toNumberOrFallback(source.ai?.maxSessionSeconds, defaults.ai.maxSessionSeconds))),
+      idleTimeoutSeconds: Math.max(1, Math.round(toNumberOrFallback(source.ai?.idleTimeoutSeconds, defaults.ai.idleTimeoutSeconds))),
+      allowAiForNewWorkspaces: source.ai?.allowAiForNewWorkspaces !== false
+    },
+    communication: {
+      emailEnabled: source.communication?.emailEnabled !== false,
+      smsEnabled: source.communication?.smsEnabled !== false,
+      defaultSenderName: String(source.communication?.defaultSenderName || defaults.communication.defaultSenderName || ""),
+      defaultReplyTo: String(source.communication?.defaultReplyTo || ""),
+      maxOtpPerUserPerDay: Math.max(0, Math.round(toNumberOrFallback(source.communication?.maxOtpPerUserPerDay, defaults.communication.maxOtpPerUserPerDay))),
+      maxEmailsPerWorkspacePerDay: Math.max(0, Math.round(toNumberOrFallback(source.communication?.maxEmailsPerWorkspacePerDay, defaults.communication.maxEmailsPerWorkspacePerDay))),
+      useOwnerEmailFallback: source.communication?.useOwnerEmailFallback !== false
+    },
+    storage: {
+      defaultAdapter: String(source.storage?.defaultAdapter || defaults.storage.defaultAdapter || "local"),
+      uploadEnabled: source.storage?.uploadEnabled !== false,
+      maxFileMb: Math.max(1, Math.round(toNumberOrFallback(source.storage?.maxFileMb, defaults.storage.maxFileMb))),
+      maxVideoMb: Math.max(1, Math.round(toNumberOrFallback(source.storage?.maxVideoMb, defaults.storage.maxVideoMb))),
+      retentionDays: Math.max(0, Math.round(toNumberOrFallback(source.storage?.retentionDays, defaults.storage.retentionDays))),
+      allowedTypes: Array.isArray(source.storage?.allowedTypes)
+        ? source.storage.allowedTypes.map((item) => String(item || "").trim().toLowerCase()).filter(Boolean)
+        : defaults.storage.allowedTypes.slice()
+    },
+    security: {
+      sessionTimeoutMinutes: Math.max(5, Math.round(toNumberOrFallback(source.security?.sessionTimeoutMinutes, defaults.security.sessionTimeoutMinutes))),
+      auditRetentionDays: Math.max(0, Math.round(toNumberOrFallback(source.security?.auditRetentionDays, defaults.security.auditRetentionDays))),
+      requireAdmin2fa: !!source.security?.requireAdmin2fa,
+      requireEmailVerification: source.security?.requireEmailVerification !== false,
+      maxLoginAttempts: Math.max(1, Math.round(toNumberOrFallback(source.security?.maxLoginAttempts, defaults.security.maxLoginAttempts))),
+      lockoutMinutes: Math.max(1, Math.round(toNumberOrFallback(source.security?.lockoutMinutes, defaults.security.lockoutMinutes))),
+      requireStrongPasswords: source.security?.requireStrongPasswords !== false,
+      allowDevBypass: !!source.security?.allowDevBypass
+    },
+    subscriptions: {
+      defaultPlan: String(source.subscriptions?.defaultPlan || defaults.subscriptions.defaultPlan || "starter"),
+      trialDays: Math.max(0, Math.round(toNumberOrFallback(source.subscriptions?.trialDays, defaults.subscriptions.trialDays))),
+      autoSuspendOnFailedPayment: !!source.subscriptions?.autoSuspendOnFailedPayment,
+      plans: {
+        starter: {
+          monthlyPriceEur: Math.max(0, toNumberOrFallback(source.subscriptions?.plans?.starter?.monthlyPriceEur, defaults.subscriptions.plans.starter.monthlyPriceEur)),
+          maxUsers: Math.max(1, Math.round(toNumberOrFallback(source.subscriptions?.plans?.starter?.maxUsers, defaults.subscriptions.plans.starter.maxUsers))),
+          aiBudgetEur: Math.max(0, toNumberOrFallback(source.subscriptions?.plans?.starter?.aiBudgetEur, defaults.subscriptions.plans.starter.aiBudgetEur)),
+          storageGb: Math.max(0, toNumberOrFallback(source.subscriptions?.plans?.starter?.storageGb, defaults.subscriptions.plans.starter.storageGb))
+        },
+        professional: {
+          monthlyPriceEur: Math.max(0, toNumberOrFallback(source.subscriptions?.plans?.professional?.monthlyPriceEur, defaults.subscriptions.plans.professional.monthlyPriceEur)),
+          maxUsers: Math.max(1, Math.round(toNumberOrFallback(source.subscriptions?.plans?.professional?.maxUsers, defaults.subscriptions.plans.professional.maxUsers))),
+          aiBudgetEur: Math.max(0, toNumberOrFallback(source.subscriptions?.plans?.professional?.aiBudgetEur, defaults.subscriptions.plans.professional.aiBudgetEur)),
+          storageGb: Math.max(0, toNumberOrFallback(source.subscriptions?.plans?.professional?.storageGb, defaults.subscriptions.plans.professional.storageGb))
+        },
+        enterprise: {
+          monthlyPriceEur: Math.max(0, toNumberOrFallback(source.subscriptions?.plans?.enterprise?.monthlyPriceEur, defaults.subscriptions.plans.enterprise.monthlyPriceEur)),
+          maxUsers: Math.max(1, Math.round(toNumberOrFallback(source.subscriptions?.plans?.enterprise?.maxUsers, defaults.subscriptions.plans.enterprise.maxUsers))),
+          aiBudgetEur: Math.max(0, toNumberOrFallback(source.subscriptions?.plans?.enterprise?.aiBudgetEur, defaults.subscriptions.plans.enterprise.aiBudgetEur)),
+          storageGb: Math.max(0, toNumberOrFallback(source.subscriptions?.plans?.enterprise?.storageGb, defaults.subscriptions.plans.enterprise.storageGb))
+        }
+      }
+    }
+  };
+}
+
+function setCheckboxValue(id, checked) {
+  const node = $(id);
+  if (node) node.checked = !!checked;
+}
+
+function writePlatformSettingsForm(settings = {}) {
+  const normalized = normalizePlatformSettings(settings);
+  if ($("settings_defaults_ai_budget")) $("settings_defaults_ai_budget").value = String(normalized.workspaceDefaults.defaultAiBudgetEur);
+  if ($("settings_defaults_max_users")) $("settings_defaults_max_users").value = String(normalized.workspaceDefaults.maxUsersPerWorkspace);
+  if ($("settings_workspaceDefaults_defaultStorageGb")) $("settings_workspaceDefaults_defaultStorageGb").value = String(normalized.workspaceDefaults.defaultStorageGb);
+  if ($("settings_workspaceDefaults_defaultEmailDailyLimit")) $("settings_workspaceDefaults_defaultEmailDailyLimit").value = String(normalized.workspaceDefaults.defaultEmailDailyLimit);
+  if ($("settings_workspaceDefaults_defaultSmsDailyLimit")) $("settings_workspaceDefaults_defaultSmsDailyLimit").value = String(normalized.workspaceDefaults.defaultSmsDailyLimit);
+  if ($("settings_costGovernance_platformMonthlyBudgetEur")) $("settings_costGovernance_platformMonthlyBudgetEur").value = String(normalized.costGovernance.platformMonthlyBudgetEur);
+  if ($("settings_costGovernance_workspaceMonthlyHardLimitEur")) $("settings_costGovernance_workspaceMonthlyHardLimitEur").value = String(normalized.costGovernance.workspaceMonthlyHardLimitEur);
+  if ($("settings_costGovernance_workspaceMonthlySoftLimitEur")) $("settings_costGovernance_workspaceMonthlySoftLimitEur").value = String(normalized.costGovernance.workspaceMonthlySoftLimitEur);
+  if ($("settings_costGovernance_alertThresholdPercent")) $("settings_costGovernance_alertThresholdPercent").value = String(normalized.costGovernance.alertThresholdPercent);
+  setCheckboxValue("settings_costGovernance_blockOnHardLimit", normalized.costGovernance.blockOnHardLimit);
+  setCheckboxValue("settings_provider_openai_enabled", normalized.providerLimits.openai.enabled);
+  if ($("settings_provider_openai_monthlyLimitEur")) $("settings_provider_openai_monthlyLimitEur").value = String(normalized.providerLimits.openai.monthlyLimitEur);
+  setCheckboxValue("settings_provider_twilio_enabled", normalized.providerLimits.twilio.enabled);
+  if ($("settings_provider_twilio_dailySmsLimit")) $("settings_provider_twilio_dailySmsLimit").value = String(normalized.providerLimits.twilio.dailySmsLimit);
+  if ($("settings_provider_twilio_monthlyLimitEur")) $("settings_provider_twilio_monthlyLimitEur").value = String(normalized.providerLimits.twilio.monthlyLimitEur);
+  setCheckboxValue("settings_provider_googleTranslate_enabled", normalized.providerLimits.googleTranslate.enabled);
+  if ($("settings_provider_googleTranslate_monthlyCharacterLimit")) $("settings_provider_googleTranslate_monthlyCharacterLimit").value = String(normalized.providerLimits.googleTranslate.monthlyCharacterLimit);
+  if ($("settings_provider_googleTranslate_monthlyLimitEur")) $("settings_provider_googleTranslate_monthlyLimitEur").value = String(normalized.providerLimits.googleTranslate.monthlyLimitEur);
+  setCheckboxValue("settings_provider_ionosEmail_enabled", normalized.providerLimits.ionosEmail.enabled);
+  if ($("settings_provider_ionosEmail_dailyEmailLimit")) $("settings_provider_ionosEmail_dailyEmailLimit").value = String(normalized.providerLimits.ionosEmail.dailyEmailLimit);
+  if ($("settings_provider_ionosEmail_monthlyLimitEur")) $("settings_provider_ionosEmail_monthlyLimitEur").value = String(normalized.providerLimits.ionosEmail.monthlyLimitEur);
+  setCheckboxValue("settings_provider_storage_enabled", normalized.providerLimits.storage.enabled);
+  if ($("settings_provider_storage_maxGbPerWorkspace")) $("settings_provider_storage_maxGbPerWorkspace").value = String(normalized.providerLimits.storage.maxGbPerWorkspace);
+  if ($("settings_provider_storage_monthlyLimitEur")) $("settings_provider_storage_monthlyLimitEur").value = String(normalized.providerLimits.storage.monthlyLimitEur);
+  setCheckboxValue("settings_provider_jitsi_enabled", normalized.providerLimits.jitsi.enabled);
+  if ($("settings_provider_jitsi_monthlyLimitEur")) $("settings_provider_jitsi_monthlyLimitEur").value = String(normalized.providerLimits.jitsi.monthlyLimitEur);
+  if ($("settings_ai_provider")) $("settings_ai_provider").value = normalized.ai.provider;
+  setCheckboxValue("settings_ai_enabled", normalized.ai.enabled);
+  setCheckboxValue("settings_ai_realtime_enabled", normalized.ai.realtimeEnabled);
+  if ($("settings_ai_defaultModel")) $("settings_ai_defaultModel").value = normalized.ai.defaultModel;
+  if ($("settings_ai_realtimeVoice")) $("settings_ai_realtimeVoice").value = normalized.ai.realtimeVoice;
+  if ($("settings_ai_maxTokensPerRequest")) $("settings_ai_maxTokensPerRequest").value = String(normalized.ai.maxTokensPerRequest);
+  if ($("settings_ai_maxSessionSeconds")) $("settings_ai_maxSessionSeconds").value = String(normalized.ai.maxSessionSeconds);
+  if ($("settings_ai_idleTimeoutSeconds")) $("settings_ai_idleTimeoutSeconds").value = String(normalized.ai.idleTimeoutSeconds);
+  setCheckboxValue("settings_ai_allowAiForNewWorkspaces", normalized.ai.allowAiForNewWorkspaces);
+  setCheckboxValue("settings_communication_email_enabled", normalized.communication.emailEnabled);
+  setCheckboxValue("settings_communication_sms_enabled", normalized.communication.smsEnabled);
+  if ($("settings_communication_default_sender_name")) $("settings_communication_default_sender_name").value = normalized.communication.defaultSenderName;
+  if ($("settings_communication_default_reply_to")) $("settings_communication_default_reply_to").value = normalized.communication.defaultReplyTo;
+  if ($("settings_communication_maxOtpPerUserPerDay")) $("settings_communication_maxOtpPerUserPerDay").value = String(normalized.communication.maxOtpPerUserPerDay);
+  if ($("settings_communication_maxEmailsPerWorkspacePerDay")) $("settings_communication_maxEmailsPerWorkspacePerDay").value = String(normalized.communication.maxEmailsPerWorkspacePerDay);
+  setCheckboxValue("settings_communication_useOwnerEmailFallback", normalized.communication.useOwnerEmailFallback);
+  if ($("settings_storage_default_adapter")) $("settings_storage_default_adapter").value = normalized.storage.defaultAdapter;
+  setCheckboxValue("settings_storage_uploadEnabled", normalized.storage.uploadEnabled);
+  if ($("settings_storage_max_upload_mb")) $("settings_storage_max_upload_mb").value = String(normalized.storage.maxFileMb);
+  if ($("settings_storage_maxVideoMb")) $("settings_storage_maxVideoMb").value = String(normalized.storage.maxVideoMb);
+  if ($("settings_storage_retention_days")) $("settings_storage_retention_days").value = String(normalized.storage.retentionDays);
+  if ($("settings_storage_allowedTypes")) $("settings_storage_allowedTypes").value = normalized.storage.allowedTypes.join(", ");
+  if ($("settings_security_session_timeout_min")) $("settings_security_session_timeout_min").value = String(normalized.security.sessionTimeoutMinutes);
+  if ($("settings_security_audit_retention_days")) $("settings_security_audit_retention_days").value = String(normalized.security.auditRetentionDays);
+  setCheckboxValue("settings_security_require_admin_2fa", normalized.security.requireAdmin2fa);
+  setCheckboxValue("settings_security_requireEmailVerification", normalized.security.requireEmailVerification);
+  if ($("settings_security_maxLoginAttempts")) $("settings_security_maxLoginAttempts").value = String(normalized.security.maxLoginAttempts);
+  if ($("settings_security_lockoutMinutes")) $("settings_security_lockoutMinutes").value = String(normalized.security.lockoutMinutes);
+  setCheckboxValue("settings_security_requireStrongPasswords", normalized.security.requireStrongPasswords);
+  setCheckboxValue("settings_security_allowDevBypass", normalized.security.allowDevBypass);
+  setCheckboxValue("settings_features_ai", normalized.features.aiEnabled);
+  setCheckboxValue("settings_features_sms", normalized.features.smsEnabled);
+  setCheckboxValue("settings_features_email", normalized.features.emailEnabled);
+  setCheckboxValue("settings_features_liveClasses", normalized.features.liveClassesEnabled);
+  setCheckboxValue("settings_features_recording", normalized.features.recordingEnabled);
+  setCheckboxValue("settings_features_analytics", normalized.features.analyticsEnabled);
+  setCheckboxValue("settings_features_payments", normalized.features.paymentsEnabled);
+  setCheckboxValue("settings_features_beta", normalized.features.beta);
+  if ($("settings_subscriptions_defaultPlan")) $("settings_subscriptions_defaultPlan").value = normalized.subscriptions.defaultPlan;
+  if ($("settings_subscriptions_trialDays")) $("settings_subscriptions_trialDays").value = String(normalized.subscriptions.trialDays);
+  setCheckboxValue("settings_subscriptions_autoSuspendOnFailedPayment", normalized.subscriptions.autoSuspendOnFailedPayment);
+  ["starter", "professional", "enterprise"].forEach((planKey) => {
+    const plan = normalized.subscriptions.plans?.[planKey] || {};
+    if ($(`settings_plan_${planKey}_monthlyPriceEur`)) $(`settings_plan_${planKey}_monthlyPriceEur`).value = String(plan.monthlyPriceEur ?? "");
+    if ($(`settings_plan_${planKey}_maxUsers`)) $(`settings_plan_${planKey}_maxUsers`).value = String(plan.maxUsers ?? "");
+    if ($(`settings_plan_${planKey}_aiBudgetEur`)) $(`settings_plan_${planKey}_aiBudgetEur`).value = String(plan.aiBudgetEur ?? "");
+    if ($(`settings_plan_${planKey}_storageGb`)) $(`settings_plan_${planKey}_storageGb`).value = String(plan.storageGb ?? "");
+  });
+}
+
+function collectPlatformSettingsFromForm() {
+  return normalizePlatformSettings({
+    workspaceDefaults: {
+      defaultAiBudgetEur: $("settings_defaults_ai_budget")?.value,
+      maxUsersPerWorkspace: $("settings_defaults_max_users")?.value,
+      defaultStorageGb: $("settings_workspaceDefaults_defaultStorageGb")?.value,
+      defaultEmailDailyLimit: $("settings_workspaceDefaults_defaultEmailDailyLimit")?.value,
+      defaultSmsDailyLimit: $("settings_workspaceDefaults_defaultSmsDailyLimit")?.value
+    },
+    costGovernance: {
+      platformMonthlyBudgetEur: $("settings_costGovernance_platformMonthlyBudgetEur")?.value,
+      workspaceMonthlyHardLimitEur: $("settings_costGovernance_workspaceMonthlyHardLimitEur")?.value,
+      workspaceMonthlySoftLimitEur: $("settings_costGovernance_workspaceMonthlySoftLimitEur")?.value,
+      alertThresholdPercent: $("settings_costGovernance_alertThresholdPercent")?.value,
+      blockOnHardLimit: !!$("settings_costGovernance_blockOnHardLimit")?.checked
+    },
+    providerLimits: {
+      openai: {
+        enabled: !!$("settings_provider_openai_enabled")?.checked,
+        monthlyLimitEur: $("settings_provider_openai_monthlyLimitEur")?.value
+      },
+      twilio: {
+        enabled: !!$("settings_provider_twilio_enabled")?.checked,
+        dailySmsLimit: $("settings_provider_twilio_dailySmsLimit")?.value,
+        monthlyLimitEur: $("settings_provider_twilio_monthlyLimitEur")?.value
+      },
+      googleTranslate: {
+        enabled: !!$("settings_provider_googleTranslate_enabled")?.checked,
+        monthlyCharacterLimit: $("settings_provider_googleTranslate_monthlyCharacterLimit")?.value,
+        monthlyLimitEur: $("settings_provider_googleTranslate_monthlyLimitEur")?.value
+      },
+      ionosEmail: {
+        enabled: !!$("settings_provider_ionosEmail_enabled")?.checked,
+        dailyEmailLimit: $("settings_provider_ionosEmail_dailyEmailLimit")?.value,
+        monthlyLimitEur: $("settings_provider_ionosEmail_monthlyLimitEur")?.value
+      },
+      storage: {
+        enabled: !!$("settings_provider_storage_enabled")?.checked,
+        maxGbPerWorkspace: $("settings_provider_storage_maxGbPerWorkspace")?.value,
+        monthlyLimitEur: $("settings_provider_storage_monthlyLimitEur")?.value
+      },
+      jitsi: {
+        enabled: !!$("settings_provider_jitsi_enabled")?.checked,
+        monthlyLimitEur: $("settings_provider_jitsi_monthlyLimitEur")?.value
+      }
+    },
+    ai: {
+      provider: $("settings_ai_provider")?.value,
+      enabled: !!$("settings_ai_enabled")?.checked,
+      realtimeEnabled: !!$("settings_ai_realtime_enabled")?.checked,
+      defaultModel: $("settings_ai_defaultModel")?.value,
+      realtimeVoice: $("settings_ai_realtimeVoice")?.value,
+      maxTokensPerRequest: $("settings_ai_maxTokensPerRequest")?.value,
+      maxSessionSeconds: $("settings_ai_maxSessionSeconds")?.value,
+      idleTimeoutSeconds: $("settings_ai_idleTimeoutSeconds")?.value,
+      allowAiForNewWorkspaces: !!$("settings_ai_allowAiForNewWorkspaces")?.checked
+    },
+    communication: {
+      emailEnabled: !!$("settings_communication_email_enabled")?.checked,
+      smsEnabled: !!$("settings_communication_sms_enabled")?.checked,
+      defaultSenderName: $("settings_communication_default_sender_name")?.value || "",
+      defaultReplyTo: $("settings_communication_default_reply_to")?.value || "",
+      maxOtpPerUserPerDay: $("settings_communication_maxOtpPerUserPerDay")?.value,
+      maxEmailsPerWorkspacePerDay: $("settings_communication_maxEmailsPerWorkspacePerDay")?.value,
+      useOwnerEmailFallback: !!$("settings_communication_useOwnerEmailFallback")?.checked
+    },
+    storage: {
+      defaultAdapter: $("settings_storage_default_adapter")?.value,
+      uploadEnabled: !!$("settings_storage_uploadEnabled")?.checked,
+      maxFileMb: $("settings_storage_max_upload_mb")?.value,
+      maxVideoMb: $("settings_storage_maxVideoMb")?.value,
+      retentionDays: $("settings_storage_retention_days")?.value,
+      allowedTypes: String($("settings_storage_allowedTypes")?.value || "").split(",").map((item) => item.trim()).filter(Boolean)
+    },
+    security: {
+      sessionTimeoutMinutes: $("settings_security_session_timeout_min")?.value,
+      auditRetentionDays: $("settings_security_audit_retention_days")?.value,
+      requireAdmin2fa: !!$("settings_security_require_admin_2fa")?.checked,
+      requireEmailVerification: !!$("settings_security_requireEmailVerification")?.checked,
+      maxLoginAttempts: $("settings_security_maxLoginAttempts")?.value,
+      lockoutMinutes: $("settings_security_lockoutMinutes")?.value,
+      requireStrongPasswords: !!$("settings_security_requireStrongPasswords")?.checked,
+      allowDevBypass: !!$("settings_security_allowDevBypass")?.checked
+    },
+    features: {
+      aiEnabled: !!$("settings_features_ai")?.checked,
+      smsEnabled: !!$("settings_features_sms")?.checked,
+      emailEnabled: !!$("settings_features_email")?.checked,
+      liveClassesEnabled: !!$("settings_features_liveClasses")?.checked,
+      recordingEnabled: !!$("settings_features_recording")?.checked,
+      analyticsEnabled: !!$("settings_features_analytics")?.checked,
+      paymentsEnabled: !!$("settings_features_payments")?.checked,
+      beta: !!$("settings_features_beta")?.checked
+    },
+    subscriptions: {
+      defaultPlan: $("settings_subscriptions_defaultPlan")?.value,
+      trialDays: $("settings_subscriptions_trialDays")?.value,
+      autoSuspendOnFailedPayment: !!$("settings_subscriptions_autoSuspendOnFailedPayment")?.checked,
+      plans: {
+        starter: {
+          monthlyPriceEur: $("settings_plan_starter_monthlyPriceEur")?.value,
+          maxUsers: $("settings_plan_starter_maxUsers")?.value,
+          aiBudgetEur: $("settings_plan_starter_aiBudgetEur")?.value,
+          storageGb: $("settings_plan_starter_storageGb")?.value
+        },
+        professional: {
+          monthlyPriceEur: $("settings_plan_professional_monthlyPriceEur")?.value,
+          maxUsers: $("settings_plan_professional_maxUsers")?.value,
+          aiBudgetEur: $("settings_plan_professional_aiBudgetEur")?.value,
+          storageGb: $("settings_plan_professional_storageGb")?.value
+        },
+        enterprise: {
+          monthlyPriceEur: $("settings_plan_enterprise_monthlyPriceEur")?.value,
+          maxUsers: $("settings_plan_enterprise_maxUsers")?.value,
+          aiBudgetEur: $("settings_plan_enterprise_aiBudgetEur")?.value,
+          storageGb: $("settings_plan_enterprise_storageGb")?.value
+        }
+      }
+    }
+  });
+}
+
+function pickPlatformControlSection(settings, section) {
+  const normalized = normalizePlatformSettings(settings);
+  switch (section) {
+    case "workspaceDefaults":
+      return { workspaceDefaults: normalized.workspaceDefaults };
+    case "features":
+      return { features: normalized.features };
+    case "costGovernance":
+      return { costGovernance: normalized.costGovernance };
+    case "providerLimits":
+      return { providerLimits: normalized.providerLimits };
+    case "ai":
+      return { ai: normalized.ai };
+    case "communication":
+      return { communication: normalized.communication };
+    case "storage":
+      return { storage: normalized.storage };
+    case "security":
+      return { security: normalized.security };
+    case "subscriptions":
+      return { subscriptions: normalized.subscriptions };
+    default:
+      return normalized;
+  }
+}
+
+function setPlatformControlFeedback(message = "", tone = "") {
+  state.platformControl.feedback = { message, tone };
+  const status = $("settingsSaveStatus");
+  if (status) status.textContent = message || "Platform settings loaded.";
+}
+
+function renderPlatformControlOverview(settings = {}) {
+  const normalized = normalizePlatformSettings(settings);
+  setText("platformControlOverviewBudget", formatEUR(normalized.costGovernance.platformMonthlyBudgetEur));
+  setText("platformControlOverviewUsers", normalized.workspaceDefaults.maxUsersPerWorkspace);
+  setText("platformControlOverviewStorage", `${normalized.workspaceDefaults.defaultStorageGb} GB`);
+  setText("platformControlOverviewPlan", normalized.subscriptions.defaultPlan || "starter");
+  setText("platformControlLastSaved", state.platformControl.updatedAt || "—");
+}
+
+function renderPlatformControlTabs() {
+  const active = state.platformControl.activeTab || "overview";
+  document.querySelectorAll("[data-platform-control-tab]").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.platformControlTab === active);
+  });
+  document.querySelectorAll("[data-platform-control-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.platformControlPanel !== active;
+  });
+}
+
+async function refreshPlatformControlWorkspacePreview() {
+  const workspaceId = state.platformControl.selectedWorkspaceId || "";
+  const overrideStatus = $("platformControlOverrideStatus");
+  const preview = $("platformControlEffectivePreview");
+  if (overrideStatus) overrideStatus.textContent = "";
+  if (preview) preview.textContent = "{\n  \"settings\": {}\n}";
+
+  if (!workspaceId) {
+    state.platformControl.workspaceOverride = null;
+    state.platformControl.effectiveSettings = null;
+    if (overrideStatus) overrideStatus.textContent = "Select a workspace to view or save overrides.";
+    return;
+  }
+
+  const [overridePayload, effectivePayload] = await Promise.all([
+    api(`/api/admin/platform-control/workspaces/${encodeURIComponent(workspaceId)}`).catch(() => ({ settings: {} })),
+    api(`/api/admin/platform-control/effective/${encodeURIComponent(workspaceId)}`)
+  ]);
+  state.platformControl.workspaceOverride = overridePayload?.settings || {};
+  state.platformControl.effectiveSettings = effectivePayload?.settings || {};
+  if (preview) {
+    preview.textContent = JSON.stringify(state.platformControl.effectiveSettings, null, 2);
+  }
+  if (overrideStatus) {
+    overrideStatus.textContent = "Effective settings preview loaded.";
   }
 }
 
@@ -2464,7 +5156,7 @@ function getSettingsWorkspaceName() {
 function writeSettingsJson(settings = {}) {
   const editor = $("settingsJson");
   if (!editor) return;
-  const snapshot = cloneSettingsObject(settings);
+  const snapshot = normalizePlatformSettings(settings);
   settingsEditorSnapshot = snapshot;
   editor.value = JSON.stringify(snapshot, null, 2);
 }
@@ -2528,30 +5220,40 @@ function mergeLegalSettingsIntoEditor() {
 }
 
 async function refreshSettings() {
-  const ws = state.workspaceId;
   const status = $("settingsSaveStatus");
   const error = $("settingsError");
   const workspaceName = $("settingsWorkspaceName");
+  const overrideSelect = $("platformControlWorkspaceSelect");
 
   if (status) status.textContent = "";
   if (error) {
     error.textContent = "";
     error.hidden = true;
   }
-  if (workspaceName) {
-    workspaceName.textContent = ws === "all" ? "All workspaces" : getSettingsWorkspaceName() || "No workspace selected";
-  }
+  if (workspaceName) workspaceName.textContent = "Platform Global";
   updateWorkspaceWarning();
 
-  if (ws === "all") {
-    writeSettingsJson({ note: "Select a specific workspace to edit settings." });
-    loadLegalSettings({});
-    if (status) status.textContent = "Select a workspace before saving.";
-    return;
+  const data = await api(`/api/admin/platform-control/global`);
+  const settings = normalizePlatformSettings(data.settings || {});
+  state.platformControl.globalSettings = settings;
+  state.platformControl.updatedAt = data.row?.updated_at || "";
+
+  writePlatformSettingsForm(settings);
+  writeSettingsJson(settings);
+  renderPlatformControlOverview(settings);
+
+  if (overrideSelect) {
+    const current = state.platformControl.selectedWorkspaceId || "";
+    overrideSelect.innerHTML = `<option value="">Select workspace</option>` + (state.workspaces || [])
+      .filter((workspace) => String(workspace.id || '').trim() && String(workspace.id) !== 'default')
+      .map((workspace) => `<option value="${escapeHtml(workspace.id)}">${escapeHtml(workspace.name || workspace.id)}</option>`)
+      .join('');
+    overrideSelect.value = current;
   }
-  const data = await api(`/api/admin/workspace-settings/${encodeURIComponent(ws)}`);
-  writeSettingsJson(data.settings || {});
-  loadLegalSettings(data.settings || {});
+
+  await refreshPlatformControlWorkspacePreview().catch(() => {});
+  renderPlatformControlTabs();
+  if (status) status.textContent = "Platform settings loaded.";
 }
 
 function showLegalStatus(message = "", tone = "info") {
@@ -3781,27 +6483,25 @@ function showSchoolRequestDetails(row) {
 // SETTINGS PAGE UX IMPROVEMENTS
 // ===============================
 
-[
-  "legal_company",
-  "legal_address",
-  "legal_email",
-  "legal_phone",
-  "legal_vat",
-  "legal_hosting",
-  "legal_ai",
-  "legal_email_provider",
-  "legal_storage",
-  "legal_retention",
-  "legal_liability"
-].forEach((id) => {
-  $(id)?.addEventListener("input", mergeLegalSettingsIntoEditor);
+SETTINGS_FIELD_IDS.forEach((id) => {
+  const node = $(id);
+  if (!node) return;
+  const eventName = node.type === "checkbox" || node.tagName === "SELECT" ? "change" : "input";
+  node.addEventListener(eventName, () => {
+    const error = $("settingsError");
+    if (error) {
+      error.textContent = "";
+      error.hidden = true;
+    }
+    writeSettingsJson(collectPlatformSettingsFromForm());
+  });
 });
 
 $("settingsJson")?.addEventListener("change", () => {
   try {
-    const parsed = JSON.parse($("settingsJson").value || "{}");
+    const parsed = normalizePlatformSettings(JSON.parse($("settingsJson").value || "{}"));
     settingsEditorSnapshot = cloneSettingsObject(parsed);
-    loadLegalSettings(parsed);
+    writePlatformSettingsForm(parsed);
     const error = $("settingsError");
     if (error) {
       error.textContent = "";
@@ -3820,28 +6520,40 @@ $("settingsJson")?.addEventListener("change", () => {
 $("btnFormatJson")?.addEventListener("click", () => {
   try {
     const raw = $("settingsJson").value;
-    const parsed = JSON.parse(raw);
+    const parsed = normalizePlatformSettings(JSON.parse(raw));
     writeSettingsJson(parsed);
-    loadLegalSettings(parsed);
   } catch {
-    alert("Invalid JSON");
+    const error = $("settingsError");
+    if (error) {
+      error.textContent = "Invalid JSON";
+      error.hidden = false;
+    }
   }
 });
 
 // Validate JSON
 $("btnValidateJson")?.addEventListener("click", () => {
   try {
-    const parsed = JSON.parse($("settingsJson").value);
+    const parsed = normalizePlatformSettings(JSON.parse($("settingsJson").value));
     settingsEditorSnapshot = cloneSettingsObject(parsed);
-    loadLegalSettings(parsed);
-    alert("✅ JSON is valid");
+    writePlatformSettingsForm(parsed);
+    const error = $("settingsError");
+    if (error) {
+      error.textContent = "";
+      error.hidden = true;
+    }
+    const status = $("settingsSaveStatus");
+    if (status) status.textContent = "Advanced JSON is valid.";
   } catch (e) {
-    alert("❌ Invalid JSON:\n" + e.message);
+    const error = $("settingsError");
+    if (error) {
+      error.textContent = e.message;
+      error.hidden = false;
+    }
   }
 });
 
-// Save feedback (override your old one visually)
-$("btnSaveSettings")?.addEventListener("click", async () => {
+async function persistPlatformSettings(settings, successMessage = "Platform settings saved.") {
   const status = $("settingsSaveStatus");
   const error = $("settingsError");
   if (status) status.textContent = "";
@@ -3850,31 +6562,130 @@ $("btnSaveSettings")?.addEventListener("click", async () => {
     error.hidden = true;
   }
 
-  if (!state.workspaceId || state.workspaceId === "all") {
-    if (status) status.textContent = "Select a specific workspace before saving.";
-    return;
-  }
-
   if (status) status.textContent = "Saving...";
 
   try {
-    const raw = $("settingsJson").value;
-    const parsed = JSON.parse(raw);
-
-    await api(`/api/admin/workspace-settings/${encodeURIComponent(state.workspaceId)}`, {
-      method: "PUT",
-      body: { settings: parsed }
+    const normalized = normalizePlatformSettings(settings);
+    const response = await api(`/api/admin/platform-control/global`, {
+      method: "PATCH",
+      body: { settings: normalized }
     });
 
-    settingsEditorSnapshot = cloneSettingsObject(parsed);
-    loadLegalSettings(parsed);
-    if (status) status.textContent = "✅ Saved successfully";
+    settingsEditorSnapshot = cloneSettingsObject(normalized);
+    state.platformControl.globalSettings = normalizePlatformSettings(response?.row?.settings || normalized);
+    state.platformControl.updatedAt = response?.row?.updated_at || state.platformControl.updatedAt;
+    writePlatformSettingsForm(state.platformControl.globalSettings);
+    writeSettingsJson(state.platformControl.globalSettings);
+    renderPlatformControlOverview(state.platformControl.globalSettings);
+    if (status) status.textContent = successMessage;
   } catch (e) {
     if (error) {
       error.textContent = e.message;
       error.hidden = false;
     }
     if (status) status.textContent = "Save failed";
+  }
+}
+
+document.querySelectorAll("[data-settings-save]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const fullSettings = collectPlatformSettingsFromForm();
+    const partial = pickPlatformControlSection(fullSettings, button.dataset.settingsSave || "");
+    await persistPlatformSettings(partial, `${button.dataset.settingsSave} settings saved.`);
+  });
+});
+
+$("btnSaveSettings")?.addEventListener("click", async () => {
+  try {
+    const parsed = normalizePlatformSettings(JSON.parse($("settingsJson").value || "{}"));
+    await persistPlatformSettings(parsed, "Advanced JSON saved.");
+  } catch (e) {
+    const error = $("settingsError");
+    if (error) {
+      error.textContent = e.message;
+      error.hidden = false;
+    }
+  }
+});
+
+document.querySelectorAll("[data-platform-control-tab]").forEach((button) => {
+  button.addEventListener("click", () => {
+    state.platformControl.activeTab = button.dataset.platformControlTab || "overview";
+    renderPlatformControlTabs();
+  });
+});
+
+$("platformControlWorkspaceSelect")?.addEventListener("change", async (event) => {
+  state.platformControl.selectedWorkspaceId = String(event.target.value || "").trim();
+  await refreshPlatformControlWorkspacePreview().catch((error) => {
+    const status = $("platformControlOverrideStatus");
+    if (status) status.textContent = error.message || "Failed to load workspace preview.";
+  });
+});
+
+$("btnPlatformControlSaveWorkspaceOverride")?.addEventListener("click", async () => {
+  const workspaceId = state.platformControl.selectedWorkspaceId || "";
+  if (!workspaceId) {
+    const status = $("platformControlOverrideStatus");
+    if (status) status.textContent = "Select a workspace first.";
+    return;
+  }
+  const fullSettings = collectPlatformSettingsFromForm();
+  const globalSettings = normalizePlatformSettings(state.platformControl.globalSettings || {});
+  const overridePatch = buildSettingsDiff(globalSettings, fullSettings) || {};
+  try {
+    const response = await api(`/api/admin/platform-control/workspaces/${encodeURIComponent(workspaceId)}`, {
+      method: "PATCH",
+      body: { settings: overridePatch }
+    });
+    state.platformControl.workspaceOverride = response?.row?.settings || overridePatch;
+    const status = $("platformControlOverrideStatus");
+    if (status) status.textContent = Object.keys(overridePatch).length ? "Workspace override saved." : "Workspace override matches global settings.";
+    await refreshPlatformControlWorkspacePreview();
+  } catch (error) {
+    const status = $("platformControlOverrideStatus");
+    if (status) status.textContent = error.message || "Failed to save workspace override.";
+  }
+});
+
+$("btnPlatformControlResetWorkspaceOverride")?.addEventListener("click", async () => {
+  const workspaceId = state.platformControl.selectedWorkspaceId || "";
+  if (!workspaceId) {
+    const status = $("platformControlOverrideStatus");
+    if (status) status.textContent = "Select a workspace first.";
+    return;
+  }
+  try {
+    await api(`/api/admin/platform-control/workspaces/${encodeURIComponent(workspaceId)}`, {
+      method: "DELETE"
+    });
+    const status = $("platformControlOverrideStatus");
+    if (status) status.textContent = "Workspace override reset.";
+    await refreshPlatformControlWorkspacePreview();
+  } catch (error) {
+    const status = $("platformControlOverrideStatus");
+    if (status) status.textContent = error.message || "Failed to reset workspace override.";
+  }
+});
+
+$("btnPlatformControlResetGlobal")?.addEventListener("click", async () => {
+  try {
+    const response = await api(`/api/admin/platform-control/global/reset`, {
+      method: "POST"
+    });
+    const normalized = normalizePlatformSettings(response?.row?.settings || {});
+    state.platformControl.globalSettings = normalized;
+    state.platformControl.updatedAt = response?.row?.updated_at || "";
+    writePlatformSettingsForm(normalized);
+    writeSettingsJson(normalized);
+    renderPlatformControlOverview(normalized);
+    setPlatformControlFeedback("Global settings reset to defaults.");
+  } catch (error) {
+    const err = $("settingsError");
+    if (err) {
+      err.textContent = error.message || "Failed to reset global settings.";
+      err.hidden = false;
+    }
   }
 });
 

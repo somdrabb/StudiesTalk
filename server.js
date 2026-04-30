@@ -39,6 +39,10 @@ const { createLiveRecordingService } = require('./server/services/liveRecording.
 const { createLocalDiskStorageAdapter } = require('./server/services/storage/localDiskStorage.adapter');
 const { createS3CompatibleStorageAdapter } = require('./server/services/storage/s3CompatibleStorage.adapter');
 const { createPlatformSecretsService } = require('./server/services/platformSecrets.service');
+const { createAiBudgetService } = require('./server/services/aiBudget.service');
+const { createCostControlService } = require('./server/services/costControl.service');
+const { createPlatformControlService } = require('./server/services/platformControl.service');
+const { createPlatformOwnerControlService } = require('./server/services/platformOwnerControl.service');
 const aiSpeakingScenarioConfig = require('./public/AIvoicepractice/scenarioConfig.js');
 const { createBillingRepository } = require('./server/repositories/billingRepository');
 const { createTasksRepository } = require('./server/repositories/tasksRepository');
@@ -56,6 +60,11 @@ const { createPolicyRepository, DEFAULT_POLICY_VERSION, PLATFORM_POLICY_VERSION_
 const { createOnboardingRepository, OnboardingValidationError } = require('./server/repositories/onboardingRepository');
 const { createOnboardingGuard } = require('./server/onboarding/onboardingGuard');
 const { createPolicyGuard, buildPolicyGateResponse } = require('./server/policy/policyGuard');
+const { createAdminAiBudgetRouter } = require('./server/routes/admin.aiBudget.routes');
+const { createAdminCostControlRouter } = require('./server/routes/admin.costControl.routes');
+const { createPlatformSettingsRouter } = require('./server/routes/platformSettings.routes');
+const { createPlatformControlRouter } = require('./server/routes/platformControl.routes');
+const { createPlatformOwnerControlRouter } = require('./server/routes/platformOwnerControl.routes');
 
 const SENSITIVE_LOG_PATTERNS = [
   /(authorization:\s*bearer\s+)[^\s]+/gi,
@@ -899,6 +908,21 @@ function isPromiseLike(value) {
       };
       audit(action, fakeReq, { target, meta, user });
     }
+  });
+  const aiBudgetService = createAiBudgetService({ db, defaultBudgetEur: 5 });
+  const costControlService = createCostControlService({ db });
+  const platformControlService = createPlatformControlService({ db });
+  const platformOwnerControlService = createPlatformOwnerControlService({
+    db,
+    env: process.env,
+    backupDir: BACKUP_DIR,
+    storageAdapter: FILE_STORAGE_ADAPTER
+  });
+  platformControlService.ensureSchema().catch((err) => {
+    console.warn('[Platform Control] schema ensure failed:', err?.message || String(err));
+  });
+  platformOwnerControlService.ensureSchema().catch((err) => {
+    console.warn('[Platform Owner Control] schema ensure failed:', err?.message || String(err));
   });
   const fileStorageService = createFileStorageService({
     adapter: fileStorageAdapter,
@@ -2895,19 +2919,37 @@ function savePlatformOwnerEmailSettings(input = {}) {
 }
 
 function getDefaultAiCapEur() {
+  const row = db
+    .prepare(`
+      SELECT monthly_limit_eur
+      FROM ai_budget_settings
+      WHERE workspace_id IS NULL
+      ORDER BY datetime(COALESCE(updated_at, created_at)) DESC, id DESC
+      LIMIT 1
+    `)
+    .get();
+  const fromTable = Number(row?.monthly_limit_eur);
+  if (Number.isFinite(fromTable) && fromTable >= 0) {
+    return fromTable;
+  }
   const raw = getPlatformSetting(PLATFORM_SETTING_AI_DEFAULT_BUDGET_KEY, '0');
-  const v = Number(raw);
-  return Number.isFinite(v) && v >= 0 ? v : 0;
+  const fallback = Number(raw);
+  return Number.isFinite(fallback) && fallback >= 0 ? fallback : 0;
 }
 
 function getWorkspaceAiCapEur(workspaceId) {
   const normalizedWorkspaceId = String(workspaceId || '').trim();
   if (!normalizedWorkspaceId) return getDefaultAiCapEur();
   const row = db
-    .prepare('SELECT monthly_cap_eur FROM ai_budget_settings WHERE workspace_id = ?')
+    .prepare(`
+      SELECT monthly_limit_eur
+      FROM ai_budget_settings
+      WHERE workspace_id = ?
+      LIMIT 1
+    `)
     .get(normalizedWorkspaceId);
-  if (row && Number.isFinite(Number(row.monthly_cap_eur))) {
-    return Math.max(0, Number(row.monthly_cap_eur));
+  if (row && Number.isFinite(Number(row.monthly_limit_eur))) {
+    return Math.max(0, Number(row.monthly_limit_eur));
   }
   return getDefaultAiCapEur();
 }
@@ -2945,17 +2987,19 @@ function getWorkspaceAiBudgetSummary(workspaceId) {
 
 function getAiBudgetSummary(workspaceId) {
   const settings = db
-    .prepare('SELECT monthly_cap_eur, updated_at FROM ai_budget_settings WHERE workspace_id = ?')
+    .prepare('SELECT monthly_limit_eur, updated_at FROM ai_budget_settings WHERE workspace_id = ?')
     .get(workspaceId);
   const defaultCap = getDefaultAiCapEur();
   const summary = getWorkspaceAiBudgetSummary(workspaceId);
   return {
     workspace_id: workspaceId,
+    monthly_limit_eur: summary.cap_eur,
     monthly_cap_eur: summary.cap_eur,
     used_eur: summary.used_eur,
     left_eur: summary.left_eur,
     blocked: summary.blocked,
     updated_at: settings?.updated_at || null,
+    default_monthly_limit_eur: defaultCap,
     default_monthly_cap_eur: defaultCap
   };
 }
@@ -2969,7 +3013,46 @@ function recordAiUsage(workspaceId, userId, cost_eur, tokens_input = 0, tokens_o
   return { id, workspace_id: workspaceId, user_id: userId, cost_eur, tokens_input, tokens_output, created_at };
 }
 
+async function recordProviderUsageSafe({
+  workspaceId,
+  providerKey,
+  featureKey = '',
+  units = 0,
+  unitName = '',
+  unitCostEur = 0,
+  costEur = 0,
+  metadata = null
+} = {}) {
+  try {
+    if (!workspaceId || !providerKey) return null;
+    return await costControlService.recordUsage({
+      workspaceId,
+      providerKey,
+      featureKey,
+      units,
+      unitName,
+      unitCostEur,
+      costEur,
+      metadata
+    });
+  } catch (error) {
+    console.warn('[Cost Control] usage write skipped:', error?.message || String(error));
+    return null;
+  }
+}
+
+async function enforceProviderLimitSafe({ workspaceId, providerKey, estimatedCostEur = 0, period = 'monthly' } = {}) {
+  if (!workspaceId || !providerKey) return { allowed: true };
+  return costControlService.enforceProviderLimit({
+    workspaceId,
+    providerKey,
+    estimatedCostEur,
+    period
+  });
+}
+
 function logAiUsage({ workspaceId, userId, costEur, tokensIn = null, tokensOut = null }) {
+  const createdAt = new Date().toISOString();
   db.prepare(`
     INSERT INTO ai_usage_ledger (id, workspace_id, user_id, cost_eur, tokens_input, tokens_output, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -2980,7 +3063,7 @@ function logAiUsage({ workspaceId, userId, costEur, tokensIn = null, tokensOut =
     Number(costEur || 0),
     tokensIn == null ? null : Number(tokensIn),
     tokensOut == null ? null : Number(tokensOut),
-    Date.now()
+    createdAt
   );
 }
 
@@ -3085,7 +3168,7 @@ function finalizeRuntimeSession({ runtimeId, reason }) {
   db.prepare(`
     INSERT INTO ai_usage_ledger (id, workspace_id, user_id, cost_eur, tokens_input, tokens_output, created_at)
     VALUES (?, ?, ?, ?, NULL, NULL, ?)
-  `).run(secId('aiu'), row.workspace_id, row.user_id, costEur, now);
+  `).run(secId('aiu'), row.workspace_id, row.user_id, costEur, new Date(now).toISOString());
   if (row.conversation_id) {
     db.prepare(`
       UPDATE ai_conversations
@@ -4322,9 +4405,12 @@ db.prepare(`
 
 db.prepare(`
   CREATE TABLE IF NOT EXISTS ai_budget_settings (
-    workspace_id TEXT PRIMARY KEY,
-    monthly_cap_eur REAL NOT NULL DEFAULT 0,
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT,
+    monthly_limit_eur REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    UNIQUE (workspace_id),
     FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
   )
 `).run();
@@ -4346,6 +4432,131 @@ db.prepare(`
   CREATE INDEX IF NOT EXISTS idx_ai_usage_workspace_month
   ON ai_usage_ledger(workspace_id, created_at)
 `).run();
+
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS provider_catalog (
+    id TEXT PRIMARY KEY,
+    provider_key TEXT UNIQUE NOT NULL,
+    display_name TEXT NOT NULL,
+    category TEXT,
+    unit_name TEXT,
+    default_unit_cost_eur REAL DEFAULT 0,
+    active INTEGER DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )
+`).run();
+
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS workspace_provider_limits (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT,
+    provider_key TEXT NOT NULL,
+    period TEXT NOT NULL DEFAULT 'monthly',
+    hard_limit_eur REAL,
+    soft_limit_eur REAL,
+    unit_limit REAL,
+    enabled INTEGER DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    UNIQUE (workspace_id, provider_key, period)
+  )
+`).run();
+
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS usage_ledger (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    provider_key TEXT NOT NULL,
+    feature_key TEXT,
+    units REAL DEFAULT 0,
+    unit_name TEXT,
+    unit_cost_eur REAL DEFAULT 0,
+    cost_eur REAL DEFAULT 0,
+    metadata_json TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )
+`).run();
+
+db.prepare(`CREATE INDEX IF NOT EXISTS idx_usage_ledger_workspace_provider_created ON usage_ledger(workspace_id, provider_key, created_at)`).run();
+db.prepare(`CREATE INDEX IF NOT EXISTS idx_usage_ledger_provider_created ON usage_ledger(provider_key, created_at)`).run();
+db.prepare(`CREATE INDEX IF NOT EXISTS idx_usage_ledger_workspace_created ON usage_ledger(workspace_id, created_at)`).run();
+
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS workspace_subscriptions (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    plan_key TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    monthly_price_eur REAL DEFAULT 0,
+    stripe_customer_id TEXT,
+    stripe_subscription_id TEXT,
+    current_period_start TEXT,
+    current_period_end TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )
+`).run();
+
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS cost_alerts (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT,
+    provider_key TEXT,
+    alert_type TEXT NOT NULL,
+    period TEXT NOT NULL,
+    threshold_eur REAL,
+    current_cost_eur REAL,
+    acknowledged INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )
+`).run();
+
+try {
+  const aiBudgetColumns = db.prepare(`PRAGMA table_info(ai_budget_settings)`).all();
+  const aiBudgetColumnNames = new Set(aiBudgetColumns.map((column) => String(column.name || '')));
+  const needsAiBudgetMigration =
+    !aiBudgetColumnNames.has('id') ||
+    !aiBudgetColumnNames.has('monthly_limit_eur') ||
+    !aiBudgetColumnNames.has('created_at');
+
+  if (needsAiBudgetMigration) {
+    db.prepare('ALTER TABLE ai_budget_settings RENAME TO ai_budget_settings_legacy').run();
+    db.prepare(`
+      CREATE TABLE ai_budget_settings (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT,
+        monthly_limit_eur REAL NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        UNIQUE (workspace_id),
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+      )
+    `).run();
+
+    const legacyRows = db.prepare(`
+      SELECT workspace_id, monthly_cap_eur, updated_at
+      FROM ai_budget_settings_legacy
+    `).all();
+    const insertBudgetRow = db.prepare(`
+      INSERT INTO ai_budget_settings (id, workspace_id, monthly_limit_eur, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    for (const row of legacyRows) {
+      const ts = String(row?.updated_at || new Date().toISOString());
+      insertBudgetRow.run(
+        crypto.randomUUID(),
+        String(row?.workspace_id || '').trim() || null,
+        Math.max(0, Number(row?.monthly_cap_eur || 0)),
+        ts,
+        ts
+      );
+    }
+    db.prepare('DROP TABLE ai_budget_settings_legacy').run();
+  }
+} catch (err) {
+  console.warn('[AI Budget] schema migration failed:', err?.message || String(err));
+}
 
 db.prepare(`
   CREATE TABLE IF NOT EXISTS ai_runtime_sessions (
@@ -4423,14 +4634,33 @@ try {
   const row = db
     .prepare('SELECT value FROM platform_settings WHERE key = ?')
     .get('ai_default_monthly_cap_eur');
+  const existingGlobalBudget = db
+    .prepare('SELECT id FROM ai_budget_settings WHERE workspace_id IS NULL LIMIT 1')
+    .get();
+  const defaultValue = row?.value ?? '5';
+  if (!existingGlobalBudget) {
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO ai_budget_settings (id, workspace_id, monthly_limit_eur, created_at, updated_at)
+      VALUES (?, NULL, ?, ?, ?)
+    `).run(crypto.randomUUID(), Math.max(0, Number(defaultValue || 0)), now, now);
+  }
   if (!row) {
     db.prepare(`
       INSERT INTO platform_settings (key, value, updated_at)
       VALUES (?, ?, ?)
-    `).run('ai_default_monthly_cap_eur', '5', new Date().toISOString());
+    `).run('ai_default_monthly_cap_eur', String(getDefaultAiCapEur()), new Date().toISOString());
   }
 } catch (err) {
   console.warn('[AI Budget] default seed failed:', err?.message || String(err));
+}
+
+try {
+  costControlService.seedProviderCatalog().catch((err) => {
+    console.warn('[Cost Control] provider catalog seed failed:', err?.message || String(err));
+  });
+} catch (err) {
+  console.warn('[Cost Control] provider catalog seed failed:', err?.message || String(err));
 }
 
 try {
@@ -8613,6 +8843,29 @@ tryAlter(`
   ADD COLUMN use_platform_contact_email INTEGER DEFAULT 0
 `);
 tryAlter("ALTER TABLE workspace_email_logs ADD COLUMN message_id TEXT DEFAULT ''");
+tryAlter("ALTER TABLE workspace_email_logs ADD COLUMN direction TEXT DEFAULT 'outbound'");
+tryAlter("ALTER TABLE workspace_email_logs ADD COLUMN from_email TEXT DEFAULT ''");
+tryAlter("ALTER TABLE workspace_email_logs ADD COLUMN provider_key TEXT DEFAULT ''");
+tryAlter("ALTER TABLE workspace_email_logs ADD COLUMN metadata_json TEXT DEFAULT ''");
+tryAlter("ALTER TABLE workspace_email_settings ADD COLUMN created_at TEXT DEFAULT ''");
+tryAlter("ALTER TABLE workspace_email_settings ADD COLUMN owner_email TEXT DEFAULT ''");
+tryAlter("ALTER TABLE workspace_email_settings ADD COLUMN owner_name TEXT DEFAULT ''");
+tryAlter("ALTER TABLE workspace_email_settings ADD COLUMN owner_subject_prefix TEXT DEFAULT ''");
+tryAlter("ALTER TABLE workspace_email_settings ADD COLUMN owner_signature TEXT DEFAULT ''");
+tryAlter("ALTER TABLE workspace_email_settings ADD COLUMN owner_enabled INTEGER DEFAULT 1");
+tryAlter("ALTER TABLE workspace_email_settings ADD COLUMN workspace_email_enabled INTEGER DEFAULT 0");
+tryAlter("ALTER TABLE workspace_email_settings ADD COLUMN workspace_email TEXT DEFAULT ''");
+tryAlter("ALTER TABLE workspace_email_settings ADD COLUMN workspace_sender_name TEXT DEFAULT ''");
+tryAlter("ALTER TABLE workspace_email_settings ADD COLUMN workspace_subject_prefix TEXT DEFAULT ''");
+tryAlter("ALTER TABLE workspace_email_settings ADD COLUMN workspace_signature TEXT DEFAULT ''");
+tryAlter("ALTER TABLE workspace_email_settings ADD COLUMN use_owner_fallback INTEGER DEFAULT 1");
+db.prepare(`
+  UPDATE workspace_email_settings
+  SET created_at = datetime('now')
+  WHERE COALESCE(created_at, '') = ''
+`).run();
+tryAlter("ALTER TABLE email_events ADD COLUMN email_log_id TEXT DEFAULT ''");
+tryAlter("ALTER TABLE email_events ADD COLUMN message TEXT DEFAULT ''");
 tryAlter("ALTER TABLE inbound_emails ADD COLUMN workspace_id TEXT DEFAULT ''");
 tryAlter("ALTER TABLE inbound_emails ADD COLUMN recipient TEXT DEFAULT ''");
 tryAlter("ALTER TABLE inbound_emails ADD COLUMN in_reply_to TEXT DEFAULT ''");
@@ -12157,6 +12410,21 @@ app.post('/api/uploads', (req, res) => {
           throw registryErr;
         }
 
+        await recordProviderUsageSafe({
+          workspaceId: requesterWorkspaceId,
+          providerKey: 'storage',
+          featureKey: 'file_upload',
+          units: Number(stored.sizeBytes || f.size || 0),
+          unitName: 'bytes',
+          costEur: 0,
+          metadata: {
+            userId: requesterUserId,
+            channelId: stagingChannelId,
+            storageKey: stored.storageKey,
+            mimeType: stored.mimeType
+          }
+        });
+
         out.push({
           url: stored.url,
           originalName: stored.originalName,
@@ -13900,6 +14168,7 @@ app.post('/api/workspaces/:workspaceId/email-settings/test', authRequired, expre
   const ctx = getManagedWorkspaceRequestContext(req, res);
   if (!ctx) return;
   const workspaceId = ctx.workspaceId;
+  const user = ctx.user || null;
   let to = '';
   try {
     to = normalizeOptionalEmail(req.body?.to || '', 'to');
@@ -13993,6 +14262,19 @@ app.post('/api/workspaces/:workspaceId/email-settings/test', authRequired, expre
       ...baseLog,
       status: 'sent',
       messageId: normalizeEmailMessageId(info?.messageId || '')
+    });
+    await recordProviderUsageSafe({
+      workspaceId,
+      providerKey: 'ionos_email',
+      featureKey: 'transactional_email',
+      units: 1,
+      unitName: 'email',
+      costEur: 0,
+      metadata: {
+        userId: user?.id || null,
+        to,
+        scope: 'workspace_email_test'
+      }
     });
     res.json({ ok: true, provider: providerName });
   } catch (e) {
@@ -19612,6 +19894,7 @@ app.post('/api/translate', async (req, res) => {
   }
 
   const viewerId = authed.id || getRequesterId(req);
+  const workspaceId = String(authed.workspace_id || authed.workspaceId || '').trim() || null;
 
   const { messageId, text, sourceLang, targetLang } = req.body || {};
   const msgId = String(messageId || '').trim();
@@ -19668,6 +19951,19 @@ app.post('/api/translate', async (req, res) => {
   // If message is not in DB, translate but don't cache (avoids FK issues)
   const msgExists = await messageRepository.getMessageById(msgId);
   if (!msgExists) {
+    if (workspaceId) {
+      try {
+        await enforceProviderLimitSafe({
+          workspaceId,
+          providerKey: 'google_translate',
+          estimatedCostEur: 0
+        });
+      } catch (error) {
+        return res.status(error.statusCode || 402).json(error.payload || {
+          error: error.message || 'Provider budget exceeded'
+        });
+      }
+    }
     try {
       const { provider, translatedText } = await translateSmart({
         text: cleanText,
@@ -19675,6 +19971,23 @@ app.post('/api/translate', async (req, res) => {
         targetLang: to
       });
       const finalTranslated = normalizeTranslatedText(translatedText) || translatedText;
+      if (workspaceId) {
+        await recordProviderUsageSafe({
+          workspaceId,
+          providerKey: 'google_translate',
+          featureKey: 'message_translation',
+          units: cleanText.length,
+          unitName: 'characters',
+          costEur: 0,
+          metadata: {
+            userId: viewerId,
+            messageId: msgId,
+            sourceLang: from,
+            targetLang: to,
+            provider: provider || 'google'
+          }
+        });
+      }
       return res.json({
         translatedText: finalTranslated,
         status: 'ready',
@@ -19707,6 +20020,20 @@ app.post('/api/translate', async (req, res) => {
   // Insert pending row (provider should reflect current provider, not hardcoded argos)
   const providerDefault = String(process.env.TRANSLATION_PROVIDER || 'google').toLowerCase();
 
+  if (workspaceId) {
+    try {
+      await enforceProviderLimitSafe({
+        workspaceId,
+        providerKey: 'google_translate',
+        estimatedCostEur: 0
+      });
+    } catch (error) {
+      return res.status(error.statusCode || 402).json(error.payload || {
+        error: error.message || 'Provider budget exceeded'
+      });
+    }
+  }
+
   await upsertPendingTranslation(msgId, to, viewerId, providerDefault);
 
     try {
@@ -19721,6 +20048,24 @@ app.post('/api/translate', async (req, res) => {
       const finalTranslated = sanitizedTranslated || translatedText;
 
       await saveReadyTranslation(msgId, to, finalTranslated, viewerId, providerUsed);
+
+      if (workspaceId) {
+        await recordProviderUsageSafe({
+          workspaceId,
+          providerKey: 'google_translate',
+          featureKey: 'message_translation',
+          units: cleanText.length,
+          unitName: 'characters',
+          costEur: 0,
+          metadata: {
+            userId: viewerId,
+            messageId: msgId,
+            sourceLang: from,
+            targetLang: to,
+            provider: providerUsed
+          }
+        });
+      }
 
       return res.json({
         translatedText: finalTranslated,
@@ -27948,15 +28293,16 @@ const resolveAiWorkspace = (req) => {
   return String(req.query.workspaceId || req.body.workspaceId || req.auth?.workspaceId || "").trim();
 };
 
-app.get("/api/ai/budget", authRequired, (req, res) => {
+app.get("/api/ai/budget", authRequired, async (req, res) => {
   try {
     const workspaceId = getAuthWorkspaceId(req);
     if (!workspaceId) {
       return res.status(400).json({ error: "workspaceId missing in auth token" });
     }
-    const summary = getWorkspaceAiBudgetSummary(workspaceId);
+    const summary = await aiBudgetService.getWorkspaceBudgetSummary(workspaceId);
     return res.json({
-      monthly_cap_eur: summary.cap_eur,
+      monthly_limit_eur: summary.monthly_limit_eur,
+      monthly_cap_eur: summary.monthly_cap_eur,
       used_eur: summary.used_eur,
       left_eur: summary.left_eur,
       blocked: summary.blocked
@@ -27967,13 +28313,13 @@ app.get("/api/ai/budget", authRequired, (req, res) => {
   }
 });
 
-app.get("/api/ai/budget/summary", authRequired, (req, res) => {
+app.get("/api/ai/budget/summary", authRequired, async (req, res) => {
   try {
     const workspaceId = getAuthWorkspaceId(req);
     if (!workspaceId) {
       return res.status(400).json({ error: "workspaceId missing" });
     }
-    const summary = getWorkspaceAiBudgetSummary(workspaceId);
+    const summary = await aiBudgetService.getWorkspaceBudgetSummary(workspaceId);
     res.json(summary);
   } catch (err) {
     console.error("Failed to fetch AI budget summary", err);
@@ -27981,7 +28327,7 @@ app.get("/api/ai/budget/summary", authRequired, (req, res) => {
   }
 });
 
-app.post("/api/ai/usage", authRequired, (req, res) => {
+app.post("/api/ai/usage", authRequired, async (req, res) => {
   try {
     const workspaceId = getAuthWorkspaceId(req);
     const userId = getAuthUserId(req);
@@ -27996,7 +28342,20 @@ app.post("/api/ai/usage", authRequired, (req, res) => {
         ? providedCost
         : calculateAiCost(tokens_input, tokens_output);
     const record = recordAiUsage(workspaceId, userId, cost_eur, tokens_input, tokens_output);
-    const summary = getWorkspaceAiBudgetSummary(workspaceId);
+    await recordProviderUsageSafe({
+      workspaceId,
+      providerKey: 'openai',
+      featureKey: 'ai_chat',
+      units: tokens_input + tokens_output,
+      unitName: 'tokens',
+      costEur: cost_eur,
+      metadata: {
+        tokens_input,
+        tokens_output,
+        userId
+      }
+    });
+    const summary = await aiBudgetService.getWorkspaceBudgetSummary(workspaceId);
     res.json({ ...summary, usage_record: record });
   } catch (err) {
     console.error("Failed to record usage", err);
@@ -28091,14 +28450,27 @@ app.post(
         });
       }
 
-      const summary = getWorkspaceAiBudgetSummary(workspaceId);
-      if (summary.blocked) {
+      const budgetCheck = await aiBudgetService.canUseAI(workspaceId);
+      if (!budgetCheck.allowed) {
+        const summary = await aiBudgetService.getWorkspaceBudgetSummary(workspaceId);
         return res.status(402).json({
           blocked: true,
-          reason: "AI budget limit reached",
+          reason: `AI budget exceeded (€${budgetCheck.limit})`,
           workspaceId,
           userId,
           ...summary
+        });
+      }
+
+      try {
+        await enforceProviderLimitSafe({
+          workspaceId,
+          providerKey: 'openai',
+          estimatedCostEur: 0
+        });
+      } catch (error) {
+        return res.status(error.statusCode || 402).json(error.payload || {
+          error: error.message || 'Provider budget exceeded'
         });
       }
 
@@ -28110,6 +28482,7 @@ app.post(
         model: getRuntimeSecret('openai', 'OPENAI_REALTIME_MODEL', 'OPENAI_REALTIME_MODEL') || "gpt-realtime-mini",
         instructions
       });
+      const summary = await aiBudgetService.getWorkspaceBudgetSummary(workspaceId);
 
       return res.json({
         blocked: false,
@@ -28177,8 +28550,28 @@ app.post("/api/ai/runtime/end", authRequired, express.json(), (req, res) => {
 
   if (!row) return res.status(404).json({ error: "runtime session not found" });
 
-  const result = finalizeRuntimeSession({ runtimeId, reason: "user_stop" });
-  res.json(result);
+  Promise.resolve(finalizeRuntimeSession({ runtimeId, reason: "user_stop" }))
+    .then(async (result) => {
+      if (result?.ok) {
+        await recordProviderUsageSafe({
+          workspaceId,
+          providerKey: 'openai',
+          featureKey: 'ai_voice',
+          units: Number(result.seconds || 0),
+          unitName: 'seconds',
+          costEur: Number(result.cost_eur || 0),
+          metadata: {
+            userId,
+            conversationId: result.conversation_id || null
+          }
+        });
+      }
+      res.json(result);
+    })
+    .catch((err) => {
+      console.error("Failed to end runtime session", err);
+      res.status(500).json({ error: "Failed to end runtime session" });
+    });
 });
 
 app.post("/api/ai/conversation/start", authRequired, express.json(), (req, res) => {
@@ -28302,63 +28695,45 @@ app.post("/api/ai/conversation/:id/end", authRequired, express.json(), (req, res
   res.json({ ok: true, updated: result.changes });
 });
 
-app.get("/api/admin/ai-budget", requireAdmin, (req, res) => {
-  const workspaceId = resolveAiWorkspace(req);
-  if (!workspaceId) return res.status(400).json({ error: "workspaceId required" });
-  res.json(getAiBudgetSummary(workspaceId));
-});
+app.use('/api/admin/ai-budget', createAdminAiBudgetRouter({
+  db,
+  aiBudgetService,
+  authRequired,
+  requireAdmin,
+  requireSuperAdmin,
+  setPlatformSetting
+}));
 
-app.post("/api/admin/ai-budget", requireAdmin, (req, res) => {
-  const workspaceId = resolveAiWorkspace(req);
-  if (!workspaceId) return res.status(400).json({ error: "workspaceId required" });
-  const cap = Number(req.body?.monthly_cap_eur);
-  if (Number.isNaN(cap) || cap < 0) {
-    return res.status(400).json({ error: "monthly_cap_eur must be a non-negative number" });
-  }
-  const now = new Date().toISOString();
-  db.prepare(`
-    INSERT INTO ai_budget_settings (workspace_id, monthly_cap_eur, updated_at)
-    VALUES (?, ?, ?)
-    ON CONFLICT(workspace_id) DO UPDATE SET
-      monthly_cap_eur = excluded.monthly_cap_eur,
-      updated_at = excluded.updated_at
-  `).run(workspaceId, cap, now);
-  res.json(getAiBudgetSummary(workspaceId));
-});
-
-app.post("/api/admin/ai-budget/reset", requireAdmin, (req, res) => {
-  const workspaceId = resolveAiWorkspace(req);
-  if (!workspaceId) return res.status(400).json({ error: "workspaceId required" });
-  db.prepare("DELETE FROM ai_usage_ledger WHERE workspace_id = ?").run(workspaceId);
-  res.json({ ok: true });
-});
-
-app.get("/api/admin/ai-budget/default", authRequired, requireSuperAdmin, (req, res) => {
-  const cap = getDefaultAiCapEur();
-  const row = db
-    .prepare(`
-      SELECT updated_at
-      FROM platform_settings
-      WHERE key = ?
-    `)
-    .get(PLATFORM_SETTING_AI_DEFAULT_BUDGET_KEY);
-  res.json({ monthly_cap_eur: cap, updated_at: row?.updated_at || null });
-});
-
-app.post(
-  "/api/admin/ai-budget/default",
+app.use('/api/admin/cost-control', createAdminCostControlRouter({
+  db,
+  costControlService,
   authRequired,
   requireSuperAdmin,
-  express.json(),
-  (req, res) => {
-    const cap = Number(req.body?.monthly_cap_eur);
-    if (!Number.isFinite(cap) || cap < 0) {
-      return res.status(400).json({ error: "monthly_cap_eur must be a number >= 0" });
-    }
-    setPlatformSetting(PLATFORM_SETTING_AI_DEFAULT_BUDGET_KEY, String(cap));
-    res.json({ ok: true, monthly_cap_eur: cap });
-  }
-);
+  auditAction: audit
+}));
+
+app.use('/api/admin/platform-settings', createPlatformSettingsRouter({
+  authRequired,
+  requireSuperAdmin,
+  getPlatformSetting,
+  setPlatformSetting,
+  auditAction: audit
+}));
+
+app.use('/api/admin/platform-control', createPlatformControlRouter({
+  db,
+  platformControlService,
+  authRequired,
+  requireSuperAdmin,
+  auditAction: audit
+}));
+
+app.use('/api/admin', createPlatformOwnerControlRouter({
+  service: platformOwnerControlService,
+  authRequired,
+  requireSuperAdmin,
+  auditAction: audit
+}));
 
 // ---------- ADMIN API ----------
 app.get('/api/admin/me', (req, res) => {
@@ -28478,6 +28853,409 @@ function getAdminWorkspaceEmailSettings(workspaceId) {
   };
 }
 
+function getFallbackEmailControlWorkspaceId() {
+  const row = db
+    .prepare(`SELECT id FROM workspaces ORDER BY datetime(COALESCE(created_at, 'now')) ASC, id ASC LIMIT 1`)
+    .get();
+  return String(row?.id || 'default').trim() || 'default';
+}
+
+function parseJsonSafely(value, fallback = null) {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value);
+  } catch (_err) {
+    return fallback;
+  }
+}
+
+function normalizeEmailControlWorkspaceId(workspaceId) {
+  const normalized = String(workspaceId || '').trim();
+  if (!normalized || normalized === 'all') return '';
+  return normalized;
+}
+
+function getEmailControlWorkspaceSettings(workspaceId) {
+  const normalizedWorkspaceId = normalizeEmailControlWorkspaceId(workspaceId);
+  if (!normalizedWorkspaceId) return null;
+  const workspaceRow = db
+    .prepare('SELECT id, name, admin_email FROM workspaces WHERE id = ?')
+    .get(normalizedWorkspaceId) || {};
+  const row = db
+    .prepare('SELECT * FROM workspace_email_settings WHERE workspace_id = ?')
+    .get(normalizedWorkspaceId) || {};
+  return {
+    workspace_id: normalizedWorkspaceId,
+    workspace_name: workspaceRow.name || normalizedWorkspaceId,
+    workspace_email_enabled: Number(
+      row.workspace_email_enabled ?? row.enabled ?? 0
+    ) === 1,
+    workspace_email: String(row.workspace_email || row.reply_to_email || workspaceRow.admin_email || '').trim(),
+    workspace_sender_name: String(row.workspace_sender_name || row.brand_school_name || workspaceRow.name || '').trim(),
+    workspace_subject_prefix: String(row.workspace_subject_prefix || row.subject_prefix || '[School]').trim(),
+    workspace_signature: String(row.workspace_signature || row.footer_text || '').trim(),
+    use_owner_fallback: Number(row.use_owner_fallback ?? 1) === 1,
+    updated_at: row.updated_at || '',
+    created_at: row.created_at || ''
+  };
+}
+
+function getEmailControlOwnerSettings() {
+  const owner = getPlatformOwnerEmailSettings();
+  return {
+    owner_enabled: Number(owner.enabled || 0) === 1,
+    owner_name: String(owner.display_name || 'Platform Owner').trim(),
+    owner_email: String(owner.owner_email || '').trim(),
+    owner_subject_prefix: String(owner.subject_prefix || '[StudiesTalk Owner]').trim(),
+    owner_signature: String(owner.footer_text || 'Kind regards,\nPlatform Owner').trim()
+  };
+}
+
+function buildEmailControlEffectiveSender(workspaceId) {
+  const owner = getEmailControlOwnerSettings();
+  const workspace = getEmailControlWorkspaceSettings(workspaceId);
+  if (
+    workspace &&
+    workspace.workspace_email_enabled &&
+    workspace.workspace_email &&
+    workspace.workspace_email.includes('@')
+  ) {
+    return {
+      mode: 'workspace',
+      workspace_id: workspace.workspace_id,
+      workspace_name: workspace.workspace_name,
+      fromEmail: workspace.workspace_email,
+      senderName: workspace.workspace_sender_name || workspace.workspace_name || owner.owner_name,
+      subjectPrefix: workspace.workspace_subject_prefix || '',
+      signature: workspace.workspace_signature || '',
+      fallbackUsed: false
+    };
+  }
+  return {
+    mode: 'owner',
+    workspace_id: workspace?.workspace_id || '',
+    workspace_name: workspace?.workspace_name || '',
+    fromEmail: owner.owner_email || '',
+    senderName: owner.owner_name || 'Platform Owner',
+    subjectPrefix: owner.owner_subject_prefix || '',
+    signature: owner.owner_signature || '',
+    fallbackUsed: !!workspace && Number(workspace.use_owner_fallback) === 1
+  };
+}
+
+function getEmailControlProviderStatus() {
+  const latestTest = db
+    .prepare(`
+      SELECT status, provider_key, created_at
+      FROM workspace_email_logs
+      WHERE lower(COALESCE(type, '')) = 'test'
+      ORDER BY datetime(created_at) DESC, id DESC
+      LIMIT 1
+    `)
+    .get();
+  if (latestTest?.status === 'failed') {
+    return { label: 'Test failed', tone: 'failed', providerKey: latestTest.provider_key || providerName || 'unknown' };
+  }
+  if (latestTest?.status === 'sent') {
+    return { label: providerName === 'disabled' ? 'Mock / disabled' : 'Configured', tone: providerName === 'disabled' ? 'warn' : 'ok', providerKey: latestTest.provider_key || providerName || 'unknown' };
+  }
+  if (providerName === 'disabled') {
+    return { label: 'Mock / disabled', tone: 'warn', providerKey: 'disabled' };
+  }
+  return { label: providerName || 'unknown', tone: providerName ? 'ok' : 'neutral', providerKey: providerName || 'unknown' };
+}
+
+function insertWorkspaceEmailLog({
+  workspaceId,
+  toEmail = '',
+  fromEmail = '',
+  subject = '',
+  bodyText = '',
+  bodyHtml = '',
+  status = 'sent',
+  type = 'test',
+  errorMessage = '',
+  direction = 'outbound',
+  providerKey = providerName || '',
+  metadata = null,
+  sentByUserId = '',
+  messageId = ''
+}) {
+  const id = generateId('elog');
+  db.prepare(`
+    INSERT INTO workspace_email_logs (
+      id, workspace_id, sent_by_user_id, to_email, to_name, from_email, subject,
+      body_text, body_html, type, status, error_message, message_id, direction,
+      provider_key, metadata_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  `).run(
+    id,
+    String(workspaceId || getFallbackEmailControlWorkspaceId()).trim(),
+    String(sentByUserId || '').trim(),
+    String(toEmail || '').trim(),
+    '',
+    String(fromEmail || '').trim(),
+    String(subject || '').trim(),
+    String(bodyText || '').trim(),
+    String(bodyHtml || '').trim(),
+    String(type || 'test').trim(),
+    String(status || 'sent').trim(),
+    String(errorMessage || '').trim(),
+    String(messageId || '').trim(),
+    String(direction || 'outbound').trim(),
+    String(providerKey || providerName || '').trim(),
+    metadata ? JSON.stringify(metadata) : '',
+  );
+  return id;
+}
+
+function insertEmailControlEvent({
+  workspaceId,
+  emailLogId = '',
+  eventType = 'email',
+  message = '',
+  toEmail = '',
+  subject = '',
+  status = 'sent',
+  provider = providerName || '',
+  errorMessage = '',
+  meta = null
+}) {
+  db.prepare(`
+    INSERT INTO email_events (
+      id, workspace_id, email_log_id, event_type, to_email, subject, status,
+      provider, error_message, message, meta_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  `).run(
+    generateId('ee'),
+    String(workspaceId || getFallbackEmailControlWorkspaceId()).trim(),
+    String(emailLogId || '').trim(),
+    String(eventType || 'email').trim(),
+    String(toEmail || '').trim(),
+    String(subject || '').trim(),
+    String(status || 'sent').trim(),
+    String(provider || providerName || '').trim(),
+    String(errorMessage || '').trim(),
+    String(message || '').trim(),
+    meta ? JSON.stringify(meta) : ''
+  );
+}
+
+function buildEmailControlAlerts({ workspaceId = '', failedCount = 0, ownerSettings, workspaceSettings }) {
+  const alerts = [];
+  if (failedCount > 0) {
+    alerts.push({
+      type: 'failed_mail',
+      tone: 'warn',
+      message: `${failedCount} failed email${failedCount === 1 ? '' : 's'} need review.`
+    });
+  }
+  if (providerName === 'disabled') {
+    alerts.push({
+      type: 'provider_disabled',
+      tone: 'warn',
+      message: 'SMTP provider is disabled. Test sends are logged in mock mode.'
+    });
+  }
+  if (!String(ownerSettings.owner_email || '').includes('@')) {
+    alerts.push({
+      type: 'owner_missing',
+      tone: 'failed',
+      message: 'Owner email identity is missing.'
+    });
+  }
+  if (
+    workspaceSettings &&
+    workspaceSettings.workspace_email_enabled &&
+    !workspaceSettings.workspace_email.includes('@') &&
+    !workspaceSettings.use_owner_fallback
+  ) {
+    alerts.push({
+      type: 'workspace_invalid',
+      tone: 'failed',
+      message: 'Workspace override is enabled but no valid sender email is configured.'
+    });
+  }
+  return alerts;
+}
+
+function getEmailControlOverview(workspaceId = '') {
+  const normalizedWorkspaceId = normalizeEmailControlWorkspaceId(workspaceId);
+  const ownerSettings = getEmailControlOwnerSettings();
+  const workspaceSettings = getEmailControlWorkspaceSettings(normalizedWorkspaceId);
+  const workspaceClause = normalizedWorkspaceId ? 'WHERE workspace_id = ?' : '';
+  const params = normalizedWorkspaceId ? [normalizedWorkspaceId] : [];
+  const inboxCount = Number(
+    db.prepare(`SELECT COUNT(*) AS c FROM inbound_emails ${workspaceClause}`).get(...params)?.c || 0
+  );
+  const templateCount = Number(
+    db.prepare(`SELECT COUNT(*) AS c FROM workspace_email_templates ${workspaceClause}`).get(...params)?.c || 0
+  );
+  const sentCount = Number(
+    db.prepare(`
+      SELECT COUNT(*) AS c
+      FROM workspace_email_logs
+      ${normalizedWorkspaceId ? 'WHERE workspace_id = ? AND status = ?' : 'WHERE status = ?'}
+    `).get(...(normalizedWorkspaceId ? [normalizedWorkspaceId, 'sent'] : ['sent']))?.c || 0
+  );
+  const failedCount = Number(
+    db.prepare(`
+      SELECT COUNT(*) AS c
+      FROM workspace_email_logs
+      ${normalizedWorkspaceId ? 'WHERE workspace_id = ? AND status = ?' : 'WHERE status = ?'}
+    `).get(...(normalizedWorkspaceId ? [normalizedWorkspaceId, 'failed'] : ['failed']))?.c || 0
+  );
+  const successRate = sentCount + failedCount > 0
+    ? Math.round((sentCount / (sentCount + failedCount)) * 100)
+    : 100;
+  const lastSent = db.prepare(`
+    SELECT created_at, subject, to_email
+    FROM workspace_email_logs
+    ${normalizedWorkspaceId ? 'WHERE workspace_id = ? AND status = ?' : 'WHERE status = ?'}
+    ORDER BY datetime(created_at) DESC, id DESC
+    LIMIT 1
+  `).get(...(normalizedWorkspaceId ? [normalizedWorkspaceId, 'sent'] : ['sent'])) || null;
+  const lastFailed = db.prepare(`
+    SELECT created_at, subject, to_email, error_message
+    FROM workspace_email_logs
+    ${normalizedWorkspaceId ? 'WHERE workspace_id = ? AND status = ?' : 'WHERE status = ?'}
+    ORDER BY datetime(created_at) DESC, id DESC
+    LIMIT 1
+  `).get(...(normalizedWorkspaceId ? [normalizedWorkspaceId, 'failed'] : ['failed'])) || null;
+  const alerts = buildEmailControlAlerts({
+    workspaceId: normalizedWorkspaceId,
+    failedCount,
+    ownerSettings,
+    workspaceSettings
+  });
+  return {
+    workspaceId: normalizedWorkspaceId || '',
+    inboxCount,
+    sentCount,
+    failedCount,
+    templatesCount: templateCount,
+    successRate,
+    lastSentAt: lastSent?.created_at || '',
+    lastFailedAt: lastFailed?.created_at || '',
+    lastSent,
+    lastFailed,
+    providerStatus: getEmailControlProviderStatus(),
+    activeAlerts: alerts
+  };
+}
+
+function listEmailControlTemplates(workspaceId = '') {
+  const normalizedWorkspaceId = normalizeEmailControlWorkspaceId(workspaceId);
+  const rows = db.prepare(`
+    SELECT t.workspace_id, t.template_key, t.subject, t.enabled, t.updated_at,
+           COALESCE(w.name, t.workspace_id) AS workspace_name
+    FROM workspace_email_templates t
+    LEFT JOIN workspaces w ON w.id = t.workspace_id
+    ${normalizedWorkspaceId ? 'WHERE t.workspace_id = ?' : ''}
+    ORDER BY datetime(COALESCE(t.updated_at, 'now')) DESC, lower(COALESCE(t.template_key, '')) ASC
+  `).all(...(normalizedWorkspaceId ? [normalizedWorkspaceId] : []));
+  return rows.map((row) => ({
+    workspaceId: row.workspace_id,
+    workspaceName: row.workspace_name || row.workspace_id,
+    templateKey: row.template_key,
+    subject: row.subject || '',
+    enabled: Number(row.enabled || 0) === 1,
+    updatedAt: row.updated_at || ''
+  }));
+}
+
+function listEmailControlLogs({ workspaceId = '', status = 'all', limit = 50 } = {}) {
+  const normalizedWorkspaceId = normalizeEmailControlWorkspaceId(workspaceId);
+  const normalizedStatus = String(status || 'all').trim().toLowerCase();
+  const safeLimit = Math.max(1, Math.min(200, Number(limit) || 50));
+  const outboundRows = db.prepare(`
+    SELECT l.id, l.workspace_id, COALESCE(w.name, l.workspace_id) AS workspace_name,
+           COALESCE(l.direction, 'outbound') AS direction, COALESCE(l.status, 'sent') AS status,
+           l.to_email, COALESCE(l.from_email, '') AS from_email, l.subject,
+           COALESCE(l.provider_key, '${providerName}') AS provider_key,
+           COALESCE(l.error_message, '') AS error_message,
+           COALESCE(l.metadata_json, '') AS metadata_json,
+           l.created_at
+    FROM workspace_email_logs l
+    LEFT JOIN workspaces w ON w.id = l.workspace_id
+    ${normalizedWorkspaceId ? 'WHERE l.workspace_id = ?' : ''}
+    ORDER BY datetime(l.created_at) DESC, l.id DESC
+    LIMIT ?
+  `).all(...(normalizedWorkspaceId ? [normalizedWorkspaceId, safeLimit] : [safeLimit]));
+  const inboundRows = db.prepare(`
+    SELECT 'inbound:' || ie.id AS id, ie.workspace_id, COALESCE(w.name, ie.workspace_id) AS workspace_name,
+           'inbound' AS direction, 'inbound' AS status,
+           COALESCE(ie.recipient, '') AS to_email, COALESCE(ie.sender, '') AS from_email,
+           COALESCE(ie.subject, '') AS subject, 'inbound' AS provider_key,
+           '' AS error_message, '' AS metadata_json,
+           COALESCE(ie.received_at, '') AS created_at
+    FROM inbound_emails ie
+    LEFT JOIN workspaces w ON w.id = ie.workspace_id
+    ${normalizedWorkspaceId ? 'WHERE ie.workspace_id = ?' : ''}
+    ORDER BY datetime(COALESCE(ie.received_at, 'now')) DESC, ie.id DESC
+    LIMIT ?
+  `).all(...(normalizedWorkspaceId ? [normalizedWorkspaceId, safeLimit] : [safeLimit]));
+
+  const rows = [...outboundRows, ...inboundRows]
+    .map((row) => ({
+      id: row.id,
+      workspaceId: row.workspace_id || '',
+      workspaceName: row.workspace_name || row.workspace_id || 'Workspace',
+      direction: row.direction || 'outbound',
+      status: row.status || 'sent',
+      toEmail: row.to_email || '',
+      fromEmail: row.from_email || '',
+      subject: row.subject || '',
+      providerKey: row.provider_key || providerName || '',
+      errorMessage: row.error_message || '',
+      metadata: parseJsonSafely(row.metadata_json, {}) || {},
+      createdAt: row.created_at || '',
+      retryable: !String(row.id || '').startsWith('inbound:') && String(row.status || '') === 'failed'
+    }))
+    .filter((row) => {
+      if (normalizedStatus === 'all') return true;
+      if (normalizedStatus === 'inbound' || normalizedStatus === 'outbound') {
+        return row.direction === normalizedStatus;
+      }
+      return row.status === normalizedStatus;
+    })
+    .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
+    .slice(0, safeLimit);
+  return rows;
+}
+
+function getEmailControlSettingsPayload(workspaceId = '') {
+  const normalizedWorkspaceId = normalizeEmailControlWorkspaceId(workspaceId) || getFallbackEmailControlWorkspaceId();
+  const ownerSettings = getEmailControlOwnerSettings();
+  const workspaceSettings = getEmailControlWorkspaceSettings(normalizedWorkspaceId);
+  const effectiveSender = buildEmailControlEffectiveSender(normalizedWorkspaceId);
+  const lastTestRow = db.prepare(`
+    SELECT id, workspace_id, status, to_email, subject, error_message, created_at
+    FROM workspace_email_logs
+    WHERE lower(COALESCE(type, '')) = 'test'
+      ${normalizedWorkspaceId ? 'AND workspace_id = ?' : ''}
+    ORDER BY datetime(created_at) DESC, id DESC
+    LIMIT 1
+  `).get(...(normalizedWorkspaceId ? [normalizedWorkspaceId] : [])) || null;
+
+  return {
+    ownerSettings,
+    workspaceSettings,
+    effectiveSender,
+    lastTestResult: lastTestRow ? {
+      id: lastTestRow.id,
+      workspaceId: lastTestRow.workspace_id,
+      status: lastTestRow.status,
+      toEmail: lastTestRow.to_email || '',
+      subject: lastTestRow.subject || '',
+      errorMessage: lastTestRow.error_message || '',
+      createdAt: lastTestRow.created_at || ''
+    } : null,
+    helperText: 'Owner settings apply platform-wide. Workspace override is used only when enabled and valid; otherwise owner fallback remains active.',
+    providerStatus: getEmailControlProviderStatus()
+  };
+}
+
 app.get('/api/admin/workspace-email-settings/:workspaceId', (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
@@ -28560,6 +29338,289 @@ app.post('/api/admin/workspace-email-settings/:workspaceId/test', async (req, re
   } catch (err) {
     res.status(400).json({ error: String(err?.message || err) });
   }
+});
+
+app.get('/api/admin/email-control/overview', (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  const workspaceId = normalizeEmailControlWorkspaceId(req.query.workspaceId || '');
+  res.json(getEmailControlOverview(workspaceId));
+});
+
+app.get('/api/admin/email-control/logs', (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  const workspaceId = normalizeEmailControlWorkspaceId(req.query.workspaceId || '');
+  const status = String(req.query.status || 'all').trim().toLowerCase();
+  const limit = Number.parseInt(req.query.limit || '50', 10);
+  res.json({
+    logs: listEmailControlLogs({ workspaceId, status, limit })
+  });
+});
+
+app.get('/api/admin/email-control/settings', (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  const workspaceId = normalizeEmailControlWorkspaceId(req.query.workspaceId || '');
+  res.json(getEmailControlSettingsPayload(workspaceId));
+});
+
+app.post('/api/admin/email-control/owner', (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  const settings = savePlatformOwnerEmailSettings({
+    enabled: req.body?.owner_enabled ?? req.body?.enabled,
+    display_name: req.body?.owner_name ?? req.body?.display_name,
+    owner_email: req.body?.owner_email,
+    subject_prefix: req.body?.owner_subject_prefix ?? req.body?.subject_prefix,
+    footer_text: req.body?.owner_signature ?? req.body?.footer_text
+  });
+  legacyAuditLog({
+    workspaceId: 'platform',
+    actor: user.id,
+    action: 'email_control.owner.update',
+    target: 'platform',
+    payload: { ownerEmail: settings.owner_email, enabled: settings.enabled }
+  });
+  res.json({ ok: true, ownerSettings: getEmailControlOwnerSettings() });
+});
+
+app.post('/api/admin/email-control/workspace', (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  const workspaceId = normalizeEmailControlWorkspaceId(req.body?.workspaceId || req.body?.workspace_id || '');
+  if (!workspaceId) return res.status(400).json({ error: 'Select a specific workspace' });
+
+  const workspaceEmailEnabled = req.body?.workspace_email_enabled ?? req.body?.enabled;
+  const workspaceEmail = String(req.body?.workspace_email || req.body?.reply_to_email || '').trim();
+  const workspaceSenderName = String(req.body?.workspace_sender_name || req.body?.brand_school_name || '').trim();
+  const workspaceSubjectPrefix = String(req.body?.workspace_subject_prefix || req.body?.subject_prefix || '').trim();
+  const workspaceSignature = String(req.body?.workspace_signature || req.body?.footer_text || '').trim();
+  const useOwnerFallback = req.body?.use_owner_fallback ?? 1;
+
+  db.prepare(`
+    INSERT INTO workspace_email_settings (
+      workspace_id, enabled, brand_school_name, reply_to_email, footer_text, subject_prefix,
+      manual_body_text, logo_url, signature_html, workspace_email_enabled, workspace_email,
+      workspace_sender_name, workspace_subject_prefix, workspace_signature, use_owner_fallback,
+      updated_at
+    ) VALUES (
+      ?, ?, ?, ?, ?, ?, '', '', '', ?, ?, ?, ?, ?, ?, datetime('now')
+    )
+    ON CONFLICT(workspace_id) DO UPDATE SET
+      enabled = excluded.enabled,
+      brand_school_name = excluded.brand_school_name,
+      reply_to_email = excluded.reply_to_email,
+      footer_text = excluded.footer_text,
+      subject_prefix = excluded.subject_prefix,
+      workspace_email_enabled = excluded.workspace_email_enabled,
+      workspace_email = excluded.workspace_email,
+      workspace_sender_name = excluded.workspace_sender_name,
+      workspace_subject_prefix = excluded.workspace_subject_prefix,
+      workspace_signature = excluded.workspace_signature,
+      use_owner_fallback = excluded.use_owner_fallback,
+      updated_at = datetime('now')
+  `).run(
+    workspaceId,
+    workspaceEmailEnabled ? 1 : 0,
+    workspaceSenderName,
+    workspaceEmail,
+    workspaceSignature,
+    workspaceSubjectPrefix,
+    workspaceEmailEnabled ? 1 : 0,
+    workspaceEmail,
+    workspaceSenderName,
+    workspaceSubjectPrefix,
+    workspaceSignature,
+    useOwnerFallback ? 1 : 0
+  );
+
+  legacyAuditLog({
+    workspaceId,
+    actor: user.id,
+    action: 'email_control.workspace.update',
+    target: workspaceId,
+    payload: { workspaceEmail, enabled: workspaceEmailEnabled ? 1 : 0 }
+  });
+  res.json({ ok: true, workspaceSettings: getEmailControlWorkspaceSettings(workspaceId) });
+});
+
+app.post('/api/admin/email-control/test-send', async (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+
+  const mode = String(req.body?.mode || 'owner').trim().toLowerCase();
+  const requestedWorkspaceId = normalizeEmailControlWorkspaceId(req.body?.workspaceId || req.body?.workspace_id || '');
+  const workspaceId = requestedWorkspaceId || getFallbackEmailControlWorkspaceId();
+  const effective = buildEmailControlEffectiveSender(mode === 'workspace' ? workspaceId : requestedWorkspaceId || workspaceId);
+  const to = String(req.body?.to || '').trim();
+  if (!to.includes('@')) return res.status(400).json({ error: "Valid 'to' email required" });
+
+  const subject = String(req.body?.subject || '').trim() || `${effective.subjectPrefix || '[Email Test]'} Test email`;
+  const bodyText = String(req.body?.message || req.body?.body || '').trim() || 'This is a test email from StudiesTalk.';
+  const signature = String(effective.signature || '').trim();
+  const text = [bodyText, signature].filter(Boolean).join('\n\n');
+  const html = `<div>${escapeHtml(bodyText).replace(/\n/g, '<br>')}</div>${
+    signature ? `<div style="margin-top:18px;color:#64748b;">${escapeHtml(signature).replace(/\n/g, '<br>')}</div>` : ''
+  }`;
+  const metadata = {
+    mode,
+    effectiveMode: effective.mode,
+    workspaceId,
+    requestedWorkspaceId: requestedWorkspaceId || '',
+    senderName: effective.senderName || '',
+    mock: providerName === 'disabled'
+  };
+
+  try {
+    const info = await sendPlatformEmail({
+      to,
+      subject,
+      text,
+      html,
+      replyTo: effective.fromEmail || undefined,
+      fromName: effective.senderName || undefined
+    });
+    const logId = insertWorkspaceEmailLog({
+      workspaceId,
+      toEmail: to,
+      fromEmail: effective.fromEmail || '',
+      subject,
+      bodyText: text,
+      bodyHtml: html,
+      status: 'sent',
+      type: 'test',
+      direction: 'outbound',
+      providerKey: providerName,
+      metadata,
+      sentByUserId: user.id,
+      messageId: String(info?.messageId || '')
+    });
+    insertEmailControlEvent({
+      workspaceId,
+      emailLogId: logId,
+      eventType: 'test_send',
+      message: providerName === 'disabled' ? 'Test email logged in mock mode.' : 'Test email sent.',
+      toEmail: to,
+      subject,
+      status: 'sent',
+      provider: providerName,
+      meta: metadata
+    });
+    legacyAuditLog({
+      workspaceId,
+      actor: user.id,
+      action: 'email_control.test_send',
+      target: logId,
+      payload: { to, mode, provider: providerName }
+    });
+    res.json({
+      ok: true,
+      provider: providerName,
+      logId,
+      mock: providerName === 'disabled',
+      effectiveSender: effective
+    });
+  } catch (err) {
+    const message = String(err?.message || err);
+    const logId = insertWorkspaceEmailLog({
+      workspaceId,
+      toEmail: to,
+      fromEmail: effective.fromEmail || '',
+      subject,
+      bodyText: text,
+      bodyHtml: html,
+      status: 'failed',
+      type: 'test',
+      errorMessage: message,
+      direction: 'outbound',
+      providerKey: providerName,
+      metadata,
+      sentByUserId: user.id
+    });
+    insertEmailControlEvent({
+      workspaceId,
+      emailLogId: logId,
+      eventType: 'test_send',
+      message,
+      toEmail: to,
+      subject,
+      status: 'failed',
+      provider: providerName,
+      errorMessage: message,
+      meta: metadata
+    });
+    res.status(400).json({ error: message, logId });
+  }
+});
+
+app.post('/api/admin/email-control/logs/:id/retry', async (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  const logId = String(req.params.id || '').trim();
+  if (!logId || logId.startsWith('inbound:')) {
+    return res.status(400).json({ error: 'Retry is only available for outbound failed logs.' });
+  }
+  const row = db.prepare(`
+    SELECT *
+    FROM workspace_email_logs
+    WHERE id = ?
+    LIMIT 1
+  `).get(logId);
+  if (!row) return res.status(404).json({ error: 'Email log not found.' });
+  if (String(row.status || '') !== 'failed') {
+    return res.status(409).json({ error: 'Only failed email logs can be retried.' });
+  }
+
+  const workspaceId = String(row.workspace_id || getFallbackEmailControlWorkspaceId()).trim();
+  const metadata = parseJsonSafely(row.metadata_json, {}) || {};
+  const effective = buildEmailControlEffectiveSender(workspaceId);
+  try {
+    const info = await sendPlatformEmail({
+      to: String(row.to_email || '').trim(),
+      subject: String(row.subject || '').trim(),
+      text: String(row.body_text || '').trim(),
+      html: String(row.body_html || '').trim(),
+      replyTo: effective.fromEmail || undefined,
+      fromName: effective.senderName || undefined
+    });
+    const retriedLogId = insertWorkspaceEmailLog({
+      workspaceId,
+      toEmail: row.to_email,
+      fromEmail: effective.fromEmail || row.from_email || '',
+      subject: row.subject || '',
+      bodyText: row.body_text || '',
+      bodyHtml: row.body_html || '',
+      status: 'sent',
+      type: row.type || 'retry',
+      direction: row.direction || 'outbound',
+      providerKey: providerName,
+      metadata: { ...metadata, retriedFromLogId: logId },
+      sentByUserId: user.id,
+      messageId: String(info?.messageId || '')
+    });
+    insertEmailControlEvent({
+      workspaceId,
+      emailLogId: retriedLogId,
+      eventType: 'retry_send',
+      message: 'Retry sent successfully.',
+      toEmail: row.to_email || '',
+      subject: row.subject || '',
+      status: 'sent',
+      provider: providerName,
+      meta: { retriedFromLogId: logId }
+    });
+    res.json({ ok: true, retriedLogId });
+  } catch (err) {
+    res.status(400).json({ error: String(err?.message || err) });
+  }
+});
+
+app.get('/api/admin/email-control/templates', (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  const workspaceId = normalizeEmailControlWorkspaceId(req.query.workspaceId || '');
+  res.json({ templates: listEmailControlTemplates(workspaceId) });
 });
 
 app.get('/api/admin/workspaces', async (req, res) => {

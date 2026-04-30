@@ -24,7 +24,7 @@
       <!-- 4.1 MAIN NAV -->
       <nav class="nav nav-icons" aria-label="Main sections">
         <button class="tab nav-item is-active" type="button" data-tab="overview" data-tooltip="Overview" aria-label="Overview">
-          <i class="fa-solid fa-gauge-high" aria-hidden="true"></i><span class="nav-label">Overview</span>
+          <i class="fa-solid  fa-gauge-high" aria-hidden="true"></i><span class="nav-label">Overview</span>
         </button>
         <button class="tab nav-item" type="button" data-tab="schools" data-tooltip="Schools" aria-label="Schools">
           <i class="fa-solid fa-building-columns" aria-hidden="true"></i><span class="nav-label">Schools</span>
@@ -33,13 +33,34 @@
           <i class="fa-solid fa-users-gear" aria-hidden="true"></i><span class="nav-label">Users</span>
         </button>
         <button class="tab nav-item" type="button" data-tab="billing" data-tooltip="Billing" aria-label="Billing">
-          <i class="fa-solid fa-file-invoice-dollar" aria-hidden="true"></i><span class="nav-label">Billing</span>
+          <i class="fa-solid fa-file-invoice" aria-hidden="true"></i><span class="nav-label">Billing</span>
         </button>
-        <button class="tab nav-item" type="button" data-tab="settings" data-tooltip="Settings" aria-label="Settings">
-          <i class="fa-solid fa-sliders" aria-hidden="true"></i><span class="nav-label">Settings</span>
+        <button class="tab nav-item" type="button" data-tab="cost-control" data-tooltip="Cost Control" aria-label="Cost control">
+          <i class="fa-solid fa-coins" aria-hidden="true"></i><span class="nav-label">Cost Control</span>
+        </button>
+        <button class="tab nav-item" type="button" data-tab="settings" data-tooltip="Platform Control" aria-label="Platform Control">
+          <i class="fa-solid fa-sliders" aria-hidden="true"></i><span class="nav-label">Platform Control</span>
+        </button>
+        <button class="tab nav-item" type="button" data-tab="operations" data-tooltip="Operations Center" aria-label="Operations Center">
+          <i class="fa-solid fa-heart-pulse" aria-hidden="true"></i><span class="nav-label">Operations Center</span>
+        </button>
+        <button class="tab nav-item" type="button" data-tab="backups" data-tooltip="Backup / Restore" aria-label="Backup and restore">
+          <i class="fa-solid fa-database" aria-hidden="true"></i><span class="nav-label">Backup / Restore</span>
+        </button>
+        <button class="tab nav-item" type="button" data-tab="lifecycle" data-tooltip="Workspace Lifecycle" aria-label="Workspace lifecycle">
+          <i class="fa-solid fa-diagram-project" aria-hidden="true"></i><span class="nav-label">Workspace Lifecycle</span>
+        </button>
+        <button class="tab nav-item" type="button" data-tab="support" data-tooltip="Support Mode" aria-label="Support Mode">
+          <i class="fa-solid fa-user-secret" aria-hidden="true"></i><span class="nav-label">Support Mode</span>
+        </button>
+        <button class="tab nav-item" type="button" data-tab="incidents" data-tooltip="Incident / Maintenance" aria-label="Incident and maintenance">
+          <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i><span class="nav-label">Incident / Maintenance</span>
+        </button>
+        <button class="tab nav-item" type="button" data-tab="data-governance" data-tooltip="Data Governance" aria-label="Data Governance">
+          <i class="fa-solid fa-folder-tree" aria-hidden="true"></i><span class="nav-label">Data Governance</span>
         </button>
         <button class="tab nav-item" type="button" data-tab="secrets" data-tooltip="Secrets / Integrations" aria-label="Secrets and integrations">
-          <i class="fa-solid fa-key" aria-hidden="true"></i><span class="nav-label">Secrets / Integrations</span>
+          <i class="fa-solid fa-vault" aria-hidden="true"></i><span class="nav-label">Secrets / Integrations</span>
         </button>
         <button class="tab nav-item" type="button" data-tab="legal" data-tooltip="Legal / Compliance" aria-label="Legal and compliance">
           <i class="fa-solid fa-scale-balanced" aria-hidden="true"></i><span class="nav-label">Legal / Compliance</span>
@@ -52,32 +73,31 @@
           <span class="nav-badge nav-badge-tab" id="reqPendingBadge" hidden>0</span>
           <span class="nav-label">School Requests</span>
         </button>
-        <button class="tab nav-item" type="button" data-tab="messages" data-tooltip="Messages" aria-label="Messages">
-          <i class="fa-solid fa-envelope-open-text" aria-hidden="true"></i><span class="nav-label">Messages</span>
+        <button class="tab nav-item" type="button" data-tab="messages" data-tooltip="Email Control" aria-label="Email Control">
+          <i class="fa-solid fa-envelope-circle-check" aria-hidden="true"></i><span class="nav-label">Email Control</span>
         </button>
-      </nav>
-
-      <div class="nav-sep" aria-hidden="true"></div>
-
-      <!-- 4.2 TOOL NAV -->
-      <nav class="nav nav-icons nav-tools" aria-label="Quick tools">
-        <button class="nav-tool" type="button" aria-label="Reports" data-tooltip="Reports">
-          <i class="fa-solid fa-chart-pie" aria-hidden="true"></i><span class="nav-label">Reports</span>
-        </button>
-        <button class="nav-tool" type="button" aria-label="Notifications" data-tooltip="Notifications">
-          <i class="fa-solid fa-bell" aria-hidden="true"></i>
+        <button class="tab nav-item" type="button" data-tab="notifications" data-tooltip="Notifications" aria-label="Notifications">
+          <i class="fa-solid fa-bullhorn" aria-hidden="true"></i>
           <span class="nav-badge" id="notifBadge" hidden>0</span>
           <span class="nav-label">Notifications</span>
         </button>
+        <button class="tab nav-item" type="button" data-tab="branding" data-tooltip="Branding / Domains" aria-label="Branding and domains">
+          <i class="fa-solid fa-palette" aria-hidden="true"></i><span class="nav-label">Branding / Domains</span>
+        </button>
+        <button class="tab nav-item" type="button" data-tab="reports" data-tooltip="Reports" aria-label="Reports">
+          <i class="fa-solid fa-chart-line" aria-hidden="true"></i><span class="nav-label">Reports</span>
+        </button>
       </nav>
+      <div class="nav-sep" aria-hidden="true"></div>
 
-      <!-- 4.3 SIDEBAR FOOTER -->
       <div class="sidebar-footer">
-        <button class="btn btn-ghost btn-icon sidebar-admin" type="button" aria-label="Admin profile">
+        <button class="btn btn-ghost btn-icon sidebar-admin" type="button" aria-label="Admin">
           <i class="fa-solid fa-user-shield" aria-hidden="true"></i>
+          <span class="nav-label">Admin</span>
         </button>
         <button class="btn btn-ghost btn-icon sidebar-logout" type="button" id="btnLogout" aria-label="Logout" hidden>
           <i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i>
+          <span class="nav-label">Logout</span>
         </button>
       </div>
     </aside>
@@ -428,35 +448,300 @@
   <div class="settings-page">
     <div class="settings-header">
       <div>
-        <h2>⚙️ Settings</h2>
-        <p>Workspace configuration and policies</p>
+        <h2>Platform Control</h2>
+        <p>Structured platform owner controls for defaults, governance, communication, storage, security, subscriptions, and workspace policy.</p>
       </div>
 
       <div class="settings-workspace">
-        <span class="label">Workspace</span>
-        <span id="settingsWorkspaceName" class="workspace-badge">All workspaces</span>
+        <span class="label">Scope</span>
+        <span id="settingsWorkspaceName" class="workspace-badge">Platform Global</span>
       </div>
     </div>
 
     <div class="settings-grid">
       <div class="settings-card">
-        <div class="workspace-warning" id="settingsWorkspaceWarning">
-          ⚠️ No workspace selected. Changes cannot be saved.
+        <div class="platform-control-tabs" role="tablist" aria-label="Platform control sections">
+          <button class="platform-control-tab is-active" type="button" data-platform-control-tab="overview">Overview</button>
+          <button class="platform-control-tab" type="button" data-platform-control-tab="workspaceDefaults">Workspace Defaults</button>
+          <button class="platform-control-tab" type="button" data-platform-control-tab="features">Features</button>
+          <button class="platform-control-tab" type="button" data-platform-control-tab="costGovernance">Cost Governance</button>
+          <button class="platform-control-tab" type="button" data-platform-control-tab="providerLimits">Providers</button>
+          <button class="platform-control-tab" type="button" data-platform-control-tab="ai">AI</button>
+          <button class="platform-control-tab" type="button" data-platform-control-tab="communication">Communication</button>
+          <button class="platform-control-tab" type="button" data-platform-control-tab="storage">Storage</button>
+          <button class="platform-control-tab" type="button" data-platform-control-tab="security">Security</button>
+          <button class="platform-control-tab" type="button" data-platform-control-tab="subscriptions">Subscription Plans</button>
+          <button class="platform-control-tab" type="button" data-platform-control-tab="workspaceOverrides">Workspace Overrides</button>
+          <button class="platform-control-tab" type="button" data-platform-control-tab="advanced">Advanced JSON</button>
         </div>
 
-        <div class="card-header settings-json-header">
-          <div>
-            <h3>Configuration JSON</h3>
-            <p>Edit system-level behavior</p>
-          </div>
+        <div class="settings-sections">
+          <section class="settings-section-card" data-platform-control-panel="overview">
+            <div class="settings-section-head">
+              <div>
+                <h3>Platform Overview</h3>
+                <p>Quick view of defaults, budget posture, and current platform control state.</p>
+              </div>
+              <button class="btn btn-ghost" type="button" id="btnPlatformControlResetGlobal">Reset to defaults</button>
+            </div>
+            <div class="platform-control-overview-grid">
+              <div class="platform-control-stat"><span>Default AI Budget</span><strong id="platformControlOverviewBudget">€0.00</strong></div>
+              <div class="platform-control-stat"><span>Max Users / Workspace</span><strong id="platformControlOverviewUsers">0</strong></div>
+              <div class="platform-control-stat"><span>Default Storage</span><strong id="platformControlOverviewStorage">0 GB</strong></div>
+              <div class="platform-control-stat"><span>Default Plan</span><strong id="platformControlOverviewPlan">starter</strong></div>
+            </div>
+            <div class="platform-control-inline-note">Last saved: <strong id="platformControlLastSaved">—</strong></div>
+          </section>
 
-          <div class="card-actions">
-            <button id="btnFormatJson" class="btn btn-ghost" type="button">Format</button>
-            <button id="btnResetJson" class="btn btn-ghost" type="button">Reset</button>
-          </div>
+          <section class="settings-section-card" data-platform-control-panel="workspaceDefaults" hidden>
+            <div class="settings-section-head">
+              <div>
+                <h3>Workspace Defaults</h3>
+                <p>Set baseline defaults for every school unless overrides are added later.</p>
+              </div>
+              <button class="btn btn-primary" type="button" data-settings-save="workspaceDefaults">Save section</button>
+            </div>
+            <div class="settings-form-grid">
+              <label><span>AI budget (EUR / month)</span><input class="input" id="settings_defaults_ai_budget" type="number" min="0" step="0.1"></label>
+              <label><span>Max users per school</span><input class="input" id="settings_defaults_max_users" type="number" min="1" step="1"></label>
+              <label><span>Default storage (GB)</span><input class="input" id="settings_workspaceDefaults_defaultStorageGb" type="number" min="0" step="1"></label>
+              <label><span>Email daily limit</span><input class="input" id="settings_workspaceDefaults_defaultEmailDailyLimit" type="number" min="0" step="1"></label>
+              <label><span>SMS daily limit</span><input class="input" id="settings_workspaceDefaults_defaultSmsDailyLimit" type="number" min="0" step="1"></label>
+            </div>
+          </section>
+
+          <section class="settings-section-card" data-platform-control-panel="costGovernance" hidden>
+            <div class="settings-section-head">
+              <div>
+                <h3>Cost &amp; Budget Governance</h3>
+                <p>Define platform-level SMS and cost guardrails.</p>
+              </div>
+              <button class="btn btn-primary" type="button" data-settings-save="costGovernance">Save section</button>
+            </div>
+            <div class="settings-form-grid">
+              <label><span>Platform monthly budget (EUR)</span><input class="input" id="settings_costGovernance_platformMonthlyBudgetEur" type="number" min="0" step="0.1"></label>
+              <label><span>Workspace monthly hard limit (EUR)</span><input class="input" id="settings_costGovernance_workspaceMonthlyHardLimitEur" type="number" min="0" step="0.1"></label>
+              <label><span>Workspace monthly soft limit (EUR)</span><input class="input" id="settings_costGovernance_workspaceMonthlySoftLimitEur" type="number" min="0" step="0.1"></label>
+              <label><span>Alert threshold (%)</span><input class="input" id="settings_costGovernance_alertThresholdPercent" type="number" min="0" max="100" step="1"></label>
+              <label class="toggle-row"><input id="settings_costGovernance_blockOnHardLimit" type="checkbox"><span>Block on hard limit</span></label>
+            </div>
+          </section>
+
+          <section class="settings-section-card" data-platform-control-panel="providerLimits" hidden>
+            <div class="settings-section-head">
+              <div>
+                <h3>Provider Limits</h3>
+                <p>Configure provider enablement and platform-level budget ceilings.</p>
+              </div>
+              <button class="btn btn-primary" type="button" data-settings-save="providerLimits">Save section</button>
+            </div>
+            <div class="settings-form-grid">
+              <label class="toggle-row"><input id="settings_provider_openai_enabled" type="checkbox"><span>OpenAI enabled</span></label>
+              <label><span>OpenAI monthly limit (EUR)</span><input class="input" id="settings_provider_openai_monthlyLimitEur" type="number" min="0" step="0.1"></label>
+              <label class="toggle-row"><input id="settings_provider_twilio_enabled" type="checkbox"><span>Twilio enabled</span></label>
+              <label><span>Twilio daily SMS limit</span><input class="input" id="settings_provider_twilio_dailySmsLimit" type="number" min="0" step="1"></label>
+              <label><span>Twilio monthly limit (EUR)</span><input class="input" id="settings_provider_twilio_monthlyLimitEur" type="number" min="0" step="0.1"></label>
+              <label class="toggle-row"><input id="settings_provider_googleTranslate_enabled" type="checkbox"><span>Google Translate enabled</span></label>
+              <label><span>Translate char limit / month</span><input class="input" id="settings_provider_googleTranslate_monthlyCharacterLimit" type="number" min="0" step="1"></label>
+              <label><span>Translate monthly limit (EUR)</span><input class="input" id="settings_provider_googleTranslate_monthlyLimitEur" type="number" min="0" step="0.1"></label>
+              <label class="toggle-row"><input id="settings_provider_ionosEmail_enabled" type="checkbox"><span>IONOS Email enabled</span></label>
+              <label><span>Email daily limit</span><input class="input" id="settings_provider_ionosEmail_dailyEmailLimit" type="number" min="0" step="1"></label>
+              <label><span>Email monthly limit (EUR)</span><input class="input" id="settings_provider_ionosEmail_monthlyLimitEur" type="number" min="0" step="0.1"></label>
+              <label class="toggle-row"><input id="settings_provider_storage_enabled" type="checkbox"><span>Storage enabled</span></label>
+              <label><span>Storage max GB / workspace</span><input class="input" id="settings_provider_storage_maxGbPerWorkspace" type="number" min="0" step="1"></label>
+              <label><span>Storage monthly limit (EUR)</span><input class="input" id="settings_provider_storage_monthlyLimitEur" type="number" min="0" step="0.1"></label>
+              <label class="toggle-row"><input id="settings_provider_jitsi_enabled" type="checkbox"><span>Jitsi enabled</span></label>
+              <label><span>Jitsi monthly limit (EUR)</span><input class="input" id="settings_provider_jitsi_monthlyLimitEur" type="number" min="0" step="0.1"></label>
+            </div>
+          </section>
+
+          <section class="settings-section-card" data-platform-control-panel="ai" hidden>
+            <div class="settings-section-head">
+              <div>
+                <h3>AI Configuration</h3>
+                <p>Control AI availability and provider behavior at platform level.</p>
+              </div>
+              <button class="btn btn-primary" type="button" data-settings-save="ai">Save section</button>
+            </div>
+            <div class="settings-form-grid">
+              <label><span>Provider</span>
+                <select class="input" id="settings_ai_provider">
+                  <option value="openai">OpenAI</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </label>
+              <label class="toggle-row"><input id="settings_ai_enabled" type="checkbox"><span>AI enabled</span></label>
+              <label class="toggle-row"><input id="settings_ai_realtime_enabled" type="checkbox"><span>Realtime enabled</span></label>
+              <label><span>Default model</span><input class="input" id="settings_ai_defaultModel" type="text"></label>
+              <label><span>Realtime voice</span><input class="input" id="settings_ai_realtimeVoice" type="text"></label>
+              <label><span>Max tokens per request</span><input class="input" id="settings_ai_maxTokensPerRequest" type="number" min="1" step="1"></label>
+              <label><span>Max session seconds</span><input class="input" id="settings_ai_maxSessionSeconds" type="number" min="1" step="1"></label>
+              <label><span>Idle timeout seconds</span><input class="input" id="settings_ai_idleTimeoutSeconds" type="number" min="1" step="1"></label>
+              <label class="toggle-row"><input id="settings_ai_allowAiForNewWorkspaces" type="checkbox"><span>Allow AI for new workspaces</span></label>
+            </div>
+          </section>
+
+          <section class="settings-section-card" data-platform-control-panel="communication" hidden>
+            <div class="settings-section-head">
+              <div>
+                <h3>Communication (Email + SMS)</h3>
+                <p>Set communication defaults without exposing provider credentials here.</p>
+              </div>
+              <button class="btn btn-primary" type="button" data-settings-save="communication">Save section</button>
+            </div>
+            <div class="settings-form-grid">
+              <label class="toggle-row"><input id="settings_communication_email_enabled" type="checkbox"><span>Email enabled</span></label>
+              <label class="toggle-row"><input id="settings_communication_sms_enabled" type="checkbox"><span>SMS enabled</span></label>
+              <label><span>Default sender name</span><input class="input" id="settings_communication_default_sender_name" type="text"></label>
+              <label><span>Default reply-to email</span><input class="input" id="settings_communication_default_reply_to" type="email"></label>
+              <label><span>Max OTP per user / day</span><input class="input" id="settings_communication_maxOtpPerUserPerDay" type="number" min="0" step="1"></label>
+              <label><span>Max emails per workspace / day</span><input class="input" id="settings_communication_maxEmailsPerWorkspacePerDay" type="number" min="0" step="1"></label>
+              <label class="toggle-row"><input id="settings_communication_useOwnerEmailFallback" type="checkbox"><span>Use owner email fallback</span></label>
+            </div>
+          </section>
+
+          <section class="settings-section-card" data-platform-control-panel="storage" hidden>
+            <div class="settings-section-head">
+              <div>
+                <h3>Storage Rules</h3>
+                <p>Control upload limits and retention behavior.</p>
+              </div>
+              <button class="btn btn-primary" type="button" data-settings-save="storage">Save section</button>
+            </div>
+            <div class="settings-form-grid">
+              <label><span>Default storage adapter</span>
+                <select class="input" id="settings_storage_default_adapter">
+                  <option value="local">Local</option>
+                  <option value="s3">S3</option>
+                  <option value="r2">R2</option>
+                </select>
+              </label>
+              <label class="toggle-row"><input id="settings_storage_uploadEnabled" type="checkbox"><span>Uploads enabled</span></label>
+              <label><span>Max upload MB</span><input class="input" id="settings_storage_max_upload_mb" type="number" min="1" step="1"></label>
+              <label><span>Max video MB</span><input class="input" id="settings_storage_maxVideoMb" type="number" min="1" step="1"></label>
+              <label><span>Retention days</span><input class="input" id="settings_storage_retention_days" type="number" min="0" step="1"></label>
+              <label><span>Allowed file types (comma-separated)</span><input class="input" id="settings_storage_allowedTypes" type="text"></label>
+            </div>
+          </section>
+
+          <section class="settings-section-card" data-platform-control-panel="security" hidden>
+            <div class="settings-section-head">
+              <div>
+                <h3>Security Settings</h3>
+                <p>Govern admin access, session timeouts, and audit retention.</p>
+              </div>
+              <button class="btn btn-primary" type="button" data-settings-save="security">Save section</button>
+            </div>
+            <div class="settings-form-grid">
+              <label><span>Admin session timeout (minutes)</span><input class="input" id="settings_security_session_timeout_min" type="number" min="5" step="5"></label>
+              <label><span>Audit retention days</span><input class="input" id="settings_security_audit_retention_days" type="number" min="0" step="1"></label>
+              <label class="toggle-row"><input id="settings_security_require_admin_2fa" type="checkbox"><span>Require admin 2FA</span></label>
+              <label class="toggle-row"><input id="settings_security_requireEmailVerification" type="checkbox"><span>Require email verification</span></label>
+              <label><span>Max login attempts</span><input class="input" id="settings_security_maxLoginAttempts" type="number" min="1" step="1"></label>
+              <label><span>Lockout minutes</span><input class="input" id="settings_security_lockoutMinutes" type="number" min="1" step="1"></label>
+              <label class="toggle-row"><input id="settings_security_requireStrongPasswords" type="checkbox"><span>Require strong passwords</span></label>
+              <label class="toggle-row"><input id="settings_security_allowDevBypass" type="checkbox"><span>Allow dev bypass</span></label>
+            </div>
+          </section>
+
+          <section class="settings-section-card" data-platform-control-panel="features" hidden>
+            <div class="settings-section-head">
+              <div>
+                <h3>Feature Flags</h3>
+                <p>Control major product capabilities without editing code.</p>
+              </div>
+              <button class="btn btn-primary" type="button" data-settings-save="features">Save section</button>
+            </div>
+            <div class="settings-form-grid settings-form-grid--toggles">
+              <label class="toggle-row"><input id="settings_features_ai" type="checkbox"><span>AI</span></label>
+              <label class="toggle-row"><input id="settings_features_sms" type="checkbox"><span>SMS</span></label>
+              <label class="toggle-row"><input id="settings_features_email" type="checkbox"><span>Email</span></label>
+              <label class="toggle-row"><input id="settings_features_liveClasses" type="checkbox"><span>Live classes</span></label>
+              <label class="toggle-row"><input id="settings_features_recording" type="checkbox"><span>Recording</span></label>
+              <label class="toggle-row"><input id="settings_features_analytics" type="checkbox"><span>Analytics</span></label>
+              <label class="toggle-row"><input id="settings_features_payments" type="checkbox"><span>Payments</span></label>
+              <label class="toggle-row"><input id="settings_features_beta" type="checkbox"><span>Beta features</span></label>
+            </div>
+          </section>
+
+          <section class="settings-section-card" data-platform-control-panel="subscriptions" hidden>
+            <div class="settings-section-head">
+              <div>
+                <h3>Subscription Plan Controls</h3>
+                <p>Define platform plan defaults and included budgets.</p>
+              </div>
+              <button class="btn btn-primary" type="button" data-settings-save="subscriptions">Save section</button>
+            </div>
+            <div class="settings-form-grid">
+              <label><span>Default plan</span>
+                <select class="input" id="settings_subscriptions_defaultPlan">
+                  <option value="starter">Starter</option>
+                  <option value="professional">Professional</option>
+                  <option value="enterprise">Enterprise</option>
+                </select>
+              </label>
+              <label><span>Trial days</span><input class="input" id="settings_subscriptions_trialDays" type="number" min="0" step="1"></label>
+              <label class="toggle-row"><input id="settings_subscriptions_autoSuspendOnFailedPayment" type="checkbox"><span>Auto suspend on failed payment</span></label>
+              <label><span>Starter monthly EUR</span><input class="input" id="settings_plan_starter_monthlyPriceEur" type="number" min="0" step="0.1"></label>
+              <label><span>Starter max users</span><input class="input" id="settings_plan_starter_maxUsers" type="number" min="1" step="1"></label>
+              <label><span>Starter AI budget EUR</span><input class="input" id="settings_plan_starter_aiBudgetEur" type="number" min="0" step="0.1"></label>
+              <label><span>Starter storage GB</span><input class="input" id="settings_plan_starter_storageGb" type="number" min="0" step="1"></label>
+              <label><span>Professional monthly EUR</span><input class="input" id="settings_plan_professional_monthlyPriceEur" type="number" min="0" step="0.1"></label>
+              <label><span>Professional max users</span><input class="input" id="settings_plan_professional_maxUsers" type="number" min="1" step="1"></label>
+              <label><span>Professional AI budget EUR</span><input class="input" id="settings_plan_professional_aiBudgetEur" type="number" min="0" step="0.1"></label>
+              <label><span>Professional storage GB</span><input class="input" id="settings_plan_professional_storageGb" type="number" min="0" step="1"></label>
+              <label><span>Enterprise monthly EUR</span><input class="input" id="settings_plan_enterprise_monthlyPriceEur" type="number" min="0" step="0.1"></label>
+              <label><span>Enterprise max users</span><input class="input" id="settings_plan_enterprise_maxUsers" type="number" min="1" step="1"></label>
+              <label><span>Enterprise AI budget EUR</span><input class="input" id="settings_plan_enterprise_aiBudgetEur" type="number" min="0" step="0.1"></label>
+              <label><span>Enterprise storage GB</span><input class="input" id="settings_plan_enterprise_storageGb" type="number" min="0" step="1"></label>
+            </div>
+          </section>
+
+          <section class="settings-section-card" data-platform-control-panel="workspaceOverrides" hidden>
+            <div class="settings-section-head">
+              <div>
+                <h3>Workspace Overrides</h3>
+                <p>Create workspace-specific overrides and preview the effective merged configuration.</p>
+              </div>
+            </div>
+            <div class="settings-form-grid">
+              <label><span>Workspace</span>
+                <select class="input" id="platformControlWorkspaceSelect">
+                  <option value="">Select workspace</option>
+                </select>
+              </label>
+            </div>
+            <div class="platform-control-override-actions">
+              <button class="btn btn-primary" type="button" id="btnPlatformControlSaveWorkspaceOverride">Save override from current form</button>
+              <button class="btn btn-ghost" type="button" id="btnPlatformControlResetWorkspaceOverride">Reset override</button>
+            </div>
+            <div class="platform-control-inline-note" id="platformControlOverrideStatus">Select a workspace to view or save overrides.</div>
+            <pre class="platform-control-preview" id="platformControlEffectivePreview">{}</pre>
+          </section>
         </div>
 
-        <textarea id="settingsJson" class="json-editor"></textarea>
+        <details class="settings-advanced" id="settingsAdvancedMode" data-platform-control-panel="advanced" hidden>
+          <summary>
+            <span>Advanced Mode</span>
+            <small>Edit the same config as raw JSON.</small>
+          </summary>
+          <div class="card-header settings-json-header">
+            <div>
+              <h3>Configuration JSON</h3>
+              <p>Direct editor for the same platform settings object.</p>
+            </div>
+
+            <div class="card-actions">
+              <button id="btnFormatJson" class="btn btn-ghost" type="button">Format</button>
+              <button id="btnResetJson" class="btn btn-ghost" type="button">Reset</button>
+            </div>
+          </div>
+          <textarea id="settingsJson" class="json-editor"></textarea>
+          <div class="settings-advanced-actions">
+            <button id="btnValidateJson" class="btn btn-ghost" type="button">Validate</button>
+            <button id="btnSaveSettings" class="btn btn-secondary" type="button">Save Advanced JSON</button>
+          </div>
+        </details>
 
         <div class="settings-feedback">
           <div id="settingsError" class="error"></div>
@@ -464,25 +749,17 @@
 
         <div class="settings-footer">
           <div class="left">
-            <span id="settingsSaveStatus">Editor reset to saved version.</span>
+            <span id="settingsSaveStatus">Platform settings loaded.</span>
           </div>
-
-          <div class="right">
-  <button id="btnValidateJson" class="btn btn-ghost" type="button">
-    <i class="fas fa-shield-alt" style="margin-right: 6px;"></i> Validate
-  </button>
-  <button id="btnSaveSettings" class="btn btn-primary" type="button">
-    <i class="fas fa-download" style="margin-right: 6px;"></i> Save Changes
-  </button>
-</div>
         </div>
       </div>
 
       <div class="settings-side">
         <div class="settings-card info">
-          <h4>ℹ️ Info</h4>
-          <p>Settings are stored as <b>JSON per workspace</b>.</p>
-          <p>Changes affect live system behavior immediately.</p>
+          <h4>Platform Control</h4>
+          <p>These controls save a structured JSON object in <b>platform_settings</b>.</p>
+          <p>Workspace overrides can layer on top later without changing this UI model.</p>
+          <p>Advanced Mode reads and writes the exact same configuration object.</p>
         </div>
       </div>
     </div>
@@ -496,9 +773,12 @@
                 <p class="muted">Rotatable provider credentials encrypted at rest. Raw secrets are never shown again.</p>
               </div>
               <div class="panel-actions secret-actions">
-                <span class="secret-environment-badge" id="secretsEnvironmentBadge">production</span>
-                <button class="btn btn-ghost" type="button" id="btnSecretsRefresh">
-                  <i class="fa-solid fa-rotate-right" aria-hidden="true"></i><span>Refresh</span>
+                <span class="secret-environment-badge" id="secretsEnvironmentBadge">
+                  <i class="fa-solid fa-layer-group" aria-hidden="true"></i>
+                  <span>production</span>
+                </span>
+                <button class="btn btn-ghost secret-refresh-btn" type="button" id="btnSecretsRefresh">
+                  <i class="fa-solid fa-arrows-rotate" aria-hidden="true"></i><span>Refresh</span>
                 </button>
               </div>
             </div>
@@ -511,11 +791,221 @@
               </div>
             </div>
 
+            <div id="secretsAiBudgetMount"></div>
+
             <div class="secret-provider-grid" id="secretProviderGrid">
               <div class="card">
                 <div class="muted" style="padding: 16px;">No provider data loaded yet.</div>
               </div>
             </div>
+          </section>
+
+          <section class="panel cost-control-panel" id="panel-cost-control" hidden>
+            <div class="panel-head cost-control-hero">
+              <div>
+                <span class="cost-control-eyebrow"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i> Platform governance</span>
+                <h2>Cost Control</h2>
+                <p class="muted">Monitor AI and platform spend, enforce provider limits, and catch workspace overruns before they become billing surprises.</p>
+              </div>
+              <div class="panel-actions cost-control-head-actions">
+                <label class="cost-control-period-control">
+                  <span>Period</span>
+                  <select class="input cost-control-period-select" id="costControlPeriod">
+                    <option value="daily">Daily</option>
+                    <option value="monthly" selected>Monthly</option>
+                    <option value="yearly">Yearly</option>
+                  </select>
+                </label>
+                <button class="btn btn-ghost cost-action-btn" type="button" id="btnCostControlRefresh">
+                  <i class="fa-solid fa-rotate-right" aria-hidden="true"></i><span>Refresh</span>
+                </button>
+                <button class="btn btn-secondary cost-action-btn cost-action-btn-primary" type="button" id="btnCostControlExport">
+                  <i class="fa-solid fa-file-csv" aria-hidden="true"></i><span>Export CSV</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="alert" id="costControlError" hidden></div>
+
+            <div class="cost-control-grid">
+              <section class="card cost-control-card cost-control-card-feature">
+                <div class="cost-control-card-head">
+                  <div>
+                    <h3>Platform overview</h3>
+                    <p class="muted">Current spend, provider concentration, school usage, and live alert pressure.</p>
+                  </div>
+                </div>
+                <div class="cost-overview-stats" id="costOverviewStats"></div>
+                <div class="cost-overview-list-grid">
+                  <div class="cost-overview-list">
+                    <h4>Top providers</h4>
+                    <div id="costTopProviders"></div>
+                  </div>
+                  <div class="cost-overview-list">
+                    <h4>Top schools</h4>
+                    <div id="costTopSchools"></div>
+                  </div>
+                  <div class="cost-overview-list">
+                    <h4>Active alerts</h4>
+                    <div id="costActiveAlerts"></div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="card cost-control-card cost-control-card-feature">
+                <div class="cost-control-card-head">
+                  <div>
+                    <h3>Limits editor</h3>
+                    <p class="muted">Set platform defaults or workspace-specific overrides by provider and period.</p>
+                  </div>
+                </div>
+                <div class="cost-limit-form">
+                  <select class="input" id="costLimitWorkspace"></select>
+                  <select class="input" id="costLimitProvider"></select>
+                  <select class="input" id="costLimitPeriodSelect">
+                    <option value="daily">Daily</option>
+                    <option value="monthly" selected>Monthly</option>
+                    <option value="yearly">Yearly</option>
+                  </select>
+                  <input class="input" id="costLimitSoft" type="number" min="0" step="0.01" placeholder="Soft limit EUR" />
+                  <input class="input" id="costLimitHard" type="number" min="0" step="0.01" placeholder="Hard limit EUR" />
+                  <input class="input" id="costLimitUnits" type="number" min="0" step="0.01" placeholder="Unit limit" />
+                </div>
+                <div class="cost-limit-actions">
+                  <button class="btn btn-primary" type="button" data-cost-control-action="save-limit">Save limit</button>
+                </div>
+                <div class="cost-control-feedback" id="costControlFeedback" aria-live="polite"></div>
+              </section>
+            </div>
+
+            <section class="card cost-control-card">
+              <div class="cost-control-card-head">
+                <div>
+                  <h3>Provider breakdown</h3>
+                </div>
+              </div>
+              <div class="table" id="costProviderTable"></div>
+            </section>
+
+            <section class="card cost-control-card cost-control-card-framed">
+              <div class="cost-control-card-head">
+                <div>
+                  <h3>School / workspace breakdown</h3>
+                  <p class="muted">Monthly provider mix and limit status per school.</p>
+                </div>
+              </div>
+              <div class="table" id="costWorkspaceTable"></div>
+            </section>
+
+            <section class="card cost-control-card cost-control-card-framed">
+              <div class="cost-control-card-head">
+                <div>
+                  <h3>Alerts</h3>
+                  <p class="muted">Soft-limit, hard-limit, and anomaly-style alerts for platform governance.</p>
+                </div>
+              </div>
+              <div class="table" id="costAlertsTable"></div>
+            </section>
+          </section>
+
+          <section class="panel owner-control-panel" id="panel-operations" hidden data-owner-panel="operations">
+            <div class="panel-head owner-panel-head">
+              <div><h2>Operations Center</h2><p class="muted">Production health, provider status, sessions, backups, and failed jobs.</p></div>
+              <button class="btn btn-ghost" type="button" data-owner-action="refresh" data-owner-target="operations"><i class="fa-solid fa-rotate-right"></i><span>Refresh</span></button>
+            </div>
+            <div class="alert" id="operationsError" hidden></div>
+            <div class="owner-summary-grid" id="operationsSummary"></div>
+            <section class="card owner-control-card"><div class="owner-card-head"><h3>Provider checks</h3></div><div class="table" id="operationsTable"></div></section>
+          </section>
+
+          <section class="panel owner-control-panel" id="panel-backups" hidden data-owner-panel="backups">
+            <div class="panel-head owner-panel-head">
+              <div><h2>Backup / Restore</h2><p class="muted">Backup readiness, manual backup metadata, history, and restore dry-runs.</p></div>
+              <div class="panel-actions owner-actions"><button class="btn btn-primary" type="button" data-owner-action="backup-run">Run backup</button><button class="btn btn-ghost" type="button" data-owner-action="restore-dry-run">Restore dry-run</button></div>
+            </div>
+            <div class="alert" id="backupsError" hidden></div>
+            <div class="owner-summary-grid" id="backupsSummary"></div>
+            <section class="card owner-control-card"><div class="owner-card-head"><h3>Backup history</h3><p class="muted">Dry-run restore is the only restore operation exposed here.</p></div><div class="table" id="backupsTable"></div></section>
+          </section>
+
+          <section class="panel owner-control-panel" id="panel-lifecycle" hidden data-owner-panel="lifecycle">
+            <div class="panel-head owner-panel-head"><div><h2>Workspace Lifecycle</h2><p class="muted">Suspend, unsuspend, archive, owner transfer, force logout, and override reset controls.</p></div></div>
+            <div class="alert" id="lifecycleError" hidden></div>
+            <section class="card owner-control-card">
+              <div class="owner-card-head"><h3>Lifecycle action</h3></div>
+              <div class="owner-form-grid">
+                <select class="input" id="lifecycleWorkspace"></select>
+                <select class="input" id="lifecycleAction"><option value="suspend">Suspend</option><option value="unsuspend">Unsuspend</option><option value="archive">Archive</option><option value="force-logout">Force logout</option><option value="reset-overrides">Reset overrides</option><option value="transfer-owner">Transfer owner</option></select>
+                <input class="input" id="lifecycleOwnerUserId" placeholder="New owner user ID (transfer only)">
+                <input class="input owner-form-wide" id="lifecycleReason" placeholder="Reason required">
+                <button class="btn btn-primary" type="button" data-owner-action="lifecycle-run">Apply action</button>
+              </div>
+            </section>
+            <section class="card owner-control-card"><div class="owner-card-head"><h3>Recent lifecycle events</h3></div><div class="table" id="lifecycleTable"></div></section>
+          </section>
+
+          <section class="panel owner-control-panel" id="panel-support" hidden data-owner-panel="support">
+            <div class="panel-head owner-panel-head"><div><h2>Support Mode</h2><p class="muted">Short-lived, audited support impersonation. Read-only is the default.</p></div><button class="btn btn-ghost" type="button" data-owner-action="support-end">End active sessions</button></div>
+            <div class="alert" id="supportError" hidden></div>
+            <section class="card owner-control-card">
+              <div class="owner-card-head"><h3>Start support session</h3></div>
+              <div class="owner-form-grid">
+                <select class="input" id="supportWorkspace"></select>
+                <input class="input" id="supportTargetUser" placeholder="Target user ID">
+                <label class="owner-toggle"><input id="supportReadOnly" type="checkbox" checked><span>Read-only</span></label>
+                <input class="input owner-form-wide" id="supportReason" placeholder="Reason required">
+                <button class="btn btn-primary" type="button" data-owner-action="support-start">Start session</button>
+              </div>
+            </section>
+            <section class="card owner-control-card"><div class="owner-card-head"><h3>Active impersonation</h3></div><div class="table" id="supportTable"></div></section>
+          </section>
+
+          <section class="panel owner-control-panel incident-panel" id="panel-incidents" hidden data-owner-panel="incidents">
+            <div class="panel-head owner-panel-head incident-panel-head"><div><span class="incident-eyebrow"><i class="fa-solid fa-shield-heart" aria-hidden="true"></i> Live operations</span><h2>Incident / Maintenance</h2><p class="muted">Maintenance banner, feature freeze switches, and incident history.</p></div><button class="btn btn-primary incident-save-btn" type="button" data-owner-action="maintenance-save"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i><span>Save maintenance</span></button></div>
+            <div class="alert" id="incidentsError" hidden></div>
+            <section class="card owner-control-card incident-card incident-maintenance-card">
+              <div class="owner-card-head"><div><span class="incident-card-icon"><i class="fa-solid fa-toggle-on" aria-hidden="true"></i></span><h3>Maintenance controls</h3></div></div>
+              <div class="owner-form-grid incident-form-grid">
+                <label class="owner-toggle"><input id="maintenanceEnabled" type="checkbox"><span>Maintenance mode</span></label>
+                <input class="input owner-form-wide" id="maintenanceMessage" placeholder="Public banner text">
+                <label class="owner-toggle"><input data-maint-feature="uploads" type="checkbox"><span>Disable uploads</span></label>
+                <label class="owner-toggle"><input data-maint-feature="ai" type="checkbox"><span>Disable AI</span></label>
+                <label class="owner-toggle"><input data-maint-feature="email" type="checkbox"><span>Disable email</span></label>
+                <label class="owner-toggle"><input data-maint-feature="live_classes" type="checkbox"><span>Disable live classes</span></label>
+              </div>
+            </section>
+            <section class="card owner-control-card incident-card"><div class="owner-card-head"><div><span class="incident-card-icon"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i></span><h3>Create incident</h3></div></div><div class="owner-form-grid incident-form-grid"><input class="input" id="incidentTitle" placeholder="Incident title"><select class="input" id="incidentSeverity"><option value="info">Info</option><option value="warn">Warn</option><option value="critical">Critical</option></select><input class="input owner-form-wide" id="incidentPublicMessage" placeholder="Public message"><input class="input owner-form-wide" id="incidentInternalNote" placeholder="Admin-only incident note"><button class="btn btn-primary incident-create-btn" type="button" data-owner-action="incident-create"><i class="fa-solid fa-plus" aria-hidden="true"></i><span>Create incident</span></button></div></section>
+            <section class="card owner-control-card incident-card"><div class="owner-card-head"><div><span class="incident-card-icon"><i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i></span><h3>Incident history</h3></div></div><div class="table incident-table" id="incidentsTable"></div></section>
+          </section>
+
+          <section class="panel owner-control-panel" id="panel-data-governance" hidden data-owner-panel="data-governance">
+            <div class="panel-head owner-panel-head"><div><h2>Data Governance</h2><p class="muted">GDPR exports, deletion queue, retention policy, DPA, and legal readiness.</p></div></div>
+            <div class="alert" id="dataGovernanceError" hidden></div>
+            <div class="owner-summary-grid" id="dataGovernanceSummary"></div>
+            <section class="card owner-control-card"><div class="owner-card-head"><h3>Create governance request</h3></div><div class="owner-form-grid"><select class="input" id="governanceWorkspace"></select><select class="input" id="governanceType"><option value="export">Export workspace data</option><option value="delete">Delete workspace data</option></select><input class="input owner-form-wide" id="governanceReason" placeholder="Reason for deletion/export"><button class="btn btn-primary" type="button" data-owner-action="governance-create">Create request</button></div></section>
+            <section class="card owner-control-card"><div class="owner-card-head"><h3>Data deletion queue</h3></div><div class="table" id="dataGovernanceTable"></div></section>
+          </section>
+
+          <section class="panel owner-control-panel" id="panel-notifications" hidden data-owner-panel="notifications">
+            <div class="panel-head owner-panel-head"><div><h2>Notifications</h2><p class="muted">Send platform announcements by in-app, email, or SMS channels.</p></div></div>
+            <div class="alert" id="notificationsError" hidden></div>
+            <section class="card owner-control-card"><div class="owner-card-head"><h3>Create announcement</h3></div><div class="owner-form-grid"><input class="input" id="notificationTitle" placeholder="Title"><select class="input" id="notificationChannel"><option value="in_app">In-app</option><option value="email">Email</option><option value="sms">SMS</option></select><select class="input" id="notificationWorkspace"></select><input class="input" id="notificationScheduledAt" placeholder="Schedule date"><textarea class="input owner-form-wide" id="notificationBody" placeholder="Message body"></textarea><button class="btn btn-primary" type="button" data-owner-action="notification-create">Save draft</button></div></section>
+            <section class="card owner-control-card"><div class="owner-card-head"><h3>Delivery stats</h3></div><div class="table" id="notificationsTable"></div></section>
+          </section>
+
+          <section class="panel owner-control-panel" id="panel-branding" hidden data-owner-panel="branding">
+            <div class="panel-head owner-panel-head"><div><h2>Branding / Domains</h2><p class="muted">Platform identity, workspace branding, custom domains, and verification status.</p></div><button class="btn btn-primary" type="button" data-owner-action="branding-save">Save platform branding</button></div>
+            <div class="alert" id="brandingError" hidden></div>
+            <section class="card owner-control-card"><div class="owner-card-head"><h3>Platform branding</h3></div><div class="owner-form-grid"><input class="input" id="brandingPlatformName" placeholder="Platform name"><input class="input" id="brandingSupportEmail" placeholder="Support email"><input class="input" id="brandingLogoUrl" placeholder="Platform logo URL"><input class="input" id="brandingDefaultTheme" placeholder="Default theme"></div></section>
+            <section class="card owner-control-card"><div class="owner-card-head"><h3>Workspace domain</h3></div><div class="owner-form-grid"><select class="input" id="brandingWorkspace"></select><input class="input" id="brandingDomain" placeholder="school.example.com"><button class="btn btn-primary" type="button" data-owner-action="branding-workspace-save">Save workspace branding</button><button class="btn btn-ghost" type="button" data-owner-action="branding-domain-verify">Verify domain</button></div></section>
+            <section class="card owner-control-card"><div class="owner-card-head"><h3>Domain verification</h3></div><div class="table" id="brandingTable"></div></section>
+          </section>
+
+          <section class="panel owner-control-panel" id="panel-reports" hidden data-owner-panel="reports">
+            <div class="panel-head owner-panel-head"><div><h2>Reports</h2><p class="muted">Owner-level revenue, growth, cost, storage, usage, delivery, compliance, and audit reports.</p></div><button class="btn btn-secondary" type="button" data-owner-action="reports-export"><i class="fa-solid fa-file-csv"></i><span>Export CSV</span></button></div>
+            <div class="alert" id="reportsError" hidden></div>
+            <div class="owner-form-grid owner-report-filters"><input class="input" id="reportsDateFrom" placeholder="Date from"><input class="input" id="reportsDateTo" placeholder="Date to"><select class="input" id="reportsWorkspace"></select></div>
+            <div class="owner-summary-grid" id="reportsSummary"></div>
           </section>
 
           <section class="panel legal-panel" id="panel-legal" hidden>
@@ -932,14 +1422,14 @@
               <p class="muted">Applies to every workspace, including new schools created later.</p>
             </div>
 
-            <label class="label" for="aiDefaultCapInput">Default monthly AI budget (EUR)</label>
-            <input id="aiDefaultCapInput" type="number" min="0" step="0.10" placeholder="5.00" />
+            <label class="label" for="aiDefaultBudget">Default monthly AI budget (EUR)</label>
+            <input id="aiDefaultBudget" type="number" min="0" step="0.10" placeholder="5.00" />
             <div style="height:10px"></div>
             <div class="row">
-              <button id="aiDefaultCapSaveBtn" class="btn btn-primary" type="button">Save default</button>
+              <button id="aiDefaultBudgetSaveBtn" class="btn btn-primary" type="button">Save default</button>
             </div>
             <div style="height:10px"></div>
-            <div class="muted">Current default: <strong id="aiDefaultCapCurrent">€0.00</strong> • Last updated <span id="aiDefaultCapUpdated">—</span></div>
+            <div class="muted">Current default: <strong id="aiDefaultBudgetCurrent">€0.00</strong> • Last updated <span id="aiDefaultBudgetUpdated">—</span></div>
           </div>
 
           <hr />
@@ -947,53 +1437,24 @@
           <div class="ai-budget-section">
             <div class="ai-budget-section-head">
               <h3>Workspace override</h3>
-              <p class="muted">Select a specific school above to define its own monthly AI cap.</p>
+              <p class="muted">Use the workspace selector in the top bar to choose the school you want to override.</p>
             </div>
 
-            <label class="label" for="aiCapInput">Max monthly spend (EUR)</label>
-            <input id="aiCapInput" type="number" min="0" step="0.10" placeholder="1.00" />
+            <label class="label" for="workspaceBudget">Max monthly spend (EUR)</label>
+            <input id="workspaceBudget" type="number" min="0" step="0.10" placeholder="1.00" />
             <div style="height:10px"></div>
             <div class="row">
-              <button id="aiCapSaveBtn" class="btn btn-primary" type="button">Save override</button>
-              <button id="aiCapResetUsageBtn" class="btn" type="button">Reset usage (dev)</button>
+              <button id="workspaceBudgetSaveBtn" class="btn btn-primary" type="button">Save override</button>
             </div>
             <div style="height:10px"></div>
-            <div class="muted">Current cap: <strong id="aiCapCurrent">€0.00</strong> • Used: <strong id="aiCapUsed">€0.00</strong></div>
+            <div class="muted">Current cap: <strong id="workspaceBudgetCurrent">€0.00</strong> • Used: <strong id="workspaceBudgetUsed">€0.00</strong></div>
           </div>
+
+          <div class="ai-budget-feedback muted" id="aiBudgetFeedback" aria-live="polite"></div>
         </div>
       </section>
     </main>
 
-    <!-- 8. FOOTER TOOLBAR -->
-    <div class="admin-dashboard-footer-bar" role="toolbar" aria-label="Admin quick settings">
-      <button class="admin-footer-btn" type="button" aria-label="Configure API"><span>API</span></button>
-      <button class="admin-footer-btn" id="btnSpeakingPractice" type="button" aria-label="Open speaking practice settings">
-        <span>
-<i class="fa-solid fa-microphone-lines"></i>
-         <i class="fa-solid fa-gear admin-footer-icon-overlay"></i>
-        </span>
-      </button>
-      <button class="admin-footer-btn" type="button" aria-label="Google Translate"><i class="fa-solid fa-language"></i><span class="sr-only">Translate</span></button>
-      <button class="admin-footer-btn" type="button" aria-label="Mobile OTP configuration"><i class="fa-solid fa-mobile-screen-button"></i><span></span></button>
-      <button class="admin-footer-btn" id="btnOwnerEmailSettings" type="button" aria-label="Email settings">
-        <span class="admin-footer-icon-stack" aria-hidden="true">
-          <i class="fa-solid fa-envelope"></i>
-          <i class="fa-solid fa-gear admin-footer-icon-overlay"></i>
-        </span>
-        <span class="sr-only">Email settings</span>
-      </button>
-      
-      <button class="admin-footer-btn admin-footer-icon-btn" type="button" aria-label="Super admin"><i class="fa-solid fa-crown"></i></button>
-    </div>
-
-    <footer class="admin-legal-footer" aria-label="Admin legal footer">
-      <a href="/privacy" target="_blank" rel="noopener">Privacy</a>
-      <a href="/terms" target="_blank" rel="noopener">Terms</a>
-      <a href="/impressum" target="_blank" rel="noopener">Impressum</a>
-      <a href="/dpa" target="_blank" rel="noopener">DPA</a>
-      <a href="/trust" target="_blank" rel="noopener">Trust</a>
-      <a href="#" id="adminManageCookiesFooterLink">Cookie settings</a>
-    </footer>
   </div>
 
   <script src="/legal/cookie-consent.js"></script>
