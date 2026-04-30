@@ -1673,8 +1673,124 @@ textarea.secret-field-input{
 .owner-control-panel .table th,.owner-control-panel .table td{padding:10px 12px;border-bottom:1px solid rgba(15,23,42,.06);vertical-align:top}
 .owner-control-panel .table-empty{padding:16px;border-radius:14px;background:rgba(248,250,252,.86);font-size:12.5px;color:#64748b}
 .owner-report-filters{margin-bottom:2px}
+
+.notification-panel-head{
+  background:
+    linear-gradient(135deg, rgba(239,246,255,.92), rgba(255,255,255,.98) 48%, rgba(240,253,244,.78));
+  border-color:rgba(147,197,253,.38);
+}
+.notification-eyebrow{
+  display:inline-flex;
+  align-items:center;
+  gap:7px;
+  margin-bottom:5px;
+  font-size:10.5px;
+  font-weight:950;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+  color:#1d4ed8;
+}
+.notification-layout{display:grid;grid-template-columns:1.05fr .95fr;gap:12px}
+.notification-create-card{grid-column:span 1}
+.notification-card{
+  border-color:rgba(191,219,254,.42);
+  background:linear-gradient(180deg,rgba(255,255,255,.98),rgba(248,250,252,.96));
+}
+.notification-form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;align-items:center}
+.notification-form-grid .input{
+  min-height:38px;
+  border:1px solid rgba(148,163,184,.34);
+  border-radius:11px;
+  background:rgba(255,255,255,.94);
+}
+.notification-form-grid select[multiple]{
+  min-height:84px;
+  padding:8px;
+}
+.notification-check{
+  min-height:38px;
+  display:flex;
+  align-items:center;
+  padding:0 11px;
+  border:1px solid rgba(148,163,184,.32);
+  border-radius:11px;
+  background:rgba(255,255,255,.92);
+}
+.notification-check input{width:15px;height:15px;margin:0 9px 0 0;accent-color:#2563eb}
+.notification-check span{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:850;color:#334155}
+.notification-message{
+  width:100%;
+  min-height:128px;
+  padding:12px;
+  border:1px solid rgba(148,163,184,.34);
+  border-radius:12px;
+  resize:vertical;
+}
+.notification-count{font-size:12px;font-weight:900;color:#64748b}
+.notification-preview{
+  margin-top:10px;
+  min-height:42px;
+  padding:11px 12px;
+  border:1px dashed rgba(37,99,235,.28);
+  border-radius:12px;
+  background:rgba(239,246,255,.72);
+  font-size:12.5px;
+  line-height:1.45;
+  color:#334155;
+}
+.notification-cost-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}
+.notification-cost-grid div{
+  padding:12px;
+  border:1px solid rgba(148,163,184,.22);
+  border-radius:12px;
+  background:rgba(255,255,255,.86);
+}
+.notification-cost-grid span{display:block;font-size:10.5px;font-weight:950;letter-spacing:.05em;text-transform:uppercase;color:#64748b}
+.notification-cost-grid strong{display:block;margin-top:5px;font-size:19px;font-weight:950;color:#0f172a}
+.notification-fallbacks{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:10px}
+.notification-template-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+.notification-template{
+  min-height:56px;
+  padding:10px 12px;
+  text-align:left;
+  border:1px solid rgba(148,163,184,.28);
+  border-radius:12px;
+  background:rgba(255,255,255,.92);
+  cursor:pointer;
+}
+.notification-template span{display:block;font-size:12.5px;font-weight:900;color:#0f172a}
+.notification-template small{display:block;margin-top:4px;font-size:11px;font-weight:800;color:#64748b;text-transform:uppercase}
+.notification-channel-pill{
+  display:inline-flex;
+  align-items:center;
+  min-height:24px;
+  padding:0 8px;
+  margin:1px;
+  border-radius:999px;
+  border:1px solid rgba(147,197,253,.42);
+  background:rgba(239,246,255,.86);
+  font-size:11px;
+  font-weight:850;
+  color:#1d4ed8;
+}
+.notification-automation-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.notification-automation-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;align-content:start}
+.notification-automation-form select[multiple]{min-height:84px;padding-top:9px}
+.notification-run-history{margin-top:12px}
+.notification-run-history h4{margin:0 0 8px;font-size:12px;font-weight:950;color:#475569;text-transform:uppercase;letter-spacing:.05em}
+.notification-rule{
+  display:grid;
+  gap:6px;
+  padding:12px;
+  border:1px solid rgba(148,163,184,.24);
+  border-radius:12px;
+  background:rgba(255,255,255,.9);
+}
+.notification-rule span{font-size:11px;font-weight:950;letter-spacing:.04em;color:#64748b;text-transform:uppercase}
+.notification-rule strong{font-size:13px;color:#0f172a}
 @media (max-width:1100px){.owner-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.owner-form-grid{grid-template-columns:1fr 1fr}.owner-form-wide{grid-column:span 2}}
-@media (max-width:720px){.owner-panel-head{align-items:flex-start}.owner-summary-grid,.owner-form-grid{grid-template-columns:1fr}.owner-form-wide{grid-column:span 1}.owner-actions,.owner-panel-head .btn{width:100%}}
+@media (max-width:1100px){.notification-layout,.notification-automation-grid{grid-template-columns:1fr}.notification-form-grid,.notification-cost-grid{grid-template-columns:1fr 1fr}}
+@media (max-width:720px){.owner-panel-head{align-items:flex-start}.owner-summary-grid,.owner-form-grid{grid-template-columns:1fr}.owner-form-wide{grid-column:span 1}.owner-actions,.owner-panel-head .btn{width:100%}.notification-form-grid,.notification-cost-grid,.notification-fallbacks,.notification-template-list,.notification-automation-form{grid-template-columns:1fr}}
 
 /* Incident / Maintenance premium surface */
 .incident-panel{gap:12px}

@@ -111,6 +111,13 @@ const state = {
     notifications: [],
     branding: null,
     reports: null
+  },
+  notificationControl: {
+    selectedCampaignId: "",
+    selectedAutomationRuleId: "",
+    lastEstimate: null,
+    stats: null,
+    automation: null
   }
 };
 
@@ -2205,7 +2212,9 @@ function syncOwnerWorkspaceSelects() {
     if (el) el.innerHTML = workspaceOptions({ includeAll: id === "reportsWorkspace" });
   });
   const notificationWorkspace = $("notificationWorkspace");
-  if (notificationWorkspace) notificationWorkspace.innerHTML = `<option value="">All schools</option>${workspaceOptions()}`;
+  if (notificationWorkspace) notificationWorkspace.innerHTML = workspaceOptions();
+  const notificationAutomationWorkspace = $("notificationAutomationWorkspace");
+  if (notificationAutomationWorkspace) notificationAutomationWorkspace.innerHTML = workspaceOptions();
 }
 
 function formatOwnerStatus(value) {
@@ -2332,18 +2341,198 @@ function renderDataGovernance(overview, rows) {
   });
 }
 
-function renderNotifications(rows) {
+function parseOwnerJson(value, fallback) {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value);
+  } catch (_err) {
+    return fallback;
+  }
+}
+
+function formatCurrencyEUR(value) {
+  return new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR" }).format(Number(value || 0));
+}
+
+function getSelectedNotificationChannels() {
+  return Array.from(document.querySelectorAll("[data-notification-channel]:checked")).map((el) => el.value);
+}
+
+function getSelectedNotificationWorkspaces() {
+  const select = $("notificationWorkspace");
+  if (!select) return [];
+  return Array.from(select.selectedOptions || []).map((option) => option.value).filter(Boolean);
+}
+
+function updateNotificationEstimate() {
+  const channels = getSelectedNotificationChannels();
+  const workspaceCount = getSelectedNotificationWorkspaces().length;
+  const targetType = $("notificationTargetType")?.value || "all_workspaces";
+  const base = Number(state.workspaces?.length || 0) * 25;
+  const recipients = targetType === "selected_workspaces"
+    ? Math.max(0, workspaceCount * 25)
+    : targetType === "role"
+      ? Math.max(0, Math.round(base / 3))
+      : targetType === "plan"
+        ? 0
+      : Math.max(0, base);
+  const sms = channels.includes("sms") ? recipients * 0.08 : 0;
+  const email = channels.includes("email") ? recipients * 0.0005 : 0;
+  if ($("notificationEstimatedRecipients")) $("notificationEstimatedRecipients").textContent = recipients.toLocaleString();
+  if ($("notificationEstimatedSms")) $("notificationEstimatedSms").textContent = formatCurrencyEUR(sms);
+  if ($("notificationEstimatedEmail")) $("notificationEstimatedEmail").textContent = formatCurrencyEUR(email);
+  if ($("notificationCharCount")) {
+    const chars = ($("notificationBody")?.value || "").length;
+    $("notificationCharCount").textContent = `${chars} chars${chars > 160 ? " / multi-SMS" : ""}`;
+  }
+}
+
+function renderNotificationTemplates(templates) {
+  const el = $("notificationTemplates");
+  if (!el) return;
+  const automationTemplate = $("notificationAutomationTemplate");
+  if (automationTemplate) {
+    automationTemplate.innerHTML = `<option value="">No template</option>${templates.map((template) => `<option value="${escapeHtml(template.id || "")}">${escapeHtml(template.name || template.id || "Template")}</option>`).join("")}`;
+  }
+  if (!templates.length) {
+    el.innerHTML = `<div class="table-empty">No templates yet.</div>`;
+    return;
+  }
+  el.innerHTML = templates.map((template) => `
+    <button class="notification-template" type="button" data-owner-action="notification-template" data-subject="${escapeHtml(template.subject || "")}" data-body="${escapeHtml(template.body || "")}">
+      <span>${escapeHtml(template.name || "Template")}</span>
+      <small>${escapeHtml(template.channel || "in_app")}</small>
+    </button>
+  `).join("");
+}
+
+function formatNotificationTarget(row) {
+  const config = row.targetConfig || parseOwnerJson(row.target_config_json, {});
+  if (row.target_type === "selected_workspaces") return `${(config.workspaceIds || []).length} workspaces`;
+  if (row.target_type === "role") return `Role: ${config.role || "—"}`;
+  if (row.target_type === "plan") return `Plan: ${config.plan || "—"}`;
+  return "All workspaces";
+}
+
+function getSelectedAutomationChannels() {
+  return Array.from(document.querySelectorAll("[data-notification-automation-channel]:checked")).map((el) => el.value);
+}
+
+function getSelectedAutomationWorkspaces() {
+  const select = $("notificationAutomationWorkspace");
+  if (!select) return [];
+  return Array.from(select.selectedOptions || []).map((option) => option.value).filter(Boolean);
+}
+
+function formatAutomationTrigger(triggerKey) {
+  const labels = {
+    ai_budget_80: "AI budget reaches 80%",
+    workspace_inactive_7_days: "Workspace inactive 7 days",
+    failed_payment: "Failed payment",
+    failed_email_delivery_gt_10: "Failed email deliveries > 10",
+    storage_usage_80: "Storage usage over 80%"
+  };
+  return labels[triggerKey] || triggerKey || "Unknown trigger";
+}
+
+function renderNotificationAutomations(data = {}) {
+  const rules = Array.isArray(data.rows) ? data.rows : [];
+  const runs = Array.isArray(data.runs) ? data.runs : [];
+  renderTable($("notificationAutomationRules"), {
+    columns: [
+      { label: "Rule", key: "name", render: (row) => `<strong>${escapeHtml(row.name || "")}</strong>` },
+      { label: "Trigger", key: "trigger_key", render: (row) => escapeHtml(formatAutomationTrigger(row.trigger_key)) },
+      { label: "Channels", key: "channels_json", render: (row) => (row.channels || parseOwnerJson(row.channels_json, [])).map((channel) => `<span class="notification-channel-pill">${escapeHtml(channel)}</span>`).join(" ") },
+      { label: "State", key: "enabled", render: (row) => formatOwnerStatus(Number(row.enabled || 0) ? "enabled" : "disabled") },
+      { label: "Cooldown", key: "cooldown_minutes", render: (row) => `${Number(row.cooldown_minutes || 0).toLocaleString()} min` },
+      { label: "Last run", key: "last_run_at", render: (row) => escapeHtml(formatAdminTimestamp(row.last_run_at)) },
+      { label: "Action", key: "_action", render: (row) => `
+        <div class="owner-actions">
+          <button class="btn btn-ghost" type="button" data-owner-action="notification-automation-test" data-id="${escapeHtml(row.id)}">Test</button>
+          <button class="btn btn-ghost" type="button" data-owner-action="notification-automation-toggle" data-id="${escapeHtml(row.id)}" data-enabled="${Number(row.enabled || 0) ? "0" : "1"}">${Number(row.enabled || 0) ? "Disable" : "Enable"}</button>
+          <button class="btn btn-ghost" type="button" data-owner-action="notification-automation-delete" data-id="${escapeHtml(row.id)}">Delete</button>
+        </div>
+      ` }
+    ],
+    rows: rules,
+    emptyText: "No automation rules yet."
+  });
+  renderTable($("notificationAutomationRuns"), {
+    columns: [
+      { label: "Rule", key: "rule_name", render: (row) => escapeHtml(row.rule_name || row.rule_id || "") },
+      { label: "Trigger", key: "trigger_key", render: (row) => escapeHtml(formatAutomationTrigger(row.trigger_key)) },
+      { label: "Status", key: "status", render: (row) => formatOwnerStatus(row.status || "unknown") },
+      { label: "Result", key: "result_json", render: (row) => {
+        const result = parseOwnerJson(row.result_json, {});
+        const recipients = Number(result.estimatedRecipients || 0).toLocaleString();
+        const cost = formatCurrencyEUR(result.estimatedCost || 0);
+        return `${recipients} recipients / ${cost}`;
+      } },
+      { label: "Created", key: "created_at", render: (row) => escapeHtml(formatAdminTimestamp(row.created_at)) }
+    ],
+    rows: runs,
+    emptyText: "No automation tests have run yet."
+  });
+}
+
+function renderNotificationStats(stats) {
+  renderOwnerSummary($("notificationDeliveryStats"), [
+    { label: "Pending", value: stats?.pending || 0, tone: Number(stats?.pending || 0) ? "warn" : "" },
+    { label: "Sent", value: stats?.sent || 0 },
+    { label: "Delivered", value: stats?.delivered || 0, tone: Number(stats?.delivered || 0) ? "ok" : "" },
+    { label: "Failed", value: stats?.failed || 0, tone: Number(stats?.failed || 0) ? "failed" : "ok" },
+    { label: "Skipped", value: stats?.skipped || 0 },
+    { label: "Total cost", value: formatCurrencyEUR(stats?.totalCost || 0) }
+  ]);
+}
+
+function renderNotifications(data) {
   syncOwnerWorkspaceSelects();
+  const rows = Array.isArray(data) ? data : (data.campaigns?.rows || data.rows || []);
+  const templates = Array.isArray(data?.templates) ? data.templates : [];
+  const summary = data?.campaigns?.summary || data?.summary || {};
+  const estimate = state.notificationControl.lastEstimate;
+  renderOwnerSummary($("notificationsSummary"), [
+    { label: "Drafts", value: summary.drafts || 0 },
+    { label: "Scheduled", value: summary.scheduled || 0, tone: Number(summary.scheduled || 0) ? "warn" : "" },
+    { label: "Sent this month", value: summary.sentThisMonth || 0, tone: Number(summary.sentThisMonth || 0) ? "ok" : "" },
+    { label: "Failed", value: summary.failed || 0, tone: Number(summary.failed || 0) ? "failed" : "ok" },
+    { label: "Estimated monthly cost", value: formatCurrencyEUR(summary.estimatedMonthlyCost || 0) }
+  ]);
+  renderNotificationTemplates(templates);
+  renderNotificationAutomations(data.automation || state.notificationControl.automation || {});
+  renderNotificationStats(state.notificationControl.stats || {});
+  if (estimate) {
+    if ($("notificationEstimatedRecipients")) $("notificationEstimatedRecipients").textContent = Number(estimate.recipients || 0).toLocaleString();
+    if ($("notificationEstimatedSms")) $("notificationEstimatedSms").textContent = formatCurrencyEUR(estimate.smsCost || 0);
+    if ($("notificationEstimatedEmail")) $("notificationEstimatedEmail").textContent = formatCurrencyEUR(estimate.emailCost || 0);
+  }
   renderTable($("notificationsTable"), {
     columns: [
       { label: "Title", key: "title", render: (row) => escapeHtml(row.title || "") },
-      { label: "Channel", key: "channel", render: (row) => escapeHtml(row.channel || "") },
+      { label: "Channels", key: "channels_json", render: (row) => (row.channels || parseOwnerJson(row.channels_json, [])).map((channel) => `<span class="notification-channel-pill">${escapeHtml(channel)}</span>`).join(" ") },
+      { label: "Target", key: "target_type", render: (row) => escapeHtml(formatNotificationTarget(row)) },
       { label: "Status", key: "status", render: (row) => formatOwnerStatus(row.status || "draft") },
-      { label: "Action", key: "_action", render: (row) => row.status === "sent" ? "—" : `<button class="btn btn-ghost" type="button" data-owner-action="notification-send" data-id="${escapeHtml(row.id)}">Send</button>` }
+      { label: "Scheduled", key: "scheduled_at", render: (row) => escapeHtml(formatAdminTimestamp(row.scheduled_at)) },
+      { label: "Recipients", key: "delivery_count", render: (row) => Number(row.delivery_count || 0).toLocaleString() },
+      { label: "Sent", key: "sent_count", render: (row) => Number(row.sent_count || 0).toLocaleString() },
+      { label: "Failed", key: "failed_count", render: (row) => Number(row.failed_count || 0).toLocaleString() },
+      { label: "Estimated cost", key: "estimated_cost", render: (row) => formatCurrencyEUR(row.estimated_cost || 0) },
+      { label: "Action", key: "_action", render: (row) => `
+        <div class="owner-actions">
+          <button class="btn btn-ghost" type="button" data-owner-action="notification-select" data-id="${escapeHtml(row.id)}">View</button>
+          <button class="btn btn-ghost" type="button" data-owner-action="notification-estimate-row" data-id="${escapeHtml(row.id)}">Estimate</button>
+          <button class="btn btn-ghost" type="button" data-owner-action="notification-build-row" data-id="${escapeHtml(row.id)}">Build deliveries</button>
+          <button class="btn btn-ghost" type="button" data-owner-action="notification-dry-run-row" data-id="${escapeHtml(row.id)}">Dry run</button>
+          <button class="btn btn-primary" type="button" data-owner-action="notification-send-row" data-id="${escapeHtml(row.id)}">Send</button>
+          <button class="btn btn-ghost" type="button" data-owner-action="notification-cancel-row" data-id="${escapeHtml(row.id)}">Cancel</button>
+        </div>
+      ` }
     ],
     rows,
-    emptyText: "No platform notifications yet."
+    emptyText: "No notification campaigns yet."
   });
+  if (!estimate) updateNotificationEstimate();
 }
 
 function renderBranding(data) {
@@ -2404,8 +2593,16 @@ async function refreshOwnerControl(tab = state.currentTab) {
       ]);
       renderDataGovernance(overview, requests.rows || []);
     } else if (tab === "notifications") {
-      const data = await api("/api/admin/notifications");
-      renderNotifications(data.rows || []);
+      const [campaigns, templates, automation] = await Promise.all([
+        api("/api/admin/notifications-control/campaigns"),
+        api("/api/admin/notifications-control/templates"),
+        api("/api/admin/notifications-control/automation-rules")
+      ]);
+      state.notificationControl.automation = automation;
+      if (state.notificationControl.selectedCampaignId) {
+        state.notificationControl.stats = await api(`/api/admin/notifications-control/campaigns/${encodeURIComponent(state.notificationControl.selectedCampaignId)}/stats`).catch(() => null);
+      }
+      renderNotifications({ campaigns, templates: templates.rows || [], automation });
     } else if (tab === "branding") {
       const data = await api("/api/admin/branding");
       renderBranding(data);
@@ -2641,6 +2838,22 @@ if (workspaceSelect) {
   });
 }
 
+[
+  "notificationTargetType",
+  "notificationWorkspace",
+  "notificationPlan",
+  "notificationUsage",
+  "notificationRole",
+  "notificationBody"
+].forEach((id) => {
+  const el = $(id);
+  if (!el) return;
+  el.addEventListener(id === "notificationBody" ? "input" : "change", updateNotificationEstimate);
+});
+document.querySelectorAll("[data-notification-channel]").forEach((el) => {
+  el.addEventListener("change", updateNotificationEstimate);
+});
+
 document.addEventListener("click", (event) => {
   const costActionButton = event.target.closest("[data-cost-control-action]");
   if (costActionButton) {
@@ -2738,21 +2951,105 @@ document.addEventListener("click", (event) => {
         }
         await refreshOwnerControl("data-governance");
       } else if (action === "notification-create") {
-        const workspaceId = $("notificationWorkspace")?.value || "";
-        await api("/api/admin/notifications", {
+        const workspaceIds = getSelectedNotificationWorkspaces();
+        const sendMode = $("notificationSendMode")?.value || "draft";
+        const result = await api("/api/admin/notifications-control/campaigns", {
           method: "POST",
           body: {
             title: $("notificationTitle")?.value || "",
+            description: $("notificationDescription")?.value || "",
+            subject: $("notificationSubject")?.value || "",
             body: $("notificationBody")?.value || "",
-            channel: $("notificationChannel")?.value || "in_app",
-            targetScope: workspaceId ? "workspace" : "all",
-            workspaceId,
+            channels: getSelectedNotificationChannels(),
+            priority: $("notificationPriority")?.value || "normal",
+            targetType: $("notificationTargetType")?.value || "all_workspaces",
+            workspaceIds,
+            plan: $("notificationPlan")?.value || "",
+            role: $("notificationRole")?.value || "",
+            status: sendMode === "scheduled" ? "scheduled" : "draft",
             scheduledAt: $("notificationScheduledAt")?.value || null
           }
         });
+        state.notificationControl.selectedCampaignId = result?.row?.id || "";
+        state.notificationControl.lastEstimate = null;
         await refreshOwnerControl("notifications");
-      } else if (action === "notification-send") {
-        await api(`/api/admin/notifications/${encodeURIComponent(ownerActionButton.dataset.id || "")}/send`, { method: "POST", body: {} });
+      } else if (action === "notification-select") {
+        state.notificationControl.selectedCampaignId = ownerActionButton.dataset.id || "";
+        state.notificationControl.stats = await api(`/api/admin/notifications-control/campaigns/${encodeURIComponent(state.notificationControl.selectedCampaignId)}/stats`);
+        await refreshOwnerControl("notifications");
+      } else if (action === "notification-estimate" || action === "notification-estimate-row") {
+        const campaignId = ownerActionButton.dataset.id || state.notificationControl.selectedCampaignId;
+        if (!campaignId) throw new Error("Save or select a campaign before estimating.");
+        state.notificationControl.selectedCampaignId = campaignId;
+        state.notificationControl.lastEstimate = await api(`/api/admin/notifications-control/campaigns/${encodeURIComponent(campaignId)}/estimate`, { method: "POST", body: {} });
+        await refreshOwnerControl("notifications");
+      } else if (action === "notification-build-deliveries" || action === "notification-build-row") {
+        const campaignId = ownerActionButton.dataset.id || state.notificationControl.selectedCampaignId;
+        if (!campaignId) throw new Error("Save or select a campaign before building deliveries.");
+        state.notificationControl.selectedCampaignId = campaignId;
+        await api(`/api/admin/notifications-control/campaigns/${encodeURIComponent(campaignId)}/build-deliveries`, { method: "POST", body: {} });
+        state.notificationControl.stats = await api(`/api/admin/notifications-control/campaigns/${encodeURIComponent(campaignId)}/stats`);
+        state.notificationControl.lastEstimate = await api(`/api/admin/notifications-control/campaigns/${encodeURIComponent(campaignId)}/estimate`, { method: "POST", body: {} });
+        await refreshOwnerControl("notifications");
+      } else if (action === "notification-send-row" || action === "notification-dry-run-row") {
+        const campaignId = ownerActionButton.dataset.id || state.notificationControl.selectedCampaignId;
+        if (!campaignId) throw new Error("Select a campaign before sending.");
+        state.notificationControl.selectedCampaignId = campaignId;
+        await api(`/api/admin/notifications-control/campaigns/${encodeURIComponent(campaignId)}/send`, {
+          method: "POST",
+          body: { dryRun: action === "notification-dry-run-row" }
+        });
+        state.notificationControl.stats = await api(`/api/admin/notifications-control/campaigns/${encodeURIComponent(campaignId)}/stats`);
+        await refreshOwnerControl("notifications");
+      } else if (action === "notification-cancel-row") {
+        const campaignId = ownerActionButton.dataset.id || state.notificationControl.selectedCampaignId;
+        if (!campaignId) throw new Error("Select a campaign before cancelling.");
+        state.notificationControl.selectedCampaignId = campaignId;
+        await api(`/api/admin/notifications-control/campaigns/${encodeURIComponent(campaignId)}/cancel`, { method: "POST", body: {} });
+        state.notificationControl.stats = await api(`/api/admin/notifications-control/campaigns/${encodeURIComponent(campaignId)}/stats`);
+        await refreshOwnerControl("notifications");
+      } else if (action === "notification-template") {
+        if ($("notificationSubject")) $("notificationSubject").value = ownerActionButton.dataset.subject || "";
+        if ($("notificationBody")) $("notificationBody").value = ownerActionButton.dataset.body || "";
+        updateNotificationEstimate();
+      } else if (action === "notification-preview") {
+        const text = ($("notificationBody")?.value || "Hello {{name}}, your school {{workspace}}...")
+          .replaceAll("{{name}}", "Amina")
+          .replaceAll("{{workspace}}", "North Campus")
+          .replaceAll("{{plan}}", "Pro")
+          .replaceAll("{{message}}", "maintenance starts tonight");
+        if ($("notificationPreview")) $("notificationPreview").textContent = text;
+        updateNotificationEstimate();
+      } else if (action === "notification-automation-create") {
+        const result = await api("/api/admin/notifications-control/automation-rules", {
+          method: "POST",
+          body: {
+            name: $("notificationAutomationName")?.value || "",
+            triggerKey: $("notificationAutomationTrigger")?.value || "ai_budget_80",
+            channels: getSelectedAutomationChannels(),
+            templateId: $("notificationAutomationTemplate")?.value || "",
+            targetType: $("notificationAutomationTargetType")?.value || "all_workspaces",
+            workspaceIds: getSelectedAutomationWorkspaces(),
+            role: $("notificationAutomationRole")?.value || "",
+            plan: $("notificationAutomationPlan")?.value || "",
+            cooldownMinutes: $("notificationAutomationCooldown")?.value || 1440,
+            enabled: $("notificationAutomationEnabled")?.checked !== false
+          }
+        });
+        state.notificationControl.selectedAutomationRuleId = result?.row?.id || "";
+        await refreshOwnerControl("notifications");
+      } else if (action === "notification-automation-toggle") {
+        await api(`/api/admin/notifications-control/automation-rules/${encodeURIComponent(ownerActionButton.dataset.id || "")}`, {
+          method: "PATCH",
+          body: { enabled: ownerActionButton.dataset.enabled === "1" }
+        });
+        await refreshOwnerControl("notifications");
+      } else if (action === "notification-automation-test") {
+        state.notificationControl.selectedAutomationRuleId = ownerActionButton.dataset.id || "";
+        await api(`/api/admin/notifications-control/automation-rules/${encodeURIComponent(state.notificationControl.selectedAutomationRuleId)}/test`, { method: "POST", body: {} });
+        await refreshOwnerControl("notifications");
+      } else if (action === "notification-automation-delete") {
+        await api(`/api/admin/notifications-control/automation-rules/${encodeURIComponent(ownerActionButton.dataset.id || "")}`, { method: "DELETE" });
         await refreshOwnerControl("notifications");
       } else if (action === "branding-save") {
         await api("/api/admin/branding/platform", {

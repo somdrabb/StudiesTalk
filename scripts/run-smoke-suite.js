@@ -11,6 +11,7 @@ const SMOKE_SCRIPTS = [
   'test:email-control:smoke',
   'test:platform-control:smoke',
   'test:platform-owner-control:smoke',
+  'test:notification-control:smoke',
   'test:tenant-isolation:smoke',
   'test:account-security:smoke',
   'test:attendance:smoke',

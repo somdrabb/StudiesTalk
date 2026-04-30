@@ -987,10 +987,108 @@
           </section>
 
           <section class="panel owner-control-panel" id="panel-notifications" hidden data-owner-panel="notifications">
-            <div class="panel-head owner-panel-head"><div><h2>Notifications</h2><p class="muted">Send platform announcements by in-app, email, or SMS channels.</p></div></div>
+            <div class="panel-head owner-panel-head notification-panel-head"><div><span class="notification-eyebrow"><i class="fa-solid fa-bullhorn" aria-hidden="true"></i> Notification Control Center</span><h2>Notifications</h2><p class="muted">Campaigns, targeting, templates, cost estimates, delivery tracking, and delivery draft controls.</p></div><div class="owner-actions"><button class="btn btn-secondary" type="button" data-owner-action="notification-preview"><i class="fa-solid fa-eye" aria-hidden="true"></i><span>Preview</span></button><button class="btn btn-secondary" type="button" data-owner-action="notification-estimate"><i class="fa-solid fa-calculator" aria-hidden="true"></i><span>Estimate cost</span></button><button class="btn btn-primary" type="button" data-owner-action="notification-create"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i><span>Save draft</span></button></div></div>
             <div class="alert" id="notificationsError" hidden></div>
-            <section class="card owner-control-card"><div class="owner-card-head"><h3>Create announcement</h3></div><div class="owner-form-grid"><input class="input" id="notificationTitle" placeholder="Title"><select class="input" id="notificationChannel"><option value="in_app">In-app</option><option value="email">Email</option><option value="sms">SMS</option></select><select class="input" id="notificationWorkspace"></select><input class="input" id="notificationScheduledAt" placeholder="Schedule date"><textarea class="input owner-form-wide" id="notificationBody" placeholder="Message body"></textarea><button class="btn btn-primary" type="button" data-owner-action="notification-create">Save draft</button></div></section>
-            <section class="card owner-control-card"><div class="owner-card-head"><h3>Delivery stats</h3></div><div class="table" id="notificationsTable"></div></section>
+            <div class="owner-summary-grid" id="notificationsSummary"></div>
+            <div class="notification-layout">
+              <section class="card owner-control-card notification-card notification-create-card">
+                <div class="owner-card-head"><div><h3>Create campaign</h3><p>Build a multi-channel message with lifecycle, priority, and reusable variables.</p></div><span class="secret-status-badge is-warn" id="notificationDraftStatus">Draft</span></div>
+                <div class="notification-form-grid">
+                  <input class="input" id="notificationTitle" placeholder="Campaign name">
+                  <input class="input" id="notificationDescription" placeholder="Description">
+                  <input class="input" id="notificationSubject" placeholder="Subject">
+                  <select class="input" id="notificationPriority"><option value="low">Low priority</option><option value="normal" selected>Normal priority</option><option value="critical">Critical priority</option></select>
+                  <label class="notification-check"><input type="checkbox" value="email" data-notification-channel checked><span><i class="fa-solid fa-envelope" aria-hidden="true"></i>Email</span></label>
+                  <label class="notification-check"><input type="checkbox" value="sms" data-notification-channel><span><i class="fa-solid fa-mobile-screen" aria-hidden="true"></i>SMS</span></label>
+                  <label class="notification-check"><input type="checkbox" value="in_app" data-notification-channel checked><span><i class="fa-solid fa-bell" aria-hidden="true"></i>In-App</span></label>
+                </div>
+              </section>
+
+              <section class="card owner-control-card notification-card">
+                <div class="owner-card-head"><div><h3>Templates</h3><p>Start from common owner messages.</p></div></div>
+                <div class="notification-template-list" id="notificationTemplates"></div>
+              </section>
+
+              <section class="card owner-control-card notification-card">
+                <div class="owner-card-head"><div><h3>Targeting</h3><p>Choose exactly who receives this campaign.</p></div></div>
+                <div class="notification-form-grid">
+                  <select class="input" id="notificationTargetType">
+                    <option value="all_workspaces">All workspaces</option>
+                    <option value="selected_workspaces">Selected workspaces</option>
+                    <option value="plan">By plan</option>
+                    <option value="role">By role</option>
+                  </select>
+                  <select class="input" id="notificationWorkspace" multiple></select>
+                  <select class="input" id="notificationPlan"><option value="">Any plan</option><option value="free">Free</option><option value="pro">Pro</option><option value="enterprise">Enterprise</option></select>
+                  <select class="input" id="notificationRole"><option value="">Any role</option><option value="admin">Admin</option><option value="teacher">Teacher</option><option value="student">Student</option></select>
+                </div>
+              </section>
+
+              <section class="card owner-control-card notification-card">
+                <div class="owner-card-head"><div><h3>Message builder</h3><p>Variables supported: {{name}}, {{workspace}}, {{plan}}, {{message}}.</p></div><span class="notification-count" id="notificationCharCount">0 chars</span></div>
+                <textarea class="input notification-message" id="notificationBody" placeholder="Hello {{name}}, your school {{workspace}}..."></textarea>
+                <div class="notification-preview" id="notificationPreview">Preview will appear here.</div>
+              </section>
+
+              <section class="card owner-control-card notification-card">
+                <div class="owner-card-head"><div><h3>Schedule</h3><p>Save as draft or schedule. Step 1 does not send real notifications.</p></div></div>
+                <div class="notification-form-grid">
+                  <select class="input" id="notificationSendMode"><option value="draft">Save draft</option><option value="scheduled">Schedule</option></select>
+                  <input class="input" id="notificationScheduledAt" type="datetime-local">
+                  <select class="input" id="notificationTimezone"><option value="Europe/Berlin">Europe/Berlin</option><option value="UTC">UTC</option><option value="America/New_York">America/New_York</option><option value="Asia/Dhaka">Asia/Dhaka</option></select>
+                  <select class="input" id="notificationRecurring"><option value="none">No repeat</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select>
+                </div>
+              </section>
+
+              <section class="card owner-control-card notification-card notification-cost-card">
+                <div class="owner-card-head"><div><h3>Cost estimate</h3><p>Review recipient count and spend before sending.</p></div></div>
+                <div class="notification-cost-grid">
+                  <div><span>Estimated recipients</span><strong id="notificationEstimatedRecipients">0</strong></div>
+                  <div><span>SMS cost</span><strong id="notificationEstimatedSms">€0.00</strong></div>
+                  <div><span>Email cost</span><strong id="notificationEstimatedEmail">€0.00</strong></div>
+                </div>
+                <button class="btn btn-secondary" type="button" data-owner-action="notification-build-deliveries"><i class="fa-solid fa-list-check" aria-hidden="true"></i><span>Build delivery list</span></button>
+              </section>
+            </div>
+            <section class="card owner-control-card notification-card"><div class="owner-card-head"><div><h3>Campaigns</h3><p>View, edit, estimate, and build delivery drafts. No external provider send occurs in Step 1.</p></div></div><div class="table" id="notificationsTable"></div></section>
+            <section class="card owner-control-card notification-card"><div class="owner-card-head"><div><h3>Delivery stats</h3><p>Stats for the selected campaign.</p></div></div><div class="owner-summary-grid" id="notificationDeliveryStats"></div></section>
+            <section class="card owner-control-card notification-card">
+              <div class="owner-card-head">
+                <div><h3>Automation</h3><p>Trigger-based rules for budget, inactivity, billing, delivery failure, and storage alerts.</p></div>
+                <button class="btn btn-primary" type="button" data-owner-action="notification-automation-create"><i class="fa-solid fa-bolt" aria-hidden="true"></i><span>Create rule</span></button>
+              </div>
+              <div class="notification-automation-grid">
+                <div class="notification-automation-form">
+                  <input class="input" id="notificationAutomationName" placeholder="Rule name">
+                  <select class="input" id="notificationAutomationTrigger">
+                    <option value="ai_budget_80">AI budget reaches 80%</option>
+                    <option value="workspace_inactive_7_days">Workspace inactive 7 days</option>
+                    <option value="failed_payment">Failed payment</option>
+                    <option value="failed_email_delivery_gt_10">Failed email deliveries > 10</option>
+                    <option value="storage_usage_80">Storage usage over 80%</option>
+                  </select>
+                  <select class="input" id="notificationAutomationTemplate"></select>
+                  <select class="input" id="notificationAutomationTargetType">
+                    <option value="all_workspaces">All workspaces</option>
+                    <option value="selected_workspaces">Selected workspaces</option>
+                    <option value="role">By role</option>
+                    <option value="plan">By plan</option>
+                  </select>
+                  <select class="input" id="notificationAutomationWorkspace" multiple></select>
+                  <select class="input" id="notificationAutomationRole"><option value="">Any role</option><option value="school_admin">School admin</option><option value="teacher">Teacher</option><option value="student">Student</option></select>
+                  <select class="input" id="notificationAutomationPlan"><option value="">Any plan</option><option value="free">Free</option><option value="pro">Pro</option><option value="enterprise">Enterprise</option></select>
+                  <input class="input" id="notificationAutomationCooldown" type="number" min="0" max="43200" value="1440" placeholder="Cooldown minutes">
+                  <label class="notification-check"><input type="checkbox" value="in_app" data-notification-automation-channel checked><span><i class="fa-solid fa-bell" aria-hidden="true"></i>In-App</span></label>
+                  <label class="notification-check"><input type="checkbox" value="email" data-notification-automation-channel checked><span><i class="fa-solid fa-envelope" aria-hidden="true"></i>Email</span></label>
+                  <label class="notification-check"><input type="checkbox" value="sms" data-notification-automation-channel><span><i class="fa-solid fa-mobile-screen" aria-hidden="true"></i>SMS</span></label>
+                  <label class="notification-check"><input type="checkbox" id="notificationAutomationEnabled" checked><span>Enabled</span></label>
+                </div>
+                <div>
+                  <div class="table" id="notificationAutomationRules"></div>
+                  <div class="notification-run-history"><h4>Run history</h4><div class="table" id="notificationAutomationRuns"></div></div>
+                </div>
+              </div>
+            </section>
           </section>
 
           <section class="panel owner-control-panel" id="panel-branding" hidden data-owner-panel="branding">

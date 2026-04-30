@@ -43,6 +43,7 @@ const { createAiBudgetService } = require('./server/services/aiBudget.service');
 const { createCostControlService } = require('./server/services/costControl.service');
 const { createPlatformControlService } = require('./server/services/platformControl.service');
 const { createPlatformOwnerControlService } = require('./server/services/platformOwnerControl.service');
+const { createNotificationControlService } = require('./server/services/notificationControl.service');
 const aiSpeakingScenarioConfig = require('./public/AIvoicepractice/scenarioConfig.js');
 const { createBillingRepository } = require('./server/repositories/billingRepository');
 const { createTasksRepository } = require('./server/repositories/tasksRepository');
@@ -65,6 +66,7 @@ const { createAdminCostControlRouter } = require('./server/routes/admin.costCont
 const { createPlatformSettingsRouter } = require('./server/routes/platformSettings.routes');
 const { createPlatformControlRouter } = require('./server/routes/platformControl.routes');
 const { createPlatformOwnerControlRouter } = require('./server/routes/platformOwnerControl.routes');
+const { createNotificationControlRouter } = require('./server/routes/notificationControl.routes');
 
 const SENSITIVE_LOG_PATTERNS = [
   /(authorization:\s*bearer\s+)[^\s]+/gi,
@@ -918,11 +920,32 @@ function isPromiseLike(value) {
     backupDir: BACKUP_DIR,
     storageAdapter: FILE_STORAGE_ADAPTER
   });
+  const notificationControlService = createNotificationControlService({
+    db,
+    emailSender: sendPlatformEmail,
+    smsSender: async ({ to, body }) => {
+      const runtime = getTwilioRuntimeConfig();
+      if (!runtime.client || !runtime.phoneNumber) {
+        throw new Error('Twilio credentials are not configured.');
+      }
+      const result = await runtime.client.messages.create({
+        to,
+        from: runtime.phoneNumber,
+        body
+      });
+      return { ok: true, provider: 'twilio', messageId: result?.sid || '' };
+    },
+    platformControlService,
+    costControlService
+  });
   platformControlService.ensureSchema().catch((err) => {
     console.warn('[Platform Control] schema ensure failed:', err?.message || String(err));
   });
   platformOwnerControlService.ensureSchema().catch((err) => {
     console.warn('[Platform Owner Control] schema ensure failed:', err?.message || String(err));
+  });
+  notificationControlService.ensureSchema().catch((err) => {
+    console.warn('[Notification Control] schema ensure failed:', err?.message || String(err));
   });
   const fileStorageService = createFileStorageService({
     adapter: fileStorageAdapter,
@@ -28723,6 +28746,13 @@ app.use('/api/admin/platform-settings', createPlatformSettingsRouter({
 app.use('/api/admin/platform-control', createPlatformControlRouter({
   db,
   platformControlService,
+  authRequired,
+  requireSuperAdmin,
+  auditAction: audit
+}));
+
+app.use('/api/admin/notifications-control', createNotificationControlRouter({
+  notificationControlService,
   authRequired,
   requireSuperAdmin,
   auditAction: audit
