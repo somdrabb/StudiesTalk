@@ -2277,13 +2277,13 @@ function formatOwnerStatus(value) {
   return `<span class="secret-status-badge is-${tone}">${escapeHtml(text)}</span>`;
 }
 
-function renderOperations(data) {
+function renderOperations(data, logs = null, jobs = null) {
   renderOwnerSummary($("operationsSummary"), [
     { label: "Database", value: data.databaseMode || "unknown", tone: "ok" },
     { label: "Uptime", value: `${Math.round(Number(data.uptimeSeconds || 0) / 60)} min`, tone: "ok" },
     { label: "Active sessions", value: data.activeSessions ?? 0, tone: "ok" },
-    { label: "Failed jobs", value: data.failedJobs ?? 0, tone: Number(data.failedJobs || 0) ? "failed" : "ok" },
-    { label: "Error rate", value: data.errorRate ?? 0, tone: "ok" },
+    { label: "Failed jobs", value: jobs?.rows?.filter((row) => row.status === "failed").length ?? data.failedJobs ?? 0, tone: Number(jobs?.rows?.filter((row) => row.status === "failed").length || data.failedJobs || 0) ? "failed" : "ok" },
+    { label: "4xx / 5xx", value: `${logs?.fourXxCount ?? 0} / ${logs?.fiveXxCount ?? 0}`, tone: Number(logs?.fiveXxCount || 0) ? "failed" : "ok" },
     { label: "Last backup", value: data.lastBackup?.status || "none", tone: data.lastBackup ? "ok" : "warn" },
     { label: "Storage", value: data.diskUsage?.available === false ? "check failed" : "available", tone: data.diskUsage?.available === false ? "warn" : "ok" },
     { label: "Generated", value: formatAdminTimestamp(data.generatedAt), tone: "ok" }
@@ -2300,21 +2300,28 @@ function renderOperations(data) {
   });
 }
 
-function renderBackups(status, history) {
+function renderBackups(status, history, evidence = null) {
+  const latestBackup = evidence?.latestBackup || null;
+  const latestVerify = evidence?.latestVerification || null;
+  const latestDryRun = evidence?.latestRestoreDryRun || null;
+  const latestRestoreTest = evidence?.latestRestoreTest || null;
   renderOwnerSummary($("backupsSummary"), [
     { label: "Backup health", value: status.health || "unknown", tone: status.health === "ok" ? "ok" : "warn" },
-    { label: "Last DB backup", value: status.latest?.status || "none", tone: status.latest ? "ok" : "warn" },
-    { label: "Location", value: status.location || "backup", note: "Secret files are never exposed." },
+    { label: "Last backup", value: latestBackup?.status || status.latest?.status || "none", tone: latestBackup || status.latest ? "ok" : "warn" },
+    { label: "Last verification", value: latestVerify?.status || "none", tone: latestVerify ? "ok" : "warn" },
+    { label: "Restore dry-run", value: latestDryRun?.status || "none", tone: latestDryRun ? "ok" : "warn" },
+    { label: "Restore test", value: latestRestoreTest?.status || "none", tone: latestRestoreTest ? "ok" : "warn" },
+    { label: "Failed events", value: evidence?.failed?.length ?? 0, tone: Number(evidence?.failed?.length || 0) ? "failed" : "ok" },
     { label: "Retention", value: `${status.retentionDays || 30} days` }
   ]);
   renderTable($("backupsTable"), {
     columns: [
       { label: "Type", key: "type", render: (row) => escapeHtml(row.type || "manual") },
       { label: "Status", key: "status", render: (row) => formatOwnerStatus(row.status) },
-      { label: "File", key: "file_path", render: (row) => escapeHtml(row.file_path || "metadata only") },
-      { label: "Started", key: "started_at", render: (row) => escapeHtml(formatAdminTimestamp(row.started_at)) }
+      { label: "File", key: "file_path", render: (row) => escapeHtml(row.file_path || row.filePath || "metadata only") },
+      { label: "Started", key: "started_at", render: (row) => escapeHtml(formatAdminTimestamp(row.started_at || row.startedAt)) }
     ],
-    rows: history || [],
+    rows: evidence?.events?.length ? evidence.events : history || [],
     emptyText: "No backup runs recorded yet."
   });
 }
@@ -2629,15 +2636,20 @@ async function refreshOwnerControl(tab = state.currentTab) {
   setError(errorEl, "");
   try {
     if (tab === "operations") {
-      const data = await api("/api/admin/operations/health");
-      state.ownerControls.operations = data;
-      renderOperations(data);
-    } else if (tab === "backups") {
-      const [status, history] = await Promise.all([
-        api("/api/admin/backups/status"),
-        api("/api/admin/backups/history")
+      const [data, logs, jobs] = await Promise.all([
+        api("/api/admin/operations/health"),
+        api("/api/admin/operations/logs/summary"),
+        api("/api/admin/operations/jobs")
       ]);
-      renderBackups(status, history.rows || []);
+      state.ownerControls.operations = data;
+      renderOperations(data, logs, jobs);
+    } else if (tab === "backups") {
+      const [status, history, evidence] = await Promise.all([
+        api("/api/admin/backups/status"),
+        api("/api/admin/backups/history"),
+        api("/api/admin/backups/evidence")
+      ]);
+      renderBackups(status, history.rows || [], evidence);
     } else if (tab === "lifecycle") {
       const data = await api("/api/admin/workspaces/lifecycle");
       renderLifecycle(data);

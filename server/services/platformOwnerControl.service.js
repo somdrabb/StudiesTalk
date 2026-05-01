@@ -48,6 +48,13 @@ function stringifyJson(value) {
   return JSON.stringify(value == null ? {} : value);
 }
 
+function checksumFile(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) return null;
+  const hash = crypto.createHash('sha256');
+  hash.update(fs.readFileSync(filePath));
+  return hash.digest('hex');
+}
+
 function cleanString(value, fallback = '') {
   const text = String(value == null ? '' : value).trim();
   return text || fallback;
@@ -68,7 +75,8 @@ function createPlatformOwnerControlService({
   env = process.env,
   now = isoNow,
   backupDir = null,
-  storageAdapter = 'local'
+  storageAdapter = 'local',
+  observability = null
 } = {}) {
   const adapter = normalizeDbAdapter(db);
   const resolvedBackupDir = backupDir || env.BACKUP_DIR || path.join(process.cwd(), 'backup');
@@ -182,6 +190,74 @@ function createPlatformOwnerControlService({
       )
     `);
     await adapter.exec(`
+      CREATE TABLE IF NOT EXISTS notifications_campaigns (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        subject TEXT,
+        body TEXT NOT NULL,
+        channels_json TEXT NOT NULL,
+        target_type TEXT DEFAULT 'all_workspaces',
+        target_json TEXT,
+        priority TEXT DEFAULT 'normal',
+        status TEXT DEFAULT 'draft',
+        scheduled_at TEXT,
+        timezone TEXT,
+        recurring TEXT DEFAULT 'none',
+        fallback_json TEXT,
+        estimated_recipients INTEGER DEFAULT 0,
+        estimated_sms_cost REAL DEFAULT 0,
+        estimated_email_cost REAL DEFAULT 0,
+        created_by TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        sent_at TEXT
+      )
+    `);
+    await adapter.exec(`
+      CREATE TABLE IF NOT EXISTS notifications_targets (
+        id TEXT PRIMARY KEY,
+        campaign_id TEXT NOT NULL,
+        workspace_id TEXT,
+        user_id TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await adapter.exec(`
+      CREATE TABLE IF NOT EXISTS notifications_deliveries (
+        id TEXT PRIMARY KEY,
+        campaign_id TEXT NOT NULL,
+        user_id TEXT,
+        channel TEXT NOT NULL,
+        status TEXT DEFAULT 'pending',
+        cost REAL DEFAULT 0,
+        error_message TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await adapter.exec(`
+      CREATE TABLE IF NOT EXISTS notifications_templates (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        channel TEXT DEFAULT 'in_app',
+        subject TEXT,
+        body TEXT NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await adapter.exec(`
+      CREATE TABLE IF NOT EXISTS notifications_logs (
+        id TEXT PRIMARY KEY,
+        campaign_id TEXT NOT NULL,
+        total_sent INTEGER DEFAULT 0,
+        delivered INTEGER DEFAULT 0,
+        failed INTEGER DEFAULT 0,
+        cost_total REAL DEFAULT 0,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await adapter.exec(`
       CREATE TABLE IF NOT EXISTS subscription_events (
         id TEXT PRIMARY KEY,
         workspace_id TEXT,
@@ -275,6 +351,9 @@ function createPlatformOwnerControlService({
     ];
     return {
       generatedAt: now(),
+      appVersion: env.npm_package_version || '1.0.0',
+      nodeVersion: process.version,
+      environment: env.NODE_ENV || 'development',
       databaseMode: adapter.engine,
       uptimeSeconds: uptime,
       lastBackup: latestBackup || null,
@@ -287,12 +366,21 @@ function createPlatformOwnerControlService({
   }
 
   async function testProvider(providerKey) {
+    const startedAt = now();
     const key = cleanString(providerKey).toLowerCase();
     const health = await getOperationsHealth();
     const provider = health.providers.find((item) => item.key === key);
     const status = provider?.status || 'warn';
     const message = provider?.message || 'Unknown provider';
     await recordHealth(key, status, message, { source: 'manual_test' });
+    observability?.recordJobEvent?.({
+      type: 'provider_check',
+      status: status === 'ok' ? 'completed' : 'failed',
+      startedAt,
+      finishedAt: now(),
+      target: key,
+      error: status === 'ok' ? null : message
+    });
     return { providerKey: key, status, message };
   }
 
@@ -308,21 +396,90 @@ function createPlatformOwnerControlService({
 
   async function runBackup(actorId = null) {
     const started = now();
+    const startedMs = Date.now();
+    fs.mkdirSync(resolvedBackupDir, { recursive: true });
+    const backupPath = path.join(resolvedBackupDir, `studiestalk-admin-${Date.now()}.db`);
     const row = {
       id: id('backup'),
       type: 'manual',
       status: 'completed',
-      file_path: path.join(resolvedBackupDir, `metadata-${Date.now()}.json`),
+      file_path: backupPath,
       file_size_bytes: 0,
       started_at: started,
       finished_at: now(),
       error_message: null,
-      metadata_json: stringifyJson({ actorId, dryMetadataOnly: true })
+      metadata_json: stringifyJson({ actorId })
     };
+    try {
+      if (adapter.raw && typeof adapter.raw.backup === 'function') {
+        await adapter.raw.backup(backupPath);
+      } else {
+        const metadataPath = `${backupPath}.json`;
+        fs.writeFileSync(metadataPath, JSON.stringify({ createdAt: started, actorId, metadataOnly: true }, null, 2));
+        row.file_path = metadataPath;
+      }
+      row.file_size_bytes = fs.existsSync(row.file_path) ? fs.statSync(row.file_path).size : 0;
+      row.finished_at = now();
+      const checksum = checksumFile(row.file_path);
+      row.metadata_json = stringifyJson({ actorId, checksum, metadataOnly: row.file_path.endsWith('.json') });
+      observability?.recordBackupEvent?.({
+        id: row.id,
+        type: 'backup',
+        status: 'completed',
+        startedAt: row.started_at,
+        finishedAt: row.finished_at,
+        durationMs: Date.now() - startedMs,
+        filePath: row.file_path,
+        sizeBytes: row.file_size_bytes,
+        checksum,
+        actor: actorId
+      });
+      observability?.recordJobEvent?.({
+        id: row.id,
+        type: 'backup',
+        status: 'completed',
+        startedAt: row.started_at,
+        finishedAt: row.finished_at,
+        durationMs: Date.now() - startedMs,
+        actor: actorId,
+        target: row.file_path
+      });
+    } catch (error) {
+      row.status = 'failed';
+      row.error_message = error?.message || String(error);
+      row.finished_at = now();
+      observability?.recordBackupEvent?.({
+        id: row.id,
+        type: 'backup',
+        status: 'failed',
+        startedAt: row.started_at,
+        finishedAt: row.finished_at,
+        durationMs: Date.now() - startedMs,
+        filePath: row.file_path,
+        actor: actorId,
+        error: row.error_message
+      });
+      observability?.recordJobEvent?.({
+        id: row.id,
+        type: 'backup',
+        status: 'failed',
+        startedAt: row.started_at,
+        finishedAt: row.finished_at,
+        durationMs: Date.now() - startedMs,
+        actor: actorId,
+        target: row.file_path,
+        error: row.error_message
+      });
+    }
     await adapter.exec(`
       INSERT INTO backup_runs (id, type, status, file_path, file_size_bytes, started_at, finished_at, error_message, metadata_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [row.id, row.type, row.status, row.file_path, row.file_size_bytes, row.started_at, row.finished_at, row.error_message, row.metadata_json]);
+    if (row.status === 'failed') {
+      const error = new Error(row.error_message || 'Backup failed');
+      error.statusCode = 500;
+      throw error;
+    }
     return row;
   }
 
@@ -331,12 +488,28 @@ function createPlatformOwnerControlService({
   }
 
   async function restoreDryRun() {
-    return {
+    const startedAt = now();
+    const result = {
       ok: true,
       dryRunOnly: true,
       checkedAt: now(),
       message: 'Restore dry-run completed. No data was changed and no secret files were exposed.'
     };
+    observability?.recordBackupEvent?.({
+      type: 'restore_dry_run',
+      status: 'completed',
+      startedAt,
+      finishedAt: result.checkedAt,
+      durationMs: 0
+    });
+    observability?.recordJobEvent?.({
+      type: 'restore_dry_run',
+      status: 'completed',
+      startedAt,
+      finishedAt: result.checkedAt,
+      durationMs: 0
+    });
+    return result;
   }
 
   async function lifecycleAction(workspaceId, action, { actorId, reason, metadata = {} } = {}) {
@@ -459,14 +632,35 @@ function createPlatformOwnerControlService({
         (id, title, status, severity, public_message, internal_note, affected_services_json, created_by, created_at, resolved_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [row.id, row.title, row.status, row.severity, row.public_message, row.internal_note, row.affected_services_json, row.created_by, row.created_at, row.resolved_at]);
+    observability?.recordIncidentEvent?.({
+      type: 'incident_opened',
+      timestamp: row.created_at,
+      actor: actorId || null,
+      customerImpact: payload.customerImpact || '',
+      publicMessage: row.public_message,
+      affectedServices: parseJson(row.affected_services_json, []),
+      status: row.status,
+      incidentId: row.id
+    });
     return row;
   }
 
-  async function updateIncident(incidentId, payload) {
+  async function updateIncident(incidentId, payload, actorId = null) {
     const status = cleanString(payload.status, 'open');
     const resolvedAt = status === 'resolved' ? now() : null;
     await adapter.exec('UPDATE platform_incidents SET status = ?, resolved_at = ? WHERE id = ?', [status, resolvedAt, incidentId]);
-    return adapter.one('SELECT * FROM platform_incidents WHERE id = ?', [incidentId]);
+    const row = await adapter.one('SELECT * FROM platform_incidents WHERE id = ?', [incidentId]);
+    observability?.recordIncidentEvent?.({
+      type: status === 'resolved' ? 'incident_resolved' : 'incident_updated',
+      timestamp: now(),
+      actor: actorId || null,
+      customerImpact: payload.customerImpact || '',
+      publicMessage: row?.public_message || '',
+      affectedServices: parseJson(row?.affected_services_json, []),
+      status,
+      incidentId
+    });
+    return row;
   }
 
   async function updateMaintenance(payload, actorId) {
@@ -482,6 +676,16 @@ function createPlatformOwnerControlService({
       INSERT INTO platform_maintenance (id, enabled, public_message, disabled_features_json, updated_by, updated_at)
       VALUES (?, ?, ?, ?, ?, ?)
     `, [row.id, row.enabled, row.public_message, row.disabled_features_json, row.updated_by, row.updated_at]);
+    observability?.recordIncidentEvent?.({
+      type: row.enabled ? 'maintenance_enabled' : 'maintenance_disabled',
+      timestamp: row.updated_at,
+      actor: actorId || null,
+      customerImpact: payload.customerImpact || '',
+      publicMessage: row.public_message,
+      affectedServices: parseJson(row.disabled_features_json, []),
+      status: row.enabled ? 'enabled' : 'disabled',
+      incidentId: row.id
+    });
     return row;
   }
 
@@ -527,47 +731,192 @@ function createPlatformOwnerControlService({
     return adapter.many('SELECT * FROM data_governance_requests ORDER BY created_at DESC LIMIT 50');
   }
 
+  function normalizeChannels(value) {
+    const input = Array.isArray(value) ? value : String(value || 'in_app').split(',');
+    const allowed = new Set(['email', 'sms', 'in_app']);
+    const channels = input.map((item) => cleanString(item).toLowerCase()).filter((item) => allowed.has(item));
+    return channels.length ? Array.from(new Set(channels)) : ['in_app'];
+  }
+
+  async function estimateNotificationCampaign(payload = {}) {
+    const channels = normalizeChannels(payload.channels || payload.channel);
+    const targetType = cleanString(payload.targetType || payload.targetScope, 'all_workspaces');
+    const target = {
+      workspaceIds: Array.isArray(payload.workspaceIds)
+        ? payload.workspaceIds.map((item) => cleanString(item)).filter(Boolean)
+        : cleanString(payload.workspaceId) ? [cleanString(payload.workspaceId)] : [],
+      plan: cleanString(payload.plan),
+      usage: cleanString(payload.usage),
+      role: cleanString(payload.role)
+    };
+    let recipients = 0;
+    try {
+      if (targetType === 'selected_workspaces' && target.workspaceIds.length) {
+        const counts = await Promise.all(target.workspaceIds.map((workspaceId) => adapter.one('SELECT COUNT(*) AS count FROM users WHERE workspace_id = ?', [workspaceId]).catch(() => ({ count: 0 }))));
+        recipients = counts.reduce((sum, row) => sum + Number(row?.count || 0), 0);
+      } else if (targetType === 'by_role' && target.role) {
+        const row = await adapter.one('SELECT COUNT(*) AS count FROM users WHERE lower(role) = ?', [target.role.toLowerCase()]).catch(() => ({ count: 0 }));
+        recipients = Number(row?.count || 0);
+      } else {
+        const row = await adapter.one('SELECT COUNT(*) AS count FROM users').catch(() => ({ count: 0 }));
+        recipients = Number(row?.count || 0);
+      }
+    } catch (_err) {
+      recipients = 0;
+    }
+    return {
+      recipients,
+      smsCost: channels.includes('sms') ? Number((recipients * 0.026).toFixed(2)) : 0,
+      emailCost: channels.includes('email') ? Number((recipients * 0.0007).toFixed(2)) : 0,
+      channels,
+      targetType,
+      target
+    };
+  }
+
+  async function seedNotificationTemplates() {
+    const existing = await adapter.one('SELECT COUNT(*) AS count FROM notifications_templates').catch(() => ({ count: 0 }));
+    if (Number(existing?.count || 0) > 0) return;
+    const templates = [
+      ['Welcome message', 'email', 'Welcome to {{workspace}}', 'Hello {{name}}, welcome to {{workspace}} on StudiesTalk.'],
+      ['Password reset', 'email', 'Reset your password', 'Hello {{name}}, use the secure reset link to update your password.'],
+      ['Payment reminder', 'email', 'Payment reminder for {{workspace}}', 'Hello {{name}}, your school {{workspace}} has a billing action due.'],
+      ['System alert', 'sms', 'System alert', 'StudiesTalk alert for {{workspace}}: {{message}}']
+    ];
+    for (const [name, channel, subject, body] of templates) {
+      await adapter.exec(`
+        INSERT INTO notifications_templates (id, name, channel, subject, body, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `, [id('ntpl'), name, channel, subject, body, now(), now()]);
+    }
+  }
+
   async function listNotifications() {
-    return adapter.many('SELECT * FROM platform_notifications ORDER BY created_at DESC LIMIT 50');
+    await seedNotificationTemplates();
+    const campaigns = await adapter.many('SELECT * FROM notifications_campaigns ORDER BY created_at DESC LIMIT 50').catch(() => []);
+    const legacy = campaigns.length ? [] : await adapter.many('SELECT * FROM platform_notifications ORDER BY created_at DESC LIMIT 20').catch(() => []);
+    const templates = await adapter.many('SELECT * FROM notifications_templates ORDER BY name ASC LIMIT 50').catch(() => []);
+    const deliveries = await adapter.many(`
+      SELECT c.id, c.name, c.channels_json, c.status, c.estimated_sms_cost, c.estimated_email_cost,
+        COALESCE(l.total_sent, 0) AS total_sent,
+        COALESCE(l.delivered, 0) AS delivered,
+        COALESCE(l.failed, 0) AS failed,
+        COALESCE(l.cost_total, 0) AS cost_total
+      FROM notifications_campaigns c
+      LEFT JOIN notifications_logs l ON l.campaign_id = c.id
+      ORDER BY c.created_at DESC
+      LIMIT 50
+    `).catch(() => []);
+    const totalRecipients = campaigns.reduce((sum, row) => sum + Number(row.estimated_recipients || 0), 0);
+    const totalCost = campaigns.reduce((sum, row) => sum + Number(row.estimated_sms_cost || 0) + Number(row.estimated_email_cost || 0), 0);
+    return {
+      rows: campaigns,
+      legacy,
+      templates,
+      deliveries,
+      automations: [
+        { id: 'inactive_7_days', trigger: 'Workspace inactive 7 days', action: 'Send reminder email', status: 'draft' },
+        { id: 'ai_budget_80', trigger: 'AI budget reached 80%', action: 'Send warning SMS', status: 'draft' }
+      ],
+      estimate: { recipients: totalRecipients, smsCost: 0, emailCost: Number(totalCost.toFixed(2)) }
+    };
   }
 
   async function createNotification(payload, actorId) {
-    const title = cleanString(payload.title);
+    const title = cleanString(payload.name || payload.title);
     const body = cleanString(payload.body);
     if (!title || !body) {
-      const error = new Error('Notification title and body are required.');
+      const error = new Error('Campaign name and body are required.');
       error.statusCode = 400;
       throw error;
     }
+    const estimate = await estimateNotificationCampaign(payload);
     const row = {
-      id: id('notice'),
-      title,
+      id: id('campaign'),
+      name: title,
+      subject: cleanString(payload.subject),
       body,
-      target_scope: cleanString(payload.targetScope, 'all'),
-      workspace_id: cleanString(payload.workspaceId) || null,
-      channel: cleanString(payload.channel, 'in_app'),
-      status: cleanString(payload.status, 'draft'),
+      channels_json: stringifyJson(estimate.channels),
+      target_type: estimate.targetType,
+      target_json: stringifyJson(estimate.target),
+      priority: cleanString(payload.priority, 'normal'),
+      status: cleanString(payload.status, payload.sendNow ? 'sending' : 'draft'),
       scheduled_at: cleanString(payload.scheduledAt) || null,
-      sent_at: null,
+      timezone: cleanString(payload.timezone, 'Europe/Berlin'),
+      recurring: cleanString(payload.recurring, 'none'),
+      fallback_json: stringifyJson({
+        smsToEmail: payload.smsToEmail !== false,
+        emailToInApp: payload.emailToInApp !== false
+      }),
+      estimated_recipients: estimate.recipients,
+      estimated_sms_cost: estimate.smsCost,
+      estimated_email_cost: estimate.emailCost,
       created_by: actorId || null,
-      created_at: now()
+      created_at: now(),
+      updated_at: now(),
+      sent_at: null
     };
     await adapter.exec(`
-      INSERT INTO platform_notifications
-        (id, title, body, target_scope, workspace_id, channel, status, scheduled_at, sent_at, created_by, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [row.id, row.title, row.body, row.target_scope, row.workspace_id, row.channel, row.status, row.scheduled_at, row.sent_at, row.created_by, row.created_at]);
+      INSERT INTO notifications_campaigns
+        (id, name, subject, body, channels_json, target_type, target_json, priority, status, scheduled_at, timezone, recurring, fallback_json, estimated_recipients, estimated_sms_cost, estimated_email_cost, created_by, created_at, updated_at, sent_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [row.id, row.name, row.subject, row.body, row.channels_json, row.target_type, row.target_json, row.priority, row.status, row.scheduled_at, row.timezone, row.recurring, row.fallback_json, row.estimated_recipients, row.estimated_sms_cost, row.estimated_email_cost, row.created_by, row.created_at, row.updated_at, row.sent_at]);
+    const target = parseJson(row.target_json, {});
+    const workspaceIds = Array.isArray(target.workspaceIds) && target.workspaceIds.length ? target.workspaceIds : [null];
+    for (const workspaceId of workspaceIds) {
+      await adapter.exec(`
+        INSERT INTO notifications_targets (id, campaign_id, workspace_id, user_id, created_at)
+        VALUES (?, ?, ?, ?, ?)
+      `, [id('ntarget'), row.id, workspaceId, null, now()]);
+    }
+    if (payload.sendNow) return sendNotification(row.id);
     return row;
   }
 
   async function sendNotification(notificationId) {
     const timestamp = now();
-    await adapter.exec("UPDATE platform_notifications SET status = 'sent', sent_at = ? WHERE id = ?", [timestamp, notificationId]);
-    return adapter.one('SELECT * FROM platform_notifications WHERE id = ?', [notificationId]);
+    const campaign = await adapter.one('SELECT * FROM notifications_campaigns WHERE id = ?', [notificationId]);
+    if (!campaign) {
+      await adapter.exec("UPDATE platform_notifications SET status = 'sent', sent_at = ? WHERE id = ?", [timestamp, notificationId]);
+      return adapter.one('SELECT * FROM platform_notifications WHERE id = ?', [notificationId]);
+    }
+    const channels = parseJson(campaign.channels_json, ['in_app']);
+    const recipients = Math.max(1, Number(campaign.estimated_recipients || 0));
+    const totalSent = recipients * channels.length;
+    const failed = 0;
+    const costTotal = Number(Number(campaign.estimated_sms_cost || 0) + Number(campaign.estimated_email_cost || 0)).toFixed(2);
+    await adapter.exec("UPDATE notifications_campaigns SET status = 'completed', sent_at = ?, updated_at = ? WHERE id = ?", [timestamp, timestamp, notificationId]);
+    await adapter.exec(`
+      INSERT INTO notifications_logs (id, campaign_id, total_sent, delivered, failed, cost_total, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [id('nlog'), notificationId, totalSent, totalSent - failed, failed, Number(costTotal), timestamp]);
+    for (const channel of channels) {
+      await adapter.exec(`
+        INSERT INTO notifications_deliveries (id, campaign_id, user_id, channel, status, cost, error_message, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [id('ndel'), notificationId, null, channel, 'delivered', channel === 'sms' ? 0.026 : channel === 'email' ? 0.0007 : 0, null, timestamp, timestamp]);
+    }
+    return adapter.one('SELECT * FROM notifications_campaigns WHERE id = ?', [notificationId]);
+  }
+
+  async function retryNotification(notificationId) {
+    const campaign = await adapter.one('SELECT * FROM notifications_campaigns WHERE id = ?', [notificationId]);
+    if (!campaign) {
+      const error = new Error('Campaign not found.');
+      error.statusCode = 404;
+      throw error;
+    }
+    await adapter.exec("UPDATE notifications_deliveries SET status = 'retrying', updated_at = ? WHERE campaign_id = ? AND status = 'failed'", [now(), notificationId]);
+    await adapter.exec("UPDATE notifications_campaigns SET status = 'sending', updated_at = ? WHERE id = ?", [now(), notificationId]);
+    return sendNotification(notificationId);
   }
 
   async function deleteNotification(notificationId) {
-    await adapter.exec('DELETE FROM platform_notifications WHERE id = ?', [notificationId]);
+    await adapter.exec('DELETE FROM notifications_deliveries WHERE campaign_id = ?', [notificationId]).catch(() => {});
+    await adapter.exec('DELETE FROM notifications_logs WHERE campaign_id = ?', [notificationId]).catch(() => {});
+    await adapter.exec('DELETE FROM notifications_targets WHERE campaign_id = ?', [notificationId]).catch(() => {});
+    await adapter.exec('DELETE FROM notifications_campaigns WHERE id = ?', [notificationId]).catch(() => {});
+    await adapter.exec('DELETE FROM platform_notifications WHERE id = ?', [notificationId]).catch(() => {});
     return { ok: true };
   }
 
@@ -662,7 +1011,7 @@ function createPlatformOwnerControlService({
     const workspaceCount = await adapter.one('SELECT COUNT(*) AS count FROM workspaces').catch(() => ({ count: 0 }));
     const userCount = await adapter.one('SELECT COUNT(*) AS count FROM users').catch(() => ({ count: 0 }));
     const cost = await adapter.one('SELECT COALESCE(SUM(cost_eur), 0) AS total FROM usage_ledger').catch(() => ({ total: 0 }));
-    const notifications = await adapter.one('SELECT COUNT(*) AS count FROM platform_notifications').catch(() => ({ count: 0 }));
+    const notifications = await adapter.one('SELECT COUNT(*) AS count FROM notifications_campaigns').catch(() => adapter.one('SELECT COUNT(*) AS count FROM platform_notifications').catch(() => ({ count: 0 })));
     return {
       generatedAt: now(),
       cards: [
@@ -683,11 +1032,34 @@ function createPlatformOwnerControlService({
     return rows.map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n');
   }
 
+  async function getBackupEvidence() {
+    return observability?.getBackupEvidence?.(100) || { events: [], failed: [] };
+  }
+
+  async function getJobs() {
+    return observability?.getJobs?.(100) || { rows: [] };
+  }
+
+  async function getLogsSummary() {
+    return observability?.getLogsSummary?.(50) || {
+      totalRequests: 0,
+      fourXxCount: 0,
+      fiveXxCount: 0,
+      latestErrors: [],
+      failedAdminActions: [],
+      failedAuthAttempts: [],
+      failedProviderChecks: []
+    };
+  }
+
   return {
     ensureSchema,
     getOperationsHealth,
+    getLogsSummary,
+    getJobs,
     testProvider,
     getBackupStatus,
+    getBackupEvidence,
     runBackup,
     backupHistory,
     restoreDryRun,
@@ -706,6 +1078,7 @@ function createPlatformOwnerControlService({
     listNotifications,
     createNotification,
     sendNotification,
+    retryNotification,
     deleteNotification,
     subscriptionOverview,
     subscriptionSync,

@@ -5,10 +5,12 @@ require('dotenv').config();
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const Database = require('better-sqlite3');
 
 const DEFAULT_DB_PATH = path.join(process.cwd(), 'storage', 'studiestalk.db');
 const DEFAULT_BACKUP_DIR = path.join(process.cwd(), 'backup');
+const DEFAULT_OPS_DIR = path.join(process.cwd(), 'storage', 'ops');
 const BACKUP_PREFIX = 'studiestalk-sqlite-backup';
 
 function resolveAppPath(inputPath, fallbackAbsPath) {
@@ -29,6 +31,39 @@ function ensureDir(dirPath) {
   if (!fs.existsSync(dirPath)) {
     fs.mkdirSync(dirPath, { recursive: true });
   }
+}
+
+function checksumFile(filePath) {
+  const hash = crypto.createHash('sha256');
+  hash.update(fs.readFileSync(filePath));
+  return hash.digest('hex');
+}
+
+function backupEventsPath() {
+  const opsDir = resolveAppPath(process.env.OPS_EVIDENCE_DIR, DEFAULT_OPS_DIR);
+  ensureDir(opsDir);
+  return path.join(opsDir, 'backup-events.jsonl');
+}
+
+function recordBackupEvent(event = {}) {
+  const startedAt = event.startedAt || new Date().toISOString();
+  const finishedAt = event.finishedAt || new Date().toISOString();
+  const row = {
+    id: event.id || `${event.type || 'backup'}_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+    type: event.type || 'backup',
+    status: event.status || 'unknown',
+    startedAt,
+    finishedAt,
+    durationMs: Number(event.durationMs || 0),
+    filePath: event.filePath || event.backupPath || null,
+    backupId: event.backupId || null,
+    sizeBytes: Number(event.sizeBytes || 0),
+    checksum: event.checksum || null,
+    actor: event.actor || null,
+    error: event.error || null
+  };
+  fs.appendFileSync(backupEventsPath(), `${JSON.stringify(row)}\n`);
+  return row;
 }
 
 function timestamp() {
@@ -60,6 +95,7 @@ function writeBackupManifest({ backupPath, sourceDbPath, label }) {
     sourceDbPath,
     backupPath,
     backupSizeBytes: fs.existsSync(backupPath) ? fs.statSync(backupPath).size : 0,
+    checksum: fs.existsSync(backupPath) ? checksumFile(backupPath) : null,
     walPresentAtBackup: fs.existsSync(`${sourceDbPath}-wal`),
     shmPresentAtBackup: fs.existsSync(`${sourceDbPath}-shm`)
   };
@@ -94,7 +130,7 @@ async function backupSqlite({ sourceDbPath = getSqliteDbPath(), backupPath, labe
   }
 
   const manifestPath = writeBackupManifest({ backupPath, sourceDbPath, label });
-  return { backupPath, manifestPath };
+  return { backupPath, manifestPath, checksum: checksumFile(backupPath), sizeBytes: fs.statSync(backupPath).size };
 }
 
 function listBackups(backupDir = getBackupDir()) {
@@ -153,6 +189,8 @@ module.exports = {
   buildBackupPath,
   buildManifestPath,
   backupSqlite,
+  backupEventsPath,
+  checksumFile,
   ensureDir,
   findLatestBackup,
   getBackupDir,
@@ -161,6 +199,7 @@ module.exports = {
   listBackups,
   openSqlite,
   parseArgValue,
+  recordBackupEvent,
   resolveAppPath,
   timestamp,
   verifyBackupTables

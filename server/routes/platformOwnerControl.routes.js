@@ -47,6 +47,14 @@ function createPlatformOwnerControlRouter({
     res.json(await service.getOperationsHealth());
   }));
 
+  router.get('/operations/logs/summary', authRequired, handler(async (_req, res) => {
+    res.json(await service.getLogsSummary());
+  }));
+
+  router.get('/operations/jobs', authRequired, handler(async (_req, res) => {
+    res.json(await service.getJobs());
+  }));
+
   router.post('/operations/test-provider/:providerKey', authRequired, handler(async (req, res, user) => {
     const result = await service.testProvider(req.params.providerKey);
     audit(req, user, 'platform_owner.provider_tested', { target: req.params.providerKey, status: result.status });
@@ -65,6 +73,10 @@ function createPlatformOwnerControlRouter({
 
   router.get('/backups/history', authRequired, handler(async (_req, res) => {
     res.json({ rows: await service.backupHistory() });
+  }));
+
+  router.get('/backups/evidence', authRequired, handler(async (_req, res) => {
+    res.json(await service.getBackupEvidence());
   }));
 
   router.post('/backups/restore-dry-run', authRequired, handler(async (req, res, user) => {
@@ -138,7 +150,7 @@ function createPlatformOwnerControlRouter({
   }));
 
   router.patch('/incidents/:id', authRequired, handler(async (req, res, user) => {
-    const row = await service.updateIncident(req.params.id, req.body || {});
+    const row = await service.updateIncident(req.params.id, req.body || {}, user.id || user.sub || null);
     audit(req, user, 'platform_owner.incident_updated', { target: req.params.id });
     res.json({ ok: true, row });
   }));
@@ -182,7 +194,7 @@ function createPlatformOwnerControlRouter({
   }));
 
   router.get('/notifications', authRequired, handler(async (_req, res) => {
-    res.json({ rows: await service.listNotifications() });
+    res.json(await service.listNotifications());
   }));
 
   router.post('/notifications', authRequired, handler(async (req, res, user) => {
@@ -194,6 +206,12 @@ function createPlatformOwnerControlRouter({
   router.post('/notifications/:id/send', authRequired, handler(async (req, res, user) => {
     const row = await service.sendNotification(req.params.id);
     audit(req, user, 'platform_owner.notification_sent', { target: req.params.id });
+    res.json({ ok: true, row });
+  }));
+
+  router.post('/notifications/:id/retry', authRequired, handler(async (req, res, user) => {
+    const row = await service.retryNotification(req.params.id);
+    audit(req, user, 'platform_owner.notification_retry', { target: req.params.id });
     res.json({ ok: true, row });
   }));
 

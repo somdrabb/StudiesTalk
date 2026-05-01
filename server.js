@@ -44,6 +44,9 @@ const { createCostControlService } = require('./server/services/costControl.serv
 const { createPlatformControlService } = require('./server/services/platformControl.service');
 const { createPlatformOwnerControlService } = require('./server/services/platformOwnerControl.service');
 const { createNotificationControlService } = require('./server/services/notificationControl.service');
+const { createObservabilityService } = require('./server/services/observability.service');
+const { createRequestContextMiddleware } = require('./server/middleware/requestContext.middleware');
+const { createErrorHandlerMiddleware } = require('./server/middleware/errorHandler.middleware');
 const aiSpeakingScenarioConfig = require('./public/AIvoicepractice/scenarioConfig.js');
 const { createBillingRepository } = require('./server/repositories/billingRepository');
 const { createTasksRepository } = require('./server/repositories/tasksRepository');
@@ -67,6 +70,20 @@ const { createPlatformSettingsRouter } = require('./server/routes/platformSettin
 const { createPlatformControlRouter } = require('./server/routes/platformControl.routes');
 const { createPlatformOwnerControlRouter } = require('./server/routes/platformOwnerControl.routes');
 const { createNotificationControlRouter } = require('./server/routes/notificationControl.routes');
+
+let sentry = null;
+if (process.env.SENTRY_DSN) {
+  try {
+    sentry = require('@sentry/node');
+    sentry.init({
+      dsn: process.env.SENTRY_DSN,
+      environment: process.env.SENTRY_ENVIRONMENT || process.env.NODE_ENV || 'development',
+      tracesSampleRate: Number(process.env.SENTRY_TRACES_SAMPLE_RATE || 0)
+    });
+  } catch (err) {
+    console.warn('[Sentry] SENTRY_DSN is set but @sentry/node is not installed:', err?.message || String(err));
+  }
+}
 
 const SENSITIVE_LOG_PATTERNS = [
   /(authorization:\s*bearer\s+)[^\s]+/gi,
@@ -311,11 +328,8 @@ async function callMobileOtpProxy(path, payload) {
 const app = express();
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
-app.use((req, res, next) => {
-  req.id = String(req.headers['x-request-id'] || '').trim() || makeRequestId();
-  res.setHeader('X-Request-Id', req.id);
-  next();
-});
+const observabilityService = createObservabilityService({ env: process.env });
+app.use(createRequestContextMiddleware({ observability: observabilityService }));
 app.use(cookieParser());
 app.use(
   helmet({
@@ -918,7 +932,8 @@ function isPromiseLike(value) {
     db,
     env: process.env,
     backupDir: BACKUP_DIR,
-    storageAdapter: FILE_STORAGE_ADAPTER
+    storageAdapter: FILE_STORAGE_ADAPTER,
+    observability: observabilityService
   });
   const notificationControlService = createNotificationControlService({
     db,
@@ -30567,10 +30582,28 @@ function checkWritableDirectory(dirPath) {
 }
 
 function runDeepHealthCheck() {
+  const backupEvidence = observabilityService.getBackupEvidence(50);
+  const activeIncident = (() => {
+    try {
+      return db.prepare("SELECT id, title, severity, status, public_message, affected_services_json, created_at FROM platform_incidents WHERE status != 'resolved' ORDER BY created_at DESC LIMIT 1").get() || null;
+    } catch (_err) {
+      return null;
+    }
+  })();
+  const maintenance = (() => {
+    try {
+      return db.prepare("SELECT enabled, public_message, disabled_features_json, updated_at FROM platform_maintenance ORDER BY updated_at DESC LIMIT 1").get() || null;
+    } catch (_err) {
+      return null;
+    }
+  })();
   const details = {
     ok: true,
     timestamp: new Date().toISOString(),
     uptimeSeconds: Math.round(process.uptime()),
+    appVersion: process.env.npm_package_version || '1.0.0',
+    nodeVersion: process.version,
+    environment: ENV.NODE_ENV,
     runtime: {
       nodeEnv: ENV.NODE_ENV,
       dbEngine: ENV.DB_ENGINE,
@@ -30584,13 +30617,38 @@ function runDeepHealthCheck() {
     },
     db: {
       ok: false,
-      path: DB_PATH
+      engine: ENV.DB_ENGINE
     },
     storage: {
-      dbDir: checkWritableDirectory(path.dirname(DB_PATH)),
-      uploadsDir: checkWritableDirectory(UPLOADS_DIR),
-      backupDir: checkWritableDirectory(BACKUP_DIR),
-      attachmentsDir: checkWritableDirectory(ATTACHMENTS_DIR)
+      dbDir: { ok: checkWritableDirectory(path.dirname(DB_PATH)).ok },
+      uploadsDir: { ok: checkWritableDirectory(UPLOADS_DIR).ok },
+      backupDir: { ok: checkWritableDirectory(BACKUP_DIR).ok },
+      attachmentsDir: { ok: checkWritableDirectory(ATTACHMENTS_DIR).ok },
+      adapter: FILE_STORAGE_ADAPTER
+    },
+    providers: {
+      email: { ok: providerName !== 'disabled', status: providerName === 'disabled' ? 'disabled' : 'configured' },
+      ai: { ok: Boolean(process.env.OPENAI_API_KEY), status: process.env.OPENAI_API_KEY ? 'configured' : 'missing_key' },
+      twilio: { ok: Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN), status: process.env.TWILIO_ACCOUNT_SID ? 'configured' : 'disabled' }
+    },
+    backups: {
+      latestBackup: backupEvidence.latestBackup,
+      latestVerification: backupEvidence.latestVerification,
+      latestRestoreDryRun: backupEvidence.latestRestoreDryRun,
+      latestRestoreTest: backupEvidence.latestRestoreTest,
+      failedCount: backupEvidence.failed.length
+    },
+    operations: {
+      activeIncident,
+      maintenance: maintenance ? {
+        enabled: Number(maintenance.enabled || 0) === 1,
+        publicMessage: maintenance.public_message || '',
+        disabledFeatures: (() => {
+          try { return JSON.parse(maintenance.disabled_features_json || '[]'); } catch (_err) { return []; }
+        })(),
+        updatedAt: maintenance.updated_at || null
+      } : { enabled: false },
+      logs: observabilityService.getLogsSummary(5)
     }
   };
 
@@ -30633,16 +30691,12 @@ app.get("/api/ai/health", async (_req, res) => {
 
 scheduleIdleRuntimeCleanup();
 
-app.use((err, req, res, next) => {
-  logEvent('error', '[ERROR]', {
-    requestId: req.id || null,
-    path: req.path,
-    method: req.method,
-    error: safeSerializeError(err, { includeStack: !ENV.IS_PROD })
-  });
-  if (res.headersSent) return next(err);
-  res.status(500).json({ error: 'Internal server error', requestId: req.id || null });
-});
+app.use(createErrorHandlerMiddleware({
+  logger: console,
+  observability: observabilityService,
+  isProd: ENV.IS_PROD,
+  serializeError: safeSerializeError
+}));
 
 /* ---------- START SERVER ---------- */
 app.listen(PORT, HOST, () => {

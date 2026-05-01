@@ -12,6 +12,7 @@
 - Review file storage strategy
 - Review Jitsi deployment mode
 - Run `npm run preflight`
+- Run `npm run test:ops-hardening:smoke`
 - Run `npm run db:migrate:pg`
 - Check `/health`
 
