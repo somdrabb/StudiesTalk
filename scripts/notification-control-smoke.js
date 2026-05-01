@@ -241,43 +241,55 @@ async function main() {
       body: 'In-app body'
     });
     await request(baseUrl, 'super_admin', 'POST', `/api/admin/notifications-control/campaigns/${inAppCampaign.row.id}/build-deliveries`, {});
-    const inAppSend = await request(baseUrl, 'super_admin', 'POST', `/api/admin/notifications-control/campaigns/${inAppCampaign.row.id}/send`, {});
+    const inAppSend = await request(baseUrl, 'super_admin', 'POST', `/api/admin/notifications-control/campaigns/${inAppCampaign.row.id}/send-in-app`, {});
     assert.strictEqual(inAppSend.processed, 4);
+    assert.strictEqual(inAppSend.status, 'completed');
+    assert.ok(inAppSend.results.every((row) => row.status === 'sent'));
+    assert.strictEqual(db.prepare('SELECT COUNT(*) AS count FROM platform_user_notifications WHERE title = ?').get('In-app subject').count, 4);
+    assert.ok(auditRows.some((row) => row.action === 'notification_control.campaign_send_in_app'));
+    const inAppSendAgain = await request(baseUrl, 'super_admin', 'POST', `/api/admin/notifications-control/campaigns/${inAppCampaign.row.id}/send-in-app`, {});
+    assert.strictEqual(inAppSendAgain.processed, 0);
     assert.strictEqual(db.prepare('SELECT COUNT(*) AS count FROM platform_user_notifications WHERE title = ?').get('In-app subject').count, 4);
 
-    const emailCampaign = await request(baseUrl, 'super_admin', 'POST', '/api/admin/notifications-control/campaigns', {
-      title: 'Email send',
-      channels: ['email'],
+    const mixedCampaign = await request(baseUrl, 'super_admin', 'POST', '/api/admin/notifications-control/campaigns', {
+      title: 'Mixed in-app only send',
+      channels: ['email', 'sms', 'in_app'],
       targetType: 'selected_workspaces',
       workspaceIds: [ids.workspaceA],
-      subject: 'Email subject',
-      body: 'Email body'
+      subject: 'Mixed subject',
+      body: 'Mixed body'
     });
-    await request(baseUrl, 'super_admin', 'POST', `/api/admin/notifications-control/campaigns/${emailCampaign.row.id}/build-deliveries`, {});
-    const emailSend = await request(baseUrl, 'super_admin', 'POST', `/api/admin/notifications-control/campaigns/${emailCampaign.row.id}/send`, {});
-    assert.strictEqual(emailSend.processed, 4);
-    assert.strictEqual(sentEmails.length, 4);
-    assert.ok(usageRows.some((row) => row.providerKey === 'ionos_email'));
+    await request(baseUrl, 'super_admin', 'POST', `/api/admin/notifications-control/campaigns/${mixedCampaign.row.id}/build-deliveries`, {});
+    const mixedSend = await request(baseUrl, 'super_admin', 'POST', `/api/admin/notifications-control/campaigns/${mixedCampaign.row.id}/send-in-app`, {});
+    assert.strictEqual(mixedSend.processed, 4);
+    assert.strictEqual(mixedSend.status, 'sending');
+    assert.strictEqual(sentEmails.length, 0);
+    assert.strictEqual(sentSms.length, 0);
+    assert.strictEqual(usageRows.length, 0);
+    const mixedPendingEmail = await request(baseUrl, 'super_admin', 'GET', `/api/admin/notifications-control/deliveries?campaignId=${encodeURIComponent(mixedCampaign.row.id)}&status=pending`);
+    assert.strictEqual(mixedPendingEmail.rows.filter((row) => row.channel === 'email').length, 4);
+    assert.strictEqual(mixedPendingEmail.rows.filter((row) => row.channel === 'sms').length, 4);
 
-    const smsCampaign = await request(baseUrl, 'super_admin', 'POST', '/api/admin/notifications-control/campaigns', {
-      title: 'SMS send',
-      channels: ['sms'],
-      targetType: 'role',
-      role: 'teacher',
-      subject: 'SMS subject',
-      body: 'SMS body'
+    const retryCampaign = await request(baseUrl, 'super_admin', 'POST', '/api/admin/notifications-control/campaigns', {
+      title: 'Retry in-app send',
+      channels: ['in_app'],
+      targetType: 'selected_workspaces',
+      workspaceIds: [ids.workspaceA],
+      subject: 'Retry subject',
+      body: 'Retry body'
     });
-    await request(baseUrl, 'super_admin', 'POST', `/api/admin/notifications-control/campaigns/${smsCampaign.row.id}/build-deliveries`, {});
-    const smsSend = await request(baseUrl, 'super_admin', 'POST', `/api/admin/notifications-control/campaigns/${smsCampaign.row.id}/send`, {});
-    assert.strictEqual(smsSend.processed, 2);
-    assert.strictEqual(smsSend.status, 'failed');
-    const failedSms = await request(baseUrl, 'super_admin', 'GET', `/api/admin/notifications-control/deliveries?campaignId=${encodeURIComponent(smsCampaign.row.id)}&status=failed`);
-    assert.strictEqual(failedSms.rows.length, 2);
-    assert.ok(String(failedSms.rows[0].error_message || '').includes('Twilio credentials are not configured'));
-    smsConfigured = true;
-    const retry = await request(baseUrl, 'super_admin', 'POST', `/api/admin/notifications-control/deliveries/${failedSms.rows[0].id}/retry`, {});
-    assert.ok(['sent', 'delivered'].includes(retry.delivery.status));
-    assert.strictEqual(sentSms.length, 1);
+    await request(baseUrl, 'super_admin', 'POST', `/api/admin/notifications-control/campaigns/${retryCampaign.row.id}/build-deliveries`, {});
+    const retryDeliveries = await request(baseUrl, 'super_admin', 'GET', `/api/admin/notifications-control/deliveries?campaignId=${encodeURIComponent(retryCampaign.row.id)}&status=pending`);
+    const retry = await request(baseUrl, 'super_admin', 'POST', `/api/admin/notifications-control/deliveries/${retryDeliveries.rows[0].id}/retry-in-app`, {});
+    assert.strictEqual(retry.delivery.status, 'sent');
+    assert.strictEqual(db.prepare('SELECT COUNT(*) AS count FROM platform_user_notifications WHERE title = ?').get('Retry subject').count, 1);
+    const retryAgain = await request(baseUrl, 'super_admin', 'POST', `/api/admin/notifications-control/deliveries/${retryDeliveries.rows[0].id}/retry-in-app`, {});
+    assert.strictEqual(retryAgain.skipped, true);
+    assert.strictEqual(retryAgain.reason, 'already_sent');
+    assert.strictEqual(db.prepare('SELECT COUNT(*) AS count FROM platform_user_notifications WHERE title = ?').get('Retry subject').count, 1);
+    assert.ok(auditRows.some((row) => row.action === 'notification_control.delivery_retry_in_app'));
+    const emailDelivery = mixedPendingEmail.rows.find((row) => row.channel === 'email');
+    await request(baseUrl, 'super_admin', 'POST', `/api/admin/notifications-control/deliveries/${emailDelivery.id}/retry-in-app`, {}, 400);
 
     const cancelCampaign = await request(baseUrl, 'super_admin', 'POST', '/api/admin/notifications-control/campaigns', {
       title: 'Cancel campaign',

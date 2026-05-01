@@ -679,9 +679,12 @@ function createNotificationControlService({
     });
   }
 
-  async function processDelivery(campaign, delivery, { dryRun = false } = {}) {
+  async function processDelivery(campaign, delivery, { dryRun = false, allowedChannels = null } = {}) {
     if (['sent', 'delivered'].includes(String(delivery.status || '').toLowerCase())) {
       return { delivery, skipped: true, reason: 'already_sent' };
+    }
+    if (allowedChannels && !allowedChannels.has(delivery.channel)) {
+      return { delivery, skipped: true, reason: 'channel_not_enabled' };
     }
     if (dryRun) {
       return {
@@ -699,7 +702,7 @@ function createNotificationControlService({
       else if (delivery.channel === 'sms') providerResult = await deliverSms(campaign, delivery);
       else throw new Error(`Unsupported delivery channel: ${delivery.channel}`);
       const updated = await updateDelivery(delivery.id, {
-        status: delivery.channel === 'in_app' ? 'delivered' : 'sent',
+        status: 'sent',
         errorMessage: null,
         metadata: { provider: providerResult?.provider || delivery.channel, messageId: providerResult?.messageId || null, disabled: !!providerResult?.disabled }
       });
@@ -731,32 +734,47 @@ function createNotificationControlService({
     return status;
   }
 
-  async function sendCampaign(campaignId, { dryRun = false, limit = 100 } = {}) {
+  async function sendInAppCampaign(campaignId, { dryRun = false, limit = 100 } = {}) {
     const campaign = await getCampaign(campaignId);
     if (campaign.status === 'cancelled') throw badRequest('Cancelled campaigns cannot be sent.');
-    const pendingCount = await adapter.one("SELECT COUNT(*) AS count FROM notification_deliveries WHERE campaign_id = ? AND status = 'pending'", [campaignId]);
+    const inAppCount = await adapter.one("SELECT COUNT(*) AS count FROM notification_deliveries WHERE campaign_id = ? AND channel = 'in_app'", [campaignId]);
+    if (Number(inAppCount?.count || 0) <= 0) throw badRequest('Build in-app notification deliveries before sending.');
+    const pendingCount = await adapter.one("SELECT COUNT(*) AS count FROM notification_deliveries WHERE campaign_id = ? AND channel = 'in_app' AND status = 'pending'", [campaignId]);
     const total = Number(pendingCount?.count || 0);
-    if (total <= 0) throw badRequest('Build notification deliveries before sending.');
     const batchLimit = Math.min(Math.max(Number(limit) || 100, 1), 100);
+    if (total <= 0) {
+      const stats = await getDeliveryStats(campaignId);
+      return {
+        ok: true,
+        dryRun: !!dryRun,
+        processed: 0,
+        remaining: 0,
+        status: campaign.status,
+        queued: false,
+        stats,
+        results: []
+      };
+    }
     if (!dryRun) {
       await adapter.exec('UPDATE notification_campaigns SET status = ?, updated_at = ? WHERE id = ?', ['sending', now(), campaignId]);
     }
     const rows = await adapter.many(`
       SELECT * FROM notification_deliveries
-      WHERE campaign_id = ? AND status = 'pending'
+      WHERE campaign_id = ? AND channel = 'in_app' AND status = 'pending'
       ORDER BY created_at ASC
       LIMIT ?
     `, [campaignId, batchLimit]);
     const results = [];
+    const inAppChannels = new Set(['in_app']);
     for (const delivery of rows) {
-      results.push(await processDelivery(campaign, delivery, { dryRun }));
+      results.push(await processDelivery(campaign, delivery, { dryRun, allowedChannels: inAppChannels }));
     }
     const status = dryRun ? campaign.status : await updateCampaignStatusFromDeliveries(campaignId);
-    const remaining = await adapter.one("SELECT COUNT(*) AS count FROM notification_deliveries WHERE campaign_id = ? AND status = 'pending'", [campaignId]);
+    const remaining = await adapter.one("SELECT COUNT(*) AS count FROM notification_deliveries WHERE campaign_id = ? AND channel = 'in_app' AND status = 'pending'", [campaignId]);
     await recordEvent({
       campaignId,
-      eventType: dryRun ? 'campaign.dry_run' : 'campaign.send_batch',
-      message: dryRun ? 'Dry run completed.' : 'Campaign send batch processed.',
+      eventType: dryRun ? 'campaign.in_app_dry_run' : 'campaign.in_app_send_batch',
+      message: dryRun ? 'In-app dry run completed.' : 'In-app campaign send batch processed.',
       metadata: { processed: results.length, remaining: Number(remaining?.count || 0), maxBatch: batchLimit }
     });
     return {
@@ -776,9 +794,14 @@ function createNotificationControlService({
     };
   }
 
-  async function retryDelivery(deliveryId, { dryRun = false } = {}) {
+  async function sendCampaign(campaignId, options = {}) {
+    return sendInAppCampaign(campaignId, options);
+  }
+
+  async function retryInAppDelivery(deliveryId, { dryRun = false } = {}) {
     const delivery = await adapter.one('SELECT * FROM notification_deliveries WHERE id = ? LIMIT 1', [deliveryId]);
     if (!delivery) throw notFound('Delivery not found.');
+    if (delivery.channel !== 'in_app') throw badRequest('Only in-app deliveries can be retried in this step.');
     if (['sent', 'delivered'].includes(String(delivery.status || '').toLowerCase())) {
       return { ok: true, delivery, skipped: true, reason: 'already_sent' };
     }
@@ -786,9 +809,13 @@ function createNotificationControlService({
     if (!dryRun) {
       await adapter.exec('UPDATE notification_campaigns SET status = ?, updated_at = ? WHERE id = ?', ['sending', now(), campaign.id]);
     }
-    const result = await processDelivery(campaign, delivery, { dryRun });
+    const result = await processDelivery(campaign, delivery, { dryRun, allowedChannels: new Set(['in_app']) });
     const status = dryRun ? campaign.status : await updateCampaignStatusFromDeliveries(campaign.id);
     return { ok: true, delivery: result.delivery, status, error: result.error || null, skipped: !!result.skipped };
+  }
+
+  async function retryDelivery(deliveryId, options = {}) {
+    return retryInAppDelivery(deliveryId, options);
   }
 
   async function cancelCampaign(campaignId) {
@@ -1034,7 +1061,9 @@ function createNotificationControlService({
     deleteCampaign,
     estimateCampaign,
     buildDeliveryDrafts,
+    sendInAppCampaign,
     sendCampaign,
+    retryInAppDelivery,
     retryDelivery,
     cancelCampaign,
     getDeliveryStats,
