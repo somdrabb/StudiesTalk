@@ -34,6 +34,16 @@ function cleanString(value, fallback = '') {
   return text || fallback;
 }
 
+function escapeHtml(value) {
+  return String(value || '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#039;'
+  }[char]));
+}
+
 function parseJson(value, fallback) {
   if (!value) return fallback;
   try {
@@ -520,17 +530,36 @@ function createNotificationControlService({
   async function getDeliveryStats(campaignId) {
     await getCampaign(campaignId);
     const rows = await adapter.many('SELECT status, COUNT(*) AS count, COALESCE(SUM(cost_eur), 0) AS cost FROM notification_deliveries WHERE campaign_id = ? GROUP BY status', [campaignId]);
-    const stats = { pending: 0, sent: 0, delivered: 0, failed: 0, skipped: 0, totalCost: 0 };
+    const emailRows = await adapter.many("SELECT status, COUNT(*) AS count FROM notification_deliveries WHERE campaign_id = ? AND channel = 'email' GROUP BY status", [campaignId]).catch(() => []);
+    const stats = {
+      pending: 0,
+      sent: 0,
+      delivered: 0,
+      failed: 0,
+      skipped: 0,
+      totalCost: 0,
+      emailPending: 0,
+      emailSent: 0,
+      emailDelivered: 0,
+      emailFailed: 0
+    };
     for (const row of rows) {
       const key = cleanString(row.status, 'pending');
       if (Object.prototype.hasOwnProperty.call(stats, key)) stats[key] = Number(row.count || 0);
       stats.totalCost += Number(row.cost || 0);
     }
+    for (const row of emailRows) {
+      const status = cleanString(row.status, 'pending');
+      if (status === 'pending') stats.emailPending = Number(row.count || 0);
+      if (status === 'sent') stats.emailSent = Number(row.count || 0);
+      if (status === 'delivered') stats.emailDelivered = Number(row.count || 0);
+      if (status === 'failed') stats.emailFailed = Number(row.count || 0);
+    }
     stats.totalCost = Number(stats.totalCost.toFixed(4));
     return stats;
   }
 
-  async function listDeliveries({ campaignId, status, workspaceId, limit = 100 } = {}) {
+  async function listDeliveries({ campaignId, status, workspaceId, channel, limit = 100 } = {}) {
     const filters = [];
     const params = [];
     if (campaignId) {
@@ -544,6 +573,10 @@ function createNotificationControlService({
     if (workspaceId) {
       filters.push('workspace_id = ?');
       params.push(workspaceId);
+    }
+    if (channel) {
+      filters.push('channel = ?');
+      params.push(channel);
     }
     params.push(Math.min(Math.max(Number(limit) || 100, 1), 500));
     return adapter.many(`SELECT * FROM notification_deliveries ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''} ORDER BY created_at DESC LIMIT ?`, params);
@@ -613,9 +646,18 @@ function createNotificationControlService({
   }
 
   async function isChannelEnabled(workspaceId, channel) {
+    if (channel === 'email' && platformControlService?.getEffectiveSettings) {
+      const settings = await platformControlService.getEffectiveSettings(workspaceId).catch(() => null);
+      if (settings?.communication?.emailEnabled === false) throw new Error('Email is disabled by Platform Control.');
+      if (settings?.providerLimits?.ionosEmail?.enabled === false) throw new Error('IONOS Email is disabled by Platform Control.');
+    }
     if (channel === 'email' && platformControlService?.isFeatureEnabled) {
       const enabled = await platformControlService.isFeatureEnabled(workspaceId, 'emailEnabled').catch(() => true);
       if (!enabled) throw new Error('Email is disabled by Platform Control.');
+    }
+    if (channel === 'email' && platformControlService?.getProviderLimit) {
+      const limit = await platformControlService.getProviderLimit(workspaceId, 'ionosEmail').catch(() => null);
+      if (limit?.enabled === false) throw new Error('IONOS Email is disabled by Platform Control.');
     }
     if (channel === 'sms' && platformControlService?.isFeatureEnabled) {
       const enabled = await platformControlService.isFeatureEnabled(workspaceId, 'smsEnabled').catch(() => true);
@@ -664,8 +706,70 @@ function createNotificationControlService({
       to: delivery.recipient,
       subject: campaign.subject || campaign.title,
       text: campaign.body,
-      html: `<div>${String(campaign.body || '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char])).replace(/\n/g, '<br>')}</div>`
+      html: `<div>${escapeHtml(campaign.body).replace(/\n/g, '<br>')}</div>`
     });
+  }
+
+  async function logWorkspaceEmailDelivery(campaign, delivery, { status, errorMessage = null, providerResult = null } = {}) {
+    if (delivery.channel !== 'email' || !cleanString(delivery.recipient).includes('@')) return;
+    const createdAt = now();
+    const messageId = cleanString(providerResult?.messageId);
+    const providerKey = providerResult?.provider === 'disabled' ? 'disabled' : 'ionos_email';
+    const metadata = stringifyJson({
+      notificationControl: true,
+      campaignId: campaign.id,
+      deliveryId: delivery.id,
+      provider: providerResult?.provider || providerKey,
+      disabled: !!providerResult?.disabled
+    });
+    const html = `<div>${escapeHtml(campaign.body).replace(/\n/g, '<br>')}</div>`;
+    try {
+      await adapter.exec(`
+        INSERT INTO workspace_email_logs
+          (id, workspace_id, sent_by_user_id, to_email, to_name, from_email, subject, body_text, body_html, type, status, error_message, message_id, direction, provider_key, metadata_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        id('wel'),
+        delivery.workspace_id || null,
+        campaign.created_by || null,
+        delivery.recipient,
+        null,
+        null,
+        campaign.subject || campaign.title,
+        campaign.body,
+        html,
+        'notification_control',
+        status,
+        errorMessage,
+        messageId,
+        'outbound',
+        providerKey,
+        metadata,
+        createdAt
+      ]);
+    } catch (_err) {
+      try {
+        await adapter.exec(`
+          INSERT INTO workspace_email_logs
+            (id, workspace_id, sent_by_user_id, to_email, to_name, subject, body_text, body_html, type, status, error_message, message_id, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [
+          id('wel'),
+          delivery.workspace_id || null,
+          campaign.created_by || null,
+          delivery.recipient,
+          null,
+          campaign.subject || campaign.title,
+          campaign.body,
+          html,
+          'notification_control',
+          status,
+          errorMessage,
+          messageId,
+          createdAt
+        ]);
+      } catch (_ignored) {}
+    }
   }
 
   async function deliverSms(campaign, delivery) {
@@ -695,6 +799,9 @@ function createNotificationControlService({
     }
     try {
       await isChannelEnabled(delivery.workspace_id, delivery.channel);
+      if (delivery.channel === 'email' && !cleanString(delivery.recipient).includes('@')) {
+        throw new Error('Delivery has no valid email recipient.');
+      }
       await checkAndRecordCost(delivery, { campaignId: campaign.id, deliveryId: delivery.id, channel: delivery.channel });
       let providerResult;
       if (delivery.channel === 'in_app') providerResult = await deliverInApp(campaign, delivery);
@@ -706,7 +813,8 @@ function createNotificationControlService({
         errorMessage: null,
         metadata: { provider: providerResult?.provider || delivery.channel, messageId: providerResult?.messageId || null, disabled: !!providerResult?.disabled }
       });
-      await recordEvent({ campaignId: campaign.id, deliveryId: delivery.id, eventType: 'delivery.sent', message: `${delivery.channel} delivery processed.` });
+      if (delivery.channel === 'email') await logWorkspaceEmailDelivery(campaign, delivery, { status: 'sent', providerResult });
+      await recordEvent({ campaignId: campaign.id, deliveryId: delivery.id, eventType: 'delivery.sent', message: `${delivery.channel} delivery processed.`, metadata: { channel: delivery.channel } });
       return { delivery: updated, providerResult };
     } catch (error) {
       const message = publicErrorMessage(error);
@@ -715,7 +823,8 @@ function createNotificationControlService({
         errorMessage: message,
         metadata: { failedAt: now(), channel: delivery.channel }
       });
-      await recordEvent({ campaignId: campaign.id, deliveryId: delivery.id, eventType: 'delivery.failed', message });
+      if (delivery.channel === 'email') await logWorkspaceEmailDelivery(campaign, delivery, { status: 'failed', errorMessage: message });
+      await recordEvent({ campaignId: campaign.id, deliveryId: delivery.id, eventType: 'delivery.failed', message, metadata: { channel: delivery.channel } });
       return { delivery: updated, error: message };
     }
   }
@@ -794,6 +903,66 @@ function createNotificationControlService({
     };
   }
 
+  async function sendEmailCampaign(campaignId, { dryRun = false, limit = 100 } = {}) {
+    const campaign = await getCampaign(campaignId);
+    if (campaign.status === 'cancelled') throw badRequest('Cancelled campaigns cannot be sent.');
+    const emailCount = await adapter.one("SELECT COUNT(*) AS count FROM notification_deliveries WHERE campaign_id = ? AND channel = 'email'", [campaignId]);
+    if (Number(emailCount?.count || 0) <= 0) throw badRequest('Build email notification deliveries before sending.');
+    const pendingCount = await adapter.one("SELECT COUNT(*) AS count FROM notification_deliveries WHERE campaign_id = ? AND channel = 'email' AND status = 'pending'", [campaignId]);
+    const total = Number(pendingCount?.count || 0);
+    const batchLimit = Math.min(Math.max(Number(limit) || 100, 1), 100);
+    if (total <= 0) {
+      const stats = await getDeliveryStats(campaignId);
+      return {
+        ok: true,
+        dryRun: !!dryRun,
+        processed: 0,
+        remaining: 0,
+        status: campaign.status,
+        queued: false,
+        stats,
+        results: []
+      };
+    }
+    if (!dryRun) {
+      await adapter.exec('UPDATE notification_campaigns SET status = ?, updated_at = ? WHERE id = ?', ['sending', now(), campaignId]);
+    }
+    const rows = await adapter.many(`
+      SELECT * FROM notification_deliveries
+      WHERE campaign_id = ? AND channel = 'email' AND status = 'pending'
+      ORDER BY created_at ASC
+      LIMIT ?
+    `, [campaignId, batchLimit]);
+    const results = [];
+    const emailChannels = new Set(['email']);
+    for (const delivery of rows) {
+      results.push(await processDelivery(campaign, delivery, { dryRun, allowedChannels: emailChannels }));
+    }
+    const status = dryRun ? campaign.status : await updateCampaignStatusFromDeliveries(campaignId);
+    const remaining = await adapter.one("SELECT COUNT(*) AS count FROM notification_deliveries WHERE campaign_id = ? AND channel = 'email' AND status = 'pending'", [campaignId]);
+    await recordEvent({
+      campaignId,
+      eventType: dryRun ? 'campaign.email_dry_run' : 'campaign.email_send_batch',
+      message: dryRun ? 'Email dry run completed.' : 'Email campaign send batch processed.',
+      metadata: { processed: results.length, remaining: Number(remaining?.count || 0), maxBatch: batchLimit }
+    });
+    return {
+      ok: true,
+      dryRun: !!dryRun,
+      processed: results.length,
+      remaining: Number(remaining?.count || 0),
+      status,
+      queued: total > batchLimit,
+      results: results.map((item) => ({
+        id: item.delivery?.id,
+        status: item.delivery?.status,
+        error: item.error || null,
+        skipped: !!item.skipped,
+        reason: item.reason || null
+      }))
+    };
+  }
+
   async function sendCampaign(campaignId, options = {}) {
     return sendInAppCampaign(campaignId, options);
   }
@@ -810,6 +979,28 @@ function createNotificationControlService({
       await adapter.exec('UPDATE notification_campaigns SET status = ?, updated_at = ? WHERE id = ?', ['sending', now(), campaign.id]);
     }
     const result = await processDelivery(campaign, delivery, { dryRun, allowedChannels: new Set(['in_app']) });
+    const status = dryRun ? campaign.status : await updateCampaignStatusFromDeliveries(campaign.id);
+    return { ok: true, delivery: result.delivery, status, error: result.error || null, skipped: !!result.skipped };
+  }
+
+  async function retryEmailDelivery(deliveryId, { dryRun = false } = {}) {
+    const delivery = await adapter.one('SELECT * FROM notification_deliveries WHERE id = ? LIMIT 1', [deliveryId]);
+    if (!delivery) throw notFound('Delivery not found.');
+    if (delivery.channel !== 'email') throw badRequest('Only email deliveries can be retried in this step.');
+    const campaign = await getCampaign(delivery.campaign_id);
+    await recordEvent({
+      campaignId: campaign.id,
+      deliveryId: delivery.id,
+      eventType: dryRun ? 'delivery.email_retry_dry_run' : 'delivery.email_retry',
+      message: dryRun ? 'Email delivery retry dry run requested.' : 'Email delivery retry requested.'
+    });
+    if (['sent', 'delivered'].includes(String(delivery.status || '').toLowerCase())) {
+      return { ok: true, delivery, skipped: true, reason: 'already_sent' };
+    }
+    if (!dryRun) {
+      await adapter.exec('UPDATE notification_campaigns SET status = ?, updated_at = ? WHERE id = ?', ['sending', now(), campaign.id]);
+    }
+    const result = await processDelivery(campaign, delivery, { dryRun, allowedChannels: new Set(['email']) });
     const status = dryRun ? campaign.status : await updateCampaignStatusFromDeliveries(campaign.id);
     return { ok: true, delivery: result.delivery, status, error: result.error || null, skipped: !!result.skipped };
   }
@@ -1062,8 +1253,10 @@ function createNotificationControlService({
     estimateCampaign,
     buildDeliveryDrafts,
     sendInAppCampaign,
+    sendEmailCampaign,
     sendCampaign,
     retryInAppDelivery,
+    retryEmailDelivery,
     retryDelivery,
     cancelCampaign,
     getDeliveryStats,

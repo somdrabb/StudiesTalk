@@ -43,6 +43,25 @@ function createSchema(db) {
       plan_key TEXT,
       status TEXT
     );
+    CREATE TABLE workspace_email_logs (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT,
+      sent_by_user_id TEXT,
+      to_email TEXT NOT NULL,
+      to_name TEXT,
+      from_email TEXT,
+      subject TEXT,
+      body_text TEXT,
+      body_html TEXT,
+      type TEXT DEFAULT 'test',
+      status TEXT DEFAULT 'sent',
+      error_message TEXT,
+      message_id TEXT DEFAULT '',
+      direction TEXT,
+      provider_key TEXT,
+      metadata_json TEXT,
+      created_at TEXT
+    );
   `);
   db.prepare('INSERT INTO workspaces (id, name, status) VALUES (?, ?, ?)').run(ids.workspaceA, 'Notification School A', 'active');
   db.prepare('INSERT INTO workspaces (id, name, status) VALUES (?, ?, ?)').run(ids.workspaceB, 'Notification School B', 'active');
@@ -143,6 +162,16 @@ async function main() {
     platformControlService: {
       async isFeatureEnabled(_workspaceId, _featureKey) {
         return true;
+      },
+      async getEffectiveSettings() {
+        return {
+          features: { emailEnabled: true, smsEnabled: true },
+          communication: { emailEnabled: true, smsEnabled: true },
+          providerLimits: { ionosEmail: { enabled: true } }
+        };
+      },
+      async getProviderLimit(_workspaceId, providerKey) {
+        return providerKey === 'ionosEmail' ? { enabled: true } : { enabled: true };
       }
     },
     costControlService: {
@@ -203,6 +232,9 @@ async function main() {
     const stats = await request(baseUrl, 'super_admin', 'GET', `/api/admin/notifications-control/campaigns/${campaign.row.id}/stats`);
     assert.strictEqual(stats.pending, 8);
     assert.strictEqual(stats.failed, 0);
+    assert.strictEqual(stats.emailPending, 4);
+    assert.strictEqual(stats.emailSent, 0);
+    assert.strictEqual(stats.emailFailed, 0);
 
     const campaigns = await request(baseUrl, 'super_admin', 'GET', '/api/admin/notifications-control/campaigns');
     assert.ok(Array.isArray(campaigns.rows));
@@ -269,6 +301,48 @@ async function main() {
     const mixedPendingEmail = await request(baseUrl, 'super_admin', 'GET', `/api/admin/notifications-control/deliveries?campaignId=${encodeURIComponent(mixedCampaign.row.id)}&status=pending`);
     assert.strictEqual(mixedPendingEmail.rows.filter((row) => row.channel === 'email').length, 4);
     assert.strictEqual(mixedPendingEmail.rows.filter((row) => row.channel === 'sms').length, 4);
+
+    const emailCampaign = await request(baseUrl, 'super_admin', 'POST', '/api/admin/notifications-control/campaigns', {
+      title: 'Email send',
+      channels: ['email'],
+      targetType: 'selected_workspaces',
+      workspaceIds: [ids.workspaceA],
+      subject: 'Email subject',
+      body: 'Email body'
+    });
+    await request(baseUrl, 'super_admin', 'POST', `/api/admin/notifications-control/campaigns/${emailCampaign.row.id}/build-deliveries`, {});
+    await request(baseUrl, 'school_admin', 'POST', `/api/admin/notifications-control/campaigns/${emailCampaign.row.id}/send-email`, {}, 403);
+    const emailPending = await request(baseUrl, 'super_admin', 'GET', `/api/admin/notifications-control/deliveries?campaignId=${encodeURIComponent(emailCampaign.row.id)}&status=pending&channel=email`);
+    assert.strictEqual(emailPending.rows.length, 4);
+    await request(baseUrl, 'school_admin', 'POST', `/api/admin/notifications-control/deliveries/${emailPending.rows[0].id}/retry-email`, {}, 403);
+    const emailSend = await request(baseUrl, 'super_admin', 'POST', `/api/admin/notifications-control/campaigns/${emailCampaign.row.id}/send-email`, {});
+    assert.strictEqual(emailSend.processed, 4);
+    assert.strictEqual(emailSend.status, 'completed');
+    assert.ok(emailSend.results.every((row) => row.status === 'sent'));
+    assert.strictEqual(sentEmails.length, 4);
+    assert.strictEqual(sentSms.length, 0);
+    assert.ok(usageRows.filter((row) => row.providerKey === 'ionos_email').length >= 4);
+    const emailStats = await request(baseUrl, 'super_admin', 'GET', `/api/admin/notifications-control/campaigns/${emailCampaign.row.id}/stats`);
+    assert.strictEqual(emailStats.emailPending, 0);
+    assert.strictEqual(emailStats.emailSent, 4);
+    assert.strictEqual(emailStats.emailFailed, 0);
+    assert.strictEqual(db.prepare('SELECT COUNT(*) AS count FROM workspace_email_logs WHERE type = ? AND status = ?').get('notification_control', 'sent').count, 4);
+    assert.ok(db.prepare("SELECT COUNT(*) AS count FROM notification_events WHERE event_type = 'delivery.sent'").get().count >= 8);
+    assert.ok(auditRows.some((row) => row.action === 'notification_control.campaign_send_email'));
+    const sentEmailDeliveries = await request(baseUrl, 'super_admin', 'GET', `/api/admin/notifications-control/deliveries?campaignId=${encodeURIComponent(emailCampaign.row.id)}&status=sent&channel=email`);
+    const retryEmailAgain = await request(baseUrl, 'super_admin', 'POST', `/api/admin/notifications-control/deliveries/${sentEmailDeliveries.rows[0].id}/retry-email`, {});
+    assert.strictEqual(retryEmailAgain.skipped, true);
+    assert.strictEqual(retryEmailAgain.reason, 'already_sent');
+    assert.strictEqual(sentEmails.length, 4);
+    assert.ok(auditRows.some((row) => row.action === 'notification_control.delivery_retry_email'));
+
+    const mixedEmailSend = await request(baseUrl, 'super_admin', 'POST', `/api/admin/notifications-control/campaigns/${mixedCampaign.row.id}/send-email`, {});
+    assert.strictEqual(mixedEmailSend.processed, 4);
+    assert.strictEqual(sentEmails.length, 8);
+    assert.strictEqual(sentSms.length, 0);
+    const mixedPendingAfterEmail = await request(baseUrl, 'super_admin', 'GET', `/api/admin/notifications-control/deliveries?campaignId=${encodeURIComponent(mixedCampaign.row.id)}&status=pending`);
+    assert.strictEqual(mixedPendingAfterEmail.rows.filter((row) => row.channel === 'email').length, 0);
+    assert.strictEqual(mixedPendingAfterEmail.rows.filter((row) => row.channel === 'sms').length, 4);
 
     const retryCampaign = await request(baseUrl, 'super_admin', 'POST', '/api/admin/notifications-control/campaigns', {
       title: 'Retry in-app send',
@@ -347,7 +421,7 @@ async function main() {
     const automationAfterDelete = await request(baseUrl, 'super_admin', 'GET', '/api/admin/notifications-control/automation-rules');
     assert.ok(!automationAfterDelete.rows.some((row) => row.id === automationRule.row.id));
 
-    const serialized = JSON.stringify({ campaigns, stats, deliveries, templates, automationList, automationTest });
+    const serialized = JSON.stringify({ campaigns, stats, deliveries, templates, automationList, automationTest, emailSend, emailStats, mixedEmailSend });
     assert.ok(!serialized.includes('TWILIO_AUTH_TOKEN'));
     assert.ok(!serialized.includes('OPENAI_API_KEY'));
     assert.ok(!serialized.includes('sk-'));

@@ -2481,6 +2481,9 @@ function renderNotificationStats(stats) {
     { label: "Sent", value: stats?.sent || 0 },
     { label: "Delivered", value: stats?.delivered || 0, tone: Number(stats?.delivered || 0) ? "ok" : "" },
     { label: "Failed", value: stats?.failed || 0, tone: Number(stats?.failed || 0) ? "failed" : "ok" },
+    { label: "Pending email", value: stats?.emailPending || 0, tone: Number(stats?.emailPending || 0) ? "warn" : "" },
+    { label: "Sent email", value: stats?.emailSent || 0, tone: Number(stats?.emailSent || 0) ? "ok" : "" },
+    { label: "Failed email", value: stats?.emailFailed || 0, tone: Number(stats?.emailFailed || 0) ? "failed" : "ok" },
     { label: "Skipped", value: stats?.skipped || 0 },
     { label: "Total cost", value: formatCurrencyEUR(stats?.totalCost || 0) }
   ]);
@@ -2523,8 +2526,9 @@ function renderNotifications(data) {
           <button class="btn btn-ghost" type="button" data-owner-action="notification-select" data-id="${escapeHtml(row.id)}">View</button>
           <button class="btn btn-ghost" type="button" data-owner-action="notification-estimate-row" data-id="${escapeHtml(row.id)}">Estimate</button>
           <button class="btn btn-ghost" type="button" data-owner-action="notification-build-row" data-id="${escapeHtml(row.id)}">Build deliveries</button>
-          <button class="btn btn-ghost" type="button" data-owner-action="notification-dry-run-row" data-id="${escapeHtml(row.id)}">Dry run</button>
-          <button class="btn btn-primary" type="button" data-owner-action="notification-send-row" data-id="${escapeHtml(row.id)}">Send</button>
+          <button class="btn btn-secondary" type="button" data-owner-action="notification-send-in-app-row" data-id="${escapeHtml(row.id)}">Send in-app</button>
+          <button class="btn btn-primary" type="button" data-owner-action="notification-send-email-row" data-id="${escapeHtml(row.id)}">Send email</button>
+          <button class="btn btn-ghost" type="button" data-owner-action="notification-retry-email-row" data-id="${escapeHtml(row.id)}">Retry failed email</button>
           <button class="btn btn-ghost" type="button" data-owner-action="notification-cancel-row" data-id="${escapeHtml(row.id)}">Cancel</button>
         </div>
       ` }
@@ -2991,14 +2995,31 @@ document.addEventListener("click", (event) => {
         state.notificationControl.stats = await api(`/api/admin/notifications-control/campaigns/${encodeURIComponent(campaignId)}/stats`);
         state.notificationControl.lastEstimate = await api(`/api/admin/notifications-control/campaigns/${encodeURIComponent(campaignId)}/estimate`, { method: "POST", body: {} });
         await refreshOwnerControl("notifications");
-      } else if (action === "notification-send-row" || action === "notification-dry-run-row") {
+      } else if (action === "notification-send-row" || action === "notification-dry-run-row" || action === "notification-send-in-app-row" || action === "notification-send-email-row") {
         const campaignId = ownerActionButton.dataset.id || state.notificationControl.selectedCampaignId;
         if (!campaignId) throw new Error("Select a campaign before sending.");
         state.notificationControl.selectedCampaignId = campaignId;
-        await api(`/api/admin/notifications-control/campaigns/${encodeURIComponent(campaignId)}/send`, {
+        const endpoint = action === "notification-send-email-row"
+          ? "send-email"
+          : action === "notification-send-in-app-row"
+            ? "send-in-app"
+            : "send";
+        await api(`/api/admin/notifications-control/campaigns/${encodeURIComponent(campaignId)}/${endpoint}`, {
           method: "POST",
           body: { dryRun: action === "notification-dry-run-row" }
         });
+        state.notificationControl.stats = await api(`/api/admin/notifications-control/campaigns/${encodeURIComponent(campaignId)}/stats`);
+        await refreshOwnerControl("notifications");
+      } else if (action === "notification-retry-email-row") {
+        const campaignId = ownerActionButton.dataset.id || state.notificationControl.selectedCampaignId;
+        if (!campaignId) throw new Error("Select a campaign before retrying email.");
+        state.notificationControl.selectedCampaignId = campaignId;
+        const failed = await api(`/api/admin/notifications-control/deliveries?campaignId=${encodeURIComponent(campaignId)}&status=failed&channel=email&limit=100`);
+        const rows = Array.isArray(failed?.rows) ? failed.rows : [];
+        if (!rows.length) throw new Error("No failed email deliveries to retry.");
+        for (const row of rows) {
+          await api(`/api/admin/notifications-control/deliveries/${encodeURIComponent(row.id)}/retry-email`, { method: "POST", body: {} });
+        }
         state.notificationControl.stats = await api(`/api/admin/notifications-control/campaigns/${encodeURIComponent(campaignId)}/stats`);
         await refreshOwnerControl("notifications");
       } else if (action === "notification-cancel-row") {
@@ -6903,6 +6924,11 @@ $("btnSaveSettings")?.addEventListener("click", async () => {
       error.hidden = false;
     }
   }
+});
+
+$("btnPlatformControlSaveAll")?.addEventListener("click", async () => {
+  const fullSettings = collectPlatformSettingsFromForm();
+  await persistPlatformSettings(fullSettings, "Platform settings saved.");
 });
 
 document.querySelectorAll("[data-platform-control-tab]").forEach((button) => {

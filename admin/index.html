@@ -377,20 +377,35 @@
           <!-- 31. BILLING PANEL -->
           <section class="panel billing-panel" id="panel-billing" hidden>
             <div class="panel-head billing-head">
-              <div><h2>Billing</h2><p class="muted">Invoices, payments and lifecycle.</p></div>
+              <div class="billing-head-left">
+                <div class="billing-head-icon" aria-hidden="true">
+                  <i class="fa-solid fa-file-invoice-dollar"></i>
+                </div>
+                <div>
+                  <div class="billing-head-kicker">Finance control</div>
+                  <h2>Billing</h2>
+                  <p class="muted">Invoices, payments and lifecycle.</p>
+                </div>
+              </div>
 
               <div class="billing-head-actions">
-                <select class="input billing-workspace-filter" id="billingWorkspaceFilter" aria-label="Filter billing by workspace">
-                  <option value="all">All workspaces</option>
-                </select>
-                <select class="input billing-status-filter" id="billingStatusFilter" aria-label="Filter invoices by status">
-                  <option value="all">All statuses</option>
-                  <option value="open">Open</option>
-                  <option value="overdue">Overdue</option>
-                  <option value="paid">Paid</option>
-                </select>
+                <div class="billing-filter-group">
+                  <i class="fa-solid fa-building" aria-hidden="true"></i>
+                  <select class="input billing-workspace-filter" id="billingWorkspaceFilter" aria-label="Filter billing by workspace">
+                    <option value="all">All workspaces</option>
+                  </select>
+                </div>
+                <div class="billing-filter-group">
+                  <i class="fa-solid fa-sliders" aria-hidden="true"></i>
+                  <select class="input billing-status-filter" id="billingStatusFilter" aria-label="Filter invoices by status">
+                    <option value="all">All statuses</option>
+                    <option value="open">Open</option>
+                    <option value="overdue">Overdue</option>
+                    <option value="paid">Paid</option>
+                  </select>
+                </div>
                 <button class="btn btn-primary" type="button" id="btnCreateInvoiceTop">
-                  <i class="fa-solid fa-plus" aria-hidden="true"></i><span>Create invoice</span>
+                  <i class="fa-solid fa-file-circle-plus" aria-hidden="true"></i><span>Create invoice</span>
                 </button>
                 <button class="btn btn-ghost" type="button" id="btnExportBilling">
                   <i class="fa-solid fa-file-export" aria-hidden="true"></i><span>Export</span>
@@ -447,14 +462,30 @@
           <section class="panel settings-panel" id="panel-settings" hidden>
   <div class="settings-page">
     <div class="settings-header">
-      <div>
-        <h2>Platform Control</h2>
-        <p>Structured platform owner controls for defaults, governance, communication, storage, security, subscriptions, and workspace policy.</p>
+      <div class="settings-header-main">
+        <div class="settings-header-icon" aria-hidden="true">
+          <i class="fa-solid fa-sliders"></i>
+        </div>
+        <div>
+          <div class="settings-eyebrow">Owner console</div>
+          <h2>Platform Control</h2>
+          <p>Structured platform owner controls for defaults, governance, communication, storage, security, subscriptions, and workspace policy.</p>
+        </div>
       </div>
 
-      <div class="settings-workspace">
-        <span class="label">Scope</span>
-        <span id="settingsWorkspaceName" class="workspace-badge">Platform Global</span>
+      <div class="settings-header-actions">
+        <div class="settings-workspace">
+          <span class="label">Scope</span>
+          <span id="settingsWorkspaceName" class="workspace-badge">Platform Global</span>
+        </div>
+        <div class="settings-action-bar">
+          <button class="btn btn-ghost" type="button" id="btnPlatformControlResetGlobal">
+            <i class="fa-solid fa-rotate-left" aria-hidden="true"></i><span>Reset defaults</span>
+          </button>
+          <button class="btn btn-primary" type="button" id="btnPlatformControlSaveAll">
+            <i class="fa-solid fa-floppy-disk" aria-hidden="true"></i><span>Save settings</span>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -482,15 +513,14 @@
                 <h3>Platform Overview</h3>
                 <p>Quick view of defaults, budget posture, and current platform control state.</p>
               </div>
-              <button class="btn btn-ghost" type="button" id="btnPlatformControlResetGlobal">Reset to defaults</button>
             </div>
             <div class="platform-control-overview-grid">
-              <div class="platform-control-stat"><span>Default AI Budget</span><strong id="platformControlOverviewBudget">€0.00</strong></div>
-              <div class="platform-control-stat"><span>Max Users / Workspace</span><strong id="platformControlOverviewUsers">0</strong></div>
-              <div class="platform-control-stat"><span>Default Storage</span><strong id="platformControlOverviewStorage">0 GB</strong></div>
-              <div class="platform-control-stat"><span>Default Plan</span><strong id="platformControlOverviewPlan">starter</strong></div>
+              <div class="platform-control-stat"><div class="platform-control-stat-icon"><i class="fa-solid fa-brain" aria-hidden="true"></i></div><span>Default AI Budget</span><strong id="platformControlOverviewBudget">€0.00</strong></div>
+              <div class="platform-control-stat"><div class="platform-control-stat-icon"><i class="fa-solid fa-users" aria-hidden="true"></i></div><span>Max Users / Workspace</span><strong id="platformControlOverviewUsers">0</strong></div>
+              <div class="platform-control-stat"><div class="platform-control-stat-icon"><i class="fa-solid fa-database" aria-hidden="true"></i></div><span>Default Storage</span><strong id="platformControlOverviewStorage">0 GB</strong></div>
+              <div class="platform-control-stat"><div class="platform-control-stat-icon"><i class="fa-solid fa-layer-group" aria-hidden="true"></i></div><span>Default Plan</span><strong id="platformControlOverviewPlan">starter</strong></div>
             </div>
-            <div class="platform-control-inline-note">Last saved: <strong id="platformControlLastSaved">—</strong></div>
+            <div class="platform-control-inline-note"><i class="fa-regular fa-clock" aria-hidden="true"></i><span>Last saved: <strong id="platformControlLastSaved">—</strong></span></div>
           </section>
 
           <section class="settings-section-card" data-platform-control-panel="workspaceDefaults" hidden>
@@ -756,10 +786,18 @@
 
       <div class="settings-side">
         <div class="settings-card info">
-          <h4>Platform Control</h4>
-          <p>These controls save a structured JSON object in <b>platform_settings</b>.</p>
-          <p>Workspace overrides can layer on top later without changing this UI model.</p>
-          <p>Advanced Mode reads and writes the exact same configuration object.</p>
+          <div class="settings-info-head">
+            <div class="settings-info-icon" aria-hidden="true"><i class="fa-solid fa-shield-halved"></i></div>
+            <div>
+              <h4>Platform Control</h4>
+              <p>Structured settings saved in <b>platform_settings</b>.</p>
+            </div>
+          </div>
+          <div class="settings-info-list">
+            <div><i class="fa-solid fa-check" aria-hidden="true"></i><span>Global defaults control new workspace behavior.</span></div>
+            <div><i class="fa-solid fa-check" aria-hidden="true"></i><span>Workspace overrides can layer on top later.</span></div>
+            <div><i class="fa-solid fa-check" aria-hidden="true"></i><span>Advanced JSON reads and writes the same object.</span></div>
+          </div>
         </div>
       </div>
     </div>
@@ -1031,7 +1069,7 @@
               </section>
 
               <section class="card owner-control-card notification-card">
-                <div class="owner-card-head"><div><h3>Schedule</h3><p>Save as draft or schedule. Step 1 does not send real notifications.</p></div></div>
+                <div class="owner-card-head"><div><h3>Schedule</h3><p>Save as draft or schedule. Campaign actions control in-app and email sends.</p></div></div>
                 <div class="notification-form-grid">
                   <select class="input" id="notificationSendMode"><option value="draft">Save draft</option><option value="scheduled">Schedule</option></select>
                   <input class="input" id="notificationScheduledAt" type="datetime-local">
@@ -1050,7 +1088,7 @@
                 <button class="btn btn-secondary" type="button" data-owner-action="notification-build-deliveries"><i class="fa-solid fa-list-check" aria-hidden="true"></i><span>Build delivery list</span></button>
               </section>
             </div>
-            <section class="card owner-control-card notification-card"><div class="owner-card-head"><div><h3>Campaigns</h3><p>View, edit, estimate, and build delivery drafts. No external provider send occurs in Step 1.</p></div></div><div class="table" id="notificationsTable"></div></section>
+            <section class="card owner-control-card notification-card"><div class="owner-card-head"><div><h3>Campaigns</h3><p>Send in-app or email in controlled batches. SMS remains untouched until the SMS step.</p></div></div><div class="table" id="notificationsTable"></div></section>
             <section class="card owner-control-card notification-card"><div class="owner-card-head"><div><h3>Delivery stats</h3><p>Stats for the selected campaign.</p></div></div><div class="owner-summary-grid" id="notificationDeliveryStats"></div></section>
             <section class="card owner-control-card notification-card">
               <div class="owner-card-head">
