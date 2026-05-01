@@ -2125,10 +2125,60 @@ async function testSecretProvider(provider) {
   );
 }
 
+async function completeMfaChallenge(challenge) {
+  if (!challenge?.mfaToken) {
+    throw new Error("MFA challenge is missing.");
+  }
+  let setupText = "";
+  if (challenge.mfaSetupRequired) {
+    const setupResp = await fetch("/api/auth/mfa/setup/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mfaToken: challenge.mfaToken }),
+      credentials: "same-origin"
+    });
+    const setup = await setupResp.json().catch(() => ({}));
+    if (!setupResp.ok) throw new Error(setup.error || "Could not start MFA setup.");
+    setupText = `MFA setup required.\n\nAdd this secret to your authenticator app:\n${setup.secret}\n\n`;
+  }
+  const code = window.prompt(`${setupText}Enter your 6-digit authenticator code:`);
+  if (!code) throw new Error("MFA code is required.");
+  const verifyResp = await fetch("/api/auth/mfa/verify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mfaToken: challenge.mfaToken, code }),
+    credentials: "same-origin"
+  });
+  const verified = await verifyResp.json().catch(() => ({}));
+  if (!verifyResp.ok) throw new Error(verified.error || "MFA verification failed.");
+  return verified;
+}
+
+function requireReason(value, label = "Reason") {
+  const reason = String(value || "").trim();
+  if (!reason) throw new Error(`${label} is required for this action.`);
+  return reason;
+}
+
+function confirmAction(message) {
+  return window.confirm(message);
+}
+
+function confirmTypedAction({ message, expected }) {
+  const typed = window.prompt(`${message}\n\nType ${expected} to confirm:`);
+  return String(typed || "").trim() === String(expected || "").trim();
+}
+
+async function confirmNotificationSend(campaignId, label) {
+  const stats = await api(`/api/admin/notifications-control/campaigns/${encodeURIComponent(campaignId)}/stats`).catch(() => null);
+  const totals = stats?.stats || stats || {};
+  const pending = Number(totals.pending || totals.pendingTotal || totals.pending_email || totals.pendingSms || 0);
+  return confirmAction(`${label}\n\nPending deliveries: ${pending || "unknown"}\nConfirm before sending.`);
+}
+
 async function api(path, { method = "GET", body = null } = {}) {
   const headers = {};
   if (body) headers["Content-Type"] = "application/json";
-  if (state.userId) headers["x-user-id"] = state.userId;
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
   const csrfToken = getCsrfToken();
   if (csrfToken) {
@@ -2811,14 +2861,18 @@ if (btnLoginEl) {
       const resp = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        credentials: "same-origin"
       });
-      const result = await resp.json().catch(() => ({}));
+      let result = await resp.json().catch(() => ({}));
       if (!resp.ok) {
         throw new Error(result.error || `Login failed (${resp.status})`);
       }
+      if (result.mfaRequired) {
+        result = await completeMfaChallenge(result);
+      }
 
-      state.userId = result.userId || result.user || identifier;
+      state.userId = result.userId || result.user?.userId || result.user?.id || identifier;
       if (result.accessToken) {
         setAccessToken(result.accessToken);
       }
@@ -2894,37 +2948,48 @@ document.addEventListener("click", (event) => {
         await api(`/api/admin/operations/test-provider/${encodeURIComponent(ownerActionButton.dataset.provider || "")}`, { method: "POST", body: {} });
         await refreshOwnerControl("operations");
       } else if (action === "backup-run") {
+        if (!confirmAction("Run a manual backup now?")) return;
         await api("/api/admin/backups/run", { method: "POST", body: {} });
         await refreshOwnerControl("backups");
       } else if (action === "restore-dry-run") {
+        if (!confirmTypedAction({ message: "Run restore dry-run verification?", expected: "DRY RUN" })) return;
         await api("/api/admin/backups/restore-dry-run", { method: "POST", body: {} });
         await refreshOwnerControl("backups");
       } else if (action === "lifecycle-run") {
         const workspaceId = $("lifecycleWorkspace")?.value || "";
         const lifecycleAction = $("lifecycleAction")?.value || "suspend";
+        const reason = requireReason($("lifecycleReason")?.value || "", "Lifecycle reason");
+        const typedActions = new Set(["suspend", "archive", "force-logout", "reset-overrides", "transfer-owner"]);
+        if (typedActions.has(lifecycleAction) && !confirmTypedAction({
+          message: `Apply ${lifecycleAction} to workspace ${workspaceId}?`,
+          expected: lifecycleAction.toUpperCase()
+        })) return;
         await api(`/api/admin/workspaces/${encodeURIComponent(workspaceId)}/${encodeURIComponent(lifecycleAction)}`, {
           method: "POST",
           body: {
-            reason: $("lifecycleReason")?.value || "",
+            reason,
             ownerUserId: $("lifecycleOwnerUserId")?.value || ""
           }
         });
         await refreshOwnerControl("lifecycle");
       } else if (action === "support-start") {
+        const reason = requireReason($("supportReason")?.value || "", "Support reason");
         await api("/api/admin/support/impersonation/start", {
           method: "POST",
           body: {
             workspaceId: $("supportWorkspace")?.value || "",
             targetUserId: $("supportTargetUser")?.value || "",
             readOnly: $("supportReadOnly")?.checked !== false,
-            reason: $("supportReason")?.value || ""
+            reason
           }
         });
         await refreshOwnerControl("support");
       } else if (action === "support-end") {
+        if (!confirmAction("End active support sessions?")) return;
         await api("/api/admin/support/impersonation/end", { method: "POST", body: {} });
         await refreshOwnerControl("support");
       } else if (action === "maintenance-save") {
+        if ($("maintenanceEnabled")?.checked && !requireReason($("maintenanceMessage")?.value || "", "Maintenance public message")) return;
         const disabledFeatures = [...document.querySelectorAll("[data-maint-feature]:checked")].map((input) => input.dataset.maintFeature);
         await api("/api/admin/maintenance", {
           method: "POST",
@@ -2936,6 +3001,7 @@ document.addEventListener("click", (event) => {
         });
         await refreshOwnerControl("incidents");
       } else if (action === "incident-create") {
+        requireReason($("incidentInternalNote")?.value || $("incidentPublicMessage")?.value || "", "Incident reason or note");
         await api("/api/admin/incidents", {
           method: "POST",
           body: {
@@ -2949,15 +3015,17 @@ document.addEventListener("click", (event) => {
       } else if (action === "governance-create") {
         const workspaceId = $("governanceWorkspace")?.value || "";
         const type = $("governanceType")?.value || "export";
+        const reason = requireReason($("governanceReason")?.value || "", "Governance reason");
+        if (type === "delete" && !confirmTypedAction({ message: `Create data deletion request for ${workspaceId}?`, expected: "DELETE" })) return;
         if (type === "export") {
           await api(`/api/admin/data-governance/export/${encodeURIComponent(workspaceId)}`, {
             method: "POST",
-            body: { reason: $("governanceReason")?.value || "Platform owner export" }
+            body: { reason }
           });
         } else {
           await api("/api/admin/data-governance/delete-request", {
             method: "POST",
-            body: { workspaceId, reason: $("governanceReason")?.value || "" }
+            body: { workspaceId, reason }
           });
         }
         await refreshOwnerControl("data-governance");
@@ -3013,7 +3081,8 @@ document.addEventListener("click", (event) => {
           : action === "notification-send-in-app-row"
             ? "send-in-app"
             : "send";
-        if (action === "notification-send-sms-row" && !window.confirm("SMS can create provider charges. Confirm before sending.")) return;
+        if (action === "notification-send-sms-row" && !confirmAction("SMS can create provider charges. Confirm before sending.")) return;
+        if (!action.includes("dry-run") && !await confirmNotificationSend(campaignId, `Send ${endpoint} campaign?`)) return;
         await api(`/api/admin/notifications-control/campaigns/${encodeURIComponent(campaignId)}/${endpoint}`, {
           method: "POST",
           body: { dryRun: action === "notification-dry-run-row" || action === "notification-send-sms-dry-run-row" }
@@ -3027,6 +3096,7 @@ document.addEventListener("click", (event) => {
         const failed = await api(`/api/admin/notifications-control/deliveries?campaignId=${encodeURIComponent(campaignId)}&status=failed&channel=email&limit=100`);
         const rows = Array.isArray(failed?.rows) ? failed.rows : [];
         if (!rows.length) throw new Error("No failed email deliveries to retry.");
+        if (!confirmAction(`Retry ${rows.length} failed email delivery row(s)?`)) return;
         for (const row of rows) {
           await api(`/api/admin/notifications-control/deliveries/${encodeURIComponent(row.id)}/retry-email`, { method: "POST", body: {} });
         }
@@ -3035,11 +3105,12 @@ document.addEventListener("click", (event) => {
       } else if (action === "notification-retry-sms-row") {
         const campaignId = ownerActionButton.dataset.id || state.notificationControl.selectedCampaignId;
         if (!campaignId) throw new Error("Select a campaign before retrying SMS.");
-        if (!window.confirm("SMS can create provider charges. Confirm before sending.")) return;
+        if (!confirmAction("SMS can create provider charges. Confirm before sending.")) return;
         state.notificationControl.selectedCampaignId = campaignId;
         const failed = await api(`/api/admin/notifications-control/deliveries?campaignId=${encodeURIComponent(campaignId)}&status=failed&channel=sms&limit=25`);
         const rows = Array.isArray(failed?.rows) ? failed.rows : [];
         if (!rows.length) throw new Error("No failed SMS deliveries to retry.");
+        if (!confirmAction(`Retry ${rows.length} failed SMS delivery row(s)?`)) return;
         for (const row of rows) {
           await api(`/api/admin/notifications-control/deliveries/${encodeURIComponent(row.id)}/retry-sms`, { method: "POST", body: {} });
         }
@@ -3048,6 +3119,7 @@ document.addEventListener("click", (event) => {
       } else if (action === "notification-cancel-row") {
         const campaignId = ownerActionButton.dataset.id || state.notificationControl.selectedCampaignId;
         if (!campaignId) throw new Error("Select a campaign before cancelling.");
+        if (!confirmTypedAction({ message: `Cancel notification campaign ${campaignId}?`, expected: "CANCEL" })) return;
         state.notificationControl.selectedCampaignId = campaignId;
         await api(`/api/admin/notifications-control/campaigns/${encodeURIComponent(campaignId)}/cancel`, { method: "POST", body: {} });
         state.notificationControl.stats = await api(`/api/admin/notifications-control/campaigns/${encodeURIComponent(campaignId)}/stats`);
@@ -3093,6 +3165,7 @@ document.addEventListener("click", (event) => {
         await api(`/api/admin/notifications-control/automation-rules/${encodeURIComponent(state.notificationControl.selectedAutomationRuleId)}/test`, { method: "POST", body: {} });
         await refreshOwnerControl("notifications");
       } else if (action === "notification-automation-delete") {
+        if (!confirmTypedAction({ message: "Delete this notification automation rule?", expected: "DELETE" })) return;
         await api(`/api/admin/notifications-control/automation-rules/${encodeURIComponent(ownerActionButton.dataset.id || "")}`, { method: "DELETE" });
         await refreshOwnerControl("notifications");
       } else if (action === "branding-save") {
@@ -3249,8 +3322,10 @@ document.addEventListener("click", (event) => {
       } else if (action === "test-provider") {
         await testSecretProvider(provider);
       } else if (action === "rotate") {
+        if (!confirmTypedAction({ message: `Rotate secret ${provider}/${keyName}?`, expected: "ROTATE" })) return;
         await rotateSecretField(provider, keyName);
       } else if (action === "delete") {
+        if (!confirmTypedAction({ message: `Delete secret ${provider}/${keyName}? Env fallback may remain.`, expected: "DELETE" })) return;
         await deleteSecretField(provider, keyName);
       }
     };
@@ -4839,6 +4914,7 @@ async function refreshBilling() {
     btn.addEventListener("click", async () => {
       const invoiceId = btn.getAttribute("data-id");
       try {
+        if (!confirmTypedAction({ message: `Mark invoice ${invoiceId} as paid?`, expected: "PAID" })) return;
         await api(`/api/admin/invoices/${encodeURIComponent(invoiceId)}/mark-paid`, {
           method: "POST",
           body: { workspaceId: state.workspaceId }
@@ -5806,6 +5882,7 @@ async function saveLegalDraft() {
 }
 
 async function publishLegalSettings() {
+  if (!confirmTypedAction({ message: "Publish platform legal settings?", expected: "PUBLISH" })) return;
   showLegalStatus("Publishing legal settings…", "info");
   const result = await api("/api/admin/legal-settings/publish", {
     method: "POST",
@@ -5853,6 +5930,7 @@ async function publishLegalVersionCard(card) {
     return;
   }
   const payload = readLegalVersionCard(card);
+  if (!confirmTypedAction({ message: `Publish ${payload.document_type} legal document?`, expected: "PUBLISH" })) return;
   showLegalStatus(`Publishing ${payload.document_type} document…`, "info");
   await api(`/api/admin/legal-versions/${encodeURIComponent(versionId)}/publish`, {
     method: "POST",
@@ -7002,6 +7080,7 @@ $("btnPlatformControlResetWorkspaceOverride")?.addEventListener("click", async (
     return;
   }
   try {
+    if (!confirmTypedAction({ message: `Reset platform override for workspace ${workspaceId}?`, expected: "RESET" })) return;
     await api(`/api/admin/platform-control/workspaces/${encodeURIComponent(workspaceId)}`, {
       method: "DELETE"
     });
@@ -7016,6 +7095,7 @@ $("btnPlatformControlResetWorkspaceOverride")?.addEventListener("click", async (
 
 $("btnPlatformControlResetGlobal")?.addEventListener("click", async () => {
   try {
+    if (!confirmTypedAction({ message: "Reset global platform settings to defaults?", expected: "RESET" })) return;
     const response = await api(`/api/admin/platform-control/global/reset`, {
       method: "POST"
     });

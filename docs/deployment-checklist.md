@@ -34,6 +34,17 @@
 - Rotate secrets before go-live
 - Review admin/super-admin accounts
 
+## Security verification
+
+Run the security hardening checks with Node 20 before hosting:
+
+```bash
+nvm use 20
+npm run preflight
+npm run test:security:smoke
+npm run test:tenant-isolation:smoke
+```
+
 ## Launch decision
 
 Do not call the platform production-ready until:

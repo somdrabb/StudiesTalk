@@ -2112,6 +2112,16 @@ function audit(action, req, { target = null, meta = null, workspaceId = null, us
     const userId = ctxUser?.sub || ctxUser?.id || ctx.userId;
     const role = ctxUser?.role || ctx.role;
     const workspace = workspaceId || ctxUser?.workspaceId || ctxUser?.workspace_id || ctx.workspaceId || null;
+    const bodyReason = typeof req?.body?.reason === 'string'
+      ? req.body.reason
+      : typeof req?.body?.note === 'string'
+        ? req.body.note
+        : '';
+    const auditMeta = {
+      ...(meta && typeof meta === 'object' ? meta : {}),
+      result: meta && Object.prototype.hasOwnProperty.call(meta, 'result') ? meta.result : 'success'
+    };
+    if (bodyReason && !auditMeta.reason) auditMeta.reason = bodyReason;
       // Phase B migration boundary: audit writes now flow through the repository.
       await auditRepository.writeAuditLog({
         at: Date.now(),
@@ -2120,7 +2130,7 @@ function audit(action, req, { target = null, meta = null, workspaceId = null, us
         workspaceId: workspace,
         action,
         target: target ? String(target) : null,
-        metaJson: meta ? JSON.stringify(meta) : null,
+        metaJson: JSON.stringify(auditMeta),
         ip: ctx.ip,
         userAgent: ctx.ua || ''
       });
@@ -2235,7 +2245,160 @@ function sha256(text) {
   return crypto.createHash('sha256').update(String(text)).digest('hex');
 }
 
-function signAccessToken(user) {
+const MFA_TOKEN_EXPIRES = '10m';
+const MFA_CODE_WINDOW = 1;
+
+function base32Encode(buffer) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = '';
+  for (const byte of buffer) bits += byte.toString(2).padStart(8, '0');
+  let out = '';
+  for (let i = 0; i < bits.length; i += 5) {
+    const chunk = bits.slice(i, i + 5).padEnd(5, '0');
+    out += alphabet[parseInt(chunk, 2)];
+  }
+  return out.replace(/=+$/, '');
+}
+
+function base32Decode(value = '') {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const cleaned = String(value || '').replace(/=+$/g, '').replace(/\s+/g, '').toUpperCase();
+  let bits = '';
+  for (const char of cleaned) {
+    const idx = alphabet.indexOf(char);
+    if (idx < 0) continue;
+    bits += idx.toString(2).padStart(5, '0');
+  }
+  const bytes = [];
+  for (let i = 0; i + 8 <= bits.length; i += 8) {
+    bytes.push(parseInt(bits.slice(i, i + 8), 2));
+  }
+  return Buffer.from(bytes);
+}
+
+function encryptMfaSecret(secret) {
+  const key = crypto.createHash('sha256').update(String(JWT_ACCESS_SECRET || 'studies-talk-mfa')).digest();
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(String(secret), 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `enc:v1:${iv.toString('base64')}:${tag.toString('base64')}:${encrypted.toString('base64')}`;
+}
+
+function decryptMfaSecret(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (!raw.startsWith('enc:v1:')) return raw;
+  const [, , ivB64, tagB64, dataB64] = raw.split(':');
+  const key = crypto.createHash('sha256').update(String(JWT_ACCESS_SECRET || 'studies-talk-mfa')).digest();
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivB64, 'base64'));
+  decipher.setAuthTag(Buffer.from(tagB64, 'base64'));
+  return Buffer.concat([decipher.update(Buffer.from(dataB64, 'base64')), decipher.final()]).toString('utf8');
+}
+
+function generateTotpSecret() {
+  return base32Encode(crypto.randomBytes(20));
+}
+
+function generateTotpCode(secret, step = Math.floor(Date.now() / 30000)) {
+  const key = base32Decode(secret);
+  const counter = Buffer.alloc(8);
+  counter.writeUInt32BE(Math.floor(step / 0x100000000), 0);
+  counter.writeUInt32BE(step >>> 0, 4);
+  const hmac = crypto.createHmac('sha1', key).update(counter).digest();
+  const offset = hmac[hmac.length - 1] & 0xf;
+  const binary = ((hmac[offset] & 0x7f) << 24) |
+    ((hmac[offset + 1] & 0xff) << 16) |
+    ((hmac[offset + 2] & 0xff) << 8) |
+    (hmac[offset + 3] & 0xff);
+  return String((binary >>> 0) % 1000000).padStart(6, '0');
+}
+
+function verifyTotpCode(secret, code) {
+  const normalized = String(code || '').replace(/\s+/g, '');
+  if (!/^\d{6}$/.test(normalized)) return false;
+  const step = Math.floor(Date.now() / 30000);
+  for (let delta = -MFA_CODE_WINDOW; delta <= MFA_CODE_WINDOW; delta += 1) {
+    if (generateTotpCode(secret, step + delta) === normalized) return true;
+  }
+  return false;
+}
+
+function signMfaToken(user, purpose) {
+  return jwt.sign(
+    {
+      purpose,
+      sub: user.id,
+      role: String(user.role || 'member').toLowerCase(),
+      workspaceId: user.workspace_id || user.workspaceId || null,
+      email: user.email || null
+    },
+    JWT_ACCESS_SECRET,
+    { expiresIn: MFA_TOKEN_EXPIRES }
+  );
+}
+
+function verifyMfaToken(token, allowedPurposes = []) {
+  try {
+    const decoded = jwt.verify(String(token || ''), JWT_ACCESS_SECRET);
+    if (!decoded?.sub || !allowedPurposes.includes(decoded.purpose)) return null;
+    return decoded;
+  } catch (_err) {
+    return null;
+  }
+}
+
+function getUserMfaRecord(userId) {
+  if (!userId) return null;
+  return db.prepare(`
+    SELECT id,
+           workspace_id AS workspaceId,
+           email,
+           role,
+           COALESCE(mfa_enabled, 0) AS mfaEnabled,
+           COALESCE(mfa_secret, '') AS mfaSecret,
+           mfa_setup_at AS mfaSetupAt,
+           mfa_last_verified_at AS mfaLastVerifiedAt
+    FROM users
+    WHERE id = ?
+    LIMIT 1
+  `).get(String(userId)) || null;
+}
+
+function ensureUserMfaSecret(userId) {
+  const row = getUserMfaRecord(userId);
+  if (!row) return null;
+  let secret = '';
+  try {
+    secret = decryptMfaSecret(row.mfaSecret || '');
+  } catch (_err) {
+    secret = '';
+  }
+  if (!secret) {
+    secret = generateTotpSecret();
+    db.prepare('UPDATE users SET mfa_secret = ? WHERE id = ?').run(encryptMfaSecret(secret), userId);
+  }
+  return { ...row, secret };
+}
+
+function setUserMfaEnabled(userId, enabled = true) {
+  db.prepare(`
+    UPDATE users
+    SET mfa_enabled = ?,
+        mfa_setup_at = COALESCE(mfa_setup_at, ?),
+        mfa_last_verified_at = ?
+    WHERE id = ?
+  `).run(enabled ? 1 : 0, new Date().toISOString(), new Date().toISOString(), userId);
+}
+
+function isSuperAdminMfaEnabled(user) {
+  if (!isSuperAdminRole(user)) return true;
+  if (user?.mfaVerified || user?.mfa_verified) return true;
+  const row = getUserMfaRecord(user.id || user.sub);
+  return !!row?.mfaEnabled && !!row?.mfaSecret && !!user?.mfaVerified;
+}
+
+function signAccessToken(user, { mfaVerified = false } = {}) {
   const jti = makeId('at');
   const token = jwt.sign(
     {
@@ -2246,6 +2409,8 @@ function signAccessToken(user) {
       email: user.email || user.userId || null,
       name: user.name || `${user.first_name || ''} ${user.last_name || ''}`.trim() || null,
       superAdmin: String(user.role || '').toLowerCase() === 'super_admin',
+      mfaVerified: !!mfaVerified,
+      mfaAt: mfaVerified ? Date.now() : null,
     },
     JWT_ACCESS_SECRET,
     { expiresIn: ACCESS_EXPIRES }
@@ -2277,6 +2442,32 @@ function setAuthCookies(res, accessToken, refreshToken) {
 function clearAuthCookies(res) {
   res.clearCookie('access_token', cookieOpts());
   res.clearCookie('refresh_token', cookieOpts());
+}
+
+async function issueAuthenticatedSession(req, res, user, { mfaVerified = false, auditMeta = {} } = {}) {
+  const access = signAccessToken(user, { mfaVerified });
+  const refresh = signRefreshToken(user);
+  const now = Date.now();
+  const refreshDecoded = jwt.decode(refresh.token);
+  const refreshExpires = refreshDecoded?.exp ? refreshDecoded.exp * 1000 : now + 30 * 86400000;
+
+  await authRepository.insertRefreshTokenIfMissing({
+    id: refresh.jti,
+    userId: user.id,
+    tokenHash: sha256(refresh.token),
+    createdAt: now,
+    issuedAt: now,
+    expiresAt: refreshExpires,
+    ip: req.ip || null,
+    userAgent: req.headers['user-agent'] || null
+  });
+
+  setAuthCookies(res, access.token, refresh.token);
+  return {
+    accessToken: access.token,
+    refreshJti: refresh.jti,
+    meta: auditMeta
+  };
 }
 
 function cookieOpts({ path = '/', maxAge } = {}) {
@@ -5444,6 +5635,54 @@ app.use(registrationMutationLimiter);
 app.use(policyAcceptanceLimiter);
 app.use(onboardingMutationLimiter);
 app.use(adminSensitiveMutationLimiter);
+app.use('/api/admin', authRequired);
+
+function inferAdminMutationAction(req) {
+  const method = String(req.method || '').toUpperCase();
+  const pathOnly = String(req.path || req.originalUrl || '').split('?')[0];
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) return '';
+  if (pathOnly.includes('/workspaces/') && method === 'DELETE') return 'workspace.delete';
+  if (pathOnly.includes('/workspaces/') && pathOnly.includes('/suspend')) return 'workspace.suspend';
+  if (pathOnly.includes('/workspaces/') && pathOnly.includes('/archive')) return 'workspace.archive';
+  if (pathOnly.includes('/workspaces/') && pathOnly.includes('/transfer-owner')) return 'workspace.transfer_owner';
+  if (pathOnly.includes('/workspaces/') && pathOnly.includes('/force-logout')) return 'workspace.force_logout';
+  if (pathOnly.includes('/workspaces/') && pathOnly.includes('/reset-overrides')) return 'workspace.reset_overrides';
+  if (pathOnly.includes('/platform-control/global/reset')) return 'platform_control.global.reset';
+  if (pathOnly.includes('/platform-control/workspaces/') && method === 'DELETE') return 'platform_control.workspace.reset';
+  if (pathOnly.includes('/secrets/') && pathOnly.includes('/rotate')) return 'platform_secret.rotate';
+  if (pathOnly.includes('/secrets/') && method === 'DELETE') return 'platform_secret.delete';
+  if (pathOnly.includes('/legal-settings/publish') || pathOnly.includes('/legal-versions/')) return 'legal.publish';
+  if (pathOnly.includes('/notifications-control/campaigns/') && pathOnly.includes('/send-sms')) return 'notification.sms_send';
+  if (pathOnly.includes('/notifications-control/campaigns/') && pathOnly.includes('/send')) return 'notification.campaign_send';
+  if (pathOnly.includes('/invoices/') && pathOnly.includes('/mark-paid')) return 'invoice.mark_paid';
+  if (pathOnly.includes('/backups/run')) return 'backup.run';
+  if (pathOnly.includes('/backups/restore-dry-run')) return 'backup.restore_dry_run';
+  if (pathOnly.includes('/support/impersonation/start')) return 'support.impersonation_start';
+  if (pathOnly.includes('/support/impersonation/end')) return 'support.impersonation_end';
+  if (pathOnly.includes('/data-governance/export/')) return 'data.export_request';
+  if (pathOnly.includes('/data-governance/delete-request')) return 'data.delete_request';
+  if (pathOnly.includes('/users/') && method === 'PATCH') return 'user.role_update';
+  return `admin.${method.toLowerCase()}`;
+}
+
+app.use('/api/admin', (req, res, next) => {
+  const action = inferAdminMutationAction(req);
+  if (!action) return next();
+  res.on('finish', () => {
+    if (res.statusCode < 400) return;
+    audit(`${action}.failed`, req, {
+      target: req.params?.id || req.params?.workspaceId || req.params?.invoiceId || null,
+      workspaceId: req.params?.workspaceId || req.body?.workspaceId || null,
+      meta: {
+        result: 'failure',
+        statusCode: res.statusCode,
+        path: req.originalUrl || req.url || '',
+        reason: req.body?.reason || req.body?.note || ''
+      }
+    });
+  });
+  next();
+});
 
 app.use((req, res, next) => {
   if (!req.ctx) {
@@ -5505,11 +5744,17 @@ app.get('/admin', (req, res) => {
   res.sendFile(path.join(__dirname, 'admin', 'index.html'));
 });
 
-app.post('/admin/backup-db', requireAdmin, (req, res) => {
+app.post('/admin/backup-db', authRequired, csrfRequired, (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
   backupDatabase('manual')
-    .then((backupPath) => res.json({ ok: true, path: backupPath }))
+    .then((backupPath) => {
+      audit('backup.run', req, { user, target: backupPath, meta: { result: 'success', source: 'legacy_admin_backup' } });
+      res.json({ ok: true, path: backupPath });
+    })
     .catch((err) => {
       console.error('Manual DB backup failed', err);
+      audit('backup.run.failed', req, { user, meta: { result: 'failure', reason: err?.message || 'Backup failed' } });
       return res.status(500).json({ error: 'Backup failed' });
     });
 });
@@ -5906,7 +6151,8 @@ app.get('/reset-password', (req, res) => {
 });
 
 function getRequesterId(req) {
-  return (req.headers['x-user-id'] || '').trim();
+  const user = req.auth || getAuthedUser(req);
+  return String(user?.sub || user?.id || '').trim();
 }
 
 function getAuthedUser(req) {
@@ -5942,7 +6188,7 @@ function getRequesterWorkspaceId(req) {
     const user = getUserById(requesterId);
     if (user?.workspaceId) return user.workspaceId;
   }
-  return (req.query.workspaceId || 'default').trim() || 'default';
+  return workspaceIdFromRequest(req) || 'default';
 }
 
 function getCalendarRequesterContext(req, fallbackUserId = "") {
@@ -5954,7 +6200,7 @@ function getCalendarRequesterContext(req, fallbackUserId = "") {
   const workspaceId =
     user?.workspaceId ||
     getAuthWorkspaceId(req) ||
-    String(req.headers["x-workspace-id"] || req.query.workspaceId || "default").trim() ||
+    String(req.query.workspaceId || "default").trim() ||
     "default";
   const isAdmin = ["admin", "school_admin", "super_admin"].includes(role);
   return { requesterId, role, workspaceId, isAdmin };
@@ -5999,6 +6245,22 @@ function requireSuperAdmin(req, res, next) {
     res.status(403).json({ error: 'Super admin only' });
     return null;
   }
+  if (!user.mfaVerified) {
+    void logSecurityEvent({
+      workspaceId: user.workspaceId || user.workspace_id || null,
+      actorUserId: user.sub || user.id || null,
+      type: 'security.mfa_required_blocked_super_admin_access',
+      severity: 'high',
+      ip: req.ip || null,
+      userAgent: req.headers['user-agent'] || null,
+      payload: { path: req.originalUrl || req.path || '' }
+    });
+    res.status(403).json({
+      error: 'Super admin MFA is required',
+      code: 'mfa_required'
+    });
+    return null;
+  }
   if (typeof next === 'function') {
     return next();
   }
@@ -6011,7 +6273,7 @@ function legacyAuditLog({ workspaceId = null, actor = null, action = '', target 
     actor,
     action,
     target,
-    payloadJson: payload ? JSON.stringify(payload) : null,
+    payloadJson: JSON.stringify({ ...(payload && typeof payload === 'object' ? payload : {}), result: 'success' }),
     createdAt: nowMs()
   }).catch(() => {
     // do not block main flow on audit errors
@@ -8857,6 +9119,10 @@ tryAlter("ALTER TABLE users ADD COLUMN emergency_contact_name TEXT DEFAULT ''");
 tryAlter("ALTER TABLE users ADD COLUMN emergency_contact_phone TEXT DEFAULT ''");
 tryAlter("ALTER TABLE users ADD COLUMN emergency_contact_relation TEXT DEFAULT ''");
 tryAlter("ALTER TABLE users ADD COLUMN learning_goal TEXT DEFAULT ''");
+tryAlter("ALTER TABLE users ADD COLUMN mfa_enabled INTEGER DEFAULT 0");
+tryAlter("ALTER TABLE users ADD COLUMN mfa_secret TEXT DEFAULT ''");
+tryAlter("ALTER TABLE users ADD COLUMN mfa_setup_at TEXT");
+tryAlter("ALTER TABLE users ADD COLUMN mfa_last_verified_at TEXT");
 tryAlter(`
   ALTER TABLE workspace_profile
   ADD COLUMN registration_details TEXT DEFAULT ''
@@ -11634,7 +11900,7 @@ function inferPurposeFromChannel(name = '', topic = '') {
 }
 
 function getRequesterRole(req) {
-  return String(req.headers['x-user-role'] || '').trim().toLowerCase();
+  return normalizeRoleName((req.auth || getAuthedUser(req) || {}).role || '');
 }
 
 function getEffectiveRequestUser(req) {
@@ -11649,24 +11915,12 @@ function getEffectiveRequestUser(req) {
     };
   }
 
-  const requesterId = String(getRequesterId(req) || '').trim();
-  if (!requesterId) {
-    return {
-      userId: '',
-      workspaceId: '',
-      role: normalizeRoleName(getRequesterRole(req)),
-      superAdmin: normalizeRoleName(getRequesterRole(req)) === 'super_admin',
-      via: 'headers'
-    };
-  }
-
-  const user = getUserById(requesterId);
   return {
-    userId: requesterId,
-    workspaceId: String(user?.workspaceId || req.headers['x-workspace-id'] || req.query.workspaceId || '').trim(),
-    role: normalizeRoleName(user?.role || getRequesterRole(req)),
-    superAdmin: normalizeRoleName(user?.role || getRequesterRole(req)) === 'super_admin',
-    via: 'headers'
+    userId: '',
+    workspaceId: '',
+    role: '',
+    superAdmin: false,
+    via: 'none'
   };
 }
 
@@ -12345,7 +12599,7 @@ async function convertIfWebm(filePath, originalName, mimeType) {
   }
 }
 
-app.post('/api/uploads', (req, res) => {
+app.post('/api/uploads', authRequired, (req, res) => {
   ensureDir(UPLOADS_DIR);
   upload.array('files', 50)(req, res, async (uploadErr) => {
     if (uploadErr) {
@@ -12371,6 +12625,14 @@ app.post('/api/uploads', (req, res) => {
       const storageRequester = getEffectiveRequestUser(req);
       const requesterWorkspaceId = String(storageRequester?.workspaceId || '').trim() || 'default';
       const requesterUserId = String(storageRequester?.userId || '').trim() || null;
+      if (!requesterUserId || storageRequester.superAdmin) {
+        return res.status(storageRequester.superAdmin ? 403 : 401).json({
+          error: storageRequester.superAdmin ? 'Super admins cannot upload private workspace files' : 'Not authenticated'
+        });
+      }
+      if (!requesterWorkspaceId || requesterWorkspaceId === 'default') {
+        return res.status(400).json({ error: 'Authenticated workspace is required for uploads' });
+      }
       const requestedChannelId = String(req.body?.channelId || '').trim() || null;
       let stagingChannelId = null;
       if (requestedChannelId) {
@@ -12473,7 +12735,7 @@ app.post('/api/uploads', (req, res) => {
 });
 
 /* ---------- File events (analytics) ---------- */
-app.post('/api/file-events', async (req, res) => {
+app.post('/api/file-events', authRequired, async (req, res) => {
   const {
     fileId,
     eventType,
@@ -12546,7 +12808,7 @@ app.post('/api/file-events', async (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/analytics/files', async (req, res) => {
+app.get('/api/analytics/files', authRequired, async (req, res) => {
   const requester = await requireAuthenticatedTenantUser(req, res);
   if (!requester) return;
 
@@ -12620,7 +12882,7 @@ app.get('/api/analytics/files', async (req, res) => {
   }
 });
 
-app.get('/api/file-stats', async (req, res) => {
+app.get('/api/file-stats', authRequired, async (req, res) => {
   const requester = await requireAuthenticatedTenantUser(req, res);
   if (!requester) return;
   if (!await enforceRequestedWorkspaceScope(req, res, requester, req.query.workspaceId, 'workspace', String(req.query.workspaceId || 'file-stats'))) {
@@ -12671,7 +12933,7 @@ app.get('/api/file-stats', async (req, res) => {
   res.json({ stats });
 });
 
-app.post('/api/file-stats/increment', async (req, res) => {
+app.post('/api/file-stats/increment', authRequired, async (req, res) => {
   const { fileUrl, type, fileName, size } = req.body || {};
   if (!fileUrl || !['view', 'download'].includes(type)) {
     return res.status(400).json({ error: 'fileUrl and type are required' });
@@ -12733,7 +12995,7 @@ app.post('/api/file-stats/increment', async (req, res) => {
 });
 
 /* ---------- Files registry ---------- */
-app.get('/api/files/registry', (req, res) => {
+app.get('/api/files/registry', authRequired, (req, res) => {
   const requester = getEffectiveRequestUser(req);
   if (!requester.userId) {
     return res.status(401).json({ error: 'Not authenticated' });
@@ -12810,7 +13072,7 @@ app.get('/api/files/registry', (req, res) => {
   res.json({ workspaceId: ws, files: rows });
 });
 
-app.post('/api/files/:fileId/pin', (req, res) => {
+app.post('/api/files/:fileId/pin', authRequired, (req, res) => {
   if (!requireTeacher(req, res)) return;
   const requester = getEffectiveRequestUser(req);
   const fileId = String(req.params.fileId || '');
@@ -12842,7 +13104,7 @@ app.post('/api/files/:fileId/pin', (req, res) => {
   res.json({ ok: true, pinned: !!pinned });
 });
 
-app.post('/api/files/:fileId/delete', (req, res) => {
+app.post('/api/files/:fileId/delete', authRequired, (req, res) => {
   if (!requireTeacher(req, res)) return;
   const requester = getEffectiveRequestUser(req);
   const fileId = String(req.params.fileId || '');
@@ -12861,7 +13123,7 @@ app.post('/api/files/:fileId/delete', (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/files/:fileId/replace', async (req, res) => {
+app.post('/api/files/:fileId/replace', authRequired, async (req, res) => {
   if (!requireTeacher(req, res)) return;
 
   const fileId = String(req.params.fileId || '');
@@ -12948,7 +13210,10 @@ app.post('/api/files/:fileId/replace', async (req, res) => {
 /* ---------- WORKSPACES API ---------- */
 
 // list all workspaces
-app.get('/api/workspaces', (req, res) => {
+app.get('/api/workspaces', authRequired, (req, res) => {
+  const authUser = req.auth || {};
+  const authWorkspaceId = String(authUser.workspaceId || authUser.workspace_id || '').trim();
+  const isSuper = isSuperAdminRole(authUser);
   const rows = db
     .prepare(
       `
@@ -12963,10 +13228,11 @@ app.get('/api/workspaces', (req, res) => {
           WHERE wm.workspace_id = w.id
         ) AS memberCount
       FROM workspaces w
+      ${isSuper ? '' : 'WHERE w.id = ?'}
       ORDER BY w.created_at
     `
     )
-    .all();
+    .all(...(isSuper ? [] : [authWorkspaceId]));
 
   const shaped = rows.map((w) => ({
     ...w,
@@ -12977,11 +13243,9 @@ app.get('/api/workspaces', (req, res) => {
 });
 
 // create workspace and seed default channel/member
-app.post('/api/workspaces', (req, res) => {
-  // super admin only
-  if (req.get('x-super-admin') !== '1') {
-    return res.status(403).json({ error: 'Super admin only' });
-  }
+app.post('/api/workspaces', authRequired, (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
 
   const { name } = req.body || {};
   if (!name || !name.trim()) {
@@ -13075,10 +13339,9 @@ app.post('/api/workspaces', (req, res) => {
   });
 });
 
-app.delete('/api/workspaces/:workspaceId', async (req, res) => {
-  if (req.get('x-super-admin') !== '1') {
-    return res.status(403).json({ error: 'Super admin only' });
-  }
+app.delete('/api/workspaces/:workspaceId', authRequired, async (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
 
   const { workspaceId } = req.params;
   const workspace = await workspaceRepository.getWorkspaceBasic(workspaceId);
@@ -17563,14 +17826,27 @@ app.post(
   }
 );
 
-app.patch('/api/users/:userId/native-language', (req, res) => {
+app.patch('/api/users/:userId/native-language', authRequired, (req, res) => {
   const { userId } = req.params;
   const requesterId = getRequesterId(req);
   if (!requesterId) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  if (requesterId !== userId && req.get('x-admin') !== '1') {
+  const requester = getUserById(requesterId);
+  const target = getUserById(userId);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  const requesterRole = normalizeRoleName(requester?.role || req.auth?.role || '');
+  const canManage = ['admin', 'school_admin', 'super_admin'].includes(requesterRole);
+  if (requesterId !== userId && !canManage) {
     return res.status(403).json({ error: 'Forbidden' });
+  }
+  if (!isSuperAdminRole(req.auth) && String(requester?.workspaceId || '') !== String(target.workspaceId || '')) {
+    return denyTenantAccess(req, res, {
+      workspaceId: target.workspaceId,
+      targetType: 'user',
+      targetId: userId,
+      reason: 'native_language_cross_workspace'
+    });
   }
   const raw = (req.body?.nativeLanguage || req.body?.language || '').trim();
   const normalized = normalizeLanguageCode(raw);
@@ -17591,19 +17867,13 @@ app.patch('/api/users/:userId/native-language', (req, res) => {
        WHERE id = ?`
     )
     .get(userId);
-  if (!updated) {
-    return res.status(404).json({ error: 'User not found' });
-  }
   res.json({
     nativeLanguage: updated.nativeLanguage,
     nativeLanguageConfirmed: !!updated.nativeLanguageConfirmed
   });
 });
 
-app.patch('/api/users/:userId', (req, res) => {
-  if (req.get('x-admin') !== '1' && req.get('x-super-admin') !== '1') {
-    return res.status(403).json({ error: 'Only admins can update users' });
-  }
+app.patch('/api/users/:userId', authRequired, (req, res) => {
   const { userId } = req.params;
   const {
     firstName,
@@ -17619,6 +17889,20 @@ app.patch('/api/users/:userId', (req, res) => {
     .get(userId);
   if (!user) {
     return res.status(404).json({ error: 'User not found' });
+  }
+  const requesterId = getRequesterId(req);
+  const requester = getUserById(requesterId);
+  const requesterRole = normalizeRoleName(requester?.role || req.auth?.role || '');
+  if (!['admin', 'school_admin', 'super_admin'].includes(requesterRole)) {
+    return res.status(403).json({ error: 'Only admins can update users' });
+  }
+  if (!isSuperAdminRole(req.auth) && String(requester?.workspaceId || '') !== String(user.workspaceId || '')) {
+    return denyTenantAccess(req, res, {
+      workspaceId: user.workspaceId,
+      targetType: 'user',
+      targetId: userId,
+      reason: 'user_update_cross_workspace'
+    });
   }
 
   const fn = (firstName || user.first_name || '').trim();
@@ -17666,11 +17950,24 @@ app.patch('/api/users/:userId', (req, res) => {
   });
 });
 
-app.delete('/api/users/:userId', (req, res) => {
-  if (req.get('x-admin') !== '1' && req.get('x-super-admin') !== '1') {
+app.delete('/api/users/:userId', authRequired, (req, res) => {
+  const { userId } = req.params;
+  const requesterId = getRequesterId(req);
+  const requester = getUserById(requesterId);
+  const target = getUserById(userId);
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  const requesterRole = normalizeRoleName(requester?.role || req.auth?.role || '');
+  if (!['admin', 'school_admin', 'super_admin'].includes(requesterRole)) {
     return res.status(403).json({ error: 'Only admins can delete users' });
   }
-  const { userId } = req.params;
+  if (!isSuperAdminRole(req.auth) && String(requester?.workspaceId || '') !== String(target.workspaceId || '')) {
+    return denyTenantAccess(req, res, {
+      workspaceId: target.workspaceId,
+      targetType: 'user',
+      targetId: userId,
+      reason: 'user_delete_cross_workspace'
+    });
+  }
   const workspaceId = deleteUserCascade(userId);
   if (!workspaceId) {
     return res.status(404).json({ error: 'User not found' });
@@ -17749,34 +18046,16 @@ async function handleAuthLogin(req, res) {
           email: bypassEntry.email,
           name: bypassEntry.name,
         };
-        const access = signAccessToken(bypassUser);
-        const refresh = signRefreshToken(bypassUser);
-        const now = Date.now();
-        const refreshDecoded = jwt.decode(refresh.token);
-        const refreshExpires = refreshDecoded?.exp ? refreshDecoded.exp * 1000 : now + 30 * 86400000;
-
-        // Auth/session migration boundary: refresh token persistence now flows
-        // through the auth repository while SQLite remains the default runtime.
-        void authRepository.insertRefreshToken({
-          id: refresh.jti,
-          userId: bypassUser.id,
-          tokenHash: sha256(refresh.token),
-          createdAt: now,
-          issuedAt: now,
-          expiresAt: refreshExpires,
-          ip: req.ip || null,
-          userAgent: req.headers['user-agent'] || null
-        });
-
-        setAuthCookies(res, access.token, refresh.token);
+        const issued = await issueAuthenticatedSession(req, res, bypassUser, { mfaVerified: true, auditMeta: { bypass: true } });
         audit('auth.login_success', req, {
           user: bypassUser,
           target: bypassUser.id,
           workspaceId: null,
-          meta: { identifier, bypass: true }
+          meta: { identifier, bypass: true, mfaBypass: true }
         });
         return res.json({
           ok: true,
+          accessToken: issued.accessToken,
           user: {
             userId: bypassUser.id,
             email: bypassUser.email,
@@ -17863,30 +18142,77 @@ async function handleAuthLogin(req, res) {
       }
     }
 
+    const smokeMfaBypass =
+      process.env.STUDIESTALK_SMOKE_MFA_BYPASS === '1' &&
+      String(process.env.NODE_ENV || 'development').toLowerCase() !== 'production';
+    if (userRole === 'super_admin' && smokeMfaBypass) {
+      const displayName =
+        userQuery.name || `${userQuery.first_name || ''} ${userQuery.last_name || ''}`.trim();
+      const issued = await issueAuthenticatedSession(req, res, userQuery, { mfaVerified: true, auditMeta: { smokeMfaBypass: true } });
+      audit('auth.mfa_smoke_bypass', req, {
+        user: userQuery,
+        target: userQuery.id,
+        workspaceId: userQuery.workspaceId || null,
+        meta: { identifier, smokeMfaBypass: true }
+      });
+      return res.json({
+        accessToken: issued.accessToken,
+        user: {
+          userId: userQuery.id,
+          email: userQuery.email || identifier,
+          role: userRole,
+          workspaceId: userQuery.workspaceId,
+          name: displayName,
+          avatarUrl: userQuery.avatarUrl || null,
+          nativeLanguage: userQuery.nativeLanguage || 'en',
+          nativeLanguageConfirmed: !!userQuery.nativeLanguageConfirmed,
+          mustChangePassword: !!userQuery.must_change_password,
+          superAdmin: true,
+          mfaVerified: true
+        }
+      });
+    }
+
+    if (userRole === 'super_admin') {
+      const mfaRecord = getUserMfaRecord(userQuery.id);
+      const mfaSetupRequired = !mfaRecord?.mfaEnabled || !mfaRecord?.mfaSecret;
+      const mfaToken = signMfaToken(userQuery, mfaSetupRequired ? 'mfa_setup' : 'mfa_verify');
+      logSecurityEvent({
+        workspaceId: userQuery.workspaceId || null,
+        actorUserId: userQuery.id,
+        type: mfaSetupRequired ? 'security.mfa_setup_required' : 'security.mfa_challenge_required',
+        severity: mfaSetupRequired ? 'high' : 'info',
+        ip: req.ip,
+        userAgent: req.headers['user-agent'] || null,
+        payload: { identifier }
+      });
+      audit('auth.mfa_required', req, {
+        user: userQuery,
+        target: userQuery.id,
+        workspaceId: userQuery.workspaceId || null,
+        meta: { identifier, setupRequired: mfaSetupRequired }
+      });
+      return res.status(202).json({
+        ok: false,
+        mfaRequired: true,
+        mfaSetupRequired,
+        mfaToken,
+        user: {
+          userId: userQuery.id,
+          email: userQuery.email || identifier,
+          role: userRole,
+          workspaceId: userQuery.workspaceId,
+          name: userQuery.name || `${userQuery.first_name || ''} ${userQuery.last_name || ''}`.trim(),
+          superAdmin: true
+        }
+      });
+    }
+
     const displayName =
       userQuery.name || `${userQuery.first_name || ''} ${userQuery.last_name || ''}`.trim();
 
-    const access = signAccessToken(userQuery);
-    const refresh = signRefreshToken(userQuery);
-
-    const now = Date.now();
-    const refreshDecoded = jwt.decode(refresh.token);
-    const refreshExpires = refreshDecoded?.exp ? refreshDecoded.exp * 1000 : now + 30 * 86400000;
-
-    void authRepository.insertRefreshTokenIfMissing({
-      id: refresh.jti,
-      userId: userQuery.id,
-      tokenHash: sha256(refresh.token),
-      createdAt: now,
-      issuedAt: now,
-      expiresAt: refreshExpires,
-      ip: req.ip || null,
-      userAgent: req.headers['user-agent'] || null
-    });
-
-    setAuthCookies(res, access.token, refresh.token);
-
-    const accessToken = access.token;
+    const issued = await issueAuthenticatedSession(req, res, userQuery, { mfaVerified: false });
+    const accessToken = issued.accessToken;
 
     logLoginAttempt({
       identifier,
@@ -17938,6 +18264,132 @@ async function handleAuthLogin(req, res) {
 // Login (admin or user) - supports email OR username as "identifier"
 app.post('/api/login', authLimiter, handleAuthLogin);
 app.post('/api/auth/login', authLimiter, handleAuthLogin);
+
+app.post('/api/auth/mfa/setup/start', authLimiter, async (req, res) => {
+  const token = String(req.body?.mfaToken || '').trim();
+  const payload = verifyMfaToken(token, ['mfa_setup']);
+  if (!payload) return res.status(401).json({ error: 'MFA setup token expired', code: 'mfa_token_invalid' });
+  const user = await userRepository.getUserAuthProfile(payload.sub);
+  if (!user || String(user.role || '').toLowerCase() !== 'super_admin') {
+    return res.status(403).json({ error: 'Super admin MFA setup only' });
+  }
+  const record = ensureUserMfaSecret(user.id);
+  if (!record?.secret) return res.status(500).json({ error: 'Could not initialize MFA secret' });
+  const issuer = encodeURIComponent('StudiesTalk Admin');
+  const label = encodeURIComponent(`${user.email || user.id}`);
+  const otpauthUrl = `otpauth://totp/${issuer}:${label}?secret=${encodeURIComponent(record.secret)}&issuer=${issuer}&algorithm=SHA1&digits=6&period=30`;
+  audit('auth.mfa_setup_started', req, {
+    user,
+    target: user.id,
+    workspaceId: user.workspaceId || null,
+    meta: { setupRequired: true }
+  });
+  void logSecurityEvent({
+    workspaceId: user.workspaceId || null,
+    actorUserId: user.id,
+    type: 'security.mfa_setup_started',
+    severity: 'info',
+    ip: req.ip || null,
+    userAgent: req.headers['user-agent'] || null,
+    payload: {}
+  });
+  return res.json({
+    ok: true,
+    secret: record.secret,
+    otpauthUrl,
+    message: 'Add this TOTP secret to an authenticator app, then verify the 6-digit code.'
+  });
+});
+
+app.post('/api/auth/mfa/verify', authLimiter, async (req, res) => {
+  const token = String(req.body?.mfaToken || '').trim();
+  const code = String(req.body?.code || '').trim();
+  const payload = verifyMfaToken(token, ['mfa_setup', 'mfa_verify']);
+  if (!payload) return res.status(401).json({ error: 'MFA token expired', code: 'mfa_token_invalid' });
+  const user = await userRepository.getUserAuthProfile(payload.sub);
+  if (!user || String(user.role || '').toLowerCase() !== 'super_admin') {
+    return res.status(403).json({ error: 'Super admin MFA only' });
+  }
+  const record = payload.purpose === 'mfa_setup' ? ensureUserMfaSecret(user.id) : getUserMfaRecord(user.id);
+  let secret = '';
+  try {
+    secret = decryptMfaSecret(record?.mfaSecret || record?.mfa_secret || '');
+  } catch (_err) {
+    secret = '';
+  }
+  if (!secret && record?.secret) secret = record.secret;
+  const verified = !!secret && verifyTotpCode(secret, code);
+  if (!verified) {
+    audit('auth.mfa_failure', req, {
+      user,
+      target: user.id,
+      workspaceId: user.workspaceId || null,
+      meta: { purpose: payload.purpose }
+    });
+    void logSecurityEvent({
+      workspaceId: user.workspaceId || null,
+      actorUserId: user.id,
+      type: 'security.mfa_failure',
+      severity: 'high',
+      ip: req.ip || null,
+      userAgent: req.headers['user-agent'] || null,
+      payload: { purpose: payload.purpose }
+    });
+    return res.status(401).json({ error: 'Invalid MFA code', code: 'mfa_failed' });
+  }
+
+  if (payload.purpose === 'mfa_setup') {
+    setUserMfaEnabled(user.id, true);
+    audit('auth.mfa_setup_completed', req, {
+      user,
+      target: user.id,
+      workspaceId: user.workspaceId || null,
+      meta: {}
+    });
+    void logSecurityEvent({
+      workspaceId: user.workspaceId || null,
+      actorUserId: user.id,
+      type: 'security.mfa_setup_completed',
+      severity: 'info',
+      ip: req.ip || null,
+      userAgent: req.headers['user-agent'] || null,
+      payload: {}
+    });
+  } else {
+    db.prepare('UPDATE users SET mfa_last_verified_at = ? WHERE id = ?').run(new Date().toISOString(), user.id);
+  }
+
+  const issued = await issueAuthenticatedSession(req, res, user, { mfaVerified: true });
+  audit('auth.mfa_success', req, {
+    user,
+    target: user.id,
+    workspaceId: user.workspaceId || null,
+    meta: { purpose: payload.purpose }
+  });
+  void logSecurityEvent({
+    workspaceId: user.workspaceId || null,
+    actorUserId: user.id,
+    type: 'security.mfa_success',
+    severity: 'info',
+    ip: req.ip || null,
+    userAgent: req.headers['user-agent'] || null,
+    payload: { purpose: payload.purpose }
+  });
+
+  return res.json({
+    ok: true,
+    accessToken: issued.accessToken,
+    user: {
+      userId: user.id,
+      email: user.email,
+      role: user.role,
+      workspaceId: user.workspaceId,
+      name: user.name,
+      superAdmin: true,
+      mfaVerified: true
+    }
+  });
+});
 
 app.get('/api/auth/me', requireAccessToken, async (req, res) => {
   const userId = req.auth.sub;
@@ -18157,7 +18609,7 @@ app.post('/api/auth/refresh', async (req, res) => {
     id: user.id,
     role: user.role,
     workspaceId: user.workspaceId,
-  });
+  }, { mfaVerified: String(user.role || '').toLowerCase() === 'super_admin' });
   const ip = req.ip || null;
   const userAgent = req.headers['user-agent'] || null;
   const refresh = signRefreshToken(user);
@@ -18244,8 +18696,8 @@ app.post('/api/auth/logout', requireAccessToken, async (req, res) => {
 function getAuthContext(req) {
   const u = req.user || req.auth || req.sessionUser || getAuthedUser(req) || {};
   return {
-    userId: u.id || u.userId || req.headers['x-user-id'],
-    workspaceId: u.workspace_id || u.workspaceId || req.headers['x-workspace-id'],
+    userId: u.id || u.userId || u.sub || '',
+    workspaceId: u.workspace_id || u.workspaceId || '',
     role: u.role || u.user_role || u.userRole || ''
   };
 }
@@ -18710,7 +19162,7 @@ app.post('/api/class-memberships', authRequired, express.json(), (req, res) => {
 app.get('/api/user-class-memberships', authRequired, (req, res) => {
   const authUser = req.auth || {};
   const workspaceId = String(req.query.workspaceId || authUser.workspaceId || authUser.workspace_id || '').trim();
-  const userId = String(req.query.userId || req.headers['x-user-id'] || authUser.id || authUser.sub || '').trim();
+  const userId = String(req.query.userId || authUser.id || authUser.sub || '').trim();
   if (!workspaceId || !userId) {
     return res.json([]);
   }
@@ -18922,7 +19374,7 @@ app.get('/api/channels/:channelId/members', authRequired, async (req, res) => {
 app.post('/api/channels/:channelId/members', authRequired, express.json(), async (req, res) => {
   const channelId = resolveRealChannelId(req.params.channelId);
   const userId = String(req.body?.userId || '').trim();
-  const requesterId = String(req.headers['x-user-id'] || req.auth?.id || req.auth?.sub || '').trim();
+  const requesterId = String(req.auth?.id || req.auth?.sub || '').trim();
   if (!requesterId) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
@@ -18975,7 +19427,7 @@ app.post('/api/channels/:channelId/members', authRequired, express.json(), async
 app.delete('/api/channels/:channelId/members', authRequired, express.json(), async (req, res) => {
   const channelId = resolveRealChannelId(req.params.channelId);
   const userId = String(req.body?.userId || '').trim();
-  const requesterId = String(req.headers['x-user-id'] || req.auth?.id || req.auth?.sub || '').trim();
+  const requesterId = String(req.auth?.id || req.auth?.sub || '').trim();
   if (!requesterId) {
     return res.status(401).json({ error: 'Unauthorized' });
   }

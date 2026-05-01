@@ -32,6 +32,36 @@ function hashPassword(password) {
   return `${salt}:${hash}`;
 }
 
+function base32Decode(value = '') {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const cleaned = String(value || '').replace(/=+$/g, '').replace(/\s+/g, '').toUpperCase();
+  let bits = '';
+  for (const char of cleaned) {
+    const idx = alphabet.indexOf(char);
+    if (idx < 0) continue;
+    bits += idx.toString(2).padStart(5, '0');
+  }
+  const bytes = [];
+  for (let i = 0; i + 8 <= bits.length; i += 8) {
+    bytes.push(parseInt(bits.slice(i, i + 8), 2));
+  }
+  return Buffer.from(bytes);
+}
+
+function generateTotpCode(secret, step = Math.floor(Date.now() / 30000)) {
+  const key = base32Decode(secret);
+  const counter = Buffer.alloc(8);
+  counter.writeUInt32BE(Math.floor(step / 0x100000000), 0);
+  counter.writeUInt32BE(step >>> 0, 4);
+  const hmac = crypto.createHmac('sha1', key).update(counter).digest();
+  const offset = hmac[hmac.length - 1] & 0xf;
+  const binary = ((hmac[offset] & 0x7f) << 24) |
+    ((hmac[offset + 1] & 0xff) << 16) |
+    ((hmac[offset + 2] & 0xff) << 8) |
+    (hmac[offset + 3] & 0xff);
+  return String((binary >>> 0) % 1000000).padStart(6, '0');
+}
+
 function safeAlterSqlite(db, sql) {
   try {
     db.exec(sql);
@@ -286,8 +316,24 @@ function countSecurityEvent(type) {
 async function login(email, password = 'AdminPass1!') {
   const jar = {};
   const payload = await api(jar, 'POST', '/api/auth/login', {
-    json: { email, password }
+    json: { email, password },
+    expectedStatuses: [200, 202]
   });
+  if (payload?.mfaRequired) {
+    assert.strictEqual(payload.mfaSetupRequired, true, 'first super admin smoke login should require MFA setup');
+    await api(jar, 'GET', '/api/admin/me', { expectedStatuses: [401, 403] }).then((blocked) => {
+      assert.ok(['mfa_required', undefined].includes(blocked.code));
+    });
+    const setup = await api(jar, 'POST', '/api/auth/mfa/setup/start', {
+      json: { mfaToken: payload.mfaToken }
+    });
+    assert.ok(setup.secret, 'expected MFA setup secret');
+    const verified = await api(jar, 'POST', '/api/auth/mfa/verify', {
+      json: { mfaToken: payload.mfaToken, code: generateTotpCode(setup.secret) }
+    });
+    assert.ok(verified?.accessToken, `Expected MFA access token for ${email}`);
+    return { jar, payload: verified };
+  }
   assert.ok(payload?.accessToken, `Expected access token for ${email}`);
   return { jar, payload };
 }

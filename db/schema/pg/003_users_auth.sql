@@ -34,6 +34,10 @@ CREATE TABLE IF NOT EXISTS users (
   temp_login_started_at BIGINT,
   phone TEXT NOT NULL DEFAULT '',
   phone_verified BOOLEAN NOT NULL DEFAULT false,
+  mfa_enabled BOOLEAN NOT NULL DEFAULT false,
+  mfa_secret TEXT NOT NULL DEFAULT '',
+  mfa_setup_at TEXT,
+  mfa_last_verified_at TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP::text,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP::text,
   UNIQUE (workspace_id, username)
@@ -156,6 +160,10 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS temp_login_started_at BIGINT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT NOT NULL DEFAULT '';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_verified BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enabled BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_secret TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_setup_at TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_last_verified_at TEXT;
 
 ALTER TABLE refresh_tokens ADD COLUMN IF NOT EXISTS issued_at BIGINT;
 ALTER TABLE refresh_tokens ADD COLUMN IF NOT EXISTS replaced_by TEXT;

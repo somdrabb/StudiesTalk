@@ -36,11 +36,19 @@ function printHeader(title) {
   console.log(`\n=== ${title} ===`);
 }
 
+function smokeEnvFor(scriptName) {
+  const env = { ...process.env };
+  if (!['test:security:smoke', 'test:tenant-isolation:smoke'].includes(scriptName)) {
+    env.STUDIESTALK_SMOKE_MFA_BYPASS = '1';
+  }
+  return env;
+}
+
 function runNpmScript(scriptName) {
   return new Promise((resolve) => {
     const child = spawn('npm', ['run', scriptName], {
       cwd: process.cwd(),
-      env: process.env,
+      env: smokeEnvFor(scriptName),
       stdio: 'inherit',
       shell: process.platform === 'win32'
     });
