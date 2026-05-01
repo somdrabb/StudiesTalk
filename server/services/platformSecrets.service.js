@@ -74,6 +74,34 @@ const PROVIDER_DEFINITIONS = {
       { keyName: 'ANALYTICS_API_KEY', label: 'Analytics API key', secret: true },
       { keyName: 'ANALYTICS_WRITE_KEY', label: 'Analytics write key', secret: true }
     ]
+  },
+  stripe: {
+    label: 'Stripe',
+    fields: [
+      { keyName: 'STRIPE_PUBLIC_KEY', label: 'Public key', secret: false },
+      { keyName: 'STRIPE_SECRET_KEY', label: 'Secret key', secret: true },
+      { keyName: 'STRIPE_WEBHOOK_SECRET', label: 'Webhook secret', secret: true },
+      { keyName: 'STRIPE_PRICE_STARTER', label: 'Starter price ID', secret: false },
+      { keyName: 'STRIPE_PRICE_PRO', label: 'Pro price ID', secret: false },
+      { keyName: 'STRIPE_PRICE_ENTERPRISE', label: 'Enterprise price ID', secret: false }
+    ]
+  },
+  paypal: {
+    label: 'PayPal',
+    fields: [
+      { keyName: 'PAYPAL_CLIENT_ID', label: 'Client ID', secret: false },
+      { keyName: 'PAYPAL_CLIENT_SECRET', label: 'Client secret', secret: true },
+      { keyName: 'PAYPAL_WEBHOOK_ID', label: 'Webhook ID', secret: true },
+      { keyName: 'PAYPAL_MODE', label: 'Mode', secret: false }
+    ]
+  },
+  mollie: {
+    label: 'Mollie',
+    fields: [
+      { keyName: 'MOLLIE_API_KEY', label: 'API key', secret: true },
+      { keyName: 'MOLLIE_WEBHOOK_SECRET', label: 'Webhook secret', secret: true },
+      { keyName: 'MOLLIE_PROFILE_ID', label: 'Profile ID', secret: false }
+    ]
   }
 };
 

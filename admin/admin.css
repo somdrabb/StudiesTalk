@@ -868,6 +868,49 @@ textarea.secret-field-input{
   .secret-card{padding:16px;border-radius:18px}
   .secret-card-head{flex-direction:column;align-items:flex-start}
 }
+
+.payment-gateways-panel{display:grid;gap:16px}
+.payment-gateways-panel .panel-head{align-items:center;padding:14px 16px;border:1px solid rgba(148,163,184,.24);border-radius:18px;background:linear-gradient(180deg,#fff 0%,#fbfdff 100%);box-shadow:0 10px 28px rgba(15,23,42,.05)}
+.payment-gateways-panel .panel-head h2{margin:0;font-size:20px;font-weight:950;color:#0f172a}
+.payment-gateways-panel .panel-head .muted{margin:4px 0 0;font-size:13px;line-height:1.4;color:#64748b}
+.gateway-summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.gateway-card{display:grid;gap:8px;min-height:106px;padding:15px 16px;border:1px solid rgba(226,232,240,.96);border-radius:18px;background:linear-gradient(180deg,rgba(255,255,255,.99),rgba(248,250,252,.98));box-shadow:0 12px 28px rgba(15,23,42,.045)}
+.gateway-card span{font-size:11px;font-weight:850;letter-spacing:.06em;text-transform:uppercase;color:#64748b}
+.gateway-card strong{font-size:20px;font-weight:950;color:#0f172a;line-height:1.05;word-break:break-word}
+.gateway-card small{font-size:12px;font-weight:650;color:#64748b;line-height:1.35}
+.gateway-card.is-ok{border-color:rgba(34,197,94,.2);background:linear-gradient(180deg,rgba(255,255,255,.99),rgba(240,253,244,.92))}
+.gateway-card.is-warn{border-color:rgba(245,158,11,.24);background:linear-gradient(180deg,rgba(255,255,255,.99),rgba(255,251,235,.94))}
+.gateway-card.is-failed{border-color:rgba(239,68,68,.22);background:linear-gradient(180deg,rgba(255,255,255,.99),rgba(254,242,242,.94))}
+.gateway-provider-tabs{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px;border:1px solid rgba(226,232,240,.9);border-radius:18px;background:rgba(255,255,255,.86)}
+.gateway-tab{min-height:38px;padding:0 14px;border:1px solid rgba(203,213,225,.9);border-radius:999px;background:#fff;color:#334155;font-size:13px;font-weight:850;cursor:pointer}
+.gateway-tab:hover{border-color:rgba(147,197,253,.95);background:#f8fbff}
+.gateway-tab.is-active{border-color:rgba(59,130,246,.28);background:linear-gradient(180deg,rgba(239,246,255,.98),rgba(248,250,252,.98));color:#1d4ed8;box-shadow:0 8px 20px rgba(37,99,235,.08)}
+.gateway-provider-panel{display:grid;gap:14px}
+.gateway-provider-panel-card{display:grid;gap:15px;padding:18px;border:1px solid rgba(203,213,225,.92);border-radius:22px;background:radial-gradient(circle at top right,rgba(239,246,255,.92),rgba(239,246,255,0) 35%),linear-gradient(180deg,rgba(255,255,255,.995),rgba(248,250,252,.985));box-shadow:0 14px 34px rgba(15,23,42,.05);overflow:hidden}
+.gateway-controls-grid{display:grid;grid-template-columns:180px minmax(180px,260px) auto;gap:12px;align-items:end;padding:14px;border:1px solid rgba(226,232,240,.96);border-radius:16px;background:rgba(255,255,255,.8)}
+.gateway-controls-grid label{display:grid;gap:7px;font-size:12px;font-weight:850;color:#334155}
+.gateway-controls-grid > div{display:grid;gap:7px}
+.gateway-controls-grid span{font-size:12px;font-weight:850;color:#334155}
+.gateway-secret-list{display:grid;gap:10px}
+.gateway-secret-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(230px,1.05fr) auto;gap:14px;align-items:end;padding:14px;border:1px solid rgba(226,232,240,.96);border-radius:16px;background:rgba(255,255,255,.78)}
+.gateway-secret-row:hover{border-color:rgba(191,219,254,.95);background:rgba(248,250,252,.98)}
+.gateway-secret-row label{display:grid;gap:7px;min-width:0;font-weight:750;color:#0f172a}
+.gateway-secret-row label > span:first-child{font-size:13px;line-height:1.25}
+.gateway-secret-row small{font-size:11px;color:#64748b;font-weight:800;letter-spacing:.02em}
+.gateway-status-badge{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;padding:0 12px;border-radius:999px;font-size:11px;font-weight:850;border:1px solid rgba(203,213,225,.9);background:rgba(255,255,255,.82);color:#334155;white-space:nowrap}
+.gateway-status-badge.is-ok{background:linear-gradient(180deg,rgba(240,253,244,.98),rgba(236,252,203,.9));border-color:rgba(34,197,94,.22);color:#166534}
+.gateway-status-badge.is-warn{background:linear-gradient(180deg,rgba(255,251,235,.98),rgba(254,243,199,.92));border-color:rgba(245,158,11,.24);color:#92400e}
+.gateway-status-badge.is-failed{background:linear-gradient(180deg,rgba(254,242,242,.98),rgba(254,226,226,.92));border-color:rgba(239,68,68,.22);color:#991b1b}
+.gateway-danger-zone{display:flex;align-items:center;gap:10px;padding:12px 14px;border:1px solid rgba(245,158,11,.24);border-radius:16px;background:linear-gradient(180deg,rgba(255,251,235,.96),rgba(255,247,237,.95));font-size:12px;font-weight:750;color:#92400e}
+.gateway-webhook-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.gateway-webhook-grid > div{display:grid;gap:7px;min-height:74px;padding:13px;border:1px solid rgba(226,232,240,.96);border-radius:16px;background:rgba(255,255,255,.82)}
+.gateway-webhook-grid span{font-size:11px;font-weight:850;letter-spacing:.04em;text-transform:uppercase;color:#64748b}
+.gateway-webhook-grid strong{font-size:13px;font-weight:900;color:#0f172a;word-break:break-word}
+.gateway-events-table{overflow:auto;border:1px solid rgba(226,232,240,.9);border-radius:16px;background:#fff}
+.gateway-events-table .table{margin:0}
+.gateway-empty{padding:18px;border:1px dashed rgba(203,213,225,.9);border-radius:18px;background:#fff;color:#64748b;font-weight:700}
+@media (max-width:1100px){.gateway-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.gateway-controls-grid,.gateway-webhook-grid{grid-template-columns:1fr 1fr}.gateway-secret-row{grid-template-columns:1fr}}
+@media (max-width:720px){.payment-gateways-panel .panel-head{align-items:flex-start}.gateway-summary-grid,.gateway-controls-grid,.gateway-webhook-grid{grid-template-columns:1fr}.payment-gateways-panel .panel-actions,.payment-gateways-panel .panel-actions .btn{width:100%}}
 @media (max-width:1100px){.kpi-grid-lg{grid-template-columns:repeat(2,minmax(0,1fr))}.overview-row-2col{grid-template-columns:1fr}}
 @media (max-width:760px){.health-grid,.kpi-grid-lg,.quick-actions-grid{grid-template-columns:1fr}.section-head,#panel-overview .card-head.small{flex-direction:column;align-items:flex-start}.health-card,.kpi-strong{min-height:auto}}
 

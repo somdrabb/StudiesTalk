@@ -29,6 +29,15 @@ const state = {
     invoices: [],
     payments: []
   },
+  paymentGateways: {
+    activeProvider: "stripe",
+    environment: "test",
+    providers: [],
+    webhookEvents: [],
+    auditEvents: [],
+    feedback: { message: "", tone: "" },
+    loadError: ""
+  },
   costControl: {
     period: "monthly",
     overview: null,
@@ -354,6 +363,10 @@ const TAB_HEADERS = {
   billing: {
     title: "Billing",
     subtitle: "Invoices, payments and lifecycle."
+  },
+  "payment-gateways": {
+    title: "Payment Gateways",
+    subtitle: "Configure Stripe, PayPal, Mollie, webhooks, and payment secrets."
   },
   "cost-control": {
     title: "Cost Control",
@@ -1647,6 +1660,319 @@ async function refreshSecrets() {
   renderSecretsPanel();
 }
 
+const PAYMENT_GATEWAY_FIELD_LABELS = {
+  STRIPE_PUBLIC_KEY: "Public key",
+  STRIPE_SECRET_KEY: "Secret key",
+  STRIPE_WEBHOOK_SECRET: "Webhook secret",
+  STRIPE_PRICE_STARTER: "Starter price ID",
+  STRIPE_PRICE_PRO: "Pro price ID",
+  STRIPE_PRICE_ENTERPRISE: "Enterprise price ID",
+  PAYPAL_CLIENT_ID: "Client ID",
+  PAYPAL_CLIENT_SECRET: "Client secret",
+  PAYPAL_WEBHOOK_ID: "Webhook ID",
+  PAYPAL_MODE: "PayPal mode",
+  MOLLIE_API_KEY: "API key",
+  MOLLIE_WEBHOOK_SECRET: "Webhook secret",
+  MOLLIE_PROFILE_ID: "Profile ID"
+};
+
+function setPaymentGatewaysFeedback(message = "", tone = "") {
+  state.paymentGateways.feedback = { message, tone };
+  const el = $("paymentGatewaysError");
+  if (!el) return;
+  el.textContent = message || "";
+  el.hidden = !message;
+  el.className = `alert${tone ? ` is-${tone}` : ""}`;
+}
+
+function getPaymentProvider(providerKey) {
+  const key = String(providerKey || state.paymentGateways.activeProvider || "stripe").toLowerCase();
+  return (state.paymentGateways.providers || []).find((provider) => provider.provider === key) || null;
+}
+
+function gatewayBadgeTone(provider) {
+  if (!provider?.enabled) return { label: "Disabled", tone: "warn" };
+  if ((provider.fields || []).some((field) => field.configured)) return { label: provider.active ? "Active" : "Ready", tone: "ok" };
+  return { label: "Needs keys", tone: "failed" };
+}
+
+function gatewayFieldInputType(field) {
+  if (field.secret) return "password";
+  if (/PRICE|PROFILE|PUBLIC|CLIENT|MODE/.test(field.keyName || "")) return "text";
+  return "text";
+}
+
+function renderPaymentGatewaysPanel() {
+  const summaryEl = $("paymentGatewaySummary");
+  const tabsEl = $("paymentGatewayTabs");
+  const panelEl = $("paymentGatewayPanel");
+  const payloadState = state.paymentGateways || {};
+  const providers = Array.isArray(payloadState.providers) ? payloadState.providers : [];
+  const specialTab = payloadState.activeProvider === "webhooks" || payloadState.activeProvider === "events";
+  const activeProvider = specialTab ? null : (getPaymentProvider(payloadState.activeProvider) || providers[0] || null);
+  if (activeProvider) state.paymentGateways.activeProvider = activeProvider.provider;
+
+  if (summaryEl) {
+    const webhookHealth = payloadState.webhookHealth || {};
+    const lastPaymentEvent = (payloadState.auditEvents || []).find((event) => /payment|active_provider|saved|tested|rotated|deleted/.test(event.event_type || ""));
+    const failedEvents = (payloadState.auditEvents || []).filter((event) => event.status === "failed").length;
+    const cards = [
+      ...["stripe", "paypal", "mollie"].map((key) => {
+        const provider = providers.find((entry) => entry.provider === key) || { label: key, enabled: false, fields: [] };
+        const badge = gatewayBadgeTone(provider);
+        return {
+          title: provider.label || key,
+          value: badge.label,
+          tone: badge.tone,
+          meta: provider.lastTestAt ? `Last test ${formatAdminTimestamp(provider.lastTestAt)}` : "Not tested"
+        };
+      }),
+      { title: "Active provider", value: payloadState.activeProvider || "stripe", tone: "ok", meta: payloadState.environment || "test" },
+      { title: "Webhook health", value: webhookHealth.signatureVerificationStatus || "Not tested", tone: "warn", meta: webhookHealth.lastWebhookReceivedAt ? `Last ${formatAdminTimestamp(webhookHealth.lastWebhookReceivedAt)}` : "No webhook event" },
+      { title: "Last payment event", value: lastPaymentEvent ? formatAdminTimestamp(lastPaymentEvent.created_at) : "None", tone: "warn", meta: lastPaymentEvent?.message || "No gateway events yet" },
+      { title: "Failed events", value: String(failedEvents), tone: failedEvents ? "failed" : "ok", meta: "Latest provider/audit failures" }
+    ];
+    summaryEl.innerHTML = cards.map((card) => `
+      <article class="gateway-card is-${escapeHtml(card.tone || "neutral")}">
+        <span>${escapeHtml(card.title)}</span>
+        <strong>${escapeHtml(card.value)}</strong>
+        <small>${escapeHtml(card.meta || "")}</small>
+      </article>
+    `).join("");
+  }
+
+  if (tabsEl) {
+    tabsEl.innerHTML = [
+      ...providers.map((provider) => ({ key: provider.provider, label: provider.label || provider.provider })),
+      { key: "webhooks", label: "Webhooks" },
+      { key: "events", label: "Audit / Events" }
+    ].map((item) => `
+      <button class="gateway-tab${payloadState.activeProvider === item.key ? " is-active" : ""}" type="button" data-gateway-provider="${escapeHtml(item.key)}">
+        ${escapeHtml(item.label)}
+      </button>
+    `).join("");
+  }
+
+  if (!panelEl) return;
+  if (!activeProvider && !specialTab) {
+    panelEl.innerHTML = `<div class="gateway-empty">Payment gateway settings are not available.</div>`;
+    return;
+  }
+
+  if (payloadState.activeProvider === "webhooks") {
+    const webhookHealth = payloadState.webhookHealth || {};
+    panelEl.innerHTML = `
+      <section class="gateway-provider-panel-card">
+        <div class="secret-card-head">
+          <div>
+            <h3>Webhook Health</h3>
+            <p>Signature and event status. Raw webhook secrets are never shown.</p>
+          </div>
+          <button class="btn btn-ghost" type="button" data-gateway-action="refresh-events">Refresh events</button>
+        </div>
+        <div class="gateway-webhook-grid">
+          ${["stripe", "paypal", "mollie"].map((key) => `<div><span>${escapeHtml(key)}</span><strong>${escapeHtml(webhookHealth[key] || "not_tested")}</strong></div>`).join("")}
+          <div><span>Last received</span><strong>${escapeHtml(formatAdminTimestamp(webhookHealth.lastWebhookReceivedAt))}</strong></div>
+          <div><span>Last failed</span><strong>${escapeHtml(webhookHealth.lastFailedWebhook?.message || "None")}</strong></div>
+          <div><span>Signature verification</span><strong>${escapeHtml(webhookHealth.signatureVerificationStatus || "Not tested")}</strong></div>
+        </div>
+      </section>
+    `;
+    return;
+  }
+
+  if (payloadState.activeProvider === "events") {
+    const rows = payloadState.auditEvents || [];
+    panelEl.innerHTML = `
+      <section class="gateway-provider-panel-card">
+        <div class="secret-card-head">
+          <div>
+            <h3>Gateway Events</h3>
+            <p>Provider changes, tests, rotations, deletes, and webhook events.</p>
+          </div>
+          <button class="btn btn-ghost" type="button" data-gateway-action="refresh-events">Refresh events</button>
+        </div>
+        <div class="gateway-events-table">
+          ${buildTableHtml({
+            rows,
+            emptyText: "No payment gateway events yet.",
+            columns: [
+              { label: "Time", key: "created_at", width: "170px", render: (row) => escapeHtml(formatAdminTimestamp(row.created_at)) },
+              { label: "Provider", key: "provider", width: "110px", render: (row) => escapeHtml(row.provider || "platform") },
+              { label: "Event", key: "event_type", render: (row) => escapeHtml(row.event_type || "") },
+              { label: "Status", key: "status", width: "100px", render: (row) => `<span class="gateway-status-badge is-${row.status === "failed" ? "failed" : "ok"}">${escapeHtml(row.status || "ok")}</span>` },
+              { label: "Message", key: "message", render: (row) => escapeHtml(row.message || "—") }
+            ]
+          })}
+        </div>
+      </section>
+    `;
+    return;
+  }
+
+  const badge = gatewayBadgeTone(activeProvider);
+  const fieldRows = (activeProvider.fields || []).map((field) => {
+    const current = field.maskedValue || (field.configured ? "Configured" : "Not stored");
+    return `
+      <div class="gateway-secret-row">
+        <label>
+          <span>${escapeHtml(PAYMENT_GATEWAY_FIELD_LABELS[field.keyName] || field.keyName)}</span>
+          <small>${escapeHtml(field.keyName)}</small>
+          <div class="secret-mask">Current: <code>${escapeHtml(current)}</code> <span class="secret-source-pill is-${escapeHtml(field.source || "unset")}">${escapeHtml(field.source || "unset")}</span></div>
+        </label>
+        <input
+          class="input secret-field-input"
+          type="${gatewayFieldInputType(field)}"
+          autocomplete="off"
+          data-gateway-input="true"
+          data-provider="${escapeHtml(activeProvider.provider)}"
+          data-key-name="${escapeHtml(field.keyName)}"
+          data-secret="${field.secret ? "1" : "0"}"
+          placeholder="${field.secret ? "Enter new value to update" : "Optional update value"}"
+        />
+        <div class="secret-row-actions">
+          ${field.secret ? `<button class="btn btn-ghost" type="button" data-gateway-action="rotate" data-provider="${escapeHtml(activeProvider.provider)}" data-key-name="${escapeHtml(field.keyName)}">Rotate</button>` : ""}
+          ${field.configured ? `<button class="btn btn-ghost" type="button" data-gateway-action="delete" data-provider="${escapeHtml(activeProvider.provider)}" data-key-name="${escapeHtml(field.keyName)}">Delete</button>` : ""}
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  panelEl.innerHTML = `
+    <section class="gateway-provider-panel-card" data-gateway-card="${escapeHtml(activeProvider.provider)}">
+      <div class="secret-card-head">
+        <div>
+          <h3>${escapeHtml(activeProvider.label || activeProvider.provider)}</h3>
+          <p>Update-only secrets are encrypted by the platform secrets service. Stored raw values are never returned.</p>
+        </div>
+        <span class="gateway-status-badge is-${escapeHtml(badge.tone)}">${escapeHtml(badge.label)}</span>
+      </div>
+
+      <div class="gateway-controls-grid">
+        <label class="secret-toggle">
+          <input type="checkbox" id="gatewayEnabled_${escapeHtml(activeProvider.provider)}" ${activeProvider.enabled ? "checked" : ""} />
+          Enabled
+        </label>
+        <label>
+          <span>Mode</span>
+          <select class="input secret-field-input" id="gatewayMode_${escapeHtml(activeProvider.provider)}">
+            <option value="test" ${activeProvider.mode === "test" ? "selected" : ""}>test</option>
+            <option value="live" ${activeProvider.mode === "live" ? "selected" : ""}>live</option>
+          </select>
+        </label>
+        <div>
+          <span>Active provider</span>
+          <button class="btn btn-secondary" type="button" data-gateway-action="set-active" data-provider="${escapeHtml(activeProvider.provider)}" ${activeProvider.active ? "disabled" : ""}>
+            ${activeProvider.active ? "Currently active" : "Make active"}
+          </button>
+        </div>
+      </div>
+
+      <div class="gateway-secret-list">${fieldRows}</div>
+
+      <div class="gateway-webhook-grid">
+        <div><span>Webhook configured</span><strong>${activeProvider.webhookConfigured ? "Yes" : "No"}</strong></div>
+        <div><span>Last webhook</span><strong>${escapeHtml(formatAdminTimestamp(activeProvider.webhookLastReceivedAt))}</strong></div>
+        <div><span>Last test</span><strong>${escapeHtml(activeProvider.lastTestStatus || "Not tested")}</strong></div>
+        <div><span>Last tested at</span><strong>${escapeHtml(formatAdminTimestamp(activeProvider.lastTestAt))}</strong></div>
+      </div>
+
+      <div class="gateway-danger-zone">
+        <span>Switching live mode, rotating, deleting, and disabling require confirmation.</span>
+      </div>
+
+      <div class="secret-actions">
+        <button class="btn btn-primary" type="button" data-gateway-action="save" data-provider="${escapeHtml(activeProvider.provider)}">Save</button>
+        <button class="btn btn-secondary" type="button" data-gateway-action="test" data-provider="${escapeHtml(activeProvider.provider)}">Test connection</button>
+      </div>
+    </section>
+  `;
+}
+
+async function refreshPaymentGateways() {
+  state.paymentGateways.loadError = "";
+  try {
+    const [payload, eventsPayload] = await Promise.all([
+      api(`/api/admin/payment-gateways?environment=${encodeURIComponent(state.paymentGateways.environment || "test")}`),
+      api("/api/admin/payment-gateways/events").catch(() => ({ rows: [] }))
+    ]);
+    state.paymentGateways.environment = payload?.environment || state.paymentGateways.environment || "test";
+    state.paymentGateways.activeProvider = state.paymentGateways.activeProvider === "webhooks" || state.paymentGateways.activeProvider === "events"
+      ? state.paymentGateways.activeProvider
+      : payload?.activeProvider || state.paymentGateways.activeProvider || "stripe";
+    state.paymentGateways.providers = Array.isArray(payload?.providers) ? payload.providers : [];
+    state.paymentGateways.webhookHealth = payload?.webhookHealth || {};
+    state.paymentGateways.auditEvents = Array.isArray(eventsPayload?.rows) ? eventsPayload.rows : [];
+    setPaymentGatewaysFeedback(state.paymentGateways.feedback?.message || "", state.paymentGateways.feedback?.tone || "");
+  } catch (error) {
+    state.paymentGateways.loadError = error.message || "Failed to load payment gateways.";
+    setPaymentGatewaysFeedback(state.paymentGateways.loadError, "error");
+  }
+  renderPaymentGatewaysPanel();
+}
+
+function collectGatewayProviderPayload(providerKey) {
+  const provider = getPaymentProvider(providerKey);
+  const enabled = $(`gatewayEnabled_${providerKey}`)?.checked || false;
+  const mode = $(`gatewayMode_${providerKey}`)?.value || "test";
+  const payload = { enabled, mode, environment: mode };
+  document.querySelectorAll(`[data-gateway-input="true"][data-provider="${providerKey}"]`).forEach((input) => {
+    const value = String(input.value || "").trim();
+    if (!value) return;
+    payload[input.dataset.keyName] = value;
+  });
+  if (provider?.enabled && !enabled && !confirmTypedAction({ message: `Disable ${provider.label || providerKey}?`, expected: "DISABLE" })) return null;
+  if (provider?.mode !== "live" && mode === "live" && !confirmTypedAction({ message: `Switch ${provider.label || providerKey} to live mode?`, expected: "LIVE" })) return null;
+  return payload;
+}
+
+async function saveGatewayProvider(providerKey) {
+  const payload = collectGatewayProviderPayload(providerKey);
+  if (!payload) return;
+  setPaymentGatewaysFeedback("Saving payment gateway...", "info");
+  await api(`/api/admin/payment-gateways/${encodeURIComponent(providerKey)}`, { method: "POST", body: payload });
+  setPaymentGatewaysFeedback("Payment gateway saved.", "success");
+  state.paymentGateways.environment = payload.mode || state.paymentGateways.environment;
+  await refreshPaymentGateways();
+}
+
+async function testGatewayProvider(providerKey) {
+  setPaymentGatewaysFeedback("Testing payment gateway...", "info");
+  const result = await api(`/api/admin/payment-gateways/${encodeURIComponent(providerKey)}/test`, {
+    method: "POST",
+    body: { environment: $(`gatewayMode_${providerKey}`)?.value || state.paymentGateways.environment || "test" }
+  });
+  setPaymentGatewaysFeedback(result?.message || "Gateway test completed.", result?.status === "failed" ? "error" : "success");
+  await refreshPaymentGateways();
+}
+
+async function rotateGatewaySecret(providerKey, keyName) {
+  if (!confirmTypedAction({ message: `Rotate ${providerKey}/${keyName}?`, expected: "ROTATE" })) return;
+  const value = window.prompt(`Enter the new value for ${keyName}:`);
+  if (!String(value || "").trim()) return;
+  await api(`/api/admin/payment-gateways/${encodeURIComponent(providerKey)}/rotate`, {
+    method: "POST",
+    body: { keyName, value, environment: $(`gatewayMode_${providerKey}`)?.value || state.paymentGateways.environment || "test" }
+  });
+  setPaymentGatewaysFeedback("Secret rotated.", "success");
+  await refreshPaymentGateways();
+}
+
+async function deleteGatewaySecret(providerKey, keyName) {
+  if (!confirmTypedAction({ message: `Delete ${providerKey}/${keyName}? Env fallback may remain.`, expected: "DELETE" })) return;
+  await api(`/api/admin/payment-gateways/${encodeURIComponent(providerKey)}/${encodeURIComponent(keyName)}?environment=${encodeURIComponent($(`gatewayMode_${providerKey}`)?.value || state.paymentGateways.environment || "test")}`, { method: "DELETE" });
+  setPaymentGatewaysFeedback("Secret deleted.", "success");
+  await refreshPaymentGateways();
+}
+
+async function setPaymentActiveProvider(providerKey) {
+  if (!confirmAction(`Change active payment provider to ${providerKey}?`)) return;
+  await api("/api/admin/payment-gateways/active-provider", { method: "POST", body: { provider: providerKey } });
+  state.paymentGateways.activeProvider = providerKey;
+  setPaymentGatewaysFeedback("Active payment provider updated.", "success");
+  await refreshPaymentGateways();
+}
+
 function renderCostControlPanel() {
   const statsEl = $("costOverviewStats");
   const topProvidersEl = $("costTopProviders");
@@ -2848,6 +3174,13 @@ if (btnSecretsRefreshEl) {
   });
 }
 
+const btnPaymentGatewaysRefreshEl = $("btnPaymentGatewaysRefresh");
+if (btnPaymentGatewaysRefreshEl) {
+  btnPaymentGatewaysRefreshEl.addEventListener("click", () => {
+    refreshPaymentGateways().catch((e) => setError($("globalError"), e.message));
+  });
+}
+
 const btnLogoutEl = $("btnLogout");
 if (btnLogoutEl) {
   btnLogoutEl.addEventListener("click", () => {
@@ -2932,6 +3265,40 @@ document.querySelectorAll("[data-notification-channel]").forEach((el) => {
 });
 
 document.addEventListener("click", (event) => {
+  const gatewayTab = event.target.closest("[data-gateway-provider]");
+  if (gatewayTab) {
+    state.paymentGateways.activeProvider = String(gatewayTab.dataset.gatewayProvider || "stripe").trim();
+    renderPaymentGatewaysPanel();
+    return;
+  }
+
+  const gatewayActionButton = event.target.closest("[data-gateway-action]");
+  if (gatewayActionButton) {
+    const action = gatewayActionButton.dataset.gatewayAction;
+    const provider = gatewayActionButton.dataset.provider;
+    const keyName = gatewayActionButton.dataset.keyName;
+    const run = async () => {
+      if (action === "save") {
+        await saveGatewayProvider(provider);
+      } else if (action === "test") {
+        await testGatewayProvider(provider);
+      } else if (action === "rotate") {
+        await rotateGatewaySecret(provider, keyName);
+      } else if (action === "delete") {
+        await deleteGatewaySecret(provider, keyName);
+      } else if (action === "set-active") {
+        await setPaymentActiveProvider(provider);
+      } else if (action === "refresh-events") {
+        await refreshPaymentGateways();
+      }
+    };
+    run().catch((error) => {
+      setPaymentGatewaysFeedback(error.message || "Payment gateway action failed.", "error");
+      renderPaymentGatewaysPanel();
+    });
+    return;
+  }
+
   const costActionButton = event.target.closest("[data-cost-control-action]");
   if (costActionButton) {
     const action = costActionButton.dataset.costControlAction;
@@ -3767,6 +4134,23 @@ $("btnCreateInvoiceTop")?.addEventListener("click", () => {
   $("btnCreateInvoice")?.click();
 });
 
+$("btnOpenStripePortal")?.addEventListener("click", async () => {
+  try {
+    const workspaceId = state.workspaceId || "all";
+    if (!workspaceId || workspaceId === "all") {
+      alert("Select a workspace before opening the Stripe portal.");
+      return;
+    }
+    const result = await api(`/api/admin/billing/stripe/workspaces/${encodeURIComponent(workspaceId)}/portal-session`, {
+      method: "POST",
+      body: {}
+    });
+    if (result?.url) window.open(result.url, "_blank", "noopener");
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
 $("btnExportBilling")?.addEventListener("click", () => {
   const payload = {
     workspaceId: state.workspaceId,
@@ -4024,6 +4408,9 @@ async function refreshActiveTab() {
       break;
     case "billing":
       await refreshBilling().catch(() => {});
+      break;
+    case "payment-gateways":
+      await refreshPaymentGateways().catch(() => {});
       break;
     case "cost-control":
       await refreshCostControl().catch(() => {});
@@ -4789,6 +5176,8 @@ async function refreshBilling() {
 
   const invoices = data.invoices || [];
   const payments = data.payments || [];
+  const stripeWorkspace = data.stripe?.workspace || null;
+  const subscriptionStatus = String(stripeWorkspace?.stripeSubscriptionStatus || stripeWorkspace?.status || "").toLowerCase();
   state.billing.invoices = invoices;
   state.billing.payments = payments;
 
@@ -4833,6 +5222,22 @@ async function refreshBilling() {
       tone: "info",
       title: "No payments recorded yet",
       meta: "Once invoices are paid, they will appear here."
+    });
+  }
+
+  if (data.stripe && !data.stripe.configured) {
+    attentionItems.push({
+      tone: "info",
+      title: "Stripe subscriptions not configured",
+      meta: "Manual invoices still work. Configure Stripe env values before enabling subscription checkout."
+    });
+  }
+
+  if (stripeWorkspace) {
+    attentionItems.unshift({
+      tone: subscriptionStatus === "active" || subscriptionStatus === "trialing" ? "info" : subscriptionStatus === "past_due" || subscriptionStatus === "canceled" ? "danger" : "warn",
+      title: `Subscription status: ${subscriptionStatus || "not set"}`,
+      meta: stripeWorkspace.currentPeriodEnd ? `Current period ends ${formatAdminTimestamp(stripeWorkspace.currentPeriodEnd)}` : "Stripe subscription status is shown when available."
     });
   }
 

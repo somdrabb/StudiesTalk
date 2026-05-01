@@ -71,6 +71,8 @@ const { createPlatformSettingsRouter } = require('./server/routes/platformSettin
 const { createPlatformControlRouter } = require('./server/routes/platformControl.routes');
 const { createPlatformOwnerControlRouter } = require('./server/routes/platformOwnerControl.routes');
 const { createNotificationControlRouter } = require('./server/routes/notificationControl.routes');
+const { createPaymentGatewaySecretsService } = require('./server/services/paymentGatewaySecrets.service');
+const { createAdminPaymentGatewaysRouter } = require('./server/routes/admin.paymentGateways.routes');
 
 let sentry = null;
 if (process.env.SENTRY_DSN) {
@@ -930,6 +932,12 @@ function isPromiseLike(value) {
   const aiBudgetService = createAiBudgetService({ db, defaultBudgetEur: 5 });
   const costControlService = createCostControlService({ db });
   const platformControlService = createPlatformControlService({ db });
+  const paymentGatewaySecretsService = createPaymentGatewaySecretsService({
+    db,
+    platformSecretsService,
+    env: process.env
+  });
+  paymentGatewaySecretsService.ensureSchema();
   const platformOwnerControlService = createPlatformOwnerControlService({
     db,
     env: process.env,
@@ -29318,6 +29326,13 @@ app.use('/api/admin/platform-control', createPlatformControlRouter({
 
 app.use('/api/admin/notifications-control', createNotificationControlRouter({
   notificationControlService,
+  authRequired,
+  requireSuperAdmin,
+  auditAction: audit
+}));
+
+app.use('/api/admin/payment-gateways', createAdminPaymentGatewaysRouter({
+  service: paymentGatewaySecretsService,
   authRequired,
   requireSuperAdmin,
   auditAction: audit

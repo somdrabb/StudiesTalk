@@ -62,6 +62,9 @@
         <button class="tab nav-item" type="button" data-tab="secrets" data-tooltip="Secrets / Integrations" aria-label="Secrets and integrations">
           <i class="fa-solid fa-vault" aria-hidden="true"></i><span class="nav-label">Secrets / Integrations</span>
         </button>
+        <button class="tab nav-item" type="button" data-tab="payment-gateways" data-tooltip="Payment Gateways" aria-label="Payment Gateways">
+          <i class="fa-solid fa-credit-card" aria-hidden="true"></i><span class="nav-label">Payment Gateways</span>
+        </button>
         <button class="tab nav-item" type="button" data-tab="legal" data-tooltip="Legal / Compliance" aria-label="Legal and compliance">
           <i class="fa-solid fa-scale-balanced" aria-hidden="true"></i><span class="nav-label">Legal / Compliance</span>
         </button>
@@ -406,6 +409,9 @@
                 </div>
                 <button class="btn btn-primary" type="button" id="btnCreateInvoiceTop">
                   <i class="fa-solid fa-file-circle-plus" aria-hidden="true"></i><span>Create invoice</span>
+                </button>
+                <button class="btn btn-ghost" type="button" id="btnOpenStripePortal">
+                  <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i><span>Stripe portal</span>
                 </button>
                 <button class="btn btn-ghost" type="button" id="btnExportBilling">
                   <i class="fa-solid fa-file-export" aria-hidden="true"></i><span>Export</span>
@@ -836,6 +842,22 @@
                 <div class="muted" style="padding: 16px;">No provider data loaded yet.</div>
               </div>
             </div>
+          </section>
+
+          <section class="panel payment-gateways-panel" id="panel-payment-gateways" hidden>
+            <div class="panel-head">
+              <div>
+                <h2>Payment Gateways</h2>
+                <p class="muted">Configure Stripe, PayPal, Mollie, webhooks, and payment secrets.</p>
+              </div>
+              <div class="panel-actions">
+                <button class="btn btn-ghost" type="button" id="btnPaymentGatewaysRefresh"><i class="fa-solid fa-rotate-right"></i><span>Refresh</span></button>
+              </div>
+            </div>
+            <div class="alert" id="paymentGatewaysError" hidden></div>
+            <div class="gateway-summary-grid" id="paymentGatewaySummary"></div>
+            <div class="gateway-provider-tabs" id="paymentGatewayTabs"></div>
+            <div class="gateway-provider-panel" id="paymentGatewayPanel"></div>
           </section>
 
           <section class="panel cost-control-panel" id="panel-cost-control" hidden>
