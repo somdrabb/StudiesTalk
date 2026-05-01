@@ -2484,6 +2484,10 @@ function renderNotificationStats(stats) {
     { label: "Pending email", value: stats?.emailPending || 0, tone: Number(stats?.emailPending || 0) ? "warn" : "" },
     { label: "Sent email", value: stats?.emailSent || 0, tone: Number(stats?.emailSent || 0) ? "ok" : "" },
     { label: "Failed email", value: stats?.emailFailed || 0, tone: Number(stats?.emailFailed || 0) ? "failed" : "ok" },
+    { label: "Pending SMS", value: stats?.smsPending || 0, tone: Number(stats?.smsPending || 0) ? "warn" : "" },
+    { label: "Sent SMS", value: stats?.smsSent || 0, tone: Number(stats?.smsSent || 0) ? "ok" : "" },
+    { label: "Failed SMS", value: stats?.smsFailed || 0, tone: Number(stats?.smsFailed || 0) ? "failed" : "ok" },
+    { label: "SMS cost", value: formatCurrencyEUR(stats?.smsCost || 0) },
     { label: "Skipped", value: stats?.skipped || 0 },
     { label: "Total cost", value: formatCurrencyEUR(stats?.totalCost || 0) }
   ]);
@@ -2529,6 +2533,9 @@ function renderNotifications(data) {
           <button class="btn btn-secondary" type="button" data-owner-action="notification-send-in-app-row" data-id="${escapeHtml(row.id)}">Send in-app</button>
           <button class="btn btn-primary" type="button" data-owner-action="notification-send-email-row" data-id="${escapeHtml(row.id)}">Send email</button>
           <button class="btn btn-ghost" type="button" data-owner-action="notification-retry-email-row" data-id="${escapeHtml(row.id)}">Retry failed email</button>
+          <button class="btn btn-ghost" type="button" data-owner-action="notification-send-sms-dry-run-row" data-id="${escapeHtml(row.id)}">Send SMS dry-run</button>
+          <button class="btn btn-secondary" type="button" data-owner-action="notification-send-sms-row" data-id="${escapeHtml(row.id)}">Send SMS</button>
+          <button class="btn btn-ghost" type="button" data-owner-action="notification-retry-sms-row" data-id="${escapeHtml(row.id)}">Retry failed SMS</button>
           <button class="btn btn-ghost" type="button" data-owner-action="notification-cancel-row" data-id="${escapeHtml(row.id)}">Cancel</button>
         </div>
       ` }
@@ -2995,18 +3002,21 @@ document.addEventListener("click", (event) => {
         state.notificationControl.stats = await api(`/api/admin/notifications-control/campaigns/${encodeURIComponent(campaignId)}/stats`);
         state.notificationControl.lastEstimate = await api(`/api/admin/notifications-control/campaigns/${encodeURIComponent(campaignId)}/estimate`, { method: "POST", body: {} });
         await refreshOwnerControl("notifications");
-      } else if (action === "notification-send-row" || action === "notification-dry-run-row" || action === "notification-send-in-app-row" || action === "notification-send-email-row") {
+      } else if (action === "notification-send-row" || action === "notification-dry-run-row" || action === "notification-send-in-app-row" || action === "notification-send-email-row" || action === "notification-send-sms-dry-run-row" || action === "notification-send-sms-row") {
         const campaignId = ownerActionButton.dataset.id || state.notificationControl.selectedCampaignId;
         if (!campaignId) throw new Error("Select a campaign before sending.");
         state.notificationControl.selectedCampaignId = campaignId;
         const endpoint = action === "notification-send-email-row"
           ? "send-email"
+          : action === "notification-send-sms-dry-run-row" || action === "notification-send-sms-row"
+            ? "send-sms"
           : action === "notification-send-in-app-row"
             ? "send-in-app"
             : "send";
+        if (action === "notification-send-sms-row" && !window.confirm("SMS can create provider charges. Confirm before sending.")) return;
         await api(`/api/admin/notifications-control/campaigns/${encodeURIComponent(campaignId)}/${endpoint}`, {
           method: "POST",
-          body: { dryRun: action === "notification-dry-run-row" }
+          body: { dryRun: action === "notification-dry-run-row" || action === "notification-send-sms-dry-run-row" }
         });
         state.notificationControl.stats = await api(`/api/admin/notifications-control/campaigns/${encodeURIComponent(campaignId)}/stats`);
         await refreshOwnerControl("notifications");
@@ -3019,6 +3029,19 @@ document.addEventListener("click", (event) => {
         if (!rows.length) throw new Error("No failed email deliveries to retry.");
         for (const row of rows) {
           await api(`/api/admin/notifications-control/deliveries/${encodeURIComponent(row.id)}/retry-email`, { method: "POST", body: {} });
+        }
+        state.notificationControl.stats = await api(`/api/admin/notifications-control/campaigns/${encodeURIComponent(campaignId)}/stats`);
+        await refreshOwnerControl("notifications");
+      } else if (action === "notification-retry-sms-row") {
+        const campaignId = ownerActionButton.dataset.id || state.notificationControl.selectedCampaignId;
+        if (!campaignId) throw new Error("Select a campaign before retrying SMS.");
+        if (!window.confirm("SMS can create provider charges. Confirm before sending.")) return;
+        state.notificationControl.selectedCampaignId = campaignId;
+        const failed = await api(`/api/admin/notifications-control/deliveries?campaignId=${encodeURIComponent(campaignId)}&status=failed&channel=sms&limit=25`);
+        const rows = Array.isArray(failed?.rows) ? failed.rows : [];
+        if (!rows.length) throw new Error("No failed SMS deliveries to retry.");
+        for (const row of rows) {
+          await api(`/api/admin/notifications-control/deliveries/${encodeURIComponent(row.id)}/retry-sms`, { method: "POST", body: {} });
         }
         state.notificationControl.stats = await api(`/api/admin/notifications-control/campaigns/${encodeURIComponent(campaignId)}/stats`);
         await refreshOwnerControl("notifications");

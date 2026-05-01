@@ -125,6 +125,20 @@ function createNotificationControlRouter({
     res.json(result);
   }));
 
+  router.post('/campaigns/:id/send-sms', authRequired, handler(async (req, res, user) => {
+    const result = await notificationControlService.sendSmsCampaign(req.params.id, {
+      dryRun: !!req.body?.dryRun,
+      limit: req.body?.limit
+    });
+    audit(req, user, 'notification_control.campaign_send_sms', {
+      target: req.params.id,
+      dryRun: !!req.body?.dryRun,
+      processed: result.processed,
+      remaining: result.remaining
+    });
+    res.json(result);
+  }));
+
   router.post('/campaigns/:id/cancel', authRequired, handler(async (req, res, user) => {
     const result = await notificationControlService.cancelCampaign(req.params.id);
     audit(req, user, 'notification_control.campaign_cancelled', { target: req.params.id });
@@ -170,6 +184,16 @@ function createNotificationControlRouter({
   router.post('/deliveries/:id/retry-email', authRequired, handler(async (req, res, user) => {
     const result = await notificationControlService.retryEmailDelivery(req.params.id, { dryRun: !!req.body?.dryRun });
     audit(req, user, 'notification_control.delivery_retry_email', {
+      target: req.params.id,
+      dryRun: !!req.body?.dryRun,
+      status: result.delivery?.status || null
+    });
+    res.json(result);
+  }));
+
+  router.post('/deliveries/:id/retry-sms', authRequired, handler(async (req, res, user) => {
+    const result = await notificationControlService.retrySmsDelivery(req.params.id, { dryRun: !!req.body?.dryRun });
+    audit(req, user, 'notification_control.delivery_retry_sms', {
       target: req.params.id,
       dryRun: !!req.body?.dryRun,
       status: result.delivery?.status || null

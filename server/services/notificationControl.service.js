@@ -77,6 +77,11 @@ function normalizeEnabled(value, fallback = true) {
   return ['1', 'true', 'yes', 'on', 'enabled'].includes(text) ? 1 : 0;
 }
 
+function isValidPhoneNumber(value) {
+  const text = cleanString(value);
+  return /^\+?[1-9][0-9\s().-]{6,19}$/.test(text);
+}
+
 function createNotificationControlService({
   db,
   now = nowIso,
@@ -531,6 +536,7 @@ function createNotificationControlService({
     await getCampaign(campaignId);
     const rows = await adapter.many('SELECT status, COUNT(*) AS count, COALESCE(SUM(cost_eur), 0) AS cost FROM notification_deliveries WHERE campaign_id = ? GROUP BY status', [campaignId]);
     const emailRows = await adapter.many("SELECT status, COUNT(*) AS count FROM notification_deliveries WHERE campaign_id = ? AND channel = 'email' GROUP BY status", [campaignId]).catch(() => []);
+    const smsRows = await adapter.many("SELECT status, COUNT(*) AS count, COALESCE(SUM(cost_eur), 0) AS cost FROM notification_deliveries WHERE campaign_id = ? AND channel = 'sms' GROUP BY status", [campaignId]).catch(() => []);
     const stats = {
       pending: 0,
       sent: 0,
@@ -541,7 +547,12 @@ function createNotificationControlService({
       emailPending: 0,
       emailSent: 0,
       emailDelivered: 0,
-      emailFailed: 0
+      emailFailed: 0,
+      smsPending: 0,
+      smsSent: 0,
+      smsDelivered: 0,
+      smsFailed: 0,
+      smsCost: 0
     };
     for (const row of rows) {
       const key = cleanString(row.status, 'pending');
@@ -555,7 +566,16 @@ function createNotificationControlService({
       if (status === 'delivered') stats.emailDelivered = Number(row.count || 0);
       if (status === 'failed') stats.emailFailed = Number(row.count || 0);
     }
+    for (const row of smsRows) {
+      const status = cleanString(row.status, 'pending');
+      if (status === 'pending') stats.smsPending = Number(row.count || 0);
+      if (status === 'sent') stats.smsSent = Number(row.count || 0);
+      if (status === 'delivered') stats.smsDelivered = Number(row.count || 0);
+      if (status === 'failed') stats.smsFailed = Number(row.count || 0);
+      stats.smsCost += Number(row.cost || 0);
+    }
     stats.totalCost = Number(stats.totalCost.toFixed(4));
+    stats.smsCost = Number(stats.smsCost.toFixed(4));
     return stats;
   }
 
@@ -663,32 +683,53 @@ function createNotificationControlService({
       const enabled = await platformControlService.isFeatureEnabled(workspaceId, 'smsEnabled').catch(() => true);
       if (!enabled) throw new Error('SMS is disabled by Platform Control.');
     }
+    if (channel === 'sms' && platformControlService?.getEffectiveSettings) {
+      const settings = await platformControlService.getEffectiveSettings(workspaceId).catch(() => null);
+      if (settings?.communication?.smsEnabled === false) throw new Error('SMS is disabled by Platform Control.');
+      if (settings?.providerLimits?.twilio?.enabled === false) throw new Error('Twilio is disabled by Platform Control.');
+    }
+    if (channel === 'sms' && platformControlService?.getProviderLimit) {
+      const limit = await platformControlService.getProviderLimit(workspaceId, 'twilio').catch(() => null);
+      if (limit?.enabled === false) throw new Error('Twilio is disabled by Platform Control.');
+    }
+  }
+
+  function deliveryProviderKey(delivery) {
+    return delivery.channel === 'sms' ? 'twilio' : delivery.channel === 'email' ? 'ionos_email' : null;
+  }
+
+  async function enforceCostLimit(delivery) {
+    const providerKey = deliveryProviderKey(delivery);
+    if (!providerKey || !costControlService?.enforceProviderLimit) return;
+    await costControlService.enforceProviderLimit({
+      workspaceId: delivery.workspace_id,
+      providerKey,
+      estimatedCostEur: Number(delivery.cost_eur || 0),
+      period: 'monthly'
+    });
+  }
+
+  async function recordCostUsage(delivery, metadata = {}) {
+    const providerKey = deliveryProviderKey(delivery);
+    if (!providerKey || !costControlService?.recordUsage) return;
+    const cost = Number(delivery.cost_eur || 0);
+    await costControlService.recordUsage({
+      workspaceId: delivery.workspace_id,
+      providerKey,
+      featureKey: 'notification_control',
+      units: 1,
+      unitName: delivery.channel === 'sms' ? 'sms' : 'email',
+      unitCostEur: cost,
+      costEur: cost,
+      metadata
+    });
   }
 
   async function checkAndRecordCost(delivery, metadata = {}) {
     const providerKey = delivery.channel === 'sms' ? 'twilio' : delivery.channel === 'email' ? 'ionos_email' : null;
     if (!providerKey || !costControlService) return;
-    const cost = Number(delivery.cost_eur || 0);
-    if (costControlService.enforceProviderLimit) {
-      await costControlService.enforceProviderLimit({
-        workspaceId: delivery.workspace_id,
-        providerKey,
-        estimatedCostEur: cost,
-        period: 'monthly'
-      });
-    }
-    if (costControlService.recordUsage) {
-      await costControlService.recordUsage({
-        workspaceId: delivery.workspace_id,
-        providerKey,
-        featureKey: 'notification_control',
-        units: 1,
-        unitName: delivery.channel === 'sms' ? 'sms' : 'email',
-        unitCostEur: cost,
-        costEur: cost,
-        metadata
-      });
-    }
+    await enforceCostLimit(delivery);
+    await recordCostUsage(delivery, metadata);
   }
 
   async function deliverInApp(campaign, delivery) {
@@ -774,7 +815,7 @@ function createNotificationControlService({
 
   async function deliverSms(campaign, delivery) {
     if (!smsSender) throw new Error('Twilio SMS sender is not configured.');
-    if (!cleanString(delivery.recipient)) throw new Error('Delivery has no SMS recipient.');
+    if (!isValidPhoneNumber(delivery.recipient)) throw new Error('Delivery has no valid SMS recipient.');
     return smsSender({
       to: delivery.recipient,
       body: campaign.body,
@@ -802,7 +843,10 @@ function createNotificationControlService({
       if (delivery.channel === 'email' && !cleanString(delivery.recipient).includes('@')) {
         throw new Error('Delivery has no valid email recipient.');
       }
-      await checkAndRecordCost(delivery, { campaignId: campaign.id, deliveryId: delivery.id, channel: delivery.channel });
+      if (delivery.channel === 'sms' && !isValidPhoneNumber(delivery.recipient)) {
+        throw new Error('Delivery has no valid SMS recipient.');
+      }
+      await enforceCostLimit(delivery);
       let providerResult;
       if (delivery.channel === 'in_app') providerResult = await deliverInApp(campaign, delivery);
       else if (delivery.channel === 'email') providerResult = await deliverEmail(campaign, delivery);
@@ -814,6 +858,7 @@ function createNotificationControlService({
         metadata: { provider: providerResult?.provider || delivery.channel, messageId: providerResult?.messageId || null, disabled: !!providerResult?.disabled }
       });
       if (delivery.channel === 'email') await logWorkspaceEmailDelivery(campaign, delivery, { status: 'sent', providerResult });
+      await recordCostUsage(delivery, { campaignId: campaign.id, deliveryId: delivery.id, channel: delivery.channel });
       await recordEvent({ campaignId: campaign.id, deliveryId: delivery.id, eventType: 'delivery.sent', message: `${delivery.channel} delivery processed.`, metadata: { channel: delivery.channel } });
       return { delivery: updated, providerResult };
     } catch (error) {
@@ -963,6 +1008,72 @@ function createNotificationControlService({
     };
   }
 
+  async function sendSmsCampaign(campaignId, { dryRun = false, limit = 25 } = {}) {
+    const campaign = await getCampaign(campaignId);
+    if (campaign.status === 'cancelled') throw badRequest('Cancelled campaigns cannot be sent.');
+    const smsCount = await adapter.one("SELECT COUNT(*) AS count FROM notification_deliveries WHERE campaign_id = ? AND channel = 'sms'", [campaignId]);
+    if (Number(smsCount?.count || 0) <= 0) throw badRequest('Build SMS notification deliveries before sending.');
+    const pendingCount = await adapter.one("SELECT COUNT(*) AS count FROM notification_deliveries WHERE campaign_id = ? AND channel = 'sms' AND status = 'pending'", [campaignId]);
+    const total = Number(pendingCount?.count || 0);
+    const batchLimit = Math.min(Math.max(Number(limit) || 25, 1), 25);
+    if (total <= 0) {
+      const stats = await getDeliveryStats(campaignId);
+      return {
+        ok: true,
+        dryRun: !!dryRun,
+        processed: 0,
+        remaining: 0,
+        status: campaign.status,
+        queued: false,
+        stats,
+        results: []
+      };
+    }
+    if (!dryRun) {
+      await adapter.exec('UPDATE notification_campaigns SET status = ?, updated_at = ? WHERE id = ?', ['sending', now(), campaignId]);
+    }
+    const rows = await adapter.many(`
+      SELECT * FROM notification_deliveries
+      WHERE campaign_id = ? AND channel = 'sms' AND status = 'pending'
+      ORDER BY created_at ASC
+      LIMIT ?
+    `, [campaignId, batchLimit]);
+    const results = [];
+    const smsChannels = new Set(['sms']);
+    for (const delivery of rows) {
+      results.push(await processDelivery(campaign, delivery, { dryRun, allowedChannels: smsChannels }));
+    }
+    const status = dryRun ? campaign.status : await updateCampaignStatusFromDeliveries(campaignId);
+    const remaining = await adapter.one("SELECT COUNT(*) AS count FROM notification_deliveries WHERE campaign_id = ? AND channel = 'sms' AND status = 'pending'", [campaignId]);
+    await recordEvent({
+      campaignId,
+      eventType: dryRun ? 'campaign.sms_dry_run' : 'campaign.sms_send_batch',
+      message: dryRun ? 'SMS dry run completed. No SMS sent.' : 'SMS campaign send batch processed.',
+      metadata: {
+        processed: results.length,
+        remaining: Number(remaining?.count || 0),
+        maxBatch: batchLimit,
+        estimatedCostEur: Number(rows.reduce((sum, row) => sum + Number(row.cost_eur || 0), 0).toFixed(4))
+      }
+    });
+    return {
+      ok: true,
+      dryRun: !!dryRun,
+      processed: results.length,
+      remaining: Number(remaining?.count || 0),
+      status,
+      queued: total > batchLimit,
+      warning: dryRun ? null : 'SMS can create provider charges. Confirm before sending.',
+      results: results.map((item) => ({
+        id: item.delivery?.id,
+        status: item.delivery?.status,
+        error: item.error || null,
+        skipped: !!item.skipped,
+        reason: item.reason || null
+      }))
+    };
+  }
+
   async function sendCampaign(campaignId, options = {}) {
     return sendInAppCampaign(campaignId, options);
   }
@@ -1001,6 +1112,28 @@ function createNotificationControlService({
       await adapter.exec('UPDATE notification_campaigns SET status = ?, updated_at = ? WHERE id = ?', ['sending', now(), campaign.id]);
     }
     const result = await processDelivery(campaign, delivery, { dryRun, allowedChannels: new Set(['email']) });
+    const status = dryRun ? campaign.status : await updateCampaignStatusFromDeliveries(campaign.id);
+    return { ok: true, delivery: result.delivery, status, error: result.error || null, skipped: !!result.skipped };
+  }
+
+  async function retrySmsDelivery(deliveryId, { dryRun = false } = {}) {
+    const delivery = await adapter.one('SELECT * FROM notification_deliveries WHERE id = ? LIMIT 1', [deliveryId]);
+    if (!delivery) throw notFound('Delivery not found.');
+    if (delivery.channel !== 'sms') throw badRequest('Only SMS deliveries can be retried in this step.');
+    const campaign = await getCampaign(delivery.campaign_id);
+    await recordEvent({
+      campaignId: campaign.id,
+      deliveryId: delivery.id,
+      eventType: dryRun ? 'delivery.sms_retry_dry_run' : 'delivery.sms_retry',
+      message: dryRun ? 'SMS delivery retry dry run requested. No SMS sent.' : 'SMS delivery retry requested.'
+    });
+    if (['sent', 'delivered'].includes(String(delivery.status || '').toLowerCase())) {
+      return { ok: true, delivery, skipped: true, reason: 'already_sent' };
+    }
+    if (!dryRun) {
+      await adapter.exec('UPDATE notification_campaigns SET status = ?, updated_at = ? WHERE id = ?', ['sending', now(), campaign.id]);
+    }
+    const result = await processDelivery(campaign, delivery, { dryRun, allowedChannels: new Set(['sms']) });
     const status = dryRun ? campaign.status : await updateCampaignStatusFromDeliveries(campaign.id);
     return { ok: true, delivery: result.delivery, status, error: result.error || null, skipped: !!result.skipped };
   }
@@ -1254,9 +1387,11 @@ function createNotificationControlService({
     buildDeliveryDrafts,
     sendInAppCampaign,
     sendEmailCampaign,
+    sendSmsCampaign,
     sendCampaign,
     retryInAppDelivery,
     retryEmailDelivery,
+    retrySmsDelivery,
     retryDelivery,
     cancelCampaign,
     getDeliveryStats,

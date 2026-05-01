@@ -167,11 +167,11 @@ async function main() {
         return {
           features: { emailEnabled: true, smsEnabled: true },
           communication: { emailEnabled: true, smsEnabled: true },
-          providerLimits: { ionosEmail: { enabled: true } }
+          providerLimits: { ionosEmail: { enabled: true }, twilio: { enabled: true } }
         };
       },
       async getProviderLimit(_workspaceId, providerKey) {
-        return providerKey === 'ionosEmail' ? { enabled: true } : { enabled: true };
+        return providerKey === 'ionosEmail' || providerKey === 'twilio' ? { enabled: true } : { enabled: true };
       }
     },
     costControlService: {
@@ -344,6 +344,62 @@ async function main() {
     assert.strictEqual(mixedPendingAfterEmail.rows.filter((row) => row.channel === 'email').length, 0);
     assert.strictEqual(mixedPendingAfterEmail.rows.filter((row) => row.channel === 'sms').length, 4);
 
+    const smsCampaign = await request(baseUrl, 'super_admin', 'POST', '/api/admin/notifications-control/campaigns', {
+      title: 'SMS send',
+      channels: ['sms'],
+      targetType: 'selected_workspaces',
+      workspaceIds: [ids.workspaceA],
+      subject: 'SMS subject',
+      body: 'SMS body'
+    });
+    await request(baseUrl, 'super_admin', 'POST', `/api/admin/notifications-control/campaigns/${smsCampaign.row.id}/build-deliveries`, {});
+    await request(baseUrl, 'school_admin', 'POST', `/api/admin/notifications-control/campaigns/${smsCampaign.row.id}/send-sms`, { dryRun: true }, 403);
+    const smsPending = await request(baseUrl, 'super_admin', 'GET', `/api/admin/notifications-control/deliveries?campaignId=${encodeURIComponent(smsCampaign.row.id)}&status=pending&channel=sms`);
+    assert.strictEqual(smsPending.rows.length, 4);
+    await request(baseUrl, 'school_admin', 'POST', `/api/admin/notifications-control/deliveries/${smsPending.rows[0].id}/retry-sms`, { dryRun: true }, 403);
+    const smsDryRun = await request(baseUrl, 'super_admin', 'POST', `/api/admin/notifications-control/campaigns/${smsCampaign.row.id}/send-sms`, { dryRun: true });
+    assert.strictEqual(smsDryRun.processed, 4);
+    assert.strictEqual(smsDryRun.dryRun, true);
+    assert.strictEqual(sentSms.length, 0);
+    assert.strictEqual(usageRows.filter((row) => row.providerKey === 'twilio').length, 0);
+    const smsAfterDryRun = await request(baseUrl, 'super_admin', 'GET', `/api/admin/notifications-control/deliveries?campaignId=${encodeURIComponent(smsCampaign.row.id)}&status=pending&channel=sms`);
+    assert.strictEqual(smsAfterDryRun.rows.length, 4);
+    assert.ok(db.prepare("SELECT COUNT(*) AS count FROM notification_events WHERE event_type = 'campaign.sms_dry_run'").get().count >= 1);
+    const smsSendMissingTwilio = await request(baseUrl, 'super_admin', 'POST', `/api/admin/notifications-control/campaigns/${smsCampaign.row.id}/send-sms`, {});
+    assert.strictEqual(smsSendMissingTwilio.processed, 4);
+    assert.ok(smsSendMissingTwilio.results.every((row) => row.status === 'failed' && row.error));
+    assert.strictEqual(sentSms.length, 0);
+    assert.strictEqual(usageRows.filter((row) => row.providerKey === 'twilio').length, 0);
+    const smsFailed = await request(baseUrl, 'super_admin', 'GET', `/api/admin/notifications-control/deliveries?campaignId=${encodeURIComponent(smsCampaign.row.id)}&status=failed&channel=sms`);
+    assert.strictEqual(smsFailed.rows.length, 4);
+    assert.ok(smsFailed.rows.every((row) => row.error_message && !String(row.error_message).includes('TWILIO_AUTH_TOKEN')));
+    const smsStats = await request(baseUrl, 'super_admin', 'GET', `/api/admin/notifications-control/campaigns/${smsCampaign.row.id}/stats`);
+    assert.strictEqual(smsStats.smsPending, 0);
+    assert.strictEqual(smsStats.smsSent, 0);
+    assert.strictEqual(smsStats.smsFailed, 4);
+    assert.ok(Number(smsStats.smsCost) > 0);
+    assert.ok(auditRows.some((row) => row.action === 'notification_control.campaign_send_sms'));
+    smsConfigured = true;
+    const retrySms = await request(baseUrl, 'super_admin', 'POST', `/api/admin/notifications-control/deliveries/${smsFailed.rows[0].id}/retry-sms`, {});
+    assert.strictEqual(retrySms.delivery.status, 'sent');
+    assert.strictEqual(sentSms.length, 1);
+    assert.strictEqual(usageRows.filter((row) => row.providerKey === 'twilio').length, 1);
+    const retrySmsAgain = await request(baseUrl, 'super_admin', 'POST', `/api/admin/notifications-control/deliveries/${smsFailed.rows[0].id}/retry-sms`, {});
+    assert.strictEqual(retrySmsAgain.skipped, true);
+    assert.strictEqual(retrySmsAgain.reason, 'already_sent');
+    assert.strictEqual(sentSms.length, 1);
+    assert.ok(auditRows.some((row) => row.action === 'notification_control.delivery_retry_sms'));
+
+    const mixedBeforeSmsDryRun = await request(baseUrl, 'super_admin', 'GET', `/api/admin/notifications-control/deliveries?campaignId=${encodeURIComponent(mixedCampaign.row.id)}`);
+    const mixedEmailSentBeforeSms = mixedBeforeSmsDryRun.rows.filter((row) => row.channel === 'email' && row.status === 'sent').length;
+    const mixedInAppSentBeforeSms = mixedBeforeSmsDryRun.rows.filter((row) => row.channel === 'in_app' && row.status === 'sent').length;
+    const mixedSmsDryRun = await request(baseUrl, 'super_admin', 'POST', `/api/admin/notifications-control/campaigns/${mixedCampaign.row.id}/send-sms`, { dryRun: true });
+    assert.strictEqual(mixedSmsDryRun.processed, 4);
+    const mixedAfterSmsDryRun = await request(baseUrl, 'super_admin', 'GET', `/api/admin/notifications-control/deliveries?campaignId=${encodeURIComponent(mixedCampaign.row.id)}`);
+    assert.strictEqual(mixedAfterSmsDryRun.rows.filter((row) => row.channel === 'email' && row.status === 'sent').length, mixedEmailSentBeforeSms);
+    assert.strictEqual(mixedAfterSmsDryRun.rows.filter((row) => row.channel === 'in_app' && row.status === 'sent').length, mixedInAppSentBeforeSms);
+    assert.strictEqual(mixedAfterSmsDryRun.rows.filter((row) => row.channel === 'sms' && row.status === 'pending').length, 4);
+
     const retryCampaign = await request(baseUrl, 'super_admin', 'POST', '/api/admin/notifications-control/campaigns', {
       title: 'Retry in-app send',
       channels: ['in_app'],
@@ -421,8 +477,9 @@ async function main() {
     const automationAfterDelete = await request(baseUrl, 'super_admin', 'GET', '/api/admin/notifications-control/automation-rules');
     assert.ok(!automationAfterDelete.rows.some((row) => row.id === automationRule.row.id));
 
-    const serialized = JSON.stringify({ campaigns, stats, deliveries, templates, automationList, automationTest, emailSend, emailStats, mixedEmailSend });
+    const serialized = JSON.stringify({ campaigns, stats, deliveries, templates, automationList, automationTest, emailSend, emailStats, mixedEmailSend, smsDryRun, smsSendMissingTwilio, smsStats, retrySms, mixedSmsDryRun });
     assert.ok(!serialized.includes('TWILIO_AUTH_TOKEN'));
+    assert.ok(!serialized.includes('TWILIO_ACCOUNT_SID'));
     assert.ok(!serialized.includes('OPENAI_API_KEY'));
     assert.ok(!serialized.includes('sk-'));
 
