@@ -21,6 +21,19 @@ function toDateOnly(value) {
   return ts.toISOString().slice(0, 10);
 }
 
+function parseJson(value, fallback = {}) {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value);
+  } catch (_err) {
+    return fallback;
+  }
+}
+
+function stringifyJson(value) {
+  return JSON.stringify(value == null ? {} : value);
+}
+
 function normalizePostgresInvoice(row) {
   if (!row) return row;
   return {
@@ -56,6 +69,36 @@ function createBillingRepository({ engine = 'sqlite', sqliteDb } = {}) {
 function createSqliteBillingRepository(sqliteDb) {
   const engine = 'sqlite';
 
+  function execIgnore(sql) {
+    try {
+      sqliteDb.exec(sql);
+    } catch (_err) {}
+  }
+
+  execIgnore('ALTER TABLE workspace_billing ADD COLUMN stripe_customer_id TEXT');
+  execIgnore('ALTER TABLE workspace_billing ADD COLUMN stripe_subscription_id TEXT');
+  execIgnore('ALTER TABLE workspace_billing ADD COLUMN stripe_price_id TEXT');
+  execIgnore('ALTER TABLE workspace_billing ADD COLUMN stripe_subscription_status TEXT');
+  execIgnore("ALTER TABLE workspace_billing ADD COLUMN provider TEXT DEFAULT 'stripe'");
+  execIgnore('ALTER TABLE workspace_billing ADD COLUMN provider_customer_id TEXT');
+  execIgnore('ALTER TABLE workspace_billing ADD COLUMN provider_subscription_id TEXT');
+  execIgnore('ALTER TABLE workspace_billing ADD COLUMN current_period_end TEXT');
+  execIgnore("ALTER TABLE invoices ADD COLUMN provider TEXT DEFAULT 'manual'");
+  execIgnore('ALTER TABLE invoices ADD COLUMN provider_invoice_id TEXT');
+  execIgnore('ALTER TABLE payments ADD COLUMN provider_payment_intent_id TEXT');
+  execIgnore(`
+    CREATE TABLE IF NOT EXISTS billing_provider_events (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT,
+      provider TEXT NOT NULL DEFAULT 'stripe',
+      event_type TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'received',
+      provider_ref TEXT,
+      metadata_json TEXT,
+      created_at INTEGER NOT NULL
+    )
+  `);
+
   function normalizeBillingProfileRow(row) {
     if (!row) return null;
     return {
@@ -68,6 +111,14 @@ function createSqliteBillingRepository(sqliteDb) {
       invoiceContactName: row.invoiceContactName ?? row.invoice_contact_name ?? null,
       readinessAcknowledgedAt: row.readinessAcknowledgedAt ?? row.readiness_acknowledged_at ?? null,
       readinessAcknowledgedByUserId: row.readinessAcknowledgedByUserId ?? row.readiness_acknowledged_by_user_id ?? null,
+      provider: row.provider || 'stripe',
+      providerCustomerId: row.providerCustomerId ?? row.provider_customer_id ?? null,
+      providerSubscriptionId: row.providerSubscriptionId ?? row.provider_subscription_id ?? null,
+      stripeCustomerId: row.stripeCustomerId ?? row.stripe_customer_id ?? row.providerCustomerId ?? row.provider_customer_id ?? null,
+      stripeSubscriptionId: row.stripeSubscriptionId ?? row.stripe_subscription_id ?? row.providerSubscriptionId ?? row.provider_subscription_id ?? null,
+      stripePriceId: row.stripePriceId ?? row.stripe_price_id ?? null,
+      stripeSubscriptionStatus: row.stripeSubscriptionStatus ?? row.stripe_subscription_status ?? null,
+      currentPeriodEnd: row.currentPeriodEnd ?? row.current_period_end ?? null,
       updatedAt: row.updatedAt ?? row.updated_at ?? null
     };
   }
@@ -139,6 +190,14 @@ function createSqliteBillingRepository(sqliteDb) {
           invoice_contact_name AS "invoiceContactName",
           readiness_acknowledged_at AS "readinessAcknowledgedAt",
           readiness_acknowledged_by_user_id AS "readinessAcknowledgedByUserId",
+          provider,
+          provider_customer_id AS "providerCustomerId",
+          provider_subscription_id AS "providerSubscriptionId",
+          stripe_customer_id AS "stripeCustomerId",
+          stripe_subscription_id AS "stripeSubscriptionId",
+          stripe_price_id AS "stripePriceId",
+          stripe_subscription_status AS "stripeSubscriptionStatus",
+          current_period_end AS "currentPeriodEnd",
           updated_at AS "updatedAt"
         FROM workspace_billing
         WHERE workspace_id = ?
@@ -193,6 +252,8 @@ function createSqliteBillingRepository(sqliteDb) {
           amount_cents AS "amountCents",
           currency,
           description,
+          provider,
+          provider_invoice_id AS "providerInvoiceId",
           status,
           due_date AS "dueDate",
           created_at AS "createdAt",
@@ -219,6 +280,7 @@ function createSqliteBillingRepository(sqliteDb) {
           currency,
           provider,
           provider_ref AS "providerRef",
+          provider_payment_intent_id AS "providerPaymentIntentId",
           created_at AS "createdAt"
         FROM payments
         ${where}
@@ -294,6 +356,110 @@ function createSqliteBillingRepository(sqliteDb) {
 
       tx();
       return { paymentId, paidAt };
+    },
+
+    async updateWorkspaceStripeState({
+      workspaceId,
+      stripeCustomerId,
+      stripeSubscriptionId,
+      stripePriceId,
+      stripeSubscriptionStatus,
+      currentPeriodEnd
+    }) {
+      if (!workspaceId) return null;
+      await this.ensureWorkspaceBilling({ workspaceId });
+      const existing = await this.getWorkspaceBillingProfile(workspaceId);
+      const now = billingTimestamp(engine);
+      sqliteDb.prepare(`
+        UPDATE workspace_billing
+        SET provider = 'stripe',
+            provider_customer_id = ?,
+            provider_subscription_id = ?,
+            stripe_customer_id = ?,
+            stripe_subscription_id = ?,
+            stripe_price_id = ?,
+            stripe_subscription_status = ?,
+            current_period_end = ?,
+            status = CASE
+              WHEN ? IN ('active', 'trialing') THEN 'active'
+              WHEN ? IN ('past_due', 'unpaid') THEN 'past_due'
+              WHEN ? IN ('canceled', 'incomplete_expired') THEN 'canceled'
+              ELSE status
+            END,
+            updated_at = ?
+        WHERE workspace_id = ?
+      `).run(
+        stripeCustomerId !== undefined ? stripeCustomerId : existing?.stripeCustomerId || null,
+        stripeSubscriptionId !== undefined ? stripeSubscriptionId : existing?.stripeSubscriptionId || null,
+        stripeCustomerId !== undefined ? stripeCustomerId : existing?.stripeCustomerId || null,
+        stripeSubscriptionId !== undefined ? stripeSubscriptionId : existing?.stripeSubscriptionId || null,
+        stripePriceId !== undefined ? stripePriceId : existing?.stripePriceId || null,
+        stripeSubscriptionStatus !== undefined ? stripeSubscriptionStatus : existing?.stripeSubscriptionStatus || null,
+        currentPeriodEnd !== undefined ? currentPeriodEnd : existing?.currentPeriodEnd || null,
+        stripeSubscriptionStatus || '',
+        stripeSubscriptionStatus || '',
+        stripeSubscriptionStatus || '',
+        now,
+        workspaceId
+      );
+      return this.getWorkspaceBillingProfile(workspaceId);
+    },
+
+    async findWorkspaceByStripeCustomerId(stripeCustomerId) {
+      if (!stripeCustomerId) return null;
+      const row = sqliteDb.prepare('SELECT workspace_id AS "workspaceId" FROM workspace_billing WHERE stripe_customer_id = ? OR provider_customer_id = ? LIMIT 1').get(stripeCustomerId, stripeCustomerId);
+      return row?.workspaceId || null;
+    },
+
+    async recordBillingProviderEvent({ workspaceId = null, provider = 'stripe', eventType, status = 'received', providerRef = null, metadata = {} }) {
+      const id = `bill_evt_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      sqliteDb.prepare(`
+        INSERT INTO billing_provider_events (id, workspace_id, provider, event_type, status, provider_ref, metadata_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(id, workspaceId || null, provider, eventType, status, providerRef || null, stringifyJson(metadata), billingTimestamp(engine));
+      return { id };
+    },
+
+    async recordStripePaymentFromInvoice({ workspaceId, stripeInvoiceId, stripePaymentIntentId = null, amountPaid = 0, currency = 'eur' }) {
+      if (!workspaceId || !stripeInvoiceId || Number(amountPaid || 0) <= 0) return null;
+      const existing = sqliteDb.prepare('SELECT id FROM payments WHERE provider = ? AND (provider_ref = ? OR provider_payment_intent_id = ?) LIMIT 1').get('stripe', stripeInvoiceId, stripePaymentIntentId || stripeInvoiceId);
+      if (existing) return { paymentId: existing.id, idempotent: true };
+      const invoiceId = `stripe_inv_${stripeInvoiceId}`;
+      const paymentId = `stripe_pay_${stripePaymentIntentId || stripeInvoiceId}`;
+      const now = billingTimestamp(engine);
+      const tx = sqliteDb.transaction(() => {
+        sqliteDb.prepare(`
+          INSERT INTO invoices (id, workspace_id, student_user_id, amount_cents, currency, description, provider, provider_invoice_id, status, due_date, created_at, paid_at)
+          VALUES (?, ?, NULL, ?, ?, ?, 'stripe', ?, 'paid', NULL, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET status = 'paid', paid_at = excluded.paid_at
+        `).run(invoiceId, workspaceId, Math.floor(Number(amountPaid)), String(currency || 'eur').toUpperCase(), 'Stripe subscription invoice', stripeInvoiceId, now, now);
+        sqliteDb.prepare(`
+          INSERT INTO payments (id, invoice_id, workspace_id, student_user_id, amount_cents, currency, provider, provider_ref, provider_payment_intent_id, created_at)
+          VALUES (?, ?, ?, NULL, ?, ?, 'stripe', ?, ?, ?)
+        `).run(paymentId, invoiceId, workspaceId, Math.floor(Number(amountPaid)), String(currency || 'eur').toUpperCase(), stripeInvoiceId, stripePaymentIntentId || null, now);
+      });
+      tx();
+      return { paymentId };
+    },
+
+    async recordStripeInvoiceFailure({ workspaceId, stripeInvoiceId, amountDue = 0, currency = 'eur' }) {
+      if (!workspaceId || !stripeInvoiceId) return null;
+      const invoiceId = `stripe_inv_${stripeInvoiceId}`;
+      const existing = sqliteDb.prepare('SELECT id, status FROM invoices WHERE id = ? LIMIT 1').get(invoiceId);
+      if (existing) return { invoiceId, idempotent: true };
+      sqliteDb.prepare(`
+        INSERT INTO invoices (id, workspace_id, student_user_id, amount_cents, currency, description, provider, provider_invoice_id, status, due_date, created_at)
+        VALUES (?, ?, NULL, ?, ?, ?, 'stripe', ?, 'open', NULL, ?)
+      `).run(
+        invoiceId,
+        workspaceId,
+        Math.max(1, Math.floor(Number(amountDue || 0) || 1)),
+        String(currency || 'eur').toUpperCase(),
+        'Stripe failed subscription invoice',
+        stripeInvoiceId,
+        billingTimestamp(engine)
+      );
+      return { invoiceId };
     }
   };
 }
@@ -314,6 +480,14 @@ function createPostgresBillingRepository() {
       invoiceContactName: row.invoiceContactName ?? row.invoice_contact_name ?? null,
       readinessAcknowledgedAt: row.readinessAcknowledgedAt ?? row.readiness_acknowledged_at ?? null,
       readinessAcknowledgedByUserId: row.readinessAcknowledgedByUserId ?? row.readiness_acknowledged_by_user_id ?? null,
+      provider: row.provider || 'stripe',
+      providerCustomerId: row.providerCustomerId ?? row.provider_customer_id ?? null,
+      providerSubscriptionId: row.providerSubscriptionId ?? row.provider_subscription_id ?? null,
+      stripeCustomerId: row.stripeCustomerId ?? row.stripe_customer_id ?? row.providerCustomerId ?? row.provider_customer_id ?? null,
+      stripeSubscriptionId: row.stripeSubscriptionId ?? row.stripe_subscription_id ?? row.providerSubscriptionId ?? row.provider_subscription_id ?? null,
+      stripePriceId: row.stripePriceId ?? row.stripe_price_id ?? null,
+      stripeSubscriptionStatus: row.stripeSubscriptionStatus ?? row.stripe_subscription_status ?? null,
+      currentPeriodEnd: row.currentPeriodEnd ?? row.current_period_end ?? null,
       updatedAt: row.updatedAt ?? row.updated_at ?? null
     };
   }
@@ -385,6 +559,14 @@ function createPostgresBillingRepository() {
           invoice_contact_name AS "invoiceContactName",
           readiness_acknowledged_at AS "readinessAcknowledgedAt",
           readiness_acknowledged_by_user_id AS "readinessAcknowledgedByUserId",
+          provider,
+          provider_customer_id AS "providerCustomerId",
+          provider_subscription_id AS "providerSubscriptionId",
+          stripe_customer_id AS "stripeCustomerId",
+          stripe_subscription_id AS "stripeSubscriptionId",
+          stripe_price_id AS "stripePriceId",
+          stripe_subscription_status AS "stripeSubscriptionStatus",
+          current_period_end AS "currentPeriodEnd",
           updated_at AS "updatedAt"
         FROM workspace_billing
         WHERE workspace_id = ?
@@ -439,6 +621,8 @@ function createPostgresBillingRepository() {
           amount_cents AS "amountCents",
           currency,
           description,
+          provider,
+          provider_invoice_id AS "providerInvoiceId",
           status,
           due_date AS "dueDate",
           created_at AS "createdAt",
@@ -466,6 +650,7 @@ function createPostgresBillingRepository() {
           currency,
           provider,
           provider_ref AS "providerRef",
+          provider_payment_intent_id AS "providerPaymentIntentId",
           created_at AS "createdAt"
         FROM payments
         ${where}
@@ -544,6 +729,109 @@ function createPostgresBillingRepository() {
       });
 
       return { paymentId, paidAt };
+    },
+
+    async updateWorkspaceStripeState({
+      workspaceId,
+      stripeCustomerId,
+      stripeSubscriptionId,
+      stripePriceId,
+      stripeSubscriptionStatus,
+      currentPeriodEnd
+    }) {
+      if (!workspaceId) return null;
+      await this.ensureWorkspaceBilling({ workspaceId });
+      const existing = await this.getWorkspaceBillingProfile(workspaceId);
+      const now = billingTimestamp(engine);
+      await postgres.execute(`
+        UPDATE workspace_billing
+        SET provider = 'stripe',
+            provider_customer_id = ?,
+            provider_subscription_id = ?,
+            stripe_customer_id = ?,
+            stripe_subscription_id = ?,
+            stripe_price_id = ?,
+            stripe_subscription_status = ?,
+            current_period_end = ?,
+            status = CASE
+              WHEN ? IN ('active', 'trialing') THEN 'active'
+              WHEN ? IN ('past_due', 'unpaid') THEN 'past_due'
+              WHEN ? IN ('canceled', 'incomplete_expired') THEN 'canceled'
+              ELSE status
+            END,
+            updated_at = ?
+        WHERE workspace_id = ?
+      `, [
+        stripeCustomerId !== undefined ? stripeCustomerId : existing?.stripeCustomerId || null,
+        stripeSubscriptionId !== undefined ? stripeSubscriptionId : existing?.stripeSubscriptionId || null,
+        stripeCustomerId !== undefined ? stripeCustomerId : existing?.stripeCustomerId || null,
+        stripeSubscriptionId !== undefined ? stripeSubscriptionId : existing?.stripeSubscriptionId || null,
+        stripePriceId !== undefined ? stripePriceId : existing?.stripePriceId || null,
+        stripeSubscriptionStatus !== undefined ? stripeSubscriptionStatus : existing?.stripeSubscriptionStatus || null,
+        currentPeriodEnd !== undefined ? currentPeriodEnd : existing?.currentPeriodEnd || null,
+        stripeSubscriptionStatus || '',
+        stripeSubscriptionStatus || '',
+        stripeSubscriptionStatus || '',
+        now,
+        workspaceId
+      ]);
+      return this.getWorkspaceBillingProfile(workspaceId);
+    },
+
+    async findWorkspaceByStripeCustomerId(stripeCustomerId) {
+      if (!stripeCustomerId) return null;
+      const row = await postgres.queryOne('SELECT workspace_id AS "workspaceId" FROM workspace_billing WHERE stripe_customer_id = ? OR provider_customer_id = ? LIMIT 1', [stripeCustomerId, stripeCustomerId]);
+      return row?.workspaceId || null;
+    },
+
+    async recordBillingProviderEvent({ workspaceId = null, provider = 'stripe', eventType, status = 'received', providerRef = null, metadata = {} }) {
+      const id = `bill_evt_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      await postgres.execute(`
+        INSERT INTO billing_provider_events (id, workspace_id, provider, event_type, status, provider_ref, metadata_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `, [id, workspaceId || null, provider, eventType, status, providerRef || null, stringifyJson(metadata), billingTimestamp(engine)]);
+      return { id };
+    },
+
+    async recordStripePaymentFromInvoice({ workspaceId, stripeInvoiceId, stripePaymentIntentId = null, amountPaid = 0, currency = 'eur' }) {
+      if (!workspaceId || !stripeInvoiceId || Number(amountPaid || 0) <= 0) return null;
+      const existing = await postgres.queryOne('SELECT id FROM payments WHERE provider = ? AND (provider_ref = ? OR provider_payment_intent_id = ?) LIMIT 1', ['stripe', stripeInvoiceId, stripePaymentIntentId || stripeInvoiceId]);
+      if (existing) return { paymentId: existing.id, idempotent: true };
+      const invoiceId = `stripe_inv_${stripeInvoiceId}`;
+      const paymentId = `stripe_pay_${stripePaymentIntentId || stripeInvoiceId}`;
+      const now = billingTimestamp(engine);
+      await postgres.transaction(async (tx) => {
+        await tx.execute(`
+          INSERT INTO invoices (id, workspace_id, student_user_id, amount_cents, currency, description, provider, provider_invoice_id, status, due_date, created_at, paid_at)
+          VALUES (?, ?, NULL, ?, ?, ?, 'stripe', ?, 'paid', NULL, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET status = 'paid', paid_at = EXCLUDED.paid_at
+        `, [invoiceId, workspaceId, Math.floor(Number(amountPaid)), String(currency || 'eur').toUpperCase(), 'Stripe subscription invoice', stripeInvoiceId, now, now]);
+        await tx.execute(`
+          INSERT INTO payments (id, invoice_id, workspace_id, student_user_id, amount_cents, currency, provider, provider_ref, provider_payment_intent_id, created_at)
+          VALUES (?, ?, ?, NULL, ?, ?, 'stripe', ?, ?, ?)
+        `, [paymentId, invoiceId, workspaceId, Math.floor(Number(amountPaid)), String(currency || 'eur').toUpperCase(), stripeInvoiceId, stripePaymentIntentId || null, now]);
+      });
+      return { paymentId };
+    },
+
+    async recordStripeInvoiceFailure({ workspaceId, stripeInvoiceId, amountDue = 0, currency = 'eur' }) {
+      if (!workspaceId || !stripeInvoiceId) return null;
+      const invoiceId = `stripe_inv_${stripeInvoiceId}`;
+      const existing = await postgres.queryOne('SELECT id, status FROM invoices WHERE id = ? LIMIT 1', [invoiceId]);
+      if (existing) return { invoiceId, idempotent: true };
+      await postgres.execute(`
+        INSERT INTO invoices (id, workspace_id, student_user_id, amount_cents, currency, description, provider, provider_invoice_id, status, due_date, created_at)
+        VALUES (?, ?, NULL, ?, ?, ?, 'stripe', ?, 'open', NULL, ?)
+      `, [
+        invoiceId,
+        workspaceId,
+        Math.max(1, Math.floor(Number(amountDue || 0) || 1)),
+        String(currency || 'eur').toUpperCase(),
+        'Stripe failed subscription invoice',
+        stripeInvoiceId,
+        billingTimestamp(engine)
+      ]);
+      return { invoiceId };
     }
   };
 }

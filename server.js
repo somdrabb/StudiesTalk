@@ -49,6 +49,7 @@ const { createRequestContextMiddleware } = require('./server/middleware/requestC
 const { createErrorHandlerMiddleware } = require('./server/middleware/errorHandler.middleware');
 const aiSpeakingScenarioConfig = require('./public/AIvoicepractice/scenarioConfig.js');
 const { createBillingRepository } = require('./server/repositories/billingRepository');
+const { createStripeBillingService } = require('./server/services/billing/stripe.service');
 const { createTasksRepository } = require('./server/repositories/tasksRepository');
 const { createAttendanceRepository } = require('./server/repositories/attendanceRepository');
 const { createWorkspaceRepository } = require('./server/repositories/workspaceRepository');
@@ -556,6 +557,7 @@ const adminSensitiveMutationLimiter = createScopedRateLimiter({
     /^\/api\/admin\/users\/[^/]+$/,
     /^\/api\/admin\/invoices$/,
     /^\/api\/admin\/invoices\/[^/]+\/mark-paid$/,
+    /^\/api\/admin\/billing\/stripe\/workspaces\/[^/]+\/(?:checkout-session|portal-session)$/,
     /^\/api\/admin\/workspace-settings\/[^/]+$/
   ]
 });
@@ -1005,6 +1007,19 @@ function isPromiseLike(value) {
   if (billingRepository.engine !== 'sqlite') {
     console.warn(`[Billing] Using ${billingRepository.engine} adapter. Auth/session runtime remains SQLite.`);
   }
+  const stripeBillingService = createStripeBillingService({
+    env: process.env,
+    billingRepository,
+    audit: (action, meta = {}) => {
+      audit(action, { auth: null, ctx: null, headers: {}, get: () => '', socket: {} }, { meta });
+    },
+    updateWorkspaceStatus: async (workspaceId, status) => {
+      const ws = String(workspaceId || '').trim();
+      const nextStatus = String(status || '').trim();
+      if (!ws || !nextStatus) return;
+      db.prepare('UPDATE workspaces SET status = ? WHERE id = ?').run(nextStatus, ws);
+    }
+  });
   const tasksRepository = createTasksRepository({
     engine: ENV.TASKS_DB_ENGINE || 'sqlite',
     sqliteDb: db
@@ -1523,6 +1538,14 @@ CREATE TABLE IF NOT EXISTS workspace_billing (
 safeAlter(`ALTER TABLE workspace_billing ADD COLUMN invoice_contact_name TEXT;`);
 safeAlter(`ALTER TABLE workspace_billing ADD COLUMN readiness_acknowledged_at TEXT;`);
 safeAlter(`ALTER TABLE workspace_billing ADD COLUMN readiness_acknowledged_by_user_id TEXT;`);
+safeAlter(`ALTER TABLE workspace_billing ADD COLUMN stripe_customer_id TEXT;`);
+safeAlter(`ALTER TABLE workspace_billing ADD COLUMN stripe_subscription_id TEXT;`);
+safeAlter(`ALTER TABLE workspace_billing ADD COLUMN stripe_price_id TEXT;`);
+safeAlter(`ALTER TABLE workspace_billing ADD COLUMN stripe_subscription_status TEXT;`);
+safeAlter(`ALTER TABLE workspace_billing ADD COLUMN provider TEXT DEFAULT 'stripe';`);
+safeAlter(`ALTER TABLE workspace_billing ADD COLUMN provider_customer_id TEXT;`);
+safeAlter(`ALTER TABLE workspace_billing ADD COLUMN provider_subscription_id TEXT;`);
+safeAlter(`ALTER TABLE workspace_billing ADD COLUMN current_period_end TEXT;`);
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS invoices (
@@ -1560,7 +1583,10 @@ CREATE TABLE IF NOT EXISTS payments (
 );
 `);
 safeAlter(`ALTER TABLE invoices ADD COLUMN student_user_id TEXT;`);
+safeAlter(`ALTER TABLE invoices ADD COLUMN provider TEXT DEFAULT 'manual';`);
+safeAlter(`ALTER TABLE invoices ADD COLUMN provider_invoice_id TEXT;`);
 safeAlter(`ALTER TABLE payments ADD COLUMN student_user_id TEXT;`);
+safeAlter(`ALTER TABLE payments ADD COLUMN provider_payment_intent_id TEXT;`);
 db.exec(`
 CREATE INDEX IF NOT EXISTS idx_invoices_ws_student
   ON invoices(workspace_id, student_user_id);
@@ -1568,6 +1594,23 @@ CREATE INDEX IF NOT EXISTS idx_invoices_ws_student
 db.exec(`
 CREATE INDEX IF NOT EXISTS idx_payments_ws_student
   ON payments(workspace_id, student_user_id);
+`);
+db.exec(`
+CREATE TABLE IF NOT EXISTS billing_provider_events (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT,
+  provider TEXT NOT NULL DEFAULT 'stripe',
+  event_type TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'received',
+  provider_ref TEXT,
+  metadata_json TEXT,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE SET NULL
+);
+`);
+db.exec(`
+CREATE INDEX IF NOT EXISTS idx_billing_provider_events_workspace
+  ON billing_provider_events(workspace_id, provider, created_at);
 `);
 
 db.exec(`
@@ -4908,7 +4951,14 @@ try {
 app.set('etag', false);
 
 // body parsing / logging / static assets must be before routes
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({
+  limit: '10mb',
+  verify: (req, _res, buf) => {
+    if (req.originalUrl === '/api/billing/stripe/webhook' || req.originalUrl === '/api/billing/webhook') {
+      req.rawBody = Buffer.from(buf);
+    }
+  }
+}));
 app.use(express.urlencoded({ extended: true }));
 morgan.token('request-id', (req) => String(req.id || '-'));
 const prodMorganFormat = ':request-id :remote-addr :method :url :status :res[content-length] - :response-time ms';
@@ -5651,6 +5701,54 @@ app.use(policyAcceptanceLimiter);
 app.use(onboardingMutationLimiter);
 app.use(adminSensitiveMutationLimiter);
 app.use('/api/admin', authRequired);
+
+const BILLING_ENFORCEMENT_ALLOW_PREFIXES = [
+  '/api/auth',
+  '/api/billing',
+  '/api/legal',
+  '/api/policy',
+  '/api/workspaces'
+];
+
+function isBillingEnforcementExempt(req) {
+  const pathOnly = String(req.path || req.originalUrl || '').split('?')[0];
+  if (!pathOnly.startsWith('/api/')) return true;
+  if (pathOnly.startsWith('/api/admin')) return true;
+  if (pathOnly === '/api/auth/me' || pathOnly === '/api/auth/logout') return true;
+  return BILLING_ENFORCEMENT_ALLOW_PREFIXES.some((prefix) => pathOnly.startsWith(prefix));
+}
+
+app.use('/api', async (req, res, next) => {
+  if (isBillingEnforcementExempt(req)) return next();
+  const user = await attachAccessTokenIfPresent(req);
+  if (!user || user.superAdmin || String(user.role || '').toLowerCase() === 'super_admin') return next();
+  const role = normalizeRoleName(user.role);
+  const workspaceId = String(user.workspaceId || user.workspace_id || '').trim();
+  if (!workspaceId || workspaceId === 'default') return next();
+  try {
+    const profile = await billingRepository.getWorkspaceBillingProfile(workspaceId);
+    const status = String(profile?.status || profile?.stripeSubscriptionStatus || 'active').toLowerCase();
+    if (status === 'past_due') {
+      res.setHeader('X-Workspace-Billing-Status', 'past_due');
+      res.setHeader('X-Workspace-Billing-Warning', 'payment_required');
+      return next();
+    }
+    if (status === 'canceled') {
+      if (['admin', 'school_admin'].includes(role)) {
+        res.setHeader('X-Workspace-Billing-Status', 'canceled');
+        return next();
+      }
+      return res.status(402).json({
+        error: 'Workspace subscription is canceled. Contact your workspace admin.',
+        code: 'workspace_billing_canceled'
+      });
+    }
+    return next();
+  } catch (err) {
+    console.warn('[Billing] enforcement skipped:', err?.message || String(err));
+    return next();
+  }
+});
 
 function inferAdminMutationAction(req) {
   const method = String(req.method || '').toUpperCase();
@@ -30339,12 +30437,190 @@ app.get('/api/admin/billing/:workspaceId', async (req, res) => {
     // Billing migration boundary: list invoices/payments through adapter only.
     const invoices = await billingRepository.listInvoices(ws);
     const payments = await billingRepository.listPayments(ws);
-    return res.json({ invoices, payments });
+    const stripe = ws === 'all'
+      ? stripeBillingService.getStatus()
+      : {
+          ...stripeBillingService.getStatus(),
+          workspace: await billingRepository.getWorkspaceBillingProfile(ws)
+        };
+    return res.json({ invoices, payments, stripe });
   } catch (err) {
     console.error('[Billing] List failed', err);
     return res.status(500).json({ error: 'Failed to load billing' });
   }
 });
+
+app.get('/api/admin/billing/stripe/status', async (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  return res.json(stripeBillingService.getStatus());
+});
+
+app.post('/api/admin/billing/stripe/workspaces/:workspaceId/checkout-session', async (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  const workspaceId = String(req.params.workspaceId || '').trim();
+  const workspace = workspaceRepository.getWorkspaceBasic
+    ? await Promise.resolve(workspaceRepository.getWorkspaceBasic(workspaceId)).catch(() => null)
+    : null;
+  const profile = await billingRepository.getWorkspaceBillingProfile(workspaceId).catch(() => null);
+  try {
+    const session = await stripeBillingService.createCheckoutSession({
+      workspaceId,
+      priceId: req.body?.priceId,
+      quantity: req.body?.quantity,
+      email: req.body?.email || profile?.billingEmail || workspace?.adminEmail || null,
+      trialDays: req.body?.trialDays,
+      actorId: user.id || user.sub || null
+    });
+    audit('billing.stripe.checkout_session_created', req, {
+      user,
+      workspaceId,
+      target: session.id,
+      meta: { result: 'success' }
+    });
+    return res.json(session);
+  } catch (err) {
+    audit('billing.stripe.checkout_session_failed', req, {
+      user,
+      workspaceId,
+      meta: { result: 'failure', reason: err?.message || 'Stripe checkout failed' }
+    });
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Failed to create Stripe checkout session' });
+  }
+});
+
+app.post('/api/admin/billing/stripe/workspaces/:workspaceId/portal-session', async (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  const workspaceId = String(req.params.workspaceId || '').trim();
+  try {
+    const session = await stripeBillingService.createPortalSession({
+      workspaceId,
+      returnUrl: req.body?.returnUrl || null
+    });
+    audit('billing.stripe.portal_session_created', req, {
+      user,
+      workspaceId,
+      target: session.id,
+      meta: { result: 'success' }
+    });
+    return res.json(session);
+  } catch (err) {
+    audit('billing.stripe.portal_session_failed', req, {
+      user,
+      workspaceId,
+      meta: { result: 'failure', reason: err?.message || 'Stripe portal failed' }
+    });
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Failed to create Stripe portal session' });
+  }
+});
+
+app.post('/api/billing/create-checkout-session', authRequired, requirePermission('billing:read'), async (req, res) => {
+  const user = req.auth || getAuthedUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated' });
+
+  const workspaceId = String(user.workspaceId || user.workspace_id || '').trim();
+  if (!workspaceId || workspaceId === 'default') {
+    return res.status(403).json({ error: 'Workspace billing requires an authenticated workspace context.' });
+  }
+
+  const workspace = await Promise.resolve(workspaceRepository.getWorkspaceBasic(workspaceId)).catch(() => null);
+  if (!workspace || String(workspace.id || '') !== workspaceId) {
+    void logTenantIsolationEvent(req, {
+      workspaceId,
+      targetType: 'workspace',
+      targetId: workspaceId,
+      reason: 'billing_workspace_not_found'
+    });
+    return tenantForbidden(res);
+  }
+
+  const plan = String(req.body?.plan || '').trim().toLowerCase();
+  if (!['starter', 'pro', 'professional', 'enterprise'].includes(plan)) {
+    return res.status(400).json({ error: 'Valid plan is required.' });
+  }
+
+  try {
+    await billingRepository.ensureWorkspaceBilling({ workspaceId, billingEmail: workspace.adminEmail || user.email || null });
+    const session = await stripeBillingService.createCheckoutSession({
+      workspaceId,
+      plan,
+      email: workspace.adminEmail || user.email || null,
+      actorId: user.id || user.sub || null
+    });
+    audit('billing.stripe.checkout_session_created', req, {
+      user,
+      workspaceId,
+      target: session.id,
+      meta: { result: 'success', plan }
+    });
+    return res.json({ url: session.url });
+  } catch (err) {
+    audit('billing.stripe.checkout_session_failed', req, {
+      user,
+      workspaceId,
+      meta: { result: 'failure', plan, reason: err?.message || 'Stripe checkout failed' }
+    });
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Failed to create checkout session' });
+  }
+});
+
+app.get('/api/billing/customer-portal', authRequired, requirePermission('billing:read'), async (req, res) => {
+  const user = req.auth || getAuthedUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated' });
+
+  const workspaceId = String(user.workspaceId || user.workspace_id || '').trim();
+  if (!workspaceId || workspaceId === 'default') {
+    return res.status(403).json({ error: 'Workspace billing requires an authenticated workspace context.' });
+  }
+
+  const workspace = await Promise.resolve(workspaceRepository.getWorkspaceBasic(workspaceId)).catch(() => null);
+  if (!workspace || String(workspace.id || '') !== workspaceId) {
+    void logTenantIsolationEvent(req, {
+      workspaceId,
+      targetType: 'workspace',
+      targetId: workspaceId,
+      reason: 'billing_workspace_not_found'
+    });
+    return tenantForbidden(res);
+  }
+
+  try {
+    const profile = await billingRepository.getWorkspaceBillingProfile(workspaceId);
+    const customerId = profile?.providerCustomerId || profile?.stripeCustomerId;
+    if (!customerId) return res.status(400).json({ error: 'Stripe customer is not available for this workspace.' });
+    const session = await stripeBillingService.getCustomerPortalSession(customerId);
+    audit('billing.stripe.portal_session_created', req, {
+      user,
+      workspaceId,
+      target: session.id,
+      meta: { result: 'success' }
+    });
+    return res.json({ url: session.url });
+  } catch (err) {
+    audit('billing.stripe.portal_session_failed', req, {
+      user,
+      workspaceId,
+      meta: { result: 'failure', reason: err?.message || 'Stripe portal failed' }
+    });
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Failed to create customer portal session' });
+  }
+});
+
+async function handleStripeWebhookRequest(req, res) {
+  try {
+    const event = stripeBillingService.constructWebhookEvent(req.rawBody || Buffer.from(JSON.stringify(req.body || {})), req.get('stripe-signature') || '');
+    const result = await stripeBillingService.handleWebhookEvent(event);
+    return res.json(result);
+  } catch (err) {
+    console.error('[Stripe] webhook failed', err?.message || err);
+    return res.status(err.statusCode || 400).json({ error: 'Invalid Stripe webhook' });
+  }
+}
+
+app.post('/api/billing/webhook', handleStripeWebhookRequest);
+app.post('/api/billing/stripe/webhook', handleStripeWebhookRequest);
 
 app.post('/api/admin/invoices', async (req, res) => {
   const user = requireSuperAdmin(req, res);
