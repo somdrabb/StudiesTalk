@@ -76,11 +76,18 @@ CREATE TABLE IF NOT EXISTS data_governance_requests (
   status TEXT DEFAULT 'pending',
   requested_by TEXT,
   approved_by TEXT,
+  approved_at TIMESTAMPTZ,
   reason TEXT,
+  evidence_path TEXT,
+  affected_tables_summary TEXT,
   metadata_json TEXT,
   created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
   completed_at TIMESTAMPTZ
 );
+
+ALTER TABLE data_governance_requests ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
+ALTER TABLE data_governance_requests ADD COLUMN IF NOT EXISTS evidence_path TEXT;
+ALTER TABLE data_governance_requests ADD COLUMN IF NOT EXISTS affected_tables_summary TEXT;
 
 CREATE TABLE IF NOT EXISTS platform_notifications (
   id TEXT PRIMARY KEY,
@@ -93,6 +100,69 @@ CREATE TABLE IF NOT EXISTS platform_notifications (
   scheduled_at TIMESTAMPTZ,
   sent_at TIMESTAMPTZ,
   created_by TEXT,
+  created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS notifications_campaigns (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  subject TEXT,
+  body TEXT NOT NULL,
+  channels_json TEXT NOT NULL,
+  target_type TEXT DEFAULT 'all_workspaces',
+  target_json TEXT,
+  priority TEXT DEFAULT 'normal',
+  status TEXT DEFAULT 'draft',
+  scheduled_at TIMESTAMPTZ,
+  timezone TEXT,
+  recurring TEXT DEFAULT 'none',
+  fallback_json TEXT,
+  estimated_recipients INTEGER DEFAULT 0,
+  estimated_sms_cost NUMERIC DEFAULT 0,
+  estimated_email_cost NUMERIC DEFAULT 0,
+  created_by TEXT,
+  created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+  sent_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS notifications_targets (
+  id TEXT PRIMARY KEY,
+  campaign_id TEXT NOT NULL,
+  workspace_id TEXT,
+  user_id TEXT,
+  created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS notifications_deliveries (
+  id TEXT PRIMARY KEY,
+  campaign_id TEXT NOT NULL,
+  user_id TEXT,
+  channel TEXT NOT NULL,
+  status TEXT DEFAULT 'pending',
+  cost NUMERIC DEFAULT 0,
+  error_message TEXT,
+  created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS notifications_templates (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  channel TEXT DEFAULT 'in_app',
+  subject TEXT,
+  body TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS notifications_logs (
+  id TEXT PRIMARY KEY,
+  campaign_id TEXT NOT NULL,
+  total_sent INTEGER DEFAULT 0,
+  delivered INTEGER DEFAULT 0,
+  failed INTEGER DEFAULT 0,
+  cost_total NUMERIC DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 

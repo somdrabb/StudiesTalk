@@ -73,6 +73,7 @@ const { createPlatformOwnerControlRouter } = require('./server/routes/platformOw
 const { createNotificationControlRouter } = require('./server/routes/notificationControl.routes');
 const { createPaymentGatewaySecretsService } = require('./server/services/paymentGatewaySecrets.service');
 const { createAdminPaymentGatewaysRouter } = require('./server/routes/admin.paymentGateways.routes');
+const { listCoveredDataDomains } = require('./server/services/dataGovernanceCoverage.service');
 
 let sentry = null;
 if (process.env.SENTRY_DSN) {
@@ -1554,6 +1555,18 @@ safeAlter(`ALTER TABLE workspace_billing ADD COLUMN provider TEXT DEFAULT 'strip
 safeAlter(`ALTER TABLE workspace_billing ADD COLUMN provider_customer_id TEXT;`);
 safeAlter(`ALTER TABLE workspace_billing ADD COLUMN provider_subscription_id TEXT;`);
 safeAlter(`ALTER TABLE workspace_billing ADD COLUMN current_period_end TEXT;`);
+safeAlter(`ALTER TABLE workspace_billing ADD COLUMN legal_company_name TEXT;`);
+safeAlter(`ALTER TABLE workspace_billing ADD COLUMN billing_contact_name TEXT;`);
+safeAlter(`ALTER TABLE workspace_billing ADD COLUMN billing_address_line1 TEXT;`);
+safeAlter(`ALTER TABLE workspace_billing ADD COLUMN billing_address_line2 TEXT;`);
+safeAlter(`ALTER TABLE workspace_billing ADD COLUMN billing_city TEXT;`);
+safeAlter(`ALTER TABLE workspace_billing ADD COLUMN billing_postal_code TEXT;`);
+safeAlter(`ALTER TABLE workspace_billing ADD COLUMN billing_country TEXT;`);
+safeAlter(`ALTER TABLE workspace_billing ADD COLUMN vat_id TEXT;`);
+safeAlter(`ALTER TABLE workspace_billing ADD COLUMN tax_number TEXT;`);
+safeAlter(`ALTER TABLE workspace_billing ADD COLUMN invoice_language TEXT DEFAULT 'en';`);
+safeAlter(`ALTER TABLE workspace_billing ADD COLUMN invoice_currency TEXT DEFAULT 'EUR';`);
+safeAlter(`ALTER TABLE workspace_billing ADD COLUMN reverse_charge_applicable INTEGER DEFAULT 0;`);
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS invoices (
@@ -1593,6 +1606,22 @@ CREATE TABLE IF NOT EXISTS payments (
 safeAlter(`ALTER TABLE invoices ADD COLUMN student_user_id TEXT;`);
 safeAlter(`ALTER TABLE invoices ADD COLUMN provider TEXT DEFAULT 'manual';`);
 safeAlter(`ALTER TABLE invoices ADD COLUMN provider_invoice_id TEXT;`);
+safeAlter(`ALTER TABLE invoices ADD COLUMN seller_company_name TEXT;`);
+safeAlter(`ALTER TABLE invoices ADD COLUMN seller_address TEXT;`);
+safeAlter(`ALTER TABLE invoices ADD COLUMN seller_vat_id TEXT;`);
+safeAlter(`ALTER TABLE invoices ADD COLUMN seller_tax_number TEXT;`);
+safeAlter(`ALTER TABLE invoices ADD COLUMN buyer_company_name TEXT;`);
+safeAlter(`ALTER TABLE invoices ADD COLUMN buyer_billing_address TEXT;`);
+safeAlter(`ALTER TABLE invoices ADD COLUMN buyer_vat_id TEXT;`);
+safeAlter(`ALTER TABLE invoices ADD COLUMN invoice_number TEXT;`);
+safeAlter(`ALTER TABLE invoices ADD COLUMN invoice_date TEXT;`);
+safeAlter(`ALTER TABLE invoices ADD COLUMN net_amount INTEGER;`);
+safeAlter(`ALTER TABLE invoices ADD COLUMN vat_rate REAL DEFAULT 0;`);
+safeAlter(`ALTER TABLE invoices ADD COLUMN vat_amount INTEGER DEFAULT 0;`);
+safeAlter(`ALTER TABLE invoices ADD COLUMN gross_amount INTEGER;`);
+safeAlter(`ALTER TABLE invoices ADD COLUMN reverse_charge_note TEXT;`);
+safeAlter(`ALTER TABLE invoices ADD COLUMN payment_provider TEXT;`);
+safeAlter(`ALTER TABLE invoices ADD COLUMN legal_footer TEXT;`);
 safeAlter(`ALTER TABLE payments ADD COLUMN student_user_id TEXT;`);
 safeAlter(`ALTER TABLE payments ADD COLUMN provider_payment_intent_id TEXT;`);
 db.exec(`
@@ -1677,22 +1706,99 @@ db.exec(`
 CREATE TABLE IF NOT EXISTS platform_legal_versions (
   id TEXT PRIMARY KEY,
   legal_settings_id TEXT,
-  document_type TEXT NOT NULL CHECK (document_type IN ('privacy','terms','impressum','cookies','dpa')),
+  document_type TEXT NOT NULL CHECK (document_type IN ('privacy','terms','impressum','cookies','dpa','ai_notice','recording_notice','subprocessor_list')),
   version TEXT,
   locale TEXT DEFAULT 'en',
   title TEXT,
   body TEXT,
+  status TEXT DEFAULT 'draft',
   is_active INTEGER DEFAULT 0,
   published_at TEXT,
+  effective_from TEXT,
   created_by TEXT,
+  updated_by TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (legal_settings_id) REFERENCES platform_legal_settings(id) ON DELETE CASCADE
 );
 `);
+try {
+  const legalVersionTableSql = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'platform_legal_versions'").get()?.sql || '';
+  if (legalVersionTableSql && !legalVersionTableSql.includes('ai_notice')) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS platform_legal_versions_new (
+        id TEXT PRIMARY KEY,
+        legal_settings_id TEXT,
+        document_type TEXT NOT NULL CHECK (document_type IN ('privacy','terms','impressum','cookies','dpa','ai_notice','recording_notice','subprocessor_list')),
+        version TEXT,
+        locale TEXT DEFAULT 'en',
+        title TEXT,
+        body TEXT,
+        status TEXT DEFAULT 'draft',
+        is_active INTEGER DEFAULT 0,
+        published_at TEXT,
+        effective_from TEXT,
+        created_by TEXT,
+        updated_by TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (legal_settings_id) REFERENCES platform_legal_settings(id) ON DELETE CASCADE
+      );
+      INSERT OR IGNORE INTO platform_legal_versions_new (
+        id, legal_settings_id, document_type, version, locale, title, body,
+        status, is_active, published_at, effective_from, created_by, updated_by, created_at
+      )
+      SELECT
+        id, legal_settings_id, document_type, version, locale, title, body,
+        CASE WHEN is_active = 1 THEN 'published' ELSE 'draft' END, is_active, published_at, NULL, created_by, NULL, created_at
+      FROM platform_legal_versions;
+      DROP TABLE platform_legal_versions;
+      ALTER TABLE platform_legal_versions_new RENAME TO platform_legal_versions;
+    `);
+  }
+} catch (err) {
+  console.warn('[Legal] legal versions table migration skipped:', err?.message || err);
+}
+safeAlter(`ALTER TABLE platform_legal_versions ADD COLUMN status TEXT DEFAULT 'draft';`);
+safeAlter(`ALTER TABLE platform_legal_versions ADD COLUMN effective_from TEXT;`);
+safeAlter(`ALTER TABLE platform_legal_versions ADD COLUMN updated_by TEXT;`);
 db.exec(`
 CREATE INDEX IF NOT EXISTS idx_platform_legal_versions_doc_locale
   ON platform_legal_versions(document_type, locale, is_active);
 `);
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS legal_subprocessors (
+  id TEXT PRIMARY KEY,
+  provider_name TEXT NOT NULL,
+  service_type TEXT,
+  data_location TEXT,
+  purpose TEXT,
+  legal_basis TEXT,
+  dpa_available INTEGER DEFAULT 0,
+  privacy_url TEXT,
+  active INTEGER DEFAULT 1,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+`);
+try {
+  const defaults = [
+    ['subproc_stripe', 'Stripe', 'Payments', 'EU/US', 'Subscription checkout and billing', 'Contract', 1, 'https://stripe.com/privacy'],
+    ['subproc_openai', 'OpenAI', 'AI assistance', 'EU/US', 'Optional AI assistance features', 'Configurable', 0, 'https://openai.com/policies/privacy-policy'],
+    ['subproc_twilio', 'Twilio', 'SMS', 'EU/US', 'Optional SMS delivery', 'Contract', 0, 'https://www.twilio.com/legal/privacy'],
+    ['subproc_ionos', 'IONOS/SMTP', 'Email', 'EU', 'Transactional email delivery', 'Contract', 0, ''],
+    ['subproc_jitsi', 'Jitsi/8x8', 'Live video', 'EU/US', 'Live class video sessions', 'Contract', 0, 'https://www.8x8.com/terms-and-conditions/privacy-policy'],
+    ['subproc_storage', 'S3/R2 provider', 'Storage', 'Configurable', 'File and recording storage', 'Contract', 0, ''],
+    ['subproc_sentry', 'Sentry', 'Error monitoring', 'EU/US', 'Optional production error monitoring', 'Legitimate interest', 0, 'https://sentry.io/privacy/']
+  ];
+  const stmt = db.prepare(`
+    INSERT OR IGNORE INTO legal_subprocessors
+      (id, provider_name, service_type, data_location, purpose, legal_basis, dpa_available, privacy_url, active, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+  `);
+  defaults.forEach((row) => stmt.run(...row));
+} catch (err) {
+  console.warn('[Legal] subprocessor seed skipped:', err?.message || err);
+}
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS legal_acceptances (
@@ -5020,7 +5126,8 @@ async function resolveLegalWorkspaceId(req) {
 }
 
 const PLATFORM_LEGAL_SETTINGS_ID = 'default';
-const LEGAL_DOCUMENT_TYPES = ['privacy', 'terms', 'impressum', 'cookies', 'dpa'];
+const LEGAL_DOCUMENT_TYPES = ['privacy', 'terms', 'impressum', 'cookies', 'dpa', 'ai_notice', 'recording_notice', 'subprocessor_list'];
+const LEGAL_REQUIRED_ACCEPTANCE_TYPES = ['privacy', 'terms', 'dpa'];
 
 function legalNowText() {
   return new Date().toISOString();
@@ -5106,9 +5213,12 @@ function normalizeLegalVersionInput(payload = {}) {
     locale: textOrEmpty(payload.locale) || 'en',
     title: textOrEmpty(payload.title),
     body: typeof payload.body === 'string' ? payload.body : '',
+    status: ['draft', 'published'].includes(textOrEmpty(payload.status)) ? textOrEmpty(payload.status) : (payload.is_active ? 'published' : 'draft'),
     is_active: !!Number(payload.is_active || 0),
     published_at: textOrEmpty(payload.published_at) || null,
+    effective_from: textOrEmpty(payload.effective_from) || null,
     created_by: textOrEmpty(payload.created_by) || null,
+    updated_by: textOrEmpty(payload.updated_by) || null,
     created_at: textOrEmpty(payload.created_at) || null
   };
 }
@@ -5289,8 +5399,8 @@ function createLegalVersionSync(input = {}) {
   });
   db.prepare(`
     INSERT INTO platform_legal_versions (
-      id, legal_settings_id, document_type, version, locale, title, body, is_active, published_at, created_by, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      id, legal_settings_id, document_type, version, locale, title, body, status, is_active, published_at, effective_from, created_by, updated_by, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     record.id,
     record.legal_settings_id,
@@ -5299,9 +5409,12 @@ function createLegalVersionSync(input = {}) {
     record.locale,
     record.title,
     record.body,
+    record.status,
     boolToInt(record.is_active),
     record.published_at,
+    record.effective_from,
     record.created_by,
+    record.updated_by,
     record.created_at || sqlNowText()
   );
   return getLegalVersionByIdSync(record.id);
@@ -5317,7 +5430,7 @@ function updateLegalVersionSync(id, input = {}) {
   });
   db.prepare(`
     UPDATE platform_legal_versions
-    SET legal_settings_id = ?, document_type = ?, version = ?, locale = ?, title = ?, body = ?, is_active = ?, published_at = ?, created_by = ?
+    SET legal_settings_id = ?, document_type = ?, version = ?, locale = ?, title = ?, body = ?, status = ?, is_active = ?, published_at = ?, effective_from = ?, created_by = ?, updated_by = ?
     WHERE id = ?
   `).run(
     record.legal_settings_id,
@@ -5326,9 +5439,12 @@ function updateLegalVersionSync(id, input = {}) {
     record.locale,
     record.title,
     record.body,
+    record.status,
     boolToInt(record.is_active),
     record.published_at,
+    record.effective_from,
     record.created_by,
+    record.updated_by,
     id
   );
   return getLegalVersionByIdSync(id);
@@ -5341,14 +5457,14 @@ function publishLegalVersionSync(id, actorId = '') {
   const tx = db.transaction(() => {
     db.prepare(`
       UPDATE platform_legal_versions
-      SET is_active = 0
+      SET is_active = 0, status = CASE WHEN status = 'published' THEN 'published' ELSE status END
       WHERE document_type = ? AND locale = ?
     `).run(existing.document_type, existing.locale);
     db.prepare(`
       UPDATE platform_legal_versions
-      SET is_active = 1, published_at = ?, created_by = COALESCE(created_by, ?)
+      SET is_active = 1, status = 'published', published_at = ?, effective_from = COALESCE(effective_from, ?), created_by = COALESCE(created_by, ?), updated_by = ?
       WHERE id = ?
-    `).run(publishedAt, actorId || existing.created_by || null, id);
+    `).run(publishedAt, publishedAt, actorId || existing.created_by || null, actorId || null, id);
     const settings = getLegalSettingsRecordSync();
     const patch = {};
     if (existing.document_type === 'terms') patch.terms_version = existing.version;
@@ -5394,7 +5510,7 @@ function getPublicLegalDocumentSync(documentType, locale = 'en') {
 
 function listActiveLegalDocumentsSync(locale = 'en') {
   const result = [];
-  for (const type of LEGAL_DOCUMENT_TYPES) {
+  for (const type of LEGAL_REQUIRED_ACCEPTANCE_TYPES) {
     const doc = getPublicLegalDocumentSync(type, locale);
     if (doc?.is_active) result.push(doc);
   }
@@ -5428,6 +5544,111 @@ function createLegalAcceptanceSync({ userId, workspaceId, documentType, version,
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(id, userId, workspaceId, documentType, version, sqlNowText(), ipAddress || null, userAgent || null);
   return db.prepare(`SELECT * FROM legal_acceptances WHERE id = ? LIMIT 1`).get(id) || null;
+}
+
+function normalizeSubprocessorInput(payload = {}) {
+  return {
+    provider_name: textOrEmpty(payload.provider_name || payload.providerName),
+    service_type: textOrEmpty(payload.service_type || payload.serviceType),
+    data_location: textOrEmpty(payload.data_location || payload.dataLocation),
+    purpose: textOrEmpty(payload.purpose),
+    legal_basis: textOrEmpty(payload.legal_basis || payload.legalBasis),
+    dpa_available: boolToInt(!!(payload.dpa_available ?? payload.dpaAvailable)),
+    privacy_url: textOrEmpty(payload.privacy_url || payload.privacyUrl),
+    active: payload.active === undefined ? 1 : boolToInt(!!payload.active)
+  };
+}
+
+function listLegalSubprocessorsSync() {
+  return db.prepare('SELECT * FROM legal_subprocessors ORDER BY active DESC, provider_name ASC').all();
+}
+
+function upsertLegalSubprocessorSync(id, payload = {}) {
+  const input = normalizeSubprocessorInput(payload);
+  if (!input.provider_name) {
+    const error = new Error('provider_name is required');
+    error.statusCode = 400;
+    throw error;
+  }
+  const rowId = id || `subproc_${crypto.randomBytes(8).toString('hex')}`;
+  const now = sqlNowText();
+  const existing = db.prepare('SELECT id, created_at FROM legal_subprocessors WHERE id = ?').get(rowId);
+  db.prepare(`
+    INSERT INTO legal_subprocessors (
+      id, provider_name, service_type, data_location, purpose, legal_basis,
+      dpa_available, privacy_url, active, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      provider_name = excluded.provider_name,
+      service_type = excluded.service_type,
+      data_location = excluded.data_location,
+      purpose = excluded.purpose,
+      legal_basis = excluded.legal_basis,
+      dpa_available = excluded.dpa_available,
+      privacy_url = excluded.privacy_url,
+      active = excluded.active,
+      updated_at = excluded.updated_at
+  `).run(
+    rowId,
+    input.provider_name,
+    input.service_type,
+    input.data_location,
+    input.purpose,
+    input.legal_basis,
+    input.dpa_available,
+    input.privacy_url,
+    input.active,
+    existing?.created_at || now,
+    now
+  );
+  return db.prepare('SELECT * FROM legal_subprocessors WHERE id = ?').get(rowId);
+}
+
+function deleteLegalSubprocessorSync(id) {
+  return db.prepare('DELETE FROM legal_subprocessors WHERE id = ?').run(id);
+}
+
+function defaultRetentionConfig() {
+  return {
+    audit_log_retention_days: 365,
+    security_log_retention_days: 365,
+    backup_retention_days: 30,
+    file_retention_days: 365,
+    deleted_user_retention_days: 30,
+    learning_data_retention_months: 24,
+    message_retention_days: 365,
+    recording_retention_days: 365,
+    email_log_retention_days: 365
+  };
+}
+
+function normalizeRetentionConfig(payload = {}) {
+  const defaults = defaultRetentionConfig();
+  const next = {};
+  for (const [key, fallback] of Object.entries(defaults)) {
+    const parsed = Number.parseInt(payload[key], 10);
+    next[key] = Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+  }
+  return next;
+}
+
+function getRetentionConfigSync() {
+  const row = db.prepare('SELECT value FROM platform_settings WHERE key = ?').get('data_governance_retention');
+  try {
+    return normalizeRetentionConfig(row?.value ? JSON.parse(row.value) : {});
+  } catch (_err) {
+    return defaultRetentionConfig();
+  }
+}
+
+function saveRetentionConfigSync(payload = {}) {
+  const config = normalizeRetentionConfig(payload);
+  db.prepare(`
+    INSERT INTO platform_settings (key, value, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+  `).run('data_governance_retention', JSON.stringify(config), sqlNowText());
+  return config;
 }
 
 app.get('/privacy', (_req, res) => {
@@ -5520,6 +5741,7 @@ app.post('/api/admin/legal-settings/publish', authRequired, csrfRequired, expres
     target: PLATFORM_LEGAL_SETTINGS_ID,
     payload: { publishedAt: published.published_at }
   });
+  audit('legal_settings.published', req, { user, target: PLATFORM_LEGAL_SETTINGS_ID, meta: { publishedAt: published.published_at } });
   return res.json({ ok: true, settings: published });
 });
 
@@ -5527,6 +5749,45 @@ app.get('/api/admin/legal-versions', authRequired, (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
   return res.json({ versions: listLegalVersionsSync() });
+});
+
+app.get('/api/admin/legal/subprocessors', authRequired, (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  return res.json({ rows: listLegalSubprocessorsSync() });
+});
+
+app.post('/api/admin/legal/subprocessors', authRequired, csrfRequired, express.json(), (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  try {
+    const row = upsertLegalSubprocessorSync(null, req.body || {});
+    audit('legal.subprocessor.created', req, { user, target: row.id, meta: { providerName: row.provider_name } });
+    return res.status(201).json({ ok: true, row });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Failed to save subprocessor' });
+  }
+});
+
+app.patch('/api/admin/legal/subprocessors/:id', authRequired, csrfRequired, express.json(), (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  try {
+    const row = upsertLegalSubprocessorSync(String(req.params.id || '').trim(), req.body || {});
+    audit('legal.subprocessor.updated', req, { user, target: row.id, meta: { providerName: row.provider_name } });
+    return res.json({ ok: true, row });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ error: err.message || 'Failed to update subprocessor' });
+  }
+});
+
+app.delete('/api/admin/legal/subprocessors/:id', authRequired, csrfRequired, (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  const id = String(req.params.id || '').trim();
+  const result = deleteLegalSubprocessorSync(id);
+  audit('legal.subprocessor.deleted', req, { user, target: id, meta: { deleted: Number(result.changes || 0) } });
+  return res.json({ ok: true, deleted: Number(result.changes || 0) });
 });
 
 app.post('/api/admin/legal-versions', authRequired, csrfRequired, express.json(), (req, res) => {
@@ -5539,6 +5800,7 @@ app.post('/api/admin/legal-versions', authRequired, csrfRequired, express.json()
   const created = createLegalVersionSync({
     ...payload,
     created_by: user.id || user.sub || '',
+    updated_by: user.id || user.sub || '',
     created_at: sqlNowText()
   });
   legacyAuditLog({
@@ -5551,10 +5813,27 @@ app.post('/api/admin/legal-versions', authRequired, csrfRequired, express.json()
   return res.status(201).json({ ok: true, version: created });
 });
 
+app.get('/api/admin/data-governance/retention', authRequired, (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  return res.json({ retention: getRetentionConfigSync(), coverage: listCoveredDataDomains() });
+});
+
+app.post('/api/admin/data-governance/retention', authRequired, csrfRequired, express.json(), (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  const retention = saveRetentionConfigSync(req.body || {});
+  audit('data_governance.retention_updated', req, { user, meta: { retention } });
+  return res.json({ ok: true, retention, coverage: listCoveredDataDomains() });
+});
+
 app.put('/api/admin/legal-versions/:id', authRequired, csrfRequired, express.json(), (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
-  const updated = updateLegalVersionSync(String(req.params.id || '').trim(), req.body || {});
+  const updated = updateLegalVersionSync(String(req.params.id || '').trim(), {
+    ...(req.body || {}),
+    updated_by: user.id || user.sub || ''
+  });
   if (!updated) return res.status(404).json({ error: 'Legal version not found' });
   legacyAuditLog({
     workspaceId: null,
@@ -5577,6 +5856,16 @@ app.post('/api/admin/legal-versions/:id/publish', authRequired, csrfRequired, ex
     action: 'legal_version.published',
     target: published.id,
     payload: {
+      documentType: published.document_type,
+      locale: published.locale,
+      version: published.version,
+      publishedAt: published.published_at
+    }
+  });
+  audit('legal_version.published', req, {
+    user,
+    target: published.id,
+    meta: {
       documentType: published.document_type,
       locale: published.locale,
       version: published.version,
@@ -17121,17 +17410,59 @@ function sanitizeBillingProfileInput(body = {}) {
     body.invoiceContactName == null
       ? undefined
       : normalizeTrimmedText(body.invoiceContactName || '', 160, 'invoiceContactName');
+  const stringField = (name, max = 240) => body[name] == null ? undefined : normalizeTrimmedText(body[name] || '', max, name);
+  const legalCompanyName = stringField('legalCompanyName');
+  const billingContactName = stringField('billingContactName', 160);
+  const billingAddressLine1 = stringField('billingAddressLine1');
+  const billingAddressLine2 = stringField('billingAddressLine2');
+  const billingCity = stringField('billingCity', 120);
+  const billingPostalCode = stringField('billingPostalCode', 40);
+  const billingCountry = stringField('billingCountry', 80);
+  const vatId = stringField('vatId', 60);
+  const taxNumber = stringField('taxNumber', 80);
+  const invoiceLanguage = stringField('invoiceLanguage', 10);
+  const invoiceCurrency = stringField('invoiceCurrency', 3);
+  const reverseChargeApplicable = body.reverseChargeApplicable == null ? undefined : body.reverseChargeApplicable === true;
   const acknowledgeReadiness = body.acknowledgeReadiness === true;
   const clearAcknowledgement = body.clearAcknowledgement === true;
   if (
     billingEmail === undefined &&
     invoiceContactName === undefined &&
+    legalCompanyName === undefined &&
+    billingContactName === undefined &&
+    billingAddressLine1 === undefined &&
+    billingAddressLine2 === undefined &&
+    billingCity === undefined &&
+    billingPostalCode === undefined &&
+    billingCountry === undefined &&
+    vatId === undefined &&
+    taxNumber === undefined &&
+    invoiceLanguage === undefined &&
+    invoiceCurrency === undefined &&
+    reverseChargeApplicable === undefined &&
     !acknowledgeReadiness &&
     !clearAcknowledgement
   ) {
     throw new OnboardingValidationError('No billing changes were provided', 'empty_billing_update');
   }
-  return { billingEmail, invoiceContactName, acknowledgeReadiness, clearAcknowledgement };
+  return {
+    billingEmail,
+    invoiceContactName,
+    legalCompanyName,
+    billingContactName,
+    billingAddressLine1,
+    billingAddressLine2,
+    billingCity,
+    billingPostalCode,
+    billingCountry,
+    vatId,
+    taxNumber,
+    invoiceLanguage,
+    invoiceCurrency,
+    reverseChargeApplicable,
+    acknowledgeReadiness,
+    clearAcknowledgement
+  };
 }
 
 function handleOnboardingRouteError(res, error, fallbackMessage) {
@@ -17225,6 +17556,18 @@ app.patch('/api/workspaces/:workspaceId/billing-profile', authRequired, express.
       workspaceId: ctx.workspaceId,
       billingEmail: input.billingEmail,
       invoiceContactName: input.invoiceContactName,
+      legalCompanyName: input.legalCompanyName,
+      billingContactName: input.billingContactName,
+      billingAddressLine1: input.billingAddressLine1,
+      billingAddressLine2: input.billingAddressLine2,
+      billingCity: input.billingCity,
+      billingPostalCode: input.billingPostalCode,
+      billingCountry: input.billingCountry,
+      vatId: input.vatId,
+      taxNumber: input.taxNumber,
+      invoiceLanguage: input.invoiceLanguage,
+      invoiceCurrency: input.invoiceCurrency,
+      reverseChargeApplicable: input.reverseChargeApplicable,
       acknowledgeReadiness: input.acknowledgeReadiness,
       clearAcknowledgement: input.clearAcknowledgement,
       userId: ctx.user.id || ctx.user.sub || null
@@ -17237,6 +17580,7 @@ app.patch('/api/workspaces/:workspaceId/billing-profile', authRequired, express.
       {
         billingEmailUpdated: input.billingEmail !== undefined ? 1 : 0,
         invoiceContactNameUpdated: input.invoiceContactName !== undefined ? 1 : 0,
+        vatBillingFieldsUpdated: input.vatId !== undefined || input.billingCountry !== undefined ? 1 : 0,
         acknowledgeReadiness: input.acknowledgeReadiness ? 1 : 0,
         clearAcknowledgement: input.clearAcknowledgement ? 1 : 0
       }
@@ -17250,6 +17594,7 @@ app.patch('/api/workspaces/:workspaceId/billing-profile', authRequired, express.
       payload: {
         billingEmailUpdated: input.billingEmail !== undefined ? 1 : 0,
         invoiceContactNameUpdated: input.invoiceContactName !== undefined ? 1 : 0,
+        vatBillingFieldsUpdated: input.vatId !== undefined || input.billingCountry !== undefined ? 1 : 0,
         acknowledgeReadiness: input.acknowledgeReadiness ? 1 : 0,
         clearAcknowledgement: input.clearAcknowledgement ? 1 : 0
       }
@@ -30465,6 +30810,34 @@ app.get('/api/admin/billing/:workspaceId', async (req, res) => {
   }
 });
 
+app.patch('/api/admin/billing/:workspaceId/profile', async (req, res) => {
+  const user = requireSuperAdmin(req, res);
+  if (!user) return;
+  const workspaceId = String(req.params.workspaceId || '').trim();
+  if (!workspaceId || workspaceId === 'all') return res.status(400).json({ error: 'workspaceId is required' });
+  try {
+    const input = sanitizeBillingProfileInput(req.body || {});
+    const billing = await billingRepository.updateWorkspaceBillingProfile({
+      workspaceId,
+      ...input,
+      userId: user.id || user.sub || null
+    });
+    audit('billing.profile_updated', req, {
+      user,
+      workspaceId,
+      target: workspaceId,
+      meta: {
+        vatIdUpdated: input.vatId !== undefined,
+        billingCountryUpdated: input.billingCountry !== undefined,
+        reverseChargeUpdated: input.reverseChargeApplicable !== undefined
+      }
+    });
+    return res.json({ ok: true, billing });
+  } catch (err) {
+    return res.status(err.statusCode || err.status || 400).json({ error: err.message || 'Failed to update billing profile' });
+  }
+});
+
 app.get('/api/admin/billing/stripe/status', async (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
@@ -30641,7 +31014,7 @@ app.post('/api/admin/invoices', async (req, res) => {
   const user = requireSuperAdmin(req, res);
   if (!user) return;
 
-  const { workspaceId, studentUserId, amountCents, currency, description, dueDate } = req.body || {};
+  const { workspaceId, studentUserId, amountCents, currency, description, dueDate, vatRate, reverseChargeNote, legalFooter } = req.body || {};
   const ws = String(workspaceId || '').trim();
   if (!ws) return res.status(400).json({ error: 'workspaceId is required' });
   const normalizedStudentUserId = String(studentUserId || '').trim() || null;
@@ -30658,20 +31031,46 @@ app.post('/api/admin/invoices', async (req, res) => {
   const invId = generateAdminId('inv');
 
   try {
+    const billingProfile = await billingRepository.getWorkspaceBillingProfile(ws).catch(() => null);
+    const legalSettings = getLegalSettingsRecordSync();
+    const grossAmount = Math.floor(Number(amount));
+    const rate = Number(vatRate ?? (billingProfile?.reverseChargeApplicable ? 0 : 19));
+    const netAmount = rate > 0 ? Math.round(grossAmount / (1 + rate / 100)) : grossAmount;
+    const vatAmount = Math.max(0, grossAmount - netAmount);
+    const buyerAddress = [
+      billingProfile?.billingAddressLine1,
+      billingProfile?.billingAddressLine2,
+      [billingProfile?.billingPostalCode, billingProfile?.billingCity].filter(Boolean).join(' '),
+      billingProfile?.billingCountry
+    ].filter(Boolean).join('\n');
     // Billing migration boundary: invoice writes go through adapter only.
-    await billingRepository.createInvoice({
+    const invoice = await billingRepository.createInvoice({
       id: invId,
       workspaceId: ws,
       studentUserId: normalizedStudentUserId,
       amountCents: amount,
-      currency: String(currency || 'EUR'),
+      currency: String(currency || billingProfile?.invoiceCurrency || 'EUR'),
       description: description || null,
-      dueDate: dueDate || null
+      dueDate: dueDate || null,
+      sellerCompanyName: legalSettings.company_name || null,
+      sellerAddress: legalSettings.legal_address || null,
+      sellerVatId: legalSettings.vat_id || null,
+      sellerTaxNumber: legalSettings.tax_number || null,
+      buyerCompanyName: billingProfile?.legalCompanyName || null,
+      buyerBillingAddress: buyerAddress || null,
+      buyerVatId: billingProfile?.vatId || null,
+      netAmount,
+      vatRate: rate,
+      vatAmount,
+      grossAmount,
+      reverseChargeNote: billingProfile?.reverseChargeApplicable ? (reverseChargeNote || 'Reverse charge may apply. Review with tax advisor before production use.') : null,
+      paymentProvider: 'manual',
+      legalFooter: legalFooter || 'Configurable invoice footer. Review with legal/accounting counsel before production use.'
     });
 
-    legacyAuditLog({ workspaceId: ws, actor: user.id, action: 'invoice.create', target: invId, payload: { amountCents: amount, currency, description, dueDate, studentUserId: normalizedStudentUserId } });
+    legacyAuditLog({ workspaceId: ws, actor: user.id, action: 'invoice.create', target: invId, payload: { amountCents: amount, currency, description, dueDate, studentUserId: normalizedStudentUserId, invoiceNumber: invoice.invoiceNumber } });
 
-    return res.json({ ok: true, id: invId });
+    return res.json({ ok: true, id: invId, invoiceNumber: invoice.invoiceNumber });
   } catch (err) {
     console.error('[Billing] Create invoice failed', err);
     return res.status(500).json({ error: 'Failed to create invoice' });

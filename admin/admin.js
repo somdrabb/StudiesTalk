@@ -94,6 +94,8 @@ const state = {
   legal: {
     settings: null,
     versions: [],
+    subprocessors: [],
+    retention: null,
     publishRequirements: []
   },
   requests: {
@@ -216,7 +218,7 @@ const SETTINGS_FIELD_IDS = [
 
 const REQUESTS_DEBOUNCE_MS = 320;
 let requestSearchTimer = null;
-const LEGAL_DOCUMENT_TYPES = ["privacy", "terms", "impressum", "cookies", "dpa"];
+const LEGAL_DOCUMENT_TYPES = ["privacy", "terms", "impressum", "cookies", "dpa", "ai_notice", "recording_notice", "subprocessor_list"];
 const LEGAL_PANEL_FIELD_IDS = [
   "legal_company_name",
   "legal_operator_name",
@@ -4019,6 +4021,18 @@ if (btnCreateInvoiceEl) {
               />
               <div class="invoice-help">Short billing note shown internally or on the invoice.</div>
             </div>
+
+            <div class="invoice-field">
+              <label class="invoice-label" for="inv_vat_rate">VAT rate (%)</label>
+              <input class="input invoice-input" id="inv_vat_rate" type="number" min="0" step="0.01" value="19" />
+              <div class="invoice-help">Configurable tax rate; verify with accounting before selling.</div>
+            </div>
+
+            <div class="invoice-field">
+              <label class="invoice-label" for="inv_reverse_charge">Reverse charge note</label>
+              <input class="input invoice-input" id="inv_reverse_charge" placeholder="Optional reverse charge note" />
+              <div class="invoice-help">Use only when applicable to the buyer.</div>
+            </div>
           </div>
 
           <div class="invoice-inline-note">
@@ -4045,6 +4059,8 @@ if (btnCreateInvoiceEl) {
         const amountCents = Number($("inv_amount")?.value.trim());
         const description = $("inv_desc")?.value.trim();
         const dueDate = $("inv_due")?.value.trim() || null;
+        const vatRate = Number($("inv_vat_rate")?.value || 0);
+        const reverseChargeNote = $("inv_reverse_charge")?.value.trim() || "";
 
         if (!workspaceId) {
           alert("Please select a workspace.");
@@ -4069,7 +4085,9 @@ if (btnCreateInvoiceEl) {
               amountCents,
               currency: "EUR",
               description,
-              dueDate
+              dueDate,
+              vatRate,
+              reverseChargeNote
             }
           });
 
@@ -5239,6 +5257,11 @@ async function refreshBilling() {
       title: `Subscription status: ${subscriptionStatus || "not set"}`,
       meta: stripeWorkspace.currentPeriodEnd ? `Current period ends ${formatAdminTimestamp(stripeWorkspace.currentPeriodEnd)}` : "Stripe subscription status is shown when available."
     });
+    attentionItems.push({
+      tone: "info",
+      title: `VAT: ${stripeWorkspace.vatId || "not configured"} • ${stripeWorkspace.billingCountry || "country missing"}`,
+      meta: `Currency ${stripeWorkspace.invoiceCurrency || stripeWorkspace.currency || "EUR"}${stripeWorkspace.reverseChargeApplicable ? " • reverse charge flagged" : ""}`
+    });
   }
 
   const attentionEl = $("billingAttentionList");
@@ -5278,8 +5301,18 @@ async function refreshBilling() {
         key: "id",
         width: "180px",
         render: (r) => `
-          <div class="billing-id">${escapeHtml(r.id || "—")}</div>
+          <div class="billing-id">${escapeHtml(r.invoiceNumber || r.id || "—")}</div>
+          <div class="muted" style="font-size:12px">${escapeHtml(r.id || "")}</div>
         `
+      },
+      {
+        label: "Legal",
+        key: "_legal",
+        width: "130px",
+        render: (r) => {
+          const complete = !!(r.invoiceNumber && r.buyerCompanyName && (r.grossAmount != null || r.amountCents != null));
+          return `<span class="billing-status-badge ${complete ? "billing-status-paid" : "billing-status-open"}">${complete ? "Ready" : "Missing"}</span>`;
+        }
       },
       {
         label: "Amount",
@@ -6219,7 +6252,41 @@ function getLegalVersionCard(documentType) {
   return document.querySelector(`.legal-preview-card[data-document-type="${documentType}"]`);
 }
 
+function ensureLegalVersionCards() {
+  const container = $("legalVersionCards");
+  if (!container) return;
+  const labels = {
+    ai_notice: "AI Notice",
+    recording_notice: "Recording Notice",
+    subprocessor_list: "Subprocessor List"
+  };
+  for (const documentType of LEGAL_DOCUMENT_TYPES) {
+    if (getLegalVersionCard(documentType)) continue;
+    const article = document.createElement("article");
+    article.className = "legal-preview-card";
+    article.dataset.documentType = documentType;
+    article.innerHTML = `
+      <div class="legal-version-header">
+        <strong>${escapeHtml(labels[documentType] || documentType)}</strong>
+        <span class="legal-status-badge" data-role="status">Draft</span>
+      </div>
+      <div class="legal-form-grid">
+        <input class="input" data-field="locale" value="en" placeholder="Locale" />
+        <input class="input" data-field="version" placeholder="Version" />
+        <input class="input legal-span-2" data-field="title" placeholder="Title" />
+        <textarea class="input legal-textarea legal-span-2" data-field="body" placeholder="Configurable placeholder. Review with legal counsel before production use."></textarea>
+      </div>
+      <div class="legal-doc-actions">
+        <button class="btn btn-ghost" type="button" data-action="save-version">Save document</button>
+        <button class="btn btn-primary" type="button" data-action="publish-version">Publish document</button>
+      </div>
+    `;
+    container.appendChild(article);
+  }
+}
+
 function renderLegalVersionCards(versions = []) {
+  ensureLegalVersionCards();
   LEGAL_DOCUMENT_TYPES.forEach((documentType) => {
     const card = getLegalVersionCard(documentType);
     if (!card) return;
@@ -6272,17 +6339,50 @@ function updateLegalPublishUi() {
   }
 }
 
+function renderLegalReadinessTables() {
+  renderTable($("legalSubprocessorsTable"), {
+    rows: state.legal.subprocessors || [],
+    emptyText: "No subprocessors configured.",
+    columns: [
+      { label: "Provider", key: "provider_name", render: (row) => escapeHtml(row.provider_name || "") },
+      { label: "Service", key: "service_type", render: (row) => escapeHtml(row.service_type || "—") },
+      { label: "Location", key: "data_location", render: (row) => escapeHtml(row.data_location || "—") },
+      { label: "DPA", key: "dpa_available", width: "80px", render: (row) => Number(row.dpa_available || 0) ? "Yes" : "No" },
+      { label: "Active", key: "active", width: "80px", render: (row) => Number(row.active || 0) ? "Yes" : "No" }
+    ]
+  });
+  renderTable($("dataCoverageTable"), {
+    rows: state.legal.retention?.coverage || [],
+    emptyText: "No data coverage map loaded.",
+    columns: [
+      { label: "Domain", key: "label", render: (row) => escapeHtml(row.label || row.key || "") },
+      { label: "Tables", key: "tables", render: (row) => escapeHtml((row.tables || []).join(", ")) },
+      { label: "Covered", key: "covered", width: "90px", render: (row) => row.covered ? "Yes" : "No" }
+    ]
+  });
+  const retention = state.legal.retention?.retention || {};
+  Object.entries(retention).forEach(([key, value]) => {
+    const input = $(`retention_${key}`);
+    if (input) input.value = value ?? "";
+  });
+}
+
 async function refreshLegalPanel() {
   showLegalStatus("");
-  const [settingsPayload, versionsPayload] = await Promise.all([
+  const [settingsPayload, versionsPayload, subprocessorsPayload, retentionPayload] = await Promise.all([
     api("/api/admin/legal-settings"),
-    api("/api/admin/legal-versions")
+    api("/api/admin/legal-versions"),
+    api("/api/admin/legal/subprocessors").catch(() => ({ rows: [] })),
+    api("/api/admin/data-governance/retention").catch(() => ({ retention: {}, coverage: [] }))
   ]);
   state.legal.settings = normalizeLegalAdminSettings(settingsPayload.settings || {});
   state.legal.versions = Array.isArray(versionsPayload.versions) ? versionsPayload.versions : [];
+  state.legal.subprocessors = Array.isArray(subprocessorsPayload.rows) ? subprocessorsPayload.rows : [];
+  state.legal.retention = retentionPayload || { retention: {}, coverage: [] };
   state.legal.publishRequirements = Array.isArray(settingsPayload.publishRequirements) ? settingsPayload.publishRequirements : [];
   populateLegalPanel(state.legal.settings);
   renderLegalVersionCards(state.legal.versions);
+  renderLegalReadinessTables();
   updateLegalPublishUi();
 }
 
@@ -7570,6 +7670,60 @@ $("btnLegalPreviewDpa")?.addEventListener("click", () => {
 
 $("btnLegalPreviewTrust")?.addEventListener("click", () => {
   window.open("/trust", "_blank", "noopener");
+});
+
+$("btnSubprocessorSave")?.addEventListener("click", async () => {
+  try {
+    await api("/api/admin/legal/subprocessors", {
+      method: "POST",
+      body: {
+        provider_name: $("subprocessorProviderName")?.value || "",
+        service_type: $("subprocessorServiceType")?.value || "",
+        data_location: $("subprocessorDataLocation")?.value || "",
+        purpose: $("subprocessorPurpose")?.value || "",
+        legal_basis: $("subprocessorLegalBasis")?.value || "",
+        dpa_available: !!$("subprocessorDpaAvailable")?.checked,
+        privacy_url: $("subprocessorPrivacyUrl")?.value || "",
+        active: true
+      }
+    });
+    ["subprocessorProviderName", "subprocessorServiceType", "subprocessorDataLocation", "subprocessorPurpose", "subprocessorLegalBasis", "subprocessorPrivacyUrl"].forEach((id) => {
+      const el = $(id);
+      if (el) el.value = "";
+    });
+    if ($("subprocessorDpaAvailable")) $("subprocessorDpaAvailable").checked = false;
+    await refreshLegalPanel();
+    showLegalStatus("Subprocessor saved.", "success");
+  } catch (err) {
+    showLegalStatus(err.message || "Could not save subprocessor.", "error");
+  }
+});
+
+$("btnRetentionSave")?.addEventListener("click", async () => {
+  try {
+    const body = {};
+    [
+      "audit_log_retention_days",
+      "security_log_retention_days",
+      "backup_retention_days",
+      "file_retention_days",
+      "deleted_user_retention_days",
+      "learning_data_retention_months",
+      "message_retention_days",
+      "recording_retention_days",
+      "email_log_retention_days"
+    ].forEach((key) => {
+      body[key] = Number($(`retention_${key}`)?.value || 0);
+    });
+    state.legal.retention = await api("/api/admin/data-governance/retention", {
+      method: "POST",
+      body
+    });
+    renderLegalReadinessTables();
+    showLegalStatus("Retention settings saved.", "success");
+  } catch (err) {
+    showLegalStatus(err.message || "Could not save retention settings.", "error");
+  }
 });
 
 document.getElementById("legalVersionCards")?.addEventListener("click", async (event) => {

@@ -1337,6 +1337,48 @@
 
             <section class="legal-card">
               <div class="legal-section-title">
+                <h3>Subprocessors</h3>
+                <p>Maintain the configurable vendor list for DPA/AVV and privacy disclosures.</p>
+              </div>
+              <div class="legal-form-grid">
+                <input class="input" id="subprocessorProviderName" placeholder="Provider name" />
+                <input class="input" id="subprocessorServiceType" placeholder="Service type" />
+                <input class="input" id="subprocessorDataLocation" placeholder="Data location" />
+                <input class="input" id="subprocessorLegalBasis" placeholder="Legal basis" />
+                <input class="input legal-span-2" id="subprocessorPurpose" placeholder="Purpose" />
+                <input class="input" id="subprocessorPrivacyUrl" placeholder="Privacy URL" />
+                <label class="owner-toggle"><input id="subprocessorDpaAvailable" type="checkbox"><span>DPA available</span></label>
+              </div>
+              <div class="panel-actions">
+                <button class="btn btn-secondary" type="button" id="btnSubprocessorSave">Add subprocessor</button>
+              </div>
+              <div class="table" id="legalSubprocessorsTable"></div>
+            </section>
+
+            <section class="legal-card">
+              <div class="legal-section-title">
+                <h3>Retention Evidence</h3>
+                <p>Technical retention configuration used by data governance evidence.</p>
+              </div>
+              <div class="legal-form-grid">
+                <input class="input" id="retention_audit_log_retention_days" type="number" min="0" placeholder="Audit log retention days" />
+                <input class="input" id="retention_security_log_retention_days" type="number" min="0" placeholder="Security log retention days" />
+                <input class="input" id="retention_backup_retention_days" type="number" min="0" placeholder="Backup retention days" />
+                <input class="input" id="retention_file_retention_days" type="number" min="0" placeholder="File retention days" />
+                <input class="input" id="retention_deleted_user_retention_days" type="number" min="0" placeholder="Deleted user retention days" />
+                <input class="input" id="retention_learning_data_retention_months" type="number" min="0" placeholder="Learning data retention months" />
+                <input class="input" id="retention_message_retention_days" type="number" min="0" placeholder="Message retention days" />
+                <input class="input" id="retention_recording_retention_days" type="number" min="0" placeholder="Recording retention days" />
+                <input class="input" id="retention_email_log_retention_days" type="number" min="0" placeholder="Email log retention days" />
+              </div>
+              <div class="panel-actions">
+                <button class="btn btn-secondary" type="button" id="btnRetentionSave">Save retention</button>
+              </div>
+              <div class="table" id="dataCoverageTable"></div>
+            </section>
+
+            <section class="legal-card">
+              <div class="legal-section-title">
                 <h3>Actions</h3>
                 <p id="legalMissingFields">Before real launch, publish privacy, terms, impressum, dpa, and cookies.</p>
               </div>

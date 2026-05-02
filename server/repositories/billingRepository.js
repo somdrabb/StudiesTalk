@@ -1,6 +1,7 @@
 'use strict';
 
 const { normalizeEngine } = require('../../db/helpers');
+const { generateInvoiceNumber } = require('../services/invoiceNumber.service');
 
 function billingTimestamp(engine) {
   return engine === 'postgres' ? new Date().toISOString() : Date.now();
@@ -32,6 +33,10 @@ function parseJson(value, fallback = {}) {
 
 function stringifyJson(value) {
   return JSON.stringify(value == null ? {} : value);
+}
+
+function moneyCents(value) {
+  return Math.max(0, Math.floor(Number(value || 0)));
 }
 
 function normalizePostgresInvoice(row) {
@@ -83,8 +88,36 @@ function createSqliteBillingRepository(sqliteDb) {
   execIgnore('ALTER TABLE workspace_billing ADD COLUMN provider_customer_id TEXT');
   execIgnore('ALTER TABLE workspace_billing ADD COLUMN provider_subscription_id TEXT');
   execIgnore('ALTER TABLE workspace_billing ADD COLUMN current_period_end TEXT');
+  execIgnore('ALTER TABLE workspace_billing ADD COLUMN legal_company_name TEXT');
+  execIgnore('ALTER TABLE workspace_billing ADD COLUMN billing_contact_name TEXT');
+  execIgnore('ALTER TABLE workspace_billing ADD COLUMN billing_address_line1 TEXT');
+  execIgnore('ALTER TABLE workspace_billing ADD COLUMN billing_address_line2 TEXT');
+  execIgnore('ALTER TABLE workspace_billing ADD COLUMN billing_city TEXT');
+  execIgnore('ALTER TABLE workspace_billing ADD COLUMN billing_postal_code TEXT');
+  execIgnore('ALTER TABLE workspace_billing ADD COLUMN billing_country TEXT');
+  execIgnore('ALTER TABLE workspace_billing ADD COLUMN vat_id TEXT');
+  execIgnore('ALTER TABLE workspace_billing ADD COLUMN tax_number TEXT');
+  execIgnore("ALTER TABLE workspace_billing ADD COLUMN invoice_language TEXT DEFAULT 'en'");
+  execIgnore("ALTER TABLE workspace_billing ADD COLUMN invoice_currency TEXT DEFAULT 'EUR'");
+  execIgnore('ALTER TABLE workspace_billing ADD COLUMN reverse_charge_applicable INTEGER DEFAULT 0');
   execIgnore("ALTER TABLE invoices ADD COLUMN provider TEXT DEFAULT 'manual'");
   execIgnore('ALTER TABLE invoices ADD COLUMN provider_invoice_id TEXT');
+  execIgnore('ALTER TABLE invoices ADD COLUMN seller_company_name TEXT');
+  execIgnore('ALTER TABLE invoices ADD COLUMN seller_address TEXT');
+  execIgnore('ALTER TABLE invoices ADD COLUMN seller_vat_id TEXT');
+  execIgnore('ALTER TABLE invoices ADD COLUMN seller_tax_number TEXT');
+  execIgnore('ALTER TABLE invoices ADD COLUMN buyer_company_name TEXT');
+  execIgnore('ALTER TABLE invoices ADD COLUMN buyer_billing_address TEXT');
+  execIgnore('ALTER TABLE invoices ADD COLUMN buyer_vat_id TEXT');
+  execIgnore('ALTER TABLE invoices ADD COLUMN invoice_number TEXT');
+  execIgnore('ALTER TABLE invoices ADD COLUMN invoice_date TEXT');
+  execIgnore('ALTER TABLE invoices ADD COLUMN net_amount INTEGER');
+  execIgnore('ALTER TABLE invoices ADD COLUMN vat_rate REAL DEFAULT 0');
+  execIgnore('ALTER TABLE invoices ADD COLUMN vat_amount INTEGER DEFAULT 0');
+  execIgnore('ALTER TABLE invoices ADD COLUMN gross_amount INTEGER');
+  execIgnore('ALTER TABLE invoices ADD COLUMN reverse_charge_note TEXT');
+  execIgnore('ALTER TABLE invoices ADD COLUMN payment_provider TEXT');
+  execIgnore('ALTER TABLE invoices ADD COLUMN legal_footer TEXT');
   execIgnore('ALTER TABLE payments ADD COLUMN provider_payment_intent_id TEXT');
   execIgnore(`
     CREATE TABLE IF NOT EXISTS billing_provider_events (
@@ -119,6 +152,18 @@ function createSqliteBillingRepository(sqliteDb) {
       stripePriceId: row.stripePriceId ?? row.stripe_price_id ?? null,
       stripeSubscriptionStatus: row.stripeSubscriptionStatus ?? row.stripe_subscription_status ?? null,
       currentPeriodEnd: row.currentPeriodEnd ?? row.current_period_end ?? null,
+      legalCompanyName: row.legalCompanyName ?? row.legal_company_name ?? null,
+      billingContactName: row.billingContactName ?? row.billing_contact_name ?? row.invoiceContactName ?? row.invoice_contact_name ?? null,
+      billingAddressLine1: row.billingAddressLine1 ?? row.billing_address_line1 ?? null,
+      billingAddressLine2: row.billingAddressLine2 ?? row.billing_address_line2 ?? null,
+      billingCity: row.billingCity ?? row.billing_city ?? null,
+      billingPostalCode: row.billingPostalCode ?? row.billing_postal_code ?? null,
+      billingCountry: row.billingCountry ?? row.billing_country ?? null,
+      vatId: row.vatId ?? row.vat_id ?? null,
+      taxNumber: row.taxNumber ?? row.tax_number ?? null,
+      invoiceLanguage: row.invoiceLanguage ?? row.invoice_language ?? 'en',
+      invoiceCurrency: row.invoiceCurrency ?? row.invoice_currency ?? row.currency ?? 'EUR',
+      reverseChargeApplicable: Boolean(Number(row.reverseChargeApplicable ?? row.reverse_charge_applicable ?? 0)),
       updatedAt: row.updatedAt ?? row.updated_at ?? null
     };
   }
@@ -198,6 +243,18 @@ function createSqliteBillingRepository(sqliteDb) {
           stripe_price_id AS "stripePriceId",
           stripe_subscription_status AS "stripeSubscriptionStatus",
           current_period_end AS "currentPeriodEnd",
+          legal_company_name AS "legalCompanyName",
+          billing_contact_name AS "billingContactName",
+          billing_address_line1 AS "billingAddressLine1",
+          billing_address_line2 AS "billingAddressLine2",
+          billing_city AS "billingCity",
+          billing_postal_code AS "billingPostalCode",
+          billing_country AS "billingCountry",
+          vat_id AS "vatId",
+          tax_number AS "taxNumber",
+          invoice_language AS "invoiceLanguage",
+          invoice_currency AS "invoiceCurrency",
+          reverse_charge_applicable AS "reverseChargeApplicable",
           updated_at AS "updatedAt"
         FROM workspace_billing
         WHERE workspace_id = ?
@@ -209,6 +266,18 @@ function createSqliteBillingRepository(sqliteDb) {
       workspaceId,
       billingEmail,
       invoiceContactName,
+      legalCompanyName,
+      billingContactName,
+      billingAddressLine1,
+      billingAddressLine2,
+      billingCity,
+      billingPostalCode,
+      billingCountry,
+      vatId,
+      taxNumber,
+      invoiceLanguage,
+      invoiceCurrency,
+      reverseChargeApplicable,
       acknowledgeReadiness = false,
       clearAcknowledgement = false,
       userId = null
@@ -218,6 +287,7 @@ function createSqliteBillingRepository(sqliteDb) {
       const existing = await this.getWorkspaceBillingProfile(workspaceId);
       const nextBillingEmail = billingEmail !== undefined ? (billingEmail || null) : existing?.billingEmail || null;
       const nextInvoiceContactName = invoiceContactName !== undefined ? (invoiceContactName || null) : existing?.invoiceContactName || null;
+      const nextBillingContactName = billingContactName !== undefined ? (billingContactName || null) : existing?.billingContactName || nextInvoiceContactName || null;
       let acknowledgedAt = existing?.readinessAcknowledgedAt || null;
       let acknowledgedBy = existing?.readinessAcknowledgedByUserId || null;
       if (clearAcknowledgement) {
@@ -231,11 +301,42 @@ function createSqliteBillingRepository(sqliteDb) {
         UPDATE workspace_billing
         SET billing_email = ?,
             invoice_contact_name = ?,
+            legal_company_name = ?,
+            billing_contact_name = ?,
+            billing_address_line1 = ?,
+            billing_address_line2 = ?,
+            billing_city = ?,
+            billing_postal_code = ?,
+            billing_country = ?,
+            vat_id = ?,
+            tax_number = ?,
+            invoice_language = ?,
+            invoice_currency = ?,
+            reverse_charge_applicable = ?,
             readiness_acknowledged_at = ?,
             readiness_acknowledged_by_user_id = ?,
             updated_at = ?
         WHERE workspace_id = ?
-      `).run(nextBillingEmail, nextInvoiceContactName, acknowledgedAt, acknowledgedBy, now, workspaceId);
+      `).run(
+        nextBillingEmail,
+        nextInvoiceContactName,
+        legalCompanyName !== undefined ? (legalCompanyName || null) : existing?.legalCompanyName || null,
+        nextBillingContactName,
+        billingAddressLine1 !== undefined ? (billingAddressLine1 || null) : existing?.billingAddressLine1 || null,
+        billingAddressLine2 !== undefined ? (billingAddressLine2 || null) : existing?.billingAddressLine2 || null,
+        billingCity !== undefined ? (billingCity || null) : existing?.billingCity || null,
+        billingPostalCode !== undefined ? (billingPostalCode || null) : existing?.billingPostalCode || null,
+        billingCountry !== undefined ? (billingCountry || null) : existing?.billingCountry || null,
+        vatId !== undefined ? (vatId || null) : existing?.vatId || null,
+        taxNumber !== undefined ? (taxNumber || null) : existing?.taxNumber || null,
+        invoiceLanguage !== undefined ? (invoiceLanguage || 'en') : existing?.invoiceLanguage || 'en',
+        invoiceCurrency !== undefined ? (invoiceCurrency || 'EUR') : existing?.invoiceCurrency || 'EUR',
+        reverseChargeApplicable !== undefined ? (reverseChargeApplicable ? 1 : 0) : (existing?.reverseChargeApplicable ? 1 : 0),
+        acknowledgedAt,
+        acknowledgedBy,
+        now,
+        workspaceId
+      );
       return this.getWorkspaceBillingProfile(workspaceId);
     },
 
@@ -254,6 +355,22 @@ function createSqliteBillingRepository(sqliteDb) {
           description,
           provider,
           provider_invoice_id AS "providerInvoiceId",
+          seller_company_name AS "sellerCompanyName",
+          seller_address AS "sellerAddress",
+          seller_vat_id AS "sellerVatId",
+          seller_tax_number AS "sellerTaxNumber",
+          buyer_company_name AS "buyerCompanyName",
+          buyer_billing_address AS "buyerBillingAddress",
+          buyer_vat_id AS "buyerVatId",
+          invoice_number AS "invoiceNumber",
+          invoice_date AS "invoiceDate",
+          net_amount AS "netAmount",
+          vat_rate AS "vatRate",
+          vat_amount AS "vatAmount",
+          gross_amount AS "grossAmount",
+          reverse_charge_note AS "reverseChargeNote",
+          payment_provider AS "paymentProvider",
+          legal_footer AS "legalFooter",
           status,
           due_date AS "dueDate",
           created_at AS "createdAt",
@@ -295,24 +412,78 @@ function createSqliteBillingRepository(sqliteDb) {
       return { invoices, payments };
     },
 
-    async createInvoice({ id, workspaceId, studentUserId = null, amountCents, currency = 'EUR', description = null, dueDate = null }) {
+    async createInvoice({
+      id,
+      workspaceId,
+      studentUserId = null,
+      amountCents,
+      currency = 'EUR',
+      description = null,
+      dueDate = null,
+      sellerCompanyName = null,
+      sellerAddress = null,
+      sellerVatId = null,
+      sellerTaxNumber = null,
+      buyerCompanyName = null,
+      buyerBillingAddress = null,
+      buyerVatId = null,
+      invoiceNumber = null,
+      invoiceDate = null,
+      netAmount = null,
+      vatRate = 0,
+      vatAmount = null,
+      grossAmount = null,
+      reverseChargeNote = null,
+      paymentProvider = 'manual',
+      providerInvoiceId = null,
+      legalFooter = null
+    }) {
       const createdAt = billingTimestamp(engine);
+      const gross = moneyCents(grossAmount ?? amountCents);
+      const net = moneyCents(netAmount ?? gross);
+      const vat = moneyCents(vatAmount ?? Math.max(0, gross - net));
+      const number = invoiceNumber || generateInvoiceNumber({ db: sqliteDb });
 
       sqliteDb.prepare(`
-        INSERT INTO invoices (id, workspace_id, student_user_id, amount_cents, currency, description, status, due_date, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)
+        INSERT INTO invoices (
+          id, workspace_id, student_user_id, amount_cents, currency, description, provider, provider_invoice_id,
+          seller_company_name, seller_address, seller_vat_id, seller_tax_number,
+          buyer_company_name, buyer_billing_address, buyer_vat_id,
+          invoice_number, invoice_date, net_amount, vat_rate, vat_amount, gross_amount,
+          reverse_charge_note, payment_provider, legal_footer,
+          status, due_date, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
       `).run(
         id,
         workspaceId,
         studentUserId || null,
-        Math.floor(Number(amountCents)),
+        gross,
         String(currency || 'EUR'),
         description || null,
+        paymentProvider || 'manual',
+        providerInvoiceId || null,
+        sellerCompanyName || null,
+        sellerAddress || null,
+        sellerVatId || null,
+        sellerTaxNumber || null,
+        buyerCompanyName || null,
+        buyerBillingAddress || null,
+        buyerVatId || null,
+        number,
+        invoiceDate || (typeof createdAt === 'number' ? new Date(createdAt).toISOString().slice(0, 10) : String(createdAt).slice(0, 10)),
+        net,
+        Number(vatRate || 0),
+        vat,
+        gross,
+        reverseChargeNote || null,
+        paymentProvider || 'manual',
+        legalFooter || null,
         dueDate || null,
         createdAt
       );
 
-      return { id, createdAt };
+      return { id, invoiceNumber: number, createdAt };
     },
 
     async getInvoiceById(invoiceId) {
@@ -488,6 +659,18 @@ function createPostgresBillingRepository() {
       stripePriceId: row.stripePriceId ?? row.stripe_price_id ?? null,
       stripeSubscriptionStatus: row.stripeSubscriptionStatus ?? row.stripe_subscription_status ?? null,
       currentPeriodEnd: row.currentPeriodEnd ?? row.current_period_end ?? null,
+      legalCompanyName: row.legalCompanyName ?? row.legal_company_name ?? null,
+      billingContactName: row.billingContactName ?? row.billing_contact_name ?? row.invoiceContactName ?? row.invoice_contact_name ?? null,
+      billingAddressLine1: row.billingAddressLine1 ?? row.billing_address_line1 ?? null,
+      billingAddressLine2: row.billingAddressLine2 ?? row.billing_address_line2 ?? null,
+      billingCity: row.billingCity ?? row.billing_city ?? null,
+      billingPostalCode: row.billingPostalCode ?? row.billing_postal_code ?? null,
+      billingCountry: row.billingCountry ?? row.billing_country ?? null,
+      vatId: row.vatId ?? row.vat_id ?? null,
+      taxNumber: row.taxNumber ?? row.tax_number ?? null,
+      invoiceLanguage: row.invoiceLanguage ?? row.invoice_language ?? 'en',
+      invoiceCurrency: row.invoiceCurrency ?? row.invoice_currency ?? row.currency ?? 'EUR',
+      reverseChargeApplicable: Boolean(Number(row.reverseChargeApplicable ?? row.reverse_charge_applicable ?? 0)),
       updatedAt: row.updatedAt ?? row.updated_at ?? null
     };
   }
@@ -567,6 +750,18 @@ function createPostgresBillingRepository() {
           stripe_price_id AS "stripePriceId",
           stripe_subscription_status AS "stripeSubscriptionStatus",
           current_period_end AS "currentPeriodEnd",
+          legal_company_name AS "legalCompanyName",
+          billing_contact_name AS "billingContactName",
+          billing_address_line1 AS "billingAddressLine1",
+          billing_address_line2 AS "billingAddressLine2",
+          billing_city AS "billingCity",
+          billing_postal_code AS "billingPostalCode",
+          billing_country AS "billingCountry",
+          vat_id AS "vatId",
+          tax_number AS "taxNumber",
+          invoice_language AS "invoiceLanguage",
+          invoice_currency AS "invoiceCurrency",
+          reverse_charge_applicable AS "reverseChargeApplicable",
           updated_at AS "updatedAt"
         FROM workspace_billing
         WHERE workspace_id = ?
@@ -578,6 +773,18 @@ function createPostgresBillingRepository() {
       workspaceId,
       billingEmail,
       invoiceContactName,
+      legalCompanyName,
+      billingContactName,
+      billingAddressLine1,
+      billingAddressLine2,
+      billingCity,
+      billingPostalCode,
+      billingCountry,
+      vatId,
+      taxNumber,
+      invoiceLanguage,
+      invoiceCurrency,
+      reverseChargeApplicable,
       acknowledgeReadiness = false,
       clearAcknowledgement = false,
       userId = null
@@ -587,6 +794,7 @@ function createPostgresBillingRepository() {
       const existing = await this.getWorkspaceBillingProfile(workspaceId);
       const nextBillingEmail = billingEmail !== undefined ? (billingEmail || null) : existing?.billingEmail || null;
       const nextInvoiceContactName = invoiceContactName !== undefined ? (invoiceContactName || null) : existing?.invoiceContactName || null;
+      const nextBillingContactName = billingContactName !== undefined ? (billingContactName || null) : existing?.billingContactName || nextInvoiceContactName || null;
       let acknowledgedAt = existing?.readinessAcknowledgedAt || null;
       let acknowledgedBy = existing?.readinessAcknowledgedByUserId || null;
       if (clearAcknowledgement) {
@@ -600,11 +808,42 @@ function createPostgresBillingRepository() {
         UPDATE workspace_billing
         SET billing_email = ?,
             invoice_contact_name = ?,
+            legal_company_name = ?,
+            billing_contact_name = ?,
+            billing_address_line1 = ?,
+            billing_address_line2 = ?,
+            billing_city = ?,
+            billing_postal_code = ?,
+            billing_country = ?,
+            vat_id = ?,
+            tax_number = ?,
+            invoice_language = ?,
+            invoice_currency = ?,
+            reverse_charge_applicable = ?,
             readiness_acknowledged_at = ?,
             readiness_acknowledged_by_user_id = ?,
             updated_at = ?
         WHERE workspace_id = ?
-      `, [nextBillingEmail, nextInvoiceContactName, acknowledgedAt, acknowledgedBy, now, workspaceId]);
+      `, [
+        nextBillingEmail,
+        nextInvoiceContactName,
+        legalCompanyName !== undefined ? (legalCompanyName || null) : existing?.legalCompanyName || null,
+        nextBillingContactName,
+        billingAddressLine1 !== undefined ? (billingAddressLine1 || null) : existing?.billingAddressLine1 || null,
+        billingAddressLine2 !== undefined ? (billingAddressLine2 || null) : existing?.billingAddressLine2 || null,
+        billingCity !== undefined ? (billingCity || null) : existing?.billingCity || null,
+        billingPostalCode !== undefined ? (billingPostalCode || null) : existing?.billingPostalCode || null,
+        billingCountry !== undefined ? (billingCountry || null) : existing?.billingCountry || null,
+        vatId !== undefined ? (vatId || null) : existing?.vatId || null,
+        taxNumber !== undefined ? (taxNumber || null) : existing?.taxNumber || null,
+        invoiceLanguage !== undefined ? (invoiceLanguage || 'en') : existing?.invoiceLanguage || 'en',
+        invoiceCurrency !== undefined ? (invoiceCurrency || 'EUR') : existing?.invoiceCurrency || 'EUR',
+        reverseChargeApplicable !== undefined ? (reverseChargeApplicable ? 1 : 0) : (existing?.reverseChargeApplicable ? 1 : 0),
+        acknowledgedAt,
+        acknowledgedBy,
+        now,
+        workspaceId
+      ]);
       return this.getWorkspaceBillingProfile(workspaceId);
     },
 
@@ -623,6 +862,22 @@ function createPostgresBillingRepository() {
           description,
           provider,
           provider_invoice_id AS "providerInvoiceId",
+          seller_company_name AS "sellerCompanyName",
+          seller_address AS "sellerAddress",
+          seller_vat_id AS "sellerVatId",
+          seller_tax_number AS "sellerTaxNumber",
+          buyer_company_name AS "buyerCompanyName",
+          buyer_billing_address AS "buyerBillingAddress",
+          buyer_vat_id AS "buyerVatId",
+          invoice_number AS "invoiceNumber",
+          invoice_date AS "invoiceDate",
+          net_amount AS "netAmount",
+          vat_rate AS "vatRate",
+          vat_amount AS "vatAmount",
+          gross_amount AS "grossAmount",
+          reverse_charge_note AS "reverseChargeNote",
+          payment_provider AS "paymentProvider",
+          legal_footer AS "legalFooter",
           status,
           due_date AS "dueDate",
           created_at AS "createdAt",
@@ -666,24 +921,78 @@ function createPostgresBillingRepository() {
       return { invoices, payments };
     },
 
-    async createInvoice({ id, workspaceId, studentUserId = null, amountCents, currency = 'EUR', description = null, dueDate = null }) {
+    async createInvoice({
+      id,
+      workspaceId,
+      studentUserId = null,
+      amountCents,
+      currency = 'EUR',
+      description = null,
+      dueDate = null,
+      sellerCompanyName = null,
+      sellerAddress = null,
+      sellerVatId = null,
+      sellerTaxNumber = null,
+      buyerCompanyName = null,
+      buyerBillingAddress = null,
+      buyerVatId = null,
+      invoiceNumber = null,
+      invoiceDate = null,
+      netAmount = null,
+      vatRate = 0,
+      vatAmount = null,
+      grossAmount = null,
+      reverseChargeNote = null,
+      paymentProvider = 'manual',
+      providerInvoiceId = null,
+      legalFooter = null
+    }) {
       const createdAt = billingTimestamp(engine);
+      const gross = moneyCents(grossAmount ?? amountCents);
+      const net = moneyCents(netAmount ?? gross);
+      const vat = moneyCents(vatAmount ?? Math.max(0, gross - net));
+      const number = invoiceNumber || `ST-${new Date().getUTCFullYear()}-${String(Date.now()).slice(-6)}`;
 
       await postgres.execute(`
-        INSERT INTO invoices (id, workspace_id, student_user_id, amount_cents, currency, description, status, due_date, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)
+        INSERT INTO invoices (
+          id, workspace_id, student_user_id, amount_cents, currency, description, provider, provider_invoice_id,
+          seller_company_name, seller_address, seller_vat_id, seller_tax_number,
+          buyer_company_name, buyer_billing_address, buyer_vat_id,
+          invoice_number, invoice_date, net_amount, vat_rate, vat_amount, gross_amount,
+          reverse_charge_note, payment_provider, legal_footer,
+          status, due_date, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
       `, [
         id,
         workspaceId,
         studentUserId || null,
-        Math.floor(Number(amountCents)),
+        gross,
         String(currency || 'EUR'),
         description || null,
+        paymentProvider || 'manual',
+        providerInvoiceId || null,
+        sellerCompanyName || null,
+        sellerAddress || null,
+        sellerVatId || null,
+        sellerTaxNumber || null,
+        buyerCompanyName || null,
+        buyerBillingAddress || null,
+        buyerVatId || null,
+        number,
+        invoiceDate || (typeof createdAt === 'number' ? new Date(createdAt).toISOString().slice(0, 10) : String(createdAt).slice(0, 10)),
+        net,
+        Number(vatRate || 0),
+        vat,
+        gross,
+        reverseChargeNote || null,
+        paymentProvider || 'manual',
+        legalFooter || null,
         dueDate || null,
         createdAt
       ]);
 
-      return { id, createdAt };
+      return { id, invoiceNumber: number, createdAt };
     },
 
     async getInvoiceById(invoiceId) {

@@ -168,12 +168,18 @@ function createPlatformOwnerControlService({
         status TEXT DEFAULT 'pending',
         requested_by TEXT,
         approved_by TEXT,
+        approved_at TEXT,
         reason TEXT,
+        evidence_path TEXT,
+        affected_tables_summary TEXT,
         metadata_json TEXT,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         completed_at TEXT
       )
     `);
+    await execIgnore('ALTER TABLE data_governance_requests ADD COLUMN approved_at TEXT');
+    await execIgnore('ALTER TABLE data_governance_requests ADD COLUMN evidence_path TEXT');
+    await execIgnore('ALTER TABLE data_governance_requests ADD COLUMN affected_tables_summary TEXT');
     await adapter.exec(`
       CREATE TABLE IF NOT EXISTS platform_notifications (
         id TEXT PRIMARY KEY,
@@ -714,16 +720,19 @@ function createPlatformOwnerControlService({
       status: 'pending',
       requested_by: requestedBy || null,
       approved_by: null,
+      approved_at: null,
       reason: why,
+      evidence_path: metadata.evidencePath || null,
+      affected_tables_summary: metadata.affectedTablesSummary || '',
       metadata_json: stringifyJson(metadata),
       created_at: now(),
       completed_at: null
     };
     await adapter.exec(`
       INSERT INTO data_governance_requests
-        (id, workspace_id, request_type, status, requested_by, approved_by, reason, metadata_json, created_at, completed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [row.id, row.workspace_id, row.request_type, row.status, row.requested_by, row.approved_by, row.reason, row.metadata_json, row.created_at, row.completed_at]);
+        (id, workspace_id, request_type, status, requested_by, approved_by, approved_at, reason, evidence_path, affected_tables_summary, metadata_json, created_at, completed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [row.id, row.workspace_id, row.request_type, row.status, row.requested_by, row.approved_by, row.approved_at, row.reason, row.evidence_path, row.affected_tables_summary, row.metadata_json, row.created_at, row.completed_at]);
     return row;
   }
 
