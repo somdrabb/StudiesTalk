@@ -1,13 +1,40 @@
 services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - path: .env.production
+        required: false
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DB_ENGINE: postgres
+      DATABASE_URL: ${DATABASE_URL:-postgresql://studiestalk:${POSTGRES_PASSWORD:-change_me}@postgres:5432/studiestalk}
+      UPLOADS_DIR: /app/uploads
+      DB_BACKUP_DIR: /app/backup
+      OPS_EVIDENCE_DIR: /app/storage/ops
+    ports:
+      - "3000:3000"
+    volumes:
+      - uploads_data:/app/uploads
+      - storage_data:/app/storage
+      - backup_data:/app/backup
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health',{headers:{'x-forwarded-proto':'https'}}).then((res)=>process.exit(res.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
   postgres:
     image: postgres:16
     restart: unless-stopped
     environment:
       POSTGRES_DB: studiestalk
       POSTGRES_USER: studiestalk
-      POSTGRES_PASSWORD: studiestalk
-    ports:
-      - "5432:5432"
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_before_launch}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -16,35 +43,8 @@ services:
       timeout: 5s
       retries: 5
 
-  app:
-    build: .
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      NODE_ENV: development
-      PORT: 3000
-      APP_BASE_URL: http://localhost:3000
-      COOKIE_SECURE: "false"
-      DB_ENGINE: postgres
-      DATABASE_URL: postgresql://studiestalk:studiestalk@postgres:5432/studiestalk
-      FILE_STORAGE_ADAPTER: local
-      UPLOADS_DIR: /app/uploads
-      JWT_ACCESS_SECRET: replace_with_64_char_random
-      JWT_REFRESH_SECRET: replace_with_64_char_random
-    ports:
-      - "3000:3000"
-    volumes:
-      - uploads_data:/app/uploads
-      - storage_data:/app/storage
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then((res)=>process.exit(res.ok?0:1)).catch(()=>process.exit(1))"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-
 volumes:
   postgres_data:
   uploads_data:
   storage_data:
+  backup_data:

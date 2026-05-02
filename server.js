@@ -127,6 +127,23 @@ function logEvent(level, message, meta = null) {
   fn(message);
 }
 
+function captureRuntimeException(error, context = {}) {
+  if (sentry && typeof sentry.captureException === 'function') {
+    sentry.captureException(error, { extra: context });
+  }
+}
+
+process.on('unhandledRejection', (reason) => {
+  const error = reason instanceof Error ? reason : new Error(String(reason));
+  captureRuntimeException(error, { type: 'unhandledRejection' });
+  logEvent('error', '[Runtime] Unhandled rejection', safeSerializeError(error, { includeStack: !ENV.IS_PROD }));
+});
+
+process.on('uncaughtException', (error) => {
+  captureRuntimeException(error, { type: 'uncaughtException' });
+  logEvent('error', '[Runtime] Uncaught exception', safeSerializeError(error, { includeStack: !ENV.IS_PROD }));
+});
+
 function makeRequestId() {
   return typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
@@ -335,6 +352,22 @@ app.set('trust proxy', 1);
 app.disable('x-powered-by');
 const observabilityService = createObservabilityService({ env: process.env });
 app.use(createRequestContextMiddleware({ observability: observabilityService }));
+app.use((req, res, next) => {
+  res.on('finish', () => {
+    if (sentry && typeof sentry.captureMessage === 'function' && res.statusCode >= 500) {
+      sentry.captureMessage('HTTP request failed', {
+        level: 'error',
+        tags: {
+          requestId: req.id || null,
+          statusCode: String(res.statusCode),
+          method: req.method || '',
+          path: req.path || ''
+        }
+      });
+    }
+  });
+  next();
+});
 app.use(cookieParser());
 app.use(
   helmet({
@@ -31429,6 +31462,13 @@ function runDeepHealthCheck() {
     providers: {
       email: { ok: providerName !== 'disabled', status: providerName === 'disabled' ? 'disabled' : 'configured' },
       ai: { ok: Boolean(process.env.OPENAI_API_KEY), status: process.env.OPENAI_API_KEY ? 'configured' : 'missing_key' },
+      stripe: {
+        ok: Boolean(ENV.STRIPE_SECRET_KEY && ENV.STRIPE_WEBHOOK_SECRET && ENV.STRIPE_PUBLIC_KEY),
+        status: ENV.STRIPE_SECRET_KEY ? (ENV.STRIPE_SECRET_KEY.startsWith('sk_live_') ? 'live' : 'test') : 'missing_key',
+        webhookConfigured: Boolean(ENV.STRIPE_WEBHOOK_SECRET),
+        publicKeyConfigured: Boolean(ENV.STRIPE_PUBLIC_KEY)
+      },
+      sentry: { ok: Boolean(sentry), status: sentry ? 'enabled' : 'disabled' },
       twilio: { ok: Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN), status: process.env.TWILIO_ACCOUNT_SID ? 'configured' : 'disabled' }
     },
     backups: {
@@ -31495,7 +31535,8 @@ app.use(createErrorHandlerMiddleware({
   logger: console,
   observability: observabilityService,
   isProd: ENV.IS_PROD,
-  serializeError: safeSerializeError
+  serializeError: safeSerializeError,
+  sentry
 }));
 
 /* ---------- START SERVER ---------- */

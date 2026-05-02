@@ -179,6 +179,14 @@ const AI_OUTPUT_TOKEN_RATE_EUR = optional('AI_OUTPUT_TOKEN_RATE_EUR', '0.00002')
 const AI_TIME_RATE_EUR_PER_SECOND = optional('AI_TIME_RATE_EUR_PER_SECOND', '0.000166');
 const AI_IDLE_TIMEOUT_SECONDS = optional('AI_IDLE_TIMEOUT_SECONDS', '45');
 const AI_CLEANUP_SWEEP_SECONDS = optional('AI_CLEANUP_SWEEP_SECONDS', '30');
+const STRIPE_SECRET_KEY = optional('STRIPE_SECRET_KEY', '');
+const STRIPE_WEBHOOK_SECRET = optional('STRIPE_WEBHOOK_SECRET', '');
+const STRIPE_PUBLIC_KEY = optional('STRIPE_PUBLIC_KEY', '');
+const STRIPE_PRICE_STARTER = optional('STRIPE_PRICE_STARTER', '');
+const STRIPE_PRICE_PRO = optional('STRIPE_PRICE_PRO', '');
+const STRIPE_PRICE_ENTERPRISE = optional('STRIPE_PRICE_ENTERPRISE', '');
+const SENTRY_DSN = optional('SENTRY_DSN', '');
+const SENTRY_ENVIRONMENT = optional('SENTRY_ENVIRONMENT', NODE_ENV);
 const JITSI_DOMAIN = optional('JITSI_DOMAIN', '');
 const JITSI_APP_ID = optional('JITSI_APP_ID', '');
 const JITSI_APP_SECRET = optional('JITSI_APP_SECRET', '');
@@ -350,6 +358,17 @@ if (normalizedEmailProvider && normalizedEmailProvider !== 'disabled') {
       addWarning('EMAIL_PROVIDER=smtp/ionos but IONOS SMTP settings are incomplete.');
     }
   }
+} else if (IS_PROD) {
+  addWarning('EMAIL_PROVIDER is disabled or empty. Configure SMTP/IONOS before launching email features.');
+}
+
+if (IS_PROD) {
+  if (!hasNonEmpty(STRIPE_SECRET_KEY) || !hasNonEmpty(STRIPE_WEBHOOK_SECRET) || !hasNonEmpty(STRIPE_PUBLIC_KEY)) {
+    addWarning('Stripe is not fully configured. Set STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, and STRIPE_PUBLIC_KEY before accepting payments.');
+  }
+  if (!hasNonEmpty(SENTRY_DSN)) {
+    addWarning('SENTRY_DSN is not set. Production error monitoring will be disabled.');
+  }
 }
 
 if (hasNonEmpty(OPENAI_REALTIME_URL) && !hasNonEmpty(OPENAI_API_KEY)) {
@@ -380,6 +399,9 @@ const jitsiPublicMeetJwtWarning =
 if (String(JITSI_DOMAIN || '').trim() === 'meet.jit.si' && jitsiJwtRequested) {
   if (IS_PROD) addError(jitsiPublicMeetJwtWarning);
   else addWarning(jitsiPublicMeetJwtWarning);
+}
+if (IS_PROD && !hasNonEmpty(JITSI_DOMAIN)) {
+  addError('JITSI_DOMAIN is required in production.');
 }
 
 const ENV_VALIDATION = {
@@ -414,6 +436,8 @@ const ENV_VALIDATION = {
     platformSecretsEnabled: hasNonEmpty(PLATFORM_SECRETS_MASTER_KEY),
     platformSecretsExpectDb: PLATFORM_SECRETS_EXPECT_DB,
     openAiConfigured: hasNonEmpty(OPENAI_API_KEY),
+    stripeConfigured: hasNonEmpty(STRIPE_SECRET_KEY) && hasNonEmpty(STRIPE_WEBHOOK_SECRET) && hasNonEmpty(STRIPE_PUBLIC_KEY),
+    sentryConfigured: hasNonEmpty(SENTRY_DSN),
     twilioConfigured: hasNonEmpty(TWILIO_ACCOUNT_SID) && hasNonEmpty(TWILIO_AUTH_TOKEN) && hasNonEmpty(TWILIO_PHONE_NUMBER)
     ,
     jitsiDomain: JITSI_DOMAIN || null,
@@ -512,6 +536,14 @@ module.exports = {
   AI_TIME_RATE_EUR_PER_SECOND,
   AI_IDLE_TIMEOUT_SECONDS,
   AI_CLEANUP_SWEEP_SECONDS,
+  STRIPE_SECRET_KEY,
+  STRIPE_WEBHOOK_SECRET,
+  STRIPE_PUBLIC_KEY,
+  STRIPE_PRICE_STARTER,
+  STRIPE_PRICE_PRO,
+  STRIPE_PRICE_ENTERPRISE,
+  SENTRY_DSN,
+  SENTRY_ENVIRONMENT,
   JITSI_DOMAIN,
   JITSI_APP_ID,
   JITSI_APP_SECRET,
