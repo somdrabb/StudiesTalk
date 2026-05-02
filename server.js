@@ -45,6 +45,7 @@ const { createPlatformControlService } = require('./server/services/platformCont
 const { createPlatformOwnerControlService } = require('./server/services/platformOwnerControl.service');
 const { createNotificationControlService } = require('./server/services/notificationControl.service');
 const { createObservabilityService } = require('./server/services/observability.service');
+const { createSupportAuditService } = require('./server/services/supportAudit.service');
 const { createRequestContextMiddleware } = require('./server/middleware/requestContext.middleware');
 const { createErrorHandlerMiddleware } = require('./server/middleware/errorHandler.middleware');
 const aiSpeakingScenarioConfig = require('./public/AIvoicepractice/scenarioConfig.js');
@@ -946,6 +947,7 @@ function isPromiseLike(value) {
     storageAdapter: FILE_STORAGE_ADAPTER,
     observability: observabilityService
   });
+  const supportAuditService = createSupportAuditService({ db });
   const notificationControlService = createNotificationControlService({
     db,
     emailSender: sendPlatformEmail,
@@ -2836,6 +2838,9 @@ async function denyTenantAccess(req, res, {
 }
 
 function getTenantAccessUser(req) {
+  if (req.supportSession && req.supportTargetUser && String(req.method || '').toUpperCase() === 'GET') {
+    return req.supportTargetUser;
+  }
   return req.auth || getAuthedUser(req) || null;
 }
 
@@ -3471,11 +3476,19 @@ function markConversationEnded(conversationId, workspaceId = null, userId = null
 }
 
 function getAuthWorkspaceId(req) {
+  if (req.supportSession && req.supportTargetUser && String(req.method || '').toUpperCase() === 'GET') {
+    const supportVal = req.supportTargetUser.workspaceId || req.supportTargetUser.workspace_id || req.supportSession.workspace_id || null;
+    return supportVal != null ? String(supportVal) : null;
+  }
   const val = req.auth?.workspaceId || req.auth?.workspace_id || null;
   return val != null ? String(val) : null;
 }
 
 function getAuthUserId(req) {
+  if (req.supportSession && req.supportTargetUser && String(req.method || '').toUpperCase() === 'GET') {
+    const supportVal = req.supportTargetUser.id || req.supportTargetUser.sub || req.supportSession.target_user_id || null;
+    return supportVal != null ? String(supportVal) : null;
+  }
   const val = req.auth?.userId || req.auth?.user_id || req.auth?.id || req.auth?.sub || null;
   return val != null ? String(val) : null;
 }
@@ -5999,6 +6012,54 @@ app.use(onboardingMutationLimiter);
 app.use(adminSensitiveMutationLimiter);
 app.use('/api/admin', authRequired);
 
+app.use('/api', async (req, res, next) => {
+  try {
+    const user = req.auth || await attachAccessTokenIfPresent(req);
+    if (!user || !isSuperAdminRole(user)) return next();
+
+    const session = await supportAuditService.getActiveSessionForActor(user.id || user.sub || '');
+    if (!session) return next();
+
+    req.supportSession = session;
+    if (session.target_user_id) {
+      const target = db.prepare(`
+        SELECT id, workspace_id AS workspaceId, name, email, username, role, status
+        FROM users
+        WHERE id = ?
+        LIMIT 1
+      `).get(session.target_user_id);
+      if (target && String(target.workspaceId || '') === String(session.workspace_id || '')) {
+        req.supportTargetUser = {
+          ...target,
+          sub: target.id,
+          superAdmin: false,
+          supportMode: true
+        };
+      }
+    }
+
+    const method = String(req.method || '').toUpperCase();
+    const pathOnly = String(req.originalUrl || req.path || '').split('?')[0];
+    const endingSupport = method === 'POST' && pathOnly === '/api/admin/support/impersonation/end';
+    if (method !== 'GET' && !endingSupport) {
+      return res.status(403).json({ error: 'Support mode is read-only. End the support session before making changes.' });
+    }
+    return next();
+  } catch (err) {
+    console.warn('[SupportAudit] support context failed:', err?.message || String(err));
+    return next();
+  }
+});
+
+app.get('/api/workspace/support-access-log', authRequired, (req, res) => {
+  const user = req.auth || getAuthedUser(req);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  if (!isSchoolAdminRole(user)) return res.status(403).json({ error: 'School admin access required' });
+  const workspaceId = userWorkspaceId(user);
+  if (!workspaceId) return res.status(400).json({ error: 'Workspace context is required' });
+  return res.json(supportAuditService.getWorkspaceSupportAccessLog(workspaceId, { days: 30, limit: 300 }));
+});
+
 const BILLING_ENFORCEMENT_ALLOW_PREFIXES = [
   '/api/auth',
   '/api/billing',
@@ -6232,6 +6293,7 @@ app.get('/uploads/*', async (req, res) => {
     });
     return tenantForbidden(res);
   }
+  logSupportAccessIfActive(req, 'files', fileRecord.fileId || normalizedUrl, fileRecord.workspaceId || fileRecord.workspace_id);
 
   if (fileRecord.storageKey) {
     try {
@@ -12314,6 +12376,17 @@ function getRequesterRole(req) {
 }
 
 function getEffectiveRequestUser(req) {
+  if (req.supportSession && req.supportTargetUser && String(req.method || '').toUpperCase() === 'GET') {
+    return {
+      userId: String(req.supportTargetUser.id || req.supportTargetUser.sub || '').trim(),
+      workspaceId: String(req.supportTargetUser.workspaceId || req.supportTargetUser.workspace_id || '').trim(),
+      role: normalizeRoleName(req.supportTargetUser.role || ''),
+      superAdmin: false,
+      via: 'support_mode',
+      supportSessionId: req.supportSession.id || null,
+      supportActorUserId: req.supportSession.super_admin_id || null
+    };
+  }
   const authUser = req.auth || getAuthedUser(req);
   if (authUser?.id || authUser?.sub) {
     return {
@@ -12332,6 +12405,18 @@ function getEffectiveRequestUser(req) {
     superAdmin: false,
     via: 'none'
   };
+}
+
+function logSupportAccessIfActive(req, resourceType, resourceId, workspaceId = null) {
+  if (!req?.supportSession) return null;
+  const session = req.supportSession;
+  return supportAuditService.logSupportAccess({
+    sessionId: session.id,
+    actorUserId: session.super_admin_id,
+    workspaceId: workspaceId || session.workspace_id,
+    resourceType,
+    resourceId
+  });
 }
 
 function isTeacherLikeRole(role = '') {
@@ -20667,6 +20752,7 @@ app.get('/api/channels/:channelId/messages', async (req, res) => {
     return tenantForbidden(res);
   }
   const channel = access.channel;
+  logSupportAccessIfActive(req, 'messages', channelId, channel.workspaceId);
 
   const viewerId = getRequesterId(req) || String(req.query.userId || '').trim();
   const viewerLang = await getUserNativeLanguage(viewerId);
@@ -27028,6 +27114,7 @@ app.get('/api/dms', (req, res) => {
   } else {
     list = db.prepare('SELECT id, name, initials, online FROM dms ORDER BY name').all();
   }
+  logSupportAccessIfActive(req, 'DMs', 'list', userWorkspaceId(getTenantAccessUser(req)) || req.supportSession?.workspace_id);
   res.json(
     list.map((d) => ({
       ...d,
@@ -27112,6 +27199,7 @@ app.get('/api/dms/:dmId/members', async (req, res) => {
     if (dmAccess.status === 404) return res.status(404).json({ error: 'DM not found' });
     return tenantForbidden(res);
   }
+  logSupportAccessIfActive(req, 'DMs', dmId, resolveDmWorkspaceId(dmId) || req.supportSession?.workspace_id);
 
   const members = db
     .prepare(
@@ -27199,6 +27287,7 @@ app.get('/api/dms/:dmId/messages', async (req, res) => {
     if (dmAccess.status === 404) return res.status(404).json({ error: 'DM not found' });
     return tenantForbidden(res);
   }
+  logSupportAccessIfActive(req, 'DMs', dmId, resolveDmWorkspaceId(dmId) || req.supportSession?.workspace_id);
 
   const msgs = db
     .prepare('SELECT id FROM dm_messages WHERE dm_id = ? ORDER BY rowid')
@@ -29592,6 +29681,7 @@ app.get("/api/ai/conversation/latest", authRequired, (req, res) => {
   if (!conversation) {
     return res.json({ conversation: null, messages: [] });
   }
+  logSupportAccessIfActive(req, 'AI conversations', conversation.id, workspaceId);
   return res.json({
     conversation,
     messages: listAiConversationMessages(conversation.id)
@@ -29609,6 +29699,7 @@ app.get("/api/ai/conversation/:id", authRequired, (req, res) => {
   if (!conversation) {
     return res.status(404).json({ error: "conversation not found" });
   }
+  logSupportAccessIfActive(req, 'AI conversations', conversation.id, workspaceId);
   return res.json({
     conversation,
     messages: listAiConversationMessages(conversation.id)
@@ -29687,7 +29778,8 @@ app.use('/api/admin', createPlatformOwnerControlRouter({
   service: platformOwnerControlService,
   authRequired,
   requireSuperAdmin,
-  auditAction: audit
+  auditAction: audit,
+  supportAudit: supportAuditService
 }));
 
 // ---------- ADMIN API ----------
@@ -30693,6 +30785,9 @@ app.get('/api/admin/users', async (req, res) => {
 
   const ws = String(req.query.workspaceId || 'all');
   const rows = await userRepository.listAdminUsers(ws);
+  if (ws !== 'all') {
+    logSupportAccessIfActive(req, 'users', 'list', ws);
+  }
 
   if (allowAdminLoginBypass && devSuperAdminBypassEntries.length) {
     for (const entry of devSuperAdminBypassEntries) {
@@ -30780,8 +30875,20 @@ app.get('/api/admin/overview', async (req, res) => {
     const { activeSubscriptions, openInvoices } = await billingRepository.getBillingSummary('all');
 
     const recentAudit = await auditRepository.listRecentLegacyAudit(15);
+    const supportAudit = supportAuditService.getSupportSessions(50);
+    const supportAccess = supportAuditService.getSupportAccessEvents(20).rows || [];
+    const incidentEvidence = observabilityService.getIncidentEvents?.(50) || { rows: [] };
+    const backupEvidence = observabilityService.getBackupEvidence?.(50) || {};
+    const failedInvoices = await billingRepository.listInvoices('all');
+    const trust = {
+      activeSupportSessions: supportAudit.active?.length || 0,
+      lastSupportAccess: supportAccess[0] || null,
+      lastIncident: incidentEvidence.rows?.[0] || null,
+      lastBackupRestoreTest: backupEvidence.latestRestoreTest || null,
+      lastBillingFailure: (failedInvoices || []).find((invoice) => String(invoice.status || '').toLowerCase() === 'failed') || null
+    };
 
-    return res.json({ schools, users, activeSubscriptions, openInvoices, recentAudit });
+    return res.json({ schools, users, activeSubscriptions, openInvoices, recentAudit, trust });
   } catch (err) {
     console.error('[Billing] Overview billing stats failed', err);
     return res.status(500).json({ error: 'Failed to load overview' });
@@ -30803,6 +30910,9 @@ app.get('/api/admin/billing/:workspaceId', async (req, res) => {
           ...stripeBillingService.getStatus(),
           workspace: await billingRepository.getWorkspaceBillingProfile(ws)
         };
+    if (ws !== 'all') {
+      logSupportAccessIfActive(req, 'billing', ws, ws);
+    }
     return res.json({ invoices, payments, stripe });
   } catch (err) {
     console.error('[Billing] List failed', err);

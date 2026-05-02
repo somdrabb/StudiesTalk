@@ -6,7 +6,8 @@ function createPlatformOwnerControlRouter({
   service,
   authRequired,
   requireSuperAdmin,
-  auditAction = null
+  auditAction = null,
+  supportAudit = null
 } = {}) {
   if (!service) throw new Error('createPlatformOwnerControlRouter requires service.');
   if (typeof authRequired !== 'function') throw new Error('createPlatformOwnerControlRouter requires authRequired.');
@@ -118,9 +119,14 @@ function createPlatformOwnerControlRouter({
       superAdminId: user.id || user.sub || '',
       targetUserId: req.body?.targetUserId,
       workspaceId: req.body?.workspaceId,
-      readOnly: req.body?.readOnly !== false,
-      reason: req.body?.reason
+      readOnly: true,
+      reason: req.body?.reason,
+      actorRole: user.role || 'super_admin',
+      ip: req.ip || null,
+      userAgent: req.headers['user-agent'] || '',
+      durationMinutes: req.body?.durationMinutes || 30
     });
+    supportAudit?.logSupportSessionStart?.(row, req, user);
     audit(req, user, 'platform_owner.impersonation_started', {
       workspaceId: row.workspace_id,
       target: row.target_user_id,
@@ -131,12 +137,35 @@ function createPlatformOwnerControlRouter({
 
   router.post('/support/impersonation/end', authRequired, handler(async (req, res, user) => {
     const result = await service.endImpersonation(user.id || user.sub || '', req.body?.sessionId || null);
+    for (const row of result.rows || []) {
+      supportAudit?.logSupportSessionEnd?.(row, req, user);
+    }
     audit(req, user, 'platform_owner.impersonation_ended', { target: req.body?.sessionId || 'active' });
     res.json(result);
   }));
 
   router.get('/support/impersonation/active', authRequired, handler(async (_req, res, user) => {
-    res.json(await service.activeImpersonation(user.id || user.sub || ''));
+    const active = await service.activeImpersonation(user.id || user.sub || '');
+    const history = await service.supportImpersonationHistory?.(100) || { rows: [] };
+    const auditSessions = supportAudit?.getSupportSessions?.(100) || { active: [], history: [] };
+    const accessEvents = supportAudit?.getSupportAccessEvents?.(100) || { rows: [] };
+    res.json({
+      rows: active.rows || [],
+      activeSessions: auditSessions.active || active.rows || [],
+      sessionHistory: history.rows || auditSessions.history || [],
+      accessEvents: accessEvents.rows || []
+    });
+  }));
+
+  router.get('/support/audit/export', authRequired, handler(async (req, res) => {
+    const format = String(req.query.format || 'json').toLowerCase();
+    const payload = supportAudit?.exportAudit?.({ format, limit: 1000 }) || { sessions: [], accessEvents: [] };
+    if (format === 'csv') {
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="support-audit.csv"');
+      return res.send(payload);
+    }
+    return res.json(payload);
   }));
 
   router.get('/incidents', authRequired, handler(async (_req, res) => {

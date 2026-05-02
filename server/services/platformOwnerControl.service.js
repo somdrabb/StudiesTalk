@@ -62,8 +62,8 @@ function cleanString(value, fallback = '') {
 
 function requireReason(reason, action = 'action') {
   const value = cleanString(reason);
-  if (!value) {
-    const error = new Error(`Reason is required for ${action}.`);
+  if (!value || value.length < 10) {
+    const error = new Error(`Reason of at least 10 characters is required for ${action}.`);
     error.statusCode = 400;
     throw error;
   }
@@ -128,14 +128,22 @@ function createPlatformOwnerControlService({
         super_admin_id TEXT NOT NULL,
         target_user_id TEXT NOT NULL,
         workspace_id TEXT NOT NULL,
+        actor_role TEXT DEFAULT 'super_admin',
+        mode TEXT DEFAULT 'read_only',
         read_only INTEGER DEFAULT 1,
         reason TEXT,
         started_at TEXT DEFAULT CURRENT_TIMESTAMP,
         ended_at TEXT,
         expires_at TEXT,
-        status TEXT DEFAULT 'active'
+        status TEXT DEFAULT 'active',
+        ip TEXT,
+        user_agent TEXT
       )
     `);
+    await execIgnore("ALTER TABLE support_impersonation_sessions ADD COLUMN actor_role TEXT DEFAULT 'super_admin'");
+    await execIgnore("ALTER TABLE support_impersonation_sessions ADD COLUMN mode TEXT DEFAULT 'read_only'");
+    await execIgnore("ALTER TABLE support_impersonation_sessions ADD COLUMN ip TEXT");
+    await execIgnore("ALTER TABLE support_impersonation_sessions ADD COLUMN user_agent TEXT");
     await adapter.exec(`
       CREATE TABLE IF NOT EXISTS platform_incidents (
         id TEXT PRIMARY KEY,
@@ -563,7 +571,7 @@ function createPlatformOwnerControlService({
     return { workspaces, events };
   }
 
-  async function startImpersonation({ superAdminId, targetUserId, workspaceId, readOnly = true, reason }) {
+  async function startImpersonation({ superAdminId, targetUserId, workspaceId, readOnly = true, reason, actorRole = 'super_admin', ip = '', userAgent = '', durationMinutes = 30 }) {
     const ws = await requireWorkspace(workspaceId);
     const target = cleanString(targetUserId);
     if (!target) {
@@ -572,39 +580,53 @@ function createPlatformOwnerControlService({
       throw error;
     }
     const why = requireReason(reason, 'support impersonation');
-    const expires = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    const minutes = Math.max(1, Math.min(Number(durationMinutes) || 30, 120));
+    const expires = new Date(Date.now() + minutes * 60 * 1000).toISOString();
     const row = {
       id: id('support'),
       super_admin_id: superAdminId,
       target_user_id: target,
       workspace_id: ws,
-      read_only: readOnly ? 1 : 0,
+      actor_role: cleanString(actorRole, 'super_admin'),
+      mode: 'read_only',
+      read_only: 1,
       reason: why,
       started_at: now(),
       ended_at: null,
       expires_at: expires,
-      status: 'active'
+      status: 'active',
+      ip: cleanString(ip),
+      user_agent: cleanString(userAgent)
     };
     await adapter.exec(`
       INSERT INTO support_impersonation_sessions
-        (id, super_admin_id, target_user_id, workspace_id, read_only, reason, started_at, ended_at, expires_at, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [row.id, row.super_admin_id, row.target_user_id, row.workspace_id, row.read_only, row.reason, row.started_at, row.ended_at, row.expires_at, row.status]);
+        (id, super_admin_id, target_user_id, workspace_id, actor_role, mode, read_only, reason, started_at, ended_at, expires_at, status, ip, user_agent)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [row.id, row.super_admin_id, row.target_user_id, row.workspace_id, row.actor_role, row.mode, row.read_only, row.reason, row.started_at, row.ended_at, row.expires_at, row.status, row.ip, row.user_agent]);
     return row;
   }
 
   async function endImpersonation(superAdminId, sessionId = null) {
     const timestamp = now();
+    let rows = [];
     if (sessionId) {
+      rows = await adapter.many("SELECT * FROM support_impersonation_sessions WHERE id = ? AND super_admin_id = ?", [sessionId, superAdminId]);
       await adapter.exec("UPDATE support_impersonation_sessions SET status = 'ended', ended_at = ? WHERE id = ? AND super_admin_id = ?", [timestamp, sessionId, superAdminId]);
     } else {
+      rows = await adapter.many("SELECT * FROM support_impersonation_sessions WHERE super_admin_id = ? AND status = 'active'", [superAdminId]);
       await adapter.exec("UPDATE support_impersonation_sessions SET status = 'ended', ended_at = ? WHERE super_admin_id = ? AND status = 'active'", [timestamp, superAdminId]);
     }
-    return { ok: true };
+    return { ok: true, rows: rows.map((row) => ({ ...row, status: 'ended', ended_at: timestamp })) };
   }
 
   async function activeImpersonation(superAdminId) {
+    await adapter.exec("UPDATE support_impersonation_sessions SET status = 'ended', ended_at = ? WHERE super_admin_id = ? AND status = 'active' AND expires_at IS NOT NULL AND expires_at <= ?", [now(), superAdminId, now()]);
     const rows = await adapter.many("SELECT * FROM support_impersonation_sessions WHERE super_admin_id = ? AND status = 'active' ORDER BY started_at DESC", [superAdminId]);
+    return { rows };
+  }
+
+  async function supportImpersonationHistory(limit = 100) {
+    const rows = await adapter.many(`SELECT * FROM support_impersonation_sessions ORDER BY started_at DESC LIMIT ${Math.max(1, Math.min(Number(limit) || 100, 500))}`);
     return { rows };
   }
 
@@ -1077,6 +1099,7 @@ function createPlatformOwnerControlService({
     startImpersonation,
     endImpersonation,
     activeImpersonation,
+    supportImpersonationHistory,
     listIncidents,
     createIncident,
     updateIncident,

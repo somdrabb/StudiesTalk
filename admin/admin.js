@@ -2670,15 +2670,40 @@ function renderLifecycle(data) {
 
 function renderSupport(data) {
   syncOwnerWorkspaceSelects();
+  const activeRows = data.activeSessions || data.rows || [];
   renderTable($("supportTable"), {
     columns: [
+      { label: "Actor", key: "actor_user_id", render: (row) => escapeHtml(row.actor_user_id || row.super_admin_id || "") },
       { label: "Target user", key: "target_user_id", render: (row) => escapeHtml(row.target_user_id || "") },
       { label: "Workspace", key: "workspace_id", render: (row) => escapeHtml(row.workspace_id || "") },
-      { label: "Mode", key: "read_only", render: (row) => Number(row.read_only || 0) === 1 ? "Read-only" : "Write-enabled" },
+      { label: "Mode", key: "mode", render: () => "Read-only" },
+      { label: "Reason", key: "reason", render: (row) => escapeHtml(row.reason || "") },
       { label: "Expires", key: "expires_at", render: (row) => escapeHtml(formatAdminTimestamp(row.expires_at)) }
     ],
-    rows: data.rows || [],
+    rows: activeRows,
     emptyText: "No active support sessions."
+  });
+  renderTable($("supportHistoryTable"), {
+    columns: [
+      { label: "Actor", key: "super_admin_id", render: (row) => escapeHtml(row.actor_user_id || row.super_admin_id || "") },
+      { label: "Workspace", key: "workspace_id", render: (row) => escapeHtml(row.workspace_id || "") },
+      { label: "Reason", key: "reason", render: (row) => escapeHtml(row.reason || "") },
+      { label: "Started", key: "started_at", render: (row) => escapeHtml(formatAdminTimestamp(row.started_at)) },
+      { label: "Ended", key: "ended_at", render: (row) => escapeHtml(row.ended_at ? formatAdminTimestamp(row.ended_at) : "Active") }
+    ],
+    rows: data.sessionHistory || [],
+    emptyText: "No support sessions recorded."
+  });
+  renderTable($("supportAccessTable"), {
+    columns: [
+      { label: "When", key: "timestamp", render: (row) => escapeHtml(formatAdminTimestamp(row.timestamp)) },
+      { label: "Actor", key: "actor_user_id", render: (row) => escapeHtml(row.actor_user_id || "") },
+      { label: "Workspace", key: "workspace_id", render: (row) => escapeHtml(row.workspace_id || "") },
+      { label: "Data", key: "resource_type", render: (row) => escapeHtml(row.resource_type || "") },
+      { label: "Resource", key: "resource_id", render: (row) => escapeHtml(row.resource_id || "") }
+    ],
+    rows: data.accessEvents || [],
+    emptyText: "No support access events recorded."
   });
 }
 
@@ -3369,6 +3394,8 @@ document.addEventListener("click", (event) => {
         if (!confirmAction("End active support sessions?")) return;
         await api("/api/admin/support/impersonation/end", { method: "POST", body: {} });
         await refreshOwnerControl("support");
+      } else if (action === "support-export") {
+        window.location.href = "/api/admin/support/audit/export?format=csv";
       } else if (action === "maintenance-save") {
         if ($("maintenanceEnabled")?.checked && !requireReason($("maintenanceMessage")?.value || "", "Maintenance public message")) return;
         const disabledFeatures = [...document.querySelectorAll("[data-maint-feature]:checked")].map((input) => input.dataset.maintFeature);
@@ -4627,6 +4654,41 @@ async function refreshOverview() {
       icon: "fa-envelope-circle-xmark",
       title: `${failedEmails} failed email${failedEmails === 1 ? "" : "s"} today`,
       meta: "Check outbound email delivery and retry failed operations."
+    });
+  }
+
+  const trust = overview.trust || {};
+  const activeSupportSessions = Number(trust.activeSupportSessions || 0);
+  if (activeSupportSessions > 0) {
+    attentionItems.push({
+      tone: "warn",
+      icon: "fa-user-secret",
+      title: `${activeSupportSessions} active support session${activeSupportSessions === 1 ? "" : "s"}`,
+      meta: trust.lastSupportAccess ? `Last access: ${formatAdminTimestamp(trust.lastSupportAccess.timestamp)}` : "Support mode is currently active."
+    });
+  }
+  if (trust.lastIncident) {
+    attentionItems.push({
+      tone: "warn",
+      icon: "fa-shield-heart",
+      title: "Recent incident evidence",
+      meta: trust.lastIncident.publicMessage || trust.lastIncident.status || "Incident log has recent activity."
+    });
+  }
+  if (trust.lastBackupRestoreTest) {
+    attentionItems.push({
+      tone: "success",
+      icon: "fa-database",
+      title: "Restore test evidence available",
+      meta: formatAdminTimestamp(trust.lastBackupRestoreTest.finishedAt || trust.lastBackupRestoreTest.startedAt)
+    });
+  }
+  if (trust.lastBillingFailure) {
+    attentionItems.push({
+      tone: "danger",
+      icon: "fa-credit-card",
+      title: "Recent billing failure",
+      meta: trust.lastBillingFailure.invoiceNumber || trust.lastBillingFailure.id || "Invoice requires review."
     });
   }
 
