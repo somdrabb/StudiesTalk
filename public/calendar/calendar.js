@@ -411,9 +411,6 @@ function buildCalendarApiHeaders() {
   const userId = getCurrentUserSafe();
   const role = getCurrentRoleSafe();
   const workspaceId = getCurrentWorkspaceHeaderSafe();
-  if (userId) headers["x-user-id"] = userId;
-  if (role) headers["x-user-role"] = role;
-  if (workspaceId) headers["x-workspace-id"] = workspaceId;
   return headers;
 }
 

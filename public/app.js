@@ -109,6 +109,17 @@ let isRestoringView = false;
 let didRestoreView = false;
 let chatScrollRaf = 0;
 let voiceRecordStatusTimer = null;
+const homeworkNoteChannels = new Map();
+const homeworkParentByChannelId = new Map();
+let homeworkLiveSyncTimer = null;
+let homeworkLiveSyncChannelId = "";
+let homeworkLiveSyncInflight = null;
+let homeworkLiveSyncBindingsAttached = false;
+let homeworkComposerExpanded = true;
+const homeworkLastSyncAtByChannel = new Map();
+let homeworkBoardByChannel = {};
+const homeworkBoardInflight = new Map();
+let homeworkBoardUiState = {};
 const channelSearchTerms = {};
 const nicknamesByChannel = {}; // channelId -> { authorKey: nickname }
 const dmMembersCache = {};
@@ -750,11 +761,8 @@ function buildApiHeaders(options = {}) {
   const uid = typeof getCurrentUserId === "function"
     ? String(getCurrentUserId() || "").trim()
     : "";
-  if (uid) headers["x-user-id"] = uid;
 
   if (typeof sessionUser === "object" && sessionUser) {
-    if (sessionUser.role) headers["x-user-role"] = String(sessionUser.role);
-    if (sessionUser.workspaceId) headers["x-workspace-id"] = String(sessionUser.workspaceId);
   }
 
   return headers;
@@ -1285,7 +1293,7 @@ async function loadServerData() {
 
     // 3) DMs (filtered by membership/creator)
     dms = await fetchJSON("/api/dms", {
-      headers: { "x-user-id": getCurrentUserId() }
+      headers: {}
     });
     // 4) preload users directory for profile cards
     await loadUserDirectory();
@@ -1552,7 +1560,7 @@ async function loadCultureReadLanguageForChannel(channelId) {
   const uid = getCurrentUserId?.() || sessionUser?.id || "anon";
   try {
     const res = await fetchJSON(`/api/channels/${channelId}/culture-pref`, {
-      headers: { "x-user-id": uid }
+      headers: {}
     });
     const readLang = normalizeCultureLanguageCode(res?.readLang || "en") || "en";
     cultureReadLanguage = readLang;
@@ -1585,7 +1593,7 @@ async function setCultureReadLanguage(channelId, langCode) {
   try {
     await fetchJSON(`/api/channels/${channelId}/culture-pref`, {
       method: "POST",
-      headers: { "x-user-id": uid },
+      headers: {},
       body: JSON.stringify({ readLang })
     });
   } catch (err) {
@@ -3332,7 +3340,7 @@ async function ensureMessagesForChannelId(channelId) {
     const dmId = dmIdFromChannel(channelId);
     if (!dmId) return;
     const msgs = await fetchJSON(`/api/dms/${dmId}/messages`, {
-      headers: { "x-user-id": getCurrentUserId() }
+      headers: {}
     });
     messagesByChannel[channelId] = msgs;
   } else {
@@ -7288,8 +7296,6 @@ function renderAiActions() {
     const resp = await apiFetch("/api/ai/chat_stream", {
       method: "POST",
       headers: {
-        "x-user-id": getCurrentUserId(),
-        "x-user-role": userRoleHeader()
       },
       body: JSON.stringify({
         message: text,
@@ -9774,7 +9780,7 @@ let sesSavedSubjectPrefix = "";
 async function loadEmailSettings() {
   const ws = await resolveProfileWorkspaceId();
   const s = await fetchJSON(`/api/workspaces/${encodeURIComponent(ws)}/email-settings`, {
-    headers: { "x-user-id": getCurrentUserId() }
+    headers: {}
   });
 
   const isEmpty =
@@ -10300,7 +10306,7 @@ async function loadSesEmailLogs() {
   if (!ws) return;
   const endpoint = `/api/workspaces/${encodeURIComponent(ws)}/email-logs?limit=${SES_HISTORY_LIMIT}`;
   try {
-    const res = await fetchJSON(endpoint, { headers: { "x-user-id": getCurrentUserId() } });
+    const res = await fetchJSON(endpoint, { headers: {} });
     sesEmailLogs = Array.isArray(res?.logs) ? res.logs : [];
     if (sesActiveHistoryLogId && !sesEmailLogs.some((log) => log.id === sesActiveHistoryLogId)) {
       sesActiveHistoryLogId = null;
@@ -10325,7 +10331,7 @@ async function loadSesEmailLogPreview(logId) {
   if (!ws) return;
   const endpoint = `/api/workspaces/${encodeURIComponent(ws)}/email-logs/${encodeURIComponent(logId)}`;
   try {
-    const payload = await fetchJSON(endpoint, { headers: { "x-user-id": getCurrentUserId() } });
+    const payload = await fetchJSON(endpoint, { headers: {} });
     const log = payload?.log;
     if (!log) {
       throw new Error("Log payload missing");
@@ -10443,7 +10449,7 @@ async function uploadSchoolLogo(file) {
 
   const resp = await fetchJSON(`/api/workspaces/${encodeURIComponent(ws)}/logo`, {
     method: "POST",
-    headers: { "x-user-id": getCurrentUserId() },
+    headers: {},
     body: JSON.stringify({ dataUrl })
   });
 
@@ -10465,7 +10471,7 @@ async function saveEmailSettings() {
   const manualBodyText = sesBodyText?.value || "";
   await fetchJSON(`/api/workspaces/${encodeURIComponent(ws)}/email-settings`, {
     method: "POST",
-    headers: { "x-user-id": getCurrentUserId() },
+    headers: {},
     body: JSON.stringify({
       enabled: sesEnabled.checked ? 1 : 0,
       brand_school_name: sesSchoolName.value || "",
@@ -10497,7 +10503,7 @@ async function sendTestEmail() {
   try {
     await fetchJSON(`/api/workspaces/${encodeURIComponent(ws)}/email-settings/test`, {
       method: "POST",
-      headers: { "x-user-id": getCurrentUserId() },
+      headers: {},
       body: JSON.stringify({
         to,
         manual_body_text: finalBody,
@@ -10641,7 +10647,7 @@ async function logFileEvent(eventType, file) {
   try {
     await fetchJSON("/api/file-events", {
       method: "POST",
-      headers: { "x-user-id": getCurrentUserId() },
+      headers: {},
       body: JSON.stringify({
         fileId: file.fileId,
         eventType,
@@ -10668,8 +10674,6 @@ async function pinFile(fileId, pinned) {
   return fetchJSON(`/api/files/${encodeURIComponent(fileId)}/pin`, {
     method: "POST",
     headers: {
-      "x-user-id": getCurrentUserId(),
-      "x-user-role": userRoleHeader()
     },
     body: JSON.stringify({ pinned })
   });
@@ -10730,8 +10734,6 @@ async function deleteFile(fileId) {
   return fetchJSON(`/api/files/${encodeURIComponent(fileId)}/delete`, {
     method: "POST",
     headers: {
-      "x-user-id": getCurrentUserId(),
-      "x-user-role": userRoleHeader()
     },
     body: JSON.stringify({})
   });
@@ -10748,8 +10750,6 @@ async function replaceFile(fileId, fileRow, newUploadFileObj) {
   return fetchJSON(`/api/files/${encodeURIComponent(fileId)}/replace`, {
     method: "POST",
     headers: {
-      "x-user-id": getCurrentUserId(),
-      "x-user-role": userRoleHeader()
     },
     body: JSON.stringify({
       workspaceId: currentWorkspaceId || "default",
@@ -14698,7 +14698,7 @@ async function assignUserToClass(userId, channelId, workspaceId) {
   if (!userId || !channelId || !workspaceId) return;
   await fetchJSON("/api/class-memberships", {
     method: "POST",
-    headers: { "x-admin": "1" },
+    headers: {},
     body: JSON.stringify({ userId, channelId, workspaceId })
   });
 }
@@ -15847,7 +15847,7 @@ function sesTplUpdatePreview() {
 async function sesTplLoadList() {
   const ws = await resolveProfileWorkspaceId();
   const data = await fetchJSON(`/api/workspaces/${encodeURIComponent(ws)}/email-templates`, {
-    headers: { "x-user-id": getCurrentUserId() }
+    headers: {}
   });
   sesTplCache = data?.templates || [];
   sesTplRenderList();
@@ -15917,7 +15917,7 @@ async function sesTplSaveSelected() {
     status && (status.textContent = "Saving...");
     await fetchJSON(`/api/workspaces/${encodeURIComponent(ws)}/email-templates/${encodeURIComponent(sesTplSelectedKey)}`, {
       method: "PUT",
-      headers: { "x-user-id": getCurrentUserId() },
+      headers: {},
       body: JSON.stringify({ subject, body_html, enabled: true })
     });
     status && (status.textContent = "Saved ✅");
@@ -15936,7 +15936,7 @@ async function sesTplResetSelected() {
     status && (status.textContent = "Resetting...");
     await fetchJSON(`/api/workspaces/${encodeURIComponent(ws)}/email-templates/${encodeURIComponent(sesTplSelectedKey)}/reset`, {
       method: "POST",
-      headers: { "x-user-id": getCurrentUserId() }
+      headers: {}
     });
     status && (status.textContent = "Reset ✅");
     await sesTplLoadList();
@@ -15955,7 +15955,7 @@ async function sesTplSendTest() {
     status && (status.textContent = "Sending test...");
     await fetchJSON(`/api/workspaces/${encodeURIComponent(ws)}/email-templates/${encodeURIComponent(sesTplSelectedKey)}/test`, {
       method: "POST",
-      headers: { "x-user-id": getCurrentUserId() },
+      headers: {},
       body: JSON.stringify({ to })
     });
     status && (status.textContent = "Test sent ✅");
@@ -16262,7 +16262,7 @@ async function deleteMessage(messageId) {
     "You";
   await fetchJSON(`/api/messages/${encodeURIComponent(messageId)}`, {
     method: "DELETE",
-    headers: { "x-user-id": getCurrentUserId() },
+    headers: {},
     body: JSON.stringify({ author: authorName })
   });
 
@@ -17290,7 +17290,7 @@ async function adminDeleteWorkspace(workspace) {
   try {
     await fetchJSON(`/api/workspaces/${workspace.id}`, {
       method: "DELETE",
-      headers: { "x-super-admin": "1" }
+      headers: {}
     });
 
     if (currentWorkspaceId === workspace.id) {
@@ -17366,7 +17366,7 @@ async function loadAdminChannels(wsId = "all") {
     const isSuper = isSuperAdmin();
     const target = isSuper ? wsId : adminCurrentWorkspace;
     const param = target && target !== "all" ? `?workspaceId=${encodeURIComponent(target)}` : "";
-    const headers = isSuper ? { "x-super-admin": "1" } : {};
+    const headers = isSuper ? {} : {};
     adminChannels = await fetchJSON(`/api/channels${param}`, { headers });
     if (isSuper && (!wsId || wsId === "all")) {
       adminChannelsAll = adminChannels;
@@ -17619,8 +17619,6 @@ async function loadAdminSchoolRequests() {
   try {
     adminSchoolRequests = await fetchJSON("/api/admin/school-requests?status=PENDING", {
       headers: {
-        "x-super-admin": "1",
-        "x-super-admin-id": getCurrentUserId() || "super-admin"
       }
     });
     renderAdminSchoolRequests();
@@ -17671,8 +17669,6 @@ function renderAdminSchoolRequests() {
         await fetchJSON(`/api/admin/school-requests/${req.id}/approve`, {
           method: "POST",
           headers: {
-            "x-super-admin": "1",
-            "x-super-admin-id": getCurrentUserId() || "super-admin"
           }
         });
         showToast("School approved.");
@@ -17701,8 +17697,6 @@ function renderAdminSchoolRequests() {
         await fetchJSON(`/api/admin/school-requests/${req.id}/reject`, {
           method: "POST",
           headers: {
-            "x-super-admin": "1",
-            "x-super-admin-id": getCurrentUserId() || "super-admin"
           },
           body: JSON.stringify({ reason: "" })
         });
@@ -17934,7 +17928,7 @@ async function handleAdminAssign() {
   try {
     await fetchJSON("/api/admin/assign", {
       method: "POST",
-      headers: { "x-admin": "1" },
+      headers: {},
       body: JSON.stringify({
         userId: adminAssignSelectedUserId,
         workspaceId: adminAssignSelectedWorkspaceId,
@@ -17963,7 +17957,7 @@ async function adminCreateWorkspace() {
   try {
     const res = await fetchJSON("/api/workspaces", {
       method: "POST",
-      headers: { "x-super-admin": "1" },
+      headers: {},
       body: JSON.stringify({ name })
     });
     const ws = res.workspace || res;
@@ -18056,7 +18050,7 @@ async function adminCreateChannel() {
   try {
     const channel = await fetchJSON("/api/channels", {
       method: "POST",
-      headers: { "x-admin": "1" },
+      headers: {},
       body: JSON.stringify({
         name,
         topic,
@@ -18184,7 +18178,7 @@ async function loadChannelsForWorkspace(workspaceId) {
     const wsParam = isSuper
       ? ""
       : `?workspaceId=${encodeURIComponent(resolvedWorkspaceId)}`;
-    const headers = isSuper ? { "x-super-admin": "1" } : {};
+    const headers = isSuper ? {} : {};
     if (!isSuper) {
       currentWorkspaceId = resolvedWorkspaceId;
       if (typeof window !== "undefined") {
@@ -19471,7 +19465,7 @@ async function loadClassMemberships(workspaceId) {
   if (classMembershipsWorkspaceId === workspaceId && classMembershipsByUser.size) {
     return classMembershipsByUser;
   }
-  const headers = { "x-admin": "1" };
+  const headers = {};
   const rows = await fetchJSON(
     `/api/class-memberships?workspaceId=${encodeURIComponent(workspaceId)}`,
     { headers }
@@ -19516,7 +19510,7 @@ async function loadCurrentUserClasses(workspaceId) {
   try {
     const wsParam = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : "";
     const rows = await fetchJSON(`/api/user-class-memberships${wsParam}`, {
-      headers: { "x-user-id": userId }
+      headers: {}
     });
     const list = Array.isArray(rows) ? rows : [];
     currentUserClassIds = new Set(list.map((row) => String(row.channelId)));
@@ -19594,7 +19588,7 @@ async function saveStudentEdits() {
   try {
     await fetchJSON(`/api/users/${encodeURIComponent(currentStudentEditUserId)}`, {
       method: "PATCH",
-      headers: { "x-admin": "1" },
+      headers: {},
       body: JSON.stringify(payload)
     });
     closeStudentEditModal();
@@ -19626,7 +19620,7 @@ async function deleteStudentProfile() {
   try {
     await fetchJSON(`/api/users/${encodeURIComponent(currentStudentEditUserId)}`, {
       method: "DELETE",
-      headers: { "x-admin": "1" }
+      headers: {}
     });
     closeStudentEditModal();
     classMembershipsWorkspaceId = null;
@@ -19752,7 +19746,7 @@ async function saveClassAssignment() {
   try {
     const res = await fetchJSON("/api/class-memberships", {
       method: "POST",
-      headers: { "x-admin": "1" },
+      headers: {},
       body: JSON.stringify({
         userId: currentClassAssignUserId,
         channelId,
@@ -21034,7 +21028,7 @@ async function fetchDmMembers(dmId) {
   if (dmMembersCache[dmId]) return dmMembersCache[dmId];
   try {
     const members = await fetchJSON(`/api/dms/${dmId}/members`, {
-      headers: { "x-user-id": getCurrentUserId() }
+      headers: {}
     });
     dmMembersCache[dmId] = Array.isArray(members) ? members : [];
   } catch (err) {
@@ -21298,7 +21292,7 @@ async function saveDmCreate() {
   try {
     const dm = await fetchJSON("/api/dms", {
       method: "POST",
-      headers: { "x-user-id": getCurrentUserId() },
+      headers: {},
       body: JSON.stringify({ name: dmName, initials })
     });
     if (!dms.some((d) => d.id === dm.id)) {
@@ -21306,7 +21300,7 @@ async function saveDmCreate() {
     }
     await fetchJSON(`/api/dms/${dm.id}/members`, {
       method: "POST",
-      headers: { "x-user-id": getCurrentUserId() },
+      headers: {},
       body: JSON.stringify({ userIds: ids })
     });
     dmMembersCache[dm.id] = null;
@@ -21454,14 +21448,14 @@ async function saveDmMembers() {
     if (toAdd.length) {
       await fetchJSON(`/api/dms/${dmId}/members`, {
         method: "POST",
-        headers: { "x-user-id": getCurrentUserId() },
+        headers: {},
         body: JSON.stringify({ userIds: toAdd })
       });
     }
     if (toRemove.length) {
       await fetchJSON(`/api/dms/${dmId}/members`, {
         method: "DELETE",
-        headers: { "x-user-id": getCurrentUserId() },
+        headers: {},
         body: JSON.stringify({ userIds: toRemove })
       });
     }
@@ -21653,8 +21647,7 @@ async function updateChannelMembership(channelId, userId, shouldAdd) {
   await fetchJSON(`/api/channels/${encodeURIComponent(channelId)}/members`, {
     method: shouldAdd ? "POST" : "DELETE",
     headers: {
-      "Content-Type": "application/json",
-      "x-user-id": getCurrentUserId()
+      "Content-Type": "application/json"
     },
     body: JSON.stringify({ userId })
   });
@@ -22273,7 +22266,7 @@ async function startDirectDmWithUser(user) {
   try {
     const dm = await fetchJSON("/api/dms", {
       method: "POST",
-      headers: { "x-user-id": getCurrentUserId() },
+      headers: {},
       body: JSON.stringify({ name: displayName, initials })
     });
     if (!dms.some((d) => d.id === dm.id)) {
@@ -22281,7 +22274,7 @@ async function startDirectDmWithUser(user) {
     }
     await fetchJSON(`/api/dms/${dm.id}/members`, {
       method: "POST",
-      headers: { "x-user-id": getCurrentUserId() },
+      headers: {},
       body: JSON.stringify({ userIds: [userId] })
     });
     dmMembersCache[dm.id] = null;
@@ -23019,7 +23012,7 @@ async function createExamSubChannel(entry) {
   try {
     const created = await fetchJSON("/api/channels", {
       method: "POST",
-      headers: { "x-admin": "1" },
+      headers: {},
       body: JSON.stringify({
         name,
         workspaceId,
@@ -23361,7 +23354,7 @@ async function openStaticChannel(item) {
     try {
       const created = await fetchJSON("/api/channels", {
         method: "POST",
-        headers: { "x-admin": "1" },
+        headers: {},
         body: JSON.stringify({
           name,
           workspaceId: currentWorkspaceId,
@@ -23974,7 +23967,7 @@ function openInlineChannelForm(category, container) {
     try {
       const newChannel = await fetchJSON("/api/channels", {
         method: "POST",
-        headers: { "x-admin": "1" },
+        headers: {},
         body: JSON.stringify({
           name,
           workspaceId: currentWorkspaceId,
@@ -24381,7 +24374,7 @@ async function deleteDm(dmId, name = "", anchor = null) {
   try {
     await fetchJSON(`/api/dms/${dmId}`, {
       method: "DELETE",
-      headers: { "x-user-id": getCurrentUserId() }
+      headers: {}
     });
     dms = dms.filter((d) => d.id !== dmId);
     renderDMs();
@@ -24471,8 +24464,7 @@ async function handleSchoolLogoUpload(file) {
 
   try {
     const dataUrl = await readFileAsDataUrl(file);
-    const headers = { "x-user-id": getCurrentUserId() };
-    if (isSuperAdmin()) headers["x-super-admin"] = "1";
+    const headers = {};
     const res = await fetchJSON(`/api/workspaces/${encodeURIComponent(workspaceId)}/logo`, {
       method: "POST",
       headers,
@@ -24566,7 +24558,7 @@ async function handleAddWorkspace() {
   try {
     const result = await fetchJSON("/api/workspaces", {
       method: "POST",
-      headers: { "x-super-admin": "1" },
+      headers: {},
       body: JSON.stringify({ name })
     });
 
@@ -24816,6 +24808,7 @@ function renderChannelHeader(channelId) {
         isTeacherTaskChannel ||
         isStudentTaskChannel ||
         isWordmeaning ||
+        isGrammar ||
         isNoteChannel ||
         hideForAnnouncements ||
         isSpeakingPracticeChannel ||
@@ -24912,7 +24905,7 @@ function renderChannelHeader(channelId) {
       iconWrapper.innerHTML = '<i class="fa-solid fa-gear"></i>';
     } else {
       if (isGrammar) {
-        iconWrapper.innerHTML = '<span class="emoji-icon" aria-hidden="true">📝</span>';
+        iconWrapper.innerHTML = '<i class="fa-solid fa-spell-check" aria-hidden="true"></i>';
       } else {
         iconWrapper.innerHTML = "";
       }
@@ -25776,7 +25769,7 @@ function renderAttendanceList() {
       try {
         const response = await fetch(`/api/classes/${encodeURIComponent(attendanceState.channelId)}/attendance/records/${encodeURIComponent(record.student_user_id)}/certificate`, {
           method: "POST",
-          headers: { "x-user-id": getCurrentUserId() },
+          headers: {},
           body: form
         });
         const payload = await response.json();
@@ -25821,7 +25814,7 @@ async function loadAttendanceForChannel(channelId, requestedDate) {
   const dateValue = requestedDate || isoDateOnlyLocal();
   try {
     const data = await fetchJSON(`/api/classes/${encodeURIComponent(channelId)}/attendance?date=${encodeURIComponent(dateValue)}`, {
-      headers: { "x-user-id": getCurrentUserId() }
+      headers: {}
     });
 
     attendanceState = {
@@ -25983,7 +25976,6 @@ async function saveAttendance(options = {}) {
     const data = await fetchJSON(`/api/classes/${encodeURIComponent(attendanceState.channelId)}/attendance/save`, {
       method: "POST",
       headers: {
-        "x-user-id": getCurrentUserId(),
         "Content-Type": "application/json"
       },
       body: JSON.stringify(payload)
@@ -26016,7 +26008,6 @@ async function generateAttendanceCode() {
     const payload = await fetchJSON(`/api/classes/${encodeURIComponent(attendanceState.channelId)}/attendance/session-code`, {
       method: "POST",
       headers: {
-        "x-user-id": getCurrentUserId(),
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
@@ -26063,7 +26054,6 @@ async function submitAttendanceStudentCheckIn(options = {}) {
     const payload = await fetchJSON(`/api/attendance/check-in`, {
       method: "POST",
       headers: {
-        "x-user-id": getCurrentUserId(),
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
@@ -27905,7 +27895,7 @@ async function selectDM(dmId) {
   if (!messagesByChannel[key]) {
     try {
       const msgs = await fetchJSON(`/api/dms/${dmId}/messages`, {
-        headers: { "x-user-id": getCurrentUserId() }
+        headers: {}
       });
       messagesByChannel[key] = msgs;
     } catch (err) {
@@ -29153,7 +29143,6 @@ async function fetchPdfDocument(url) {
         withCredentials: true,
         // include user ID header so uploads that require auth still load
         httpHeaders: {
-          "x-user-id": getCurrentUserId() || "",
           ...(ACCESS_TOKEN ? { Authorization: `Bearer ${ACCESS_TOKEN}` } : {})
         }
       })
@@ -29280,7 +29269,7 @@ async function hydratePdfStats(container) {
 
   try {
     const data = await fetchJSON(`/api/file-stats?${params.toString()}`, {
-      headers: { "x-user-id": getCurrentUserId() }
+      headers: {}
     });
 
     const statsMap = (data && data.stats) || {};
@@ -29316,7 +29305,6 @@ async function recordPdfStat(url, type, card) {
     const stats = await fetchJSON("/api/file-stats/increment", {
       method: "POST",
       headers: {
-        "x-user-id": getCurrentUserId()
       },
       body: JSON.stringify(payload)
     });
@@ -29472,7 +29460,7 @@ async function deleteSinglePdfCard(card, channelId) {
   try {
     await fetchJSON(`/api/messages/${encodeURIComponent(messageId)}`, {
       method: "PATCH",
-      headers: { "x-user-id": getCurrentUserId() },
+      headers: {},
       body: JSON.stringify({ text: newText })
     });
     msg.text = newText;
@@ -31125,7 +31113,7 @@ async function sendMessage(options = {}) {
       isDm ? `/api/dms/${dmId}/messages` : `/api/channels/${currentChannelId}/messages`,
       {
         method: "POST",
-        headers: isDm ? { "x-user-id": getCurrentUserId() } : undefined,
+        headers: isDm ? {} : undefined,
         body: JSON.stringify(payload)
       }
     );
@@ -31240,7 +31228,7 @@ async function sendThreadReply() {
         : `/api/channels/${channelId}/messages/${currentThreadMessage.id}/replies`,
       {
         method: "POST",
-        headers: dmId ? { "x-user-id": getCurrentUserId() } : undefined,
+        headers: dmId ? {} : undefined,
         body: JSON.stringify({
           author: authorName,
           initials,
@@ -31598,7 +31586,7 @@ async function fetchSearchResultsFromServer(query) {
     const results = await fetchJSON(
       url,
       {
-        headers: { "x-user-id": getCurrentUserId() }
+        headers: {}
       }
     );
     // ignore out-of-order responses
@@ -32420,7 +32408,7 @@ if (studentSendLinkBtn) {
 
         const payload = await fetchJSON("/api/register/send-link", {
         method: "POST",
-        headers: { "x-admin": "1" },
+        headers: {},
         body: JSON.stringify({
           role: "student",
           workspaceId,
@@ -32555,7 +32543,7 @@ if (teacherSendLinkBtn) {
 
       const payload = await fetchJSON("/api/register/send-link", {
         method: "POST",
-        headers: { "x-admin": "1" },
+        headers: {},
         body: JSON.stringify({
           role: "teacher",
           workspaceId,
@@ -35454,8 +35442,7 @@ async function moveCalendarEvent(id, newDate) {
   await fetchJSON(`/api/calendar/events/${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: {
-      "Content-Type": "application/json",
-      "x-user-id": getCurrentUserId()
+      "Content-Type": "application/json"
     },
     body: JSON.stringify({ date: newDate })
   });
@@ -36791,7 +36778,7 @@ async function requestCultureTranslation({ channelId, msg, from, to, plainText }
     try {
       const resp = await fetchJSON("/api/translate", {
         method: "POST",
-        headers: { "x-user-id": getCurrentUserId() },
+        headers: {},
         body: JSON.stringify({
           messageId: msg.id,
           text: plainText,
@@ -37240,7 +37227,7 @@ window.addEventListener("popstate", () => {
     params.set("channelId", state.channelId);
     if (state.filter !== "all") params.set("status", state.filter);
     const data = await fetchJSON(`/api/tasks?${params.toString()}`, {
-      headers: { "x-user-id": getUserIdHeader() }
+      headers: {}
     });
     state.tasks = data.tasks || [];
     if (state.selectedTaskId && !state.tasks.find((t) => t.id === state.selectedTaskId)) {
@@ -37337,7 +37324,7 @@ window.addEventListener("popstate", () => {
   async function loadComments(taskId) {
     if (!taskId) return;
     const data = await fetchJSON(`/api/tasks/${taskId}/comments`, {
-      headers: { "x-user-id": getUserIdHeader() }
+      headers: {}
     });
     state.commentsByTask.set(taskId, data.comments || []);
     if (state.selectedTaskId === taskId) renderTaskDetail();
@@ -37441,9 +37428,8 @@ window.addEventListener("popstate", () => {
       await fetchJSON(`/api/tasks/${task.id}/comments`, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
-          "x-user-id": getUserIdHeader()
-        },
+          "Content-Type": "application/json"
+    },
         body: JSON.stringify({ body })
       });
       ta.value = "";
@@ -37495,9 +37481,8 @@ window.addEventListener("popstate", () => {
     await fetchJSON(`/api/task-reactions/toggle`, {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
-        "x-user-id": getUserIdHeader()
-      },
+        "Content-Type": "application/json"
+    },
       body: JSON.stringify({ targetType, targetId, emoji })
     });
   }
@@ -37506,9 +37491,8 @@ window.addEventListener("popstate", () => {
     await fetchJSON(`/api/tasks/${taskId}`, {
       method: "PATCH",
       headers: {
-        "Content-Type": "application/json",
-        "x-user-id": getUserIdHeader()
-      },
+        "Content-Type": "application/json"
+    },
       body: JSON.stringify(patch)
     });
     await loadTasks();
@@ -37553,9 +37537,8 @@ window.addEventListener("popstate", () => {
       const data = await fetchJSON(`/api/tasks`, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
-          "x-user-id": getUserIdHeader()
-        },
+          "Content-Type": "application/json"
+    },
         body: JSON.stringify({
           channelId: state.channelId,
           title,

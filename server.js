@@ -3015,6 +3015,29 @@ async function assertMessageAccess(user, messageId, req) {
   };
 }
 
+async function assertTranslatableMessageAccess(user, messageId, req) {
+  const channelAccess = await assertMessageAccess(user, messageId, req);
+  if (channelAccess.ok || channelAccess.status !== 404) {
+    return { ...channelAccess, type: 'channel' };
+  }
+  const dmMessage = db.prepare(`
+    SELECT id, dm_id AS dmId
+    FROM dm_messages
+    WHERE id = ?
+    LIMIT 1
+  `).get(String(messageId || '').trim());
+  if (!dmMessage) return { ok: false, status: 404 };
+  const dmAccess = await assertDmAccess(user, dmMessage.dmId, req);
+  return {
+    ok: dmAccess.ok,
+    status: dmAccess.status,
+    type: 'dm',
+    message: dmMessage,
+    dm: dmAccess.dm,
+    workspaceId: dmAccess.workspaceId
+  };
+}
+
 async function assertFileAccess(user, fileId, req) {
   const file = findManagedUploadRecordById(fileId);
   if (!file || file.deleted) return { ok: false, status: 404 };
@@ -20988,6 +21011,13 @@ app.post('/api/translate', async (req, res) => {
     return res.status(400).json({ error: 'messageId and text are required' });
   }
 
+  const messageAccess = await assertTranslatableMessageAccess(authed, msgId, req);
+  if (!messageAccess.ok) {
+    if (messageAccess.status === 401) return res.status(401).json({ error: 'unauthorized' });
+    if (messageAccess.status === 404) return res.status(404).json({ error: 'message not found' });
+    return tenantForbidden(res);
+  }
+
   if (!from || from === 'auto') {
     const provider = String(process.env.TRANSLATION_PROVIDER || '').toLowerCase();
     if (provider === 'google') {
@@ -21009,9 +21039,7 @@ app.post('/api/translate', async (req, res) => {
     return res.json({ translatedText: rawText, status: 'none', provider: 'none' });
   }
 
-  // If message is not in DB, translate but don't cache (avoids FK issues)
-  const msgExists = await messageRepository.getMessageById(msgId);
-  if (!msgExists) {
+  if (messageAccess.type === 'dm') {
     if (workspaceId) {
       try {
         await enforceProviderLimitSafe({
@@ -21031,6 +21059,7 @@ app.post('/api/translate', async (req, res) => {
         sourceLang: from,
         targetLang: to
       });
+      const providerUsed = provider || String(process.env.TRANSLATION_PROVIDER || 'google').toLowerCase();
       const finalTranslated = normalizeTranslatedText(translatedText) || translatedText;
       if (workspaceId) {
         await recordProviderUsageSafe({
@@ -21045,25 +21074,30 @@ app.post('/api/translate', async (req, res) => {
             messageId: msgId,
             sourceLang: from,
             targetLang: to,
-            provider: provider || 'google'
+            provider: providerUsed,
+            sourceType: 'dm'
           }
         });
       }
       return res.json({
         translatedText: finalTranslated,
         status: 'ready',
-        provider: provider || 'google',
-        cached: false,
-        note: 'not cached (message not in db)'
+        provider: providerUsed,
+        cached: false
       });
     } catch (e) {
       return res.json({
         translatedText: rawText,
         status: 'failed',
-        provider: String(process.env.TRANSLATION_PROVIDER || 'google'),
+        provider: String(process.env.TRANSLATION_PROVIDER || 'google').toLowerCase(),
         error: String(e?.message || e)
       });
     }
+  }
+
+  const msgExists = messageAccess.message || await messageRepository.getMessageById(msgId);
+  if (!msgExists) {
+    return res.status(404).json({ error: 'message not found' });
   }
 
   // Check cache
@@ -21631,18 +21665,32 @@ app.post('/api/channels/:channelId/culture-pref', async (req, res) => {
 // update message text (author-only)
 app.patch('/api/messages/:messageId', async (req, res) => {
   const { messageId } = req.params;
-  const { text, author } = req.body || {};
+  const { text } = req.body || {};
   if (!text || !String(text).trim()) {
     return res.status(400).json({ error: 'Text is required' });
   }
-  const access = await assertMessageAccess(getTenantAccessUser(req), messageId, req);
+  const authed = getAuthedUser(req);
+  if (!authed) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const access = await assertMessageAccess(authed, messageId, req);
   if (!access.ok) {
     if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
     if (access.status === 404) return res.status(404).json({ error: 'Message not found' });
     return tenantForbidden(res);
   }
-  const msg = await messageRepository.getMessageById(messageId);
-  if (author && msg.author && msg.author !== author) {
+  const msg = access.message || await messageRepository.getMessageById(messageId);
+  const actorNames = new Set([
+    authed.name,
+    authed.username,
+    authed.email,
+    `${authed.first_name || ''} ${authed.last_name || ''}`.trim()
+  ].filter(Boolean).map((value) => String(value).trim().toLowerCase()));
+  const storedAuthor = String(msg?.author || '').trim().toLowerCase();
+  const sameAuthor = storedAuthor && actorNames.has(storedAuthor);
+  const role = getNormalizedUserRole(authed);
+  const canModerate = ['admin', 'school_admin', 'moderator'].includes(role) && access.channel;
+  if (!sameAuthor && !canModerate) {
     return res.status(403).json({ error: 'Only the author can edit this message' });
   }
 
@@ -27247,22 +27295,59 @@ app.get('/api/live-sessions/:sessionId/attendance', (req, res) => {
   res.json(state.participants);
 });
 
-app.post('/api/live-sessions/:sessionId/attendance', (req, res) => {
-  const user = getAuthedUser(req);
-  if (!canManageLiveSessions(user)) {
-    return res.status(403).json({ error: 'Forbidden' });
-  }
+app.post('/api/live-sessions/:sessionId/attendance', async (req, res) => {
   const { sessionId } = req.params;
-  const session = db.prepare('SELECT * FROM live_sessions WHERE id = ?').get(sessionId);
-  if (!session) {
-    return res.status(404).json({ error: 'Session not found' });
-  }
-  if (!canUserManageSpecificLiveSession(user, session)) {
+  const access = await resolveLiveSessionAccess(req, sessionId, { requireManage: true });
+  if (!access.ok) {
+    if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
+    if (access.status === 404) return res.status(404).json({ error: 'Session not found' });
     return tenantForbidden(res);
   }
+  const { session } = access;
   const records = Array.isArray(req.body?.records) ? req.body.records : [];
   if (!records.length) {
     return res.status(400).json({ error: 'Records are required' });
+  }
+  const sessionWorkspaceId = String(session.workspace_id || session.workspaceId || '').trim();
+  const sessionChannelId = String(session.channel_id || session.channelId || '').trim();
+  const normalizedRecords = [];
+  for (const record of records) {
+    const studentId = String(record?.studentId || record?.student_id || '').trim();
+    if (!studentId) continue;
+    const student = db.prepare(`
+      SELECT id, workspace_id AS workspaceId, role
+      FROM users
+      WHERE id = ?
+      LIMIT 1
+    `).get(studentId);
+    if (!student || String(student.workspaceId || '').trim() !== sessionWorkspaceId) {
+      await logTenantIsolationEvent(req, {
+        workspaceId: sessionWorkspaceId,
+        targetType: 'live_attendance',
+        targetId: studentId || sessionId,
+        reason: 'live_attendance_student_workspace_denied',
+        type: 'security.forbidden_live_attendance_write'
+      });
+      return tenantForbidden(res);
+    }
+    const studentRole = String(student.role || '').trim().toLowerCase();
+    if (studentRole && !['student', 'member'].includes(studentRole)) {
+      return res.status(400).json({ error: 'Attendance records must target students only' });
+    }
+    if (sessionChannelId && !isUserInChannel(studentId, sessionChannelId)) {
+      await logTenantIsolationEvent(req, {
+        workspaceId: sessionWorkspaceId,
+        targetType: 'live_attendance',
+        targetId: studentId,
+        reason: 'live_attendance_student_class_denied',
+        type: 'security.forbidden_live_attendance_write'
+      });
+      return tenantForbidden(res);
+    }
+    normalizedRecords.push({ ...record, studentId });
+  }
+  if (!normalizedRecords.length) {
+    return res.status(400).json({ error: 'Valid student records are required' });
   }
   const now = nowIso();
   const stmt = db.prepare(`
@@ -27272,9 +27357,8 @@ app.post('/api/live-sessions/:sessionId/attendance', (req, res) => {
       DO UPDATE SET status = excluded.status, note = excluded.note, updated_at = excluded.updated_at
   `);
   const payloads = [];
-  records.forEach((record) => {
-    const studentId = record.studentId || record.student_id;
-    if (!studentId) return;
+  normalizedRecords.forEach((record) => {
+    const studentId = record.studentId;
     const status = record.status || 'unmarked';
     const note = record.note || null;
     const joinedAt = record.joinedAt || now;
@@ -27585,10 +27669,12 @@ app.post('/api/dm-replies/:replyId/reactions', async (req, res) => {
 
 /* ---------- DMs (unchanged, no reactions yet) ---------- */
 
-app.get('/api/dms', (req, res) => {
-  const requesterUser = getTenantAccessUser(req);
-  const requester = String(requesterUser?.id || requesterUser?.sub || getRequesterId(req) || '').trim();
-  let list;
+app.get('/api/dms', async (req, res) => {
+  const requesterUser = getAuthedUser(req);
+  const requester = String(requesterUser?.id || requesterUser?.sub || '').trim();
+  if (!requesterUser || !requester) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
   if (requesterUser && isSuperAdminRole(requesterUser)) {
     void logTenantIsolationEvent(req, {
       workspaceId: userWorkspaceId(requesterUser) || null,
@@ -27599,21 +27685,25 @@ app.get('/api/dms', (req, res) => {
     });
     return tenantForbidden(res);
   }
-  if (requester) {
-    list = db
-      .prepare(
-        `SELECT d.id, d.name, d.initials, d.online
-         FROM dms d
-         LEFT JOIN dm_members m ON m.dm_id = d.id
-         WHERE m.user_id = ? OR d.created_by = ?
-         GROUP BY d.id
-         ORDER BY d.name`
-      )
-      .all(requester, requester);
-  } else {
-    list = db.prepare('SELECT id, name, initials, online FROM dms ORDER BY name').all();
+
+  const rows = db
+    .prepare(
+      `SELECT d.id, d.name, d.initials, d.online
+       FROM dms d
+       LEFT JOIN dm_members m ON m.dm_id = d.id
+       WHERE m.user_id = ? OR d.created_by = ?
+       GROUP BY d.id
+       ORDER BY d.name`
+    )
+    .all(requester, requester);
+  const list = [];
+  for (const row of rows) {
+    const access = await assertDmAccess(requesterUser, row.id, req);
+    if (access.ok) {
+      list.push(row);
+    }
   }
-  logSupportAccessIfActive(req, 'DMs', 'list', userWorkspaceId(getTenantAccessUser(req)) || req.supportSession?.workspace_id);
+  logSupportAccessIfActive(req, 'DMs', 'list', userWorkspaceId(requesterUser) || req.supportSession?.workspace_id);
   res.json(
     list.map((d) => ({
       ...d,
