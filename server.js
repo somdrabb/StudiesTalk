@@ -6948,7 +6948,7 @@ app.post("/api/register/send-link", async (req, res) => {
     return res.status(500).json({ error: "Could not create/send link" });
   }
 });
-app.get("/api/register/link/:token", async (req, res) => {
+app.get("/api/register/link/:token", strictLimiter, async (req, res) => {
   try {
     const token = String(req.params.token || "").trim();
     const row = await registrationRepository.getInvite(token);
@@ -25448,16 +25448,18 @@ app.post('/api/channels/:channelId/messages/:messageId/replies', async (req, res
 
 /* ---------- NEW: REACTIONS API ---------- */
 
-app.post('/api/messages/:messageId/reactions', async (req, res) => {
+app.post('/api/messages/:messageId/reactions', authRequired, async (req, res) => {
   const { messageId } = req.params;
-  const { emoji, userId: rawUserId } = req.body || {};
+  const { emoji } = req.body || {};
   if (!emoji) {
     return res.status(400).json({ error: 'emoji is required' });
   }
 
-  const userId = String(rawUserId || 'anonymous').trim() || 'anonymous';
+  const requesterUser = getTenantAccessUser(req);
+  const userId = String(requesterUser?.id || requesterUser?.sub || '').trim();
+  if (!requesterUser || !userId) return res.status(401).json({ error: 'Unauthorized' });
 
-  const access = await assertMessageAccess(getTenantAccessUser(req), messageId, req);
+  const access = await assertMessageAccess(requesterUser, messageId, req);
   if (!access.ok) {
     if (access.status === 401) return res.status(401).json({ error: 'Unauthorized' });
     if (access.status === 404) return res.status(404).json({ error: 'Message not found' });
@@ -25471,20 +25473,22 @@ app.post('/api/messages/:messageId/reactions', async (req, res) => {
   res.json(payload);
 });
 
-app.post('/api/replies/:replyId/reactions', async (req, res) => {
+app.post('/api/replies/:replyId/reactions', authRequired, async (req, res) => {
   const { replyId } = req.params;
-  const { emoji, userId: rawUserId } = req.body || {};
+  const { emoji } = req.body || {};
   if (!emoji) {
     return res.status(400).json({ error: 'emoji is required' });
   }
 
-  const userId = String(rawUserId || 'anonymous').trim() || 'anonymous';
+  const requesterUser = getTenantAccessUser(req);
+  const userId = String(requesterUser?.id || requesterUser?.sub || '').trim();
+  if (!requesterUser || !userId) return res.status(401).json({ error: 'Unauthorized' });
 
   const replyAccess = resolveReplyAccessRow(replyId);
   if (!replyAccess) {
     return res.status(404).json({ error: 'Reply not found' });
   }
-  const channelAccess = await assertChannelAccess(getTenantAccessUser(req), replyAccess.channelId, req, { requireMembership: true });
+  const channelAccess = await assertChannelAccess(requesterUser, replyAccess.channelId, req, { requireMembership: true });
   if (!channelAccess.ok) {
     if (channelAccess.status === 401) return res.status(401).json({ error: 'Unauthorized' });
     return tenantForbidden(res);
@@ -27726,9 +27730,9 @@ app.post('/api/dms/:dmId/messages/:messageId/replies', (req, res) => {
 });
 
 // DM reply reactions
-app.post('/api/dm-replies/:replyId/reactions', async (req, res) => {
+app.post('/api/dm-replies/:replyId/reactions', authRequired, async (req, res) => {
   const { replyId } = req.params;
-  const { emoji, userId: rawUserId } = req.body || {};
+  const { emoji } = req.body || {};
   if (!emoji) {
     return res.status(400).json({ error: 'emoji is required' });
   }
@@ -27745,10 +27749,10 @@ app.post('/api/dm-replies/:replyId/reactions', async (req, res) => {
   }
   const requesterUser = getTenantAccessUser(req);
   if (!requesterUser) return res.status(401).json({ error: 'Unauthorized' });
+  const userId = String(requesterUser?.id || requesterUser?.sub || '').trim();
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   const dmAccess = await assertDmAccess(requesterUser, replyRow.dmId, req);
   if (!dmAccess.ok) return tenantForbidden(res);
-
-  const userId = String(rawUserId || 'anonymous').trim() || 'anonymous';
 
   const toggleReaction = db.transaction(() => {
     const exists = db
@@ -28085,17 +28089,18 @@ app.post('/api/dms/:dmId/messages', async (req, res) => {
 });
 
 // add / toggle reaction on DM message
-app.post('/api/dms/:dmId/messages/:messageId/reactions', async (req, res) => {
+app.post('/api/dms/:dmId/messages/:messageId/reactions', authRequired, async (req, res) => {
   const { dmId, messageId } = req.params;
-  const { emoji, userId: rawUserId } = req.body || {};
+  const { emoji } = req.body || {};
   if (!emoji) {
     return res.status(400).json({ error: 'emoji is required' });
   }
   const requesterUser = getTenantAccessUser(req);
   if (!requesterUser) return res.status(401).json({ error: 'Unauthorized' });
+  const userId = String(requesterUser?.id || requesterUser?.sub || '').trim();
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' });
   const dmAccess = await assertDmAccess(requesterUser, dmId, req);
   if (!dmAccess.ok) return tenantForbidden(res);
-  const userId = String(rawUserId || 'anonymous').trim() || 'anonymous';
 
   const dm = db.prepare('SELECT id, created_by FROM dms WHERE id = ?').get(dmId);
   if (!dm) return res.status(404).json({ error: 'DM not found' });

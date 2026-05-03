@@ -70,6 +70,33 @@ function createStripeBillingService({
     return new Date(n * 1000).toISOString();
   }
 
+  async function resolveWebhookWorkspace(object = {}, { allowMetadataOnly = true } = {}) {
+    const metadataWorkspaceId = cleanString(object?.metadata?.workspaceId || object?.subscription_details?.metadata?.workspaceId);
+    const customerWorkspaceId = object?.customer
+      ? cleanString(await billingRepository.findWorkspaceByStripeCustomerId(object.customer))
+      : '';
+    if (metadataWorkspaceId && customerWorkspaceId && metadataWorkspaceId !== customerWorkspaceId) {
+      const error = new Error('Stripe webhook customer/workspace mapping mismatch.');
+      error.statusCode = 409;
+      await billingRepository.recordBillingProviderEvent({
+        workspaceId: customerWorkspaceId,
+        provider: 'stripe',
+        eventType: 'webhook.mapping_mismatch',
+        status: 'blocked',
+        providerRef: cleanString(object?.id || object?.customer),
+        metadata: {
+          metadataWorkspaceId,
+          customerWorkspaceId,
+          customer: cleanString(object?.customer)
+        }
+      });
+      throw error;
+    }
+    if (customerWorkspaceId) return customerWorkspaceId;
+    if (allowMetadataOnly && metadataWorkspaceId) return metadataWorkspaceId;
+    return '';
+  }
+
   async function ensureCustomer({ workspaceId, email = null, name = null, metadata = {} }) {
     const ws = requireConfigured(workspaceId, 'workspaceId is required.');
     const profile = await billingRepository.getWorkspaceBillingProfile(ws)
@@ -217,20 +244,22 @@ function createStripeBillingService({
   async function handleWebhookEvent(event) {
     const type = cleanString(event?.type);
     const object = event?.data?.object || {};
-    const workspaceId = cleanString(object?.metadata?.workspaceId || object?.subscription_details?.metadata?.workspaceId);
     const status = cleanString(object?.status, 'received');
     const providerRef = cleanString(object?.id || event?.id);
+    let resolvedWorkspaceId = '';
 
     if (type === 'checkout.session.completed') {
+      resolvedWorkspaceId = await resolveWebhookWorkspace(object, { allowMetadataOnly: true });
       await billingRepository.updateWorkspaceStripeState({
-        workspaceId,
+        workspaceId: resolvedWorkspaceId,
         stripeCustomerId: object.customer || null,
         stripeSubscriptionId: object.subscription || null,
         stripeSubscriptionStatus: 'active'
       });
-      await setWorkspaceStatus(workspaceId, 'active');
+      await setWorkspaceStatus(resolvedWorkspaceId, 'active');
     } else if (type.startsWith('customer.subscription.')) {
-      const customerWorkspaceId = workspaceId || await billingRepository.findWorkspaceByStripeCustomerId(object.customer);
+      const customerWorkspaceId = await resolveWebhookWorkspace(object, { allowMetadataOnly: true });
+      resolvedWorkspaceId = customerWorkspaceId;
       const subscriptionStatus = type === 'customer.subscription.deleted'
         ? 'canceled'
         : object.status || null;
@@ -250,7 +279,8 @@ function createStripeBillingService({
         await setWorkspaceStatus(customerWorkspaceId, 'past_due');
       }
     } else if (type === 'invoice.payment_succeeded' || type === 'invoice.paid') {
-      const customerWorkspaceId = workspaceId || await billingRepository.findWorkspaceByStripeCustomerId(object.customer);
+      const customerWorkspaceId = await resolveWebhookWorkspace(object, { allowMetadataOnly: true });
+      resolvedWorkspaceId = customerWorkspaceId;
       await billingRepository.recordStripePaymentFromInvoice({
         workspaceId: customerWorkspaceId,
         stripeInvoiceId: object.id,
@@ -266,7 +296,8 @@ function createStripeBillingService({
       });
       await setWorkspaceStatus(customerWorkspaceId, 'active');
     } else if (type === 'invoice.payment_failed') {
-      const customerWorkspaceId = workspaceId || await billingRepository.findWorkspaceByStripeCustomerId(object.customer);
+      const customerWorkspaceId = await resolveWebhookWorkspace(object, { allowMetadataOnly: true });
+      resolvedWorkspaceId = customerWorkspaceId;
       await billingRepository.updateWorkspaceStripeState({
         workspaceId: customerWorkspaceId,
         stripeCustomerId: object.customer || null,
@@ -296,14 +327,14 @@ function createStripeBillingService({
     }
 
     await billingRepository.recordBillingProviderEvent({
-      workspaceId: workspaceId || null,
+      workspaceId: resolvedWorkspaceId || null,
       provider: 'stripe',
       eventType: type,
       status,
       providerRef,
       metadata: { eventId: event.id, livemode: !!event.livemode }
     });
-    if (typeof audit === 'function') audit('billing.stripe.webhook', { eventType: type, providerRef, workspaceId: workspaceId || null });
+    if (typeof audit === 'function') audit('billing.stripe.webhook', { eventType: type, providerRef, workspaceId: resolvedWorkspaceId || null });
     return { ok: true, type };
   }
 
