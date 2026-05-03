@@ -16138,6 +16138,7 @@ app.get('/api/classes/:channelId/attendance', async (req, res) => {
       from: String(req.query.from || '').trim(),
       to: String(req.query.to || '').trim()
     });
+    logSupportAccessIfActive(req, 'attendance', channelId, workspaceId);
 
     res.json({
       channel: chk.channel,
@@ -16893,6 +16894,7 @@ app.get('/api/classes/:channelId/attendance/report', (req, res) => {
     from: String(req.query.from || '').trim(),
     to: String(req.query.to || '').trim()
   });
+  logSupportAccessIfActive(req, 'attendance', channelId, workspaceId);
   res.json({
     ok: true,
     channel: chk.channel,
@@ -16927,6 +16929,7 @@ app.get('/api/classes/:channelId/attendance/report.csv', (req, res) => {
     from: String(req.query.from || '').trim(),
     to: String(req.query.to || '').trim()
   });
+  logSupportAccessIfActive(req, 'attendance', channelId, workspaceId);
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="attendance_${channelId}.csv"`);
   res.send(buildAttendanceReportCsv(report));
@@ -20201,6 +20204,7 @@ app.get('/api/homework/channels/:channelId/board', authRequired, async (req, res
   if (!ctx) return;
   const role = getNormalizedUserRole(ctx.user);
   try {
+    logSupportAccessIfActive(req, 'homework', ctx.homeworkChannel.id, ctx.homeworkChannel.workspaceId);
     res.json({
       channel: {
         ...ctx.homeworkChannel,

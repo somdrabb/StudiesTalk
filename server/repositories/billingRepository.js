@@ -582,6 +582,12 @@ function createSqliteBillingRepository(sqliteDb) {
       return row?.workspaceId || null;
     },
 
+    async findWorkspaceByStripeSubscriptionId(stripeSubscriptionId) {
+      if (!stripeSubscriptionId) return null;
+      const row = sqliteDb.prepare('SELECT workspace_id AS "workspaceId" FROM workspace_billing WHERE stripe_subscription_id = ? OR provider_subscription_id = ? LIMIT 1').get(stripeSubscriptionId, stripeSubscriptionId);
+      return row?.workspaceId || null;
+    },
+
     async recordBillingProviderEvent({ workspaceId = null, provider = 'stripe', eventType, status = 'received', providerRef = null, metadata = {} }) {
       const id = `bill_evt_${Date.now()}_${Math.random().toString(16).slice(2)}`;
       sqliteDb.prepare(`
@@ -1090,6 +1096,12 @@ function createPostgresBillingRepository() {
     async findWorkspaceByStripeCustomerId(stripeCustomerId) {
       if (!stripeCustomerId) return null;
       const row = await postgres.queryOne('SELECT workspace_id AS "workspaceId" FROM workspace_billing WHERE stripe_customer_id = ? OR provider_customer_id = ? LIMIT 1', [stripeCustomerId, stripeCustomerId]);
+      return row?.workspaceId || null;
+    },
+
+    async findWorkspaceByStripeSubscriptionId(stripeSubscriptionId) {
+      if (!stripeSubscriptionId) return null;
+      const row = await postgres.queryOne('SELECT workspace_id AS "workspaceId" FROM workspace_billing WHERE stripe_subscription_id = ? OR provider_subscription_id = ? LIMIT 1', [stripeSubscriptionId, stripeSubscriptionId]);
       return row?.workspaceId || null;
     },
 

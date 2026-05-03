@@ -70,29 +70,38 @@ function createStripeBillingService({
     return new Date(n * 1000).toISOString();
   }
 
-  async function resolveWebhookWorkspace(object = {}, { allowMetadataOnly = true } = {}) {
+  async function resolveWebhookWorkspace(object = {}, { allowMetadataOnly = true, subscriptionId = null } = {}) {
     const metadataWorkspaceId = cleanString(object?.metadata?.workspaceId || object?.subscription_details?.metadata?.workspaceId);
+    const effectiveSubscriptionId = cleanString(subscriptionId || object?.subscription || (object?.object === 'subscription' ? object?.id : ''));
     const customerWorkspaceId = object?.customer
       ? cleanString(await billingRepository.findWorkspaceByStripeCustomerId(object.customer))
       : '';
-    if (metadataWorkspaceId && customerWorkspaceId && metadataWorkspaceId !== customerWorkspaceId) {
+    const subscriptionWorkspaceId = effectiveSubscriptionId && typeof billingRepository.findWorkspaceByStripeSubscriptionId === 'function'
+      ? cleanString(await billingRepository.findWorkspaceByStripeSubscriptionId(effectiveSubscriptionId))
+      : '';
+    const mappedWorkspaceIds = [metadataWorkspaceId, customerWorkspaceId, subscriptionWorkspaceId].filter(Boolean);
+    const hasMismatch = mappedWorkspaceIds.some((workspaceId) => workspaceId !== mappedWorkspaceIds[0]);
+    if (hasMismatch) {
       const error = new Error('Stripe webhook customer/workspace mapping mismatch.');
       error.statusCode = 409;
       await billingRepository.recordBillingProviderEvent({
-        workspaceId: customerWorkspaceId,
+        workspaceId: customerWorkspaceId || subscriptionWorkspaceId || metadataWorkspaceId || null,
         provider: 'stripe',
         eventType: 'webhook.mapping_mismatch',
         status: 'blocked',
-        providerRef: cleanString(object?.id || object?.customer),
+        providerRef: cleanString(object?.id || object?.customer || effectiveSubscriptionId),
         metadata: {
           metadataWorkspaceId,
           customerWorkspaceId,
-          customer: cleanString(object?.customer)
+          subscriptionWorkspaceId,
+          customer: cleanString(object?.customer),
+          subscription: effectiveSubscriptionId
         }
       });
       throw error;
     }
     if (customerWorkspaceId) return customerWorkspaceId;
+    if (subscriptionWorkspaceId) return subscriptionWorkspaceId;
     if (allowMetadataOnly && metadataWorkspaceId) return metadataWorkspaceId;
     return '';
   }
@@ -249,7 +258,7 @@ function createStripeBillingService({
     let resolvedWorkspaceId = '';
 
     if (type === 'checkout.session.completed') {
-      resolvedWorkspaceId = await resolveWebhookWorkspace(object, { allowMetadataOnly: true });
+      resolvedWorkspaceId = await resolveWebhookWorkspace(object, { allowMetadataOnly: true, subscriptionId: object.subscription });
       await billingRepository.updateWorkspaceStripeState({
         workspaceId: resolvedWorkspaceId,
         stripeCustomerId: object.customer || null,
@@ -258,7 +267,7 @@ function createStripeBillingService({
       });
       await setWorkspaceStatus(resolvedWorkspaceId, 'active');
     } else if (type.startsWith('customer.subscription.')) {
-      const customerWorkspaceId = await resolveWebhookWorkspace(object, { allowMetadataOnly: true });
+      const customerWorkspaceId = await resolveWebhookWorkspace(object, { allowMetadataOnly: true, subscriptionId: object.id });
       resolvedWorkspaceId = customerWorkspaceId;
       const subscriptionStatus = type === 'customer.subscription.deleted'
         ? 'canceled'
@@ -279,7 +288,7 @@ function createStripeBillingService({
         await setWorkspaceStatus(customerWorkspaceId, 'past_due');
       }
     } else if (type === 'invoice.payment_succeeded' || type === 'invoice.paid') {
-      const customerWorkspaceId = await resolveWebhookWorkspace(object, { allowMetadataOnly: true });
+      const customerWorkspaceId = await resolveWebhookWorkspace(object, { allowMetadataOnly: true, subscriptionId: object.subscription });
       resolvedWorkspaceId = customerWorkspaceId;
       await billingRepository.recordStripePaymentFromInvoice({
         workspaceId: customerWorkspaceId,
@@ -296,7 +305,7 @@ function createStripeBillingService({
       });
       await setWorkspaceStatus(customerWorkspaceId, 'active');
     } else if (type === 'invoice.payment_failed') {
-      const customerWorkspaceId = await resolveWebhookWorkspace(object, { allowMetadataOnly: true });
+      const customerWorkspaceId = await resolveWebhookWorkspace(object, { allowMetadataOnly: true, subscriptionId: object.subscription });
       resolvedWorkspaceId = customerWorkspaceId;
       await billingRepository.updateWorkspaceStripeState({
         workspaceId: customerWorkspaceId,
