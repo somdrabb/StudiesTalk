@@ -2222,14 +2222,6 @@ function makeResetToken() {
   return crypto.randomBytes(24).toString('hex');
 }
 
-function safeJsonParse(text, fallback) {
-  try {
-    return JSON.parse(text);
-  } catch (err) {
-    return fallback;
-  }
-}
-
 const JWT_ACCESS_SECRET = ENV.JWT_ACCESS_SECRET;
 const JWT_REFRESH_SECRET = ENV.JWT_REFRESH_SECRET;
 
@@ -2795,30 +2787,6 @@ function requirePermission(perm) {
   };
 }
 
-function requireWorkspaceAccess(getWorkspaceId) {
-  return (req, res, next) => {
-    const user = req.auth;
-    if (!user) return res.status(401).json({ error: 'Not authenticated' });
-
-    const workspaceId = getWorkspaceId(req);
-    if (!workspaceId) return res.status(400).json({ error: 'workspaceId required' });
-
-    if (user.superAdmin) return next();
-
-    if (String(workspaceId) !== String(user.workspaceId)) {
-      void logTenantIsolationEvent(req, {
-        workspaceId,
-        targetType: 'workspace',
-        targetId: workspaceId,
-        reason: 'workspace_mismatch'
-      });
-      return tenantForbidden(res);
-    }
-
-    next();
-  };
-}
-
 function tenantForbidden(res) {
   return res.status(403).json({
     error: 'Forbidden',
@@ -2944,14 +2912,6 @@ function resolveDmWorkspaceId(dmId) {
   if (!workspaces.length) return '';
   if (new Set(workspaces).size > 1) return '__mixed__';
   return workspaces[0];
-}
-
-function isUserInChannel(userId, channelId) {
-  if (!userId || !channelId) return false;
-  const row = db
-    .prepare("SELECT 1 FROM channel_members WHERE user_id = ? AND channel_id = ? LIMIT 1")
-    .get(String(userId), String(channelId));
-  return Boolean(row);
 }
 
 async function assertSameWorkspace(user, workspaceId, req, { targetType = 'workspace', targetId = '', privateContent = false } = {}) {
@@ -4242,16 +4202,6 @@ function parseCsv(text) {
   }
 
   return rows;
-}
-
-function generateId(prefix = 'u') {
-  return `${prefix}_${crypto.randomBytes(10).toString('hex')}`;
-}
-
-function generateUsername(workspaceId, firstName, lastName) {
-  const base = `${firstName}.${lastName}`.toLowerCase().replace(/[^a-z0-9.]/g, '');
-  const suffix = crypto.randomBytes(2).toString('hex');
-  return `${base}.${suffix}`;
 }
 
 function tryAlter(sql) {
@@ -10949,11 +10899,11 @@ app.get("/api/calendar/events", (req, res) => {
   );
 });
 
-function safeJsonParse(s) {
+function safeJsonParse(s, fallback = null) {
   try {
     return JSON.parse(s);
   } catch {
-    return null;
+    return fallback;
   }
 }
 
@@ -16845,17 +16795,25 @@ app.get('/api/classes/:channelId/attendance/report.csv', (req, res) => {
 
 app.get('/api/analytics/school-overview', authRequired, (req, res) => {
   const user = req.auth;
-  const requestedWorkspaceId = String(req.query.workspaceId || user.workspaceId || 'default').trim() || 'default';
-  if (isSuperAdminRole(user) && String(req.query.workspaceId || '').trim() === '') {
+  const workspaceContext = getAnalyticsWorkspaceIdForRequest(req, { allowPlatformOverview: true });
+  if (!workspaceContext.ok) {
+    return res.status(workspaceContext.status || 403).json({ error: workspaceContext.error || 'Forbidden' });
+  }
+  if (workspaceContext.platform) {
     return res.json({
       summary: buildPlatformAnalyticsOverview(),
       generatedAt: new Date().toISOString()
     });
   }
+  const requestedWorkspaceId = workspaceContext.workspaceId;
   if (!canViewSchoolAnalytics(user, requestedWorkspaceId)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
-  const summary = buildSchoolAnalyticsOverview(requestedWorkspaceId, user);
+  const filterResult = getAnalyticsValidatedFilters(req, requestedWorkspaceId);
+  if (!filterResult.ok) {
+    return res.status(filterResult.status || 400).json({ error: filterResult.error || 'Invalid analytics filter' });
+  }
+  const summary = buildSchoolAnalyticsOverview(requestedWorkspaceId, user, { filters: filterResult.filters });
   if (!summary) {
     return res.status(404).json({ error: 'Workspace not found' });
   }
@@ -16864,8 +16822,23 @@ app.get('/api/analytics/school-overview', authRequired, (req, res) => {
 
 app.get('/api/analytics/teacher-overview', authRequired, (req, res) => {
   const user = req.auth;
-  const requestedWorkspaceId = String(req.query.workspaceId || user.workspaceId || 'default').trim() || 'default';
-  const teacherUserId = String(req.query.teacherId || user.id || user.sub || '').trim();
+  const workspaceContext = getAnalyticsWorkspaceIdForRequest(req);
+  if (!workspaceContext.ok) {
+    return res.status(workspaceContext.status || 403).json({ error: workspaceContext.error || 'Forbidden' });
+  }
+  const requestedWorkspaceId = workspaceContext.workspaceId;
+  const filterResult = getAnalyticsValidatedFilters(req, requestedWorkspaceId);
+  if (!filterResult.ok) {
+    return res.status(filterResult.status || 400).json({ error: filterResult.error || 'Invalid analytics filter' });
+  }
+  const currentUserId = String(user.id || user.sub || '').trim();
+  const requestedTeacherId = String(req.query.teacherId || '').trim();
+  if (isTeacherAnalyticsRole(user) && requestedTeacherId && requestedTeacherId !== currentUserId) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const teacherUserId = isTeacherAnalyticsRole(user)
+    ? currentUserId
+    : String(filterResult.filters.teacherId || requestedTeacherId || currentUserId).trim();
   if (!canViewTeacherAnalytics(user, requestedWorkspaceId, teacherUserId)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
@@ -16873,7 +16846,13 @@ app.get('/api/analytics/teacher-overview', authRequired, (req, res) => {
   if (!teacher || getNormalizedUserRole(teacher) !== 'teacher') {
     return res.status(404).json({ error: 'Teacher not found' });
   }
-  const summary = buildTeacherAnalyticsOverview(requestedWorkspaceId, teacherUserId);
+  if (filterResult.filters.classId && !teacherHasClassAccess(requestedWorkspaceId, teacherUserId, filterResult.filters.classId)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const summary = filterTeacherAnalyticsSummary(
+    buildTeacherAnalyticsOverview(requestedWorkspaceId, teacherUserId),
+    filterResult.filters
+  );
   if (!summary) {
     return res.status(404).json({ error: 'Analytics unavailable' });
   }
@@ -16882,8 +16861,30 @@ app.get('/api/analytics/teacher-overview', authRequired, (req, res) => {
 
 app.get('/api/analytics/student-overview', authRequired, (req, res) => {
   const user = req.auth;
-  const requestedWorkspaceId = String(req.query.workspaceId || user.workspaceId || 'default').trim() || 'default';
-  const studentUserId = String(req.query.studentId || user.id || user.sub || '').trim();
+  if (!isStudentAnalyticsRole(user)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const requestedStudentId = String(req.query.studentId || '').trim();
+  const currentStudentId = String(user.id || user.sub || '').trim();
+  if (requestedStudentId && requestedStudentId !== currentStudentId) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const workspaceContext = getAnalyticsWorkspaceIdForRequest(req);
+  if (!workspaceContext.ok) {
+    return res.status(workspaceContext.status || 403).json({ error: workspaceContext.error || 'Forbidden' });
+  }
+  const requestedWorkspaceId = workspaceContext.workspaceId;
+  const filterResult = getAnalyticsValidatedFilters(req, requestedWorkspaceId);
+  if (!filterResult.ok) {
+    return res.status(filterResult.status || 400).json({ error: filterResult.error || 'Invalid analytics filter' });
+  }
+  const studentUserId = currentStudentId;
+  if (filterResult.filters.classId) {
+    const classMember = db
+      .prepare('SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ? LIMIT 1')
+      .get(filterResult.filters.classId, studentUserId);
+    if (!classMember) return res.status(403).json({ error: 'Forbidden' });
+  }
   if (!canViewStudentPerformance(user, requestedWorkspaceId, studentUserId)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
@@ -21953,6 +21954,177 @@ function canViewStudentPayment(user, workspaceId, studentUserId) {
   return isStudentAnalyticsRole(user) && normalizedStudentUserId === currentUserId;
 }
 
+const ANALYTICS_ALLOWED_RANGES = new Set(["7d", "30d", "term"]);
+const ANALYTICS_ALLOWED_TOOLS = new Set(["all", "homework", "exams", "messages"]);
+
+function normalizeAnalyticsRange(value) {
+  const normalized = String(value || "7d").trim().toLowerCase();
+  return ANALYTICS_ALLOWED_RANGES.has(normalized) ? normalized : null;
+}
+
+function normalizeAnalyticsTool(value) {
+  const normalized = String(value || "all").trim().toLowerCase();
+  return ANALYTICS_ALLOWED_TOOLS.has(normalized) ? normalized : null;
+}
+
+function getAnalyticsRangeDays(range) {
+  if (range === "30d") return 30;
+  if (range === "term") return 120;
+  return 7;
+}
+
+function getAnalyticsWorkspaceIdForRequest(req, { allowPlatformOverview = false } = {}) {
+  const user = req.auth || {};
+  const role = getNormalizedUserRole(user);
+  const requestedWorkspaceId = String(req.query.workspaceId || "").trim();
+  const ownWorkspaceId = String(user.workspaceId || user.workspace_id || "default").trim() || "default";
+  if (isSuperAdminRole(user)) {
+    if (!requestedWorkspaceId && allowPlatformOverview) {
+      return { ok: true, platform: true, workspaceId: "" };
+    }
+    if (!requestedWorkspaceId) {
+      return { ok: false, status: 400, error: "workspaceId required" };
+    }
+    const workspace = db.prepare("SELECT id FROM workspaces WHERE id = ? LIMIT 1").get(requestedWorkspaceId);
+    if (!workspace) return { ok: false, status: 404, error: "Workspace not found" };
+    void logSecurityEvent({
+      workspaceId: requestedWorkspaceId,
+      actorUserId: user.id || user.sub || null,
+      type: "analytics.super_admin_workspace_view",
+      severity: "info",
+      ip: req.ip || null,
+      userAgent: req.headers["user-agent"] || null,
+      payload: { endpoint: req.path, requestedWorkspaceId }
+    }).catch(() => null);
+    return { ok: true, workspaceId: requestedWorkspaceId };
+  }
+  if (requestedWorkspaceId && requestedWorkspaceId !== ownWorkspaceId) {
+    void logTenantIsolationEvent(req, {
+      workspaceId: requestedWorkspaceId,
+      targetType: "analytics",
+      targetId: requestedWorkspaceId,
+      reason: `${role || "user"}_workspace_mismatch`
+    });
+    return { ok: false, status: 403, error: "Forbidden" };
+  }
+  return { ok: true, workspaceId: ownWorkspaceId };
+}
+
+function getAnalyticsValidatedFilters(req, workspaceId) {
+  const range = normalizeAnalyticsRange(req.query.range);
+  if (!range) return { ok: false, status: 400, error: "Invalid range" };
+  const tool = normalizeAnalyticsTool(req.query.tool);
+  if (!tool) return { ok: false, status: 400, error: "Invalid tool" };
+
+  const filters = { range, tool, classId: "", teacherId: "" };
+  const classId = String(req.query.classId || "").trim();
+  if (classId) {
+    const classRow = db
+      .prepare(
+        `
+        SELECT id
+        FROM channels
+        WHERE id = ?
+          AND workspace_id = ?
+          AND lower(COALESCE(category, '')) IN ('class', 'classes')
+        LIMIT 1
+      `
+      )
+      .get(classId, workspaceId);
+    if (!classRow) return { ok: false, status: 403, error: "Invalid classId" };
+    filters.classId = classId;
+  }
+
+  const teacherId = String(req.query.teacherId || "").trim();
+  if (teacherId) {
+    const teacher = getWorkspaceScopedUser(workspaceId, teacherId);
+    if (!teacher || getNormalizedUserRole(teacher) !== "teacher") {
+      return { ok: false, status: 403, error: "Invalid teacherId" };
+    }
+    filters.teacherId = teacherId;
+  }
+
+  return { ok: true, filters };
+}
+
+function teacherHasClassAccess(workspaceId, teacherUserId, classId) {
+  if (!workspaceId || !teacherUserId || !classId) return false;
+  const row = db
+    .prepare(
+      `
+      SELECT 1
+      FROM channel_members cm
+      JOIN channels c ON c.id = cm.channel_id
+      WHERE cm.user_id = ?
+        AND c.id = ?
+        AND c.workspace_id = ?
+        AND lower(COALESCE(c.category, '')) IN ('class', 'classes')
+      LIMIT 1
+    `
+    )
+    .get(String(teacherUserId), String(classId), String(workspaceId));
+  return Boolean(row);
+}
+
+function buildAnalyticsActionRequired({ teachersCount = 0, lowActivityClasses = 0, atRiskStudents = 0, completionRate = 0, pendingInvoices = 0 } = {}) {
+  const items = [];
+  if (Number(teachersCount || 0) === 0) {
+    items.push({
+      type: "teacher_missing",
+      severity: "danger",
+      label: "No teacher is assigned yet.",
+      count: 0,
+      target: "teachers"
+    });
+  }
+  if (Number(lowActivityClasses || 0) > 0) {
+    items.push({
+      type: "low_activity",
+      severity: "warning",
+      label: "Classes have low activity.",
+      count: Number(lowActivityClasses || 0),
+      target: "classes"
+    });
+  }
+  if (Number(atRiskStudents || 0) > 0) {
+    items.push({
+      type: "inactive_students",
+      severity: "warning",
+      label: "Students may need follow-up.",
+      count: Number(atRiskStudents || 0),
+      target: "students"
+    });
+  }
+  if (Number(completionRate || 0) < 30) {
+    items.push({
+      type: "homework_low",
+      severity: "danger",
+      label: "Homework completion is low.",
+      count: Number(completionRate || 0),
+      target: "homework"
+    });
+  }
+  if (Number(pendingInvoices || 0) > 0) {
+    items.push({
+      type: "billing_pending",
+      severity: "warning",
+      label: "Invoices are pending.",
+      count: Number(pendingInvoices || 0),
+      target: "billing"
+    });
+  }
+  if (!items.length) {
+    items.push({
+      type: "low_activity",
+      severity: "success",
+      label: "No urgent action required.",
+      count: 0,
+      target: "overview"
+    });
+  }
+  return items;
+}
+
 function getLatestStudentProgress(workspaceId, studentId) {
   return (
     db
@@ -22306,8 +22478,14 @@ function buildPlatformAnalyticsOverview() {
   };
 }
 
-function buildWorkspaceDashboardSummary(workspaceId) {
+function buildWorkspaceDashboardSummary(workspaceId, options = {}) {
   const normalizedWorkspaceId = String(workspaceId || "").trim() || "default";
+  const analyticsFilters = options.filters || {};
+  const range = normalizeAnalyticsRange(analyticsFilters.range) || "7d";
+  const rangeDays = getAnalyticsRangeDays(range);
+  const tool = normalizeAnalyticsTool(analyticsFilters.tool) || "all";
+  const filterClassId = String(analyticsFilters.classId || "").trim();
+  const filterTeacherId = String(analyticsFilters.teacherId || "").trim();
   const workspaceRow = db
     .prepare("SELECT id, name FROM workspaces WHERE id = ?")
     .get(normalizedWorkspaceId);
@@ -22336,7 +22514,7 @@ function buildWorkspaceDashboardSummary(workspaceId) {
     return acc;
   }, {});
 
-  const channels = db
+  const allChannels = db
     .prepare(
       `
       SELECT id, name, topic, category, members, workspace_id AS workspaceId
@@ -22350,6 +22528,32 @@ function buildWorkspaceDashboardSummary(workspaceId) {
       normalizedCategory: normalizeDashboardChannelCategory(row.category)
     }));
 
+  const teacherAssignedClassIds = filterTeacherId
+    ? new Set(getAssignedClassChannelsForTeacher(normalizedWorkspaceId, filterTeacherId).map((row) => String(row.id || "")))
+    : null;
+  const channels = allChannels.filter((channel) => {
+    const channelId = String(channel.id || "");
+    const category = normalizeDashboardChannelCategory(channel.category);
+    if (filterClassId) {
+      const topic = String(channel.topic || "").trim().toLowerCase();
+      const belongsToClass = channelId === filterClassId || topic.includes(`homework_for:${filterClassId.toLowerCase()}`);
+      if (!belongsToClass) return false;
+    }
+    if (teacherAssignedClassIds) {
+      if (category === "classes") return teacherAssignedClassIds.has(channelId);
+      if (category === "homework") {
+        const topic = String(channel.topic || "").trim().toLowerCase();
+        const match = topic.match(/homework_for:([^\s]+)/);
+        return Boolean(match?.[1] && teacherAssignedClassIds.has(match[1]));
+      }
+      return false;
+    }
+    if (tool === "homework") return category === "homework";
+    if (tool === "exams") return category === "exams";
+    return true;
+  });
+  const filteredChannelIds = new Set(channels.map((channel) => String(channel.id || "")));
+
   const channelCounts = { classes: 0, clubs: 0, exams: 0, tools: 0, homework: 0 };
   channels.forEach((channel) => {
     if (channelCounts[channel.normalizedCategory] !== undefined) {
@@ -22359,22 +22563,36 @@ function buildWorkspaceDashboardSummary(workspaceId) {
   const totalGroups =
     channelCounts.classes + channelCounts.clubs + channelCounts.exams + channelCounts.tools;
 
-  const messageAggRows = db
-    .prepare(
-      `
-      SELECT
-        c.id AS channelId,
-        c.category AS category,
-        m.author AS author,
-        COUNT(*) AS messageCount,
-        MAX(m.time) AS lastTime
-      FROM channels c
-      LEFT JOIN messages m ON m.channel_id = c.id
-      WHERE c.workspace_id = ?
-      GROUP BY c.id, c.category, m.author
-    `
-    )
-    .all(normalizedWorkspaceId);
+  const messageFilters = ["c.workspace_id = ?", "datetime(COALESCE(m.created_at, m.time)) >= datetime('now', ?)"];
+  const messageParams = [normalizedWorkspaceId, `-${rangeDays} days`];
+  if (filteredChannelIds.size) {
+    messageFilters.push(`c.id IN (${Array.from(filteredChannelIds).map(() => "?").join(",")})`);
+    messageParams.push(...Array.from(filteredChannelIds));
+  }
+  if (tool === "homework") {
+    messageFilters.push("lower(COALESCE(c.category, '')) = 'homework'");
+  } else if (tool === "exams") {
+    messageFilters.push("lower(COALESCE(c.category, '')) = 'exams'");
+  }
+
+  const messageAggRows = channels.length
+    ? db
+        .prepare(
+          `
+          SELECT
+            c.id AS channelId,
+            c.category AS category,
+            m.author AS author,
+            COUNT(*) AS messageCount,
+            MAX(COALESCE(m.created_at, m.time)) AS lastTime
+          FROM channels c
+          LEFT JOIN messages m ON m.channel_id = c.id
+          WHERE ${messageFilters.join(" AND ")}
+          GROUP BY c.id, c.category, m.author
+        `
+        )
+        .all(...messageParams)
+    : [];
 
   const messageCounts = new Map();
   const authorCounts = new Map();
@@ -22480,14 +22698,34 @@ function buildWorkspaceDashboardSummary(workspaceId) {
     })
     .sort((a, b) => b.messages - a.messages);
 
+  const attendanceByTeacher = new Map();
+  try {
+    db.prepare(`
+      SELECT marked_by_user_id AS teacherId, COUNT(*) AS attendanceRecords
+      FROM attendance_records
+      WHERE workspace_id = ?
+        AND marked_by_user_id IS NOT NULL
+      GROUP BY marked_by_user_id
+    `).all(normalizedWorkspaceId).forEach((row) => {
+      attendanceByTeacher.set(String(row.teacherId || ""), Number(row.attendanceRecords || 0));
+    });
+  } catch (_err) {}
+
   const teacherRows = teachers.map((teacher) => {
     const key = String(teacher.name || teacher.email || teacher.username || "").trim();
+    const messages = Number(authorCounts.get(key) || 0);
+    const homeworkCount = Number(homeworkPostsByTeacher.get(key) || 0);
+    const lastActive = String(authorLast.get(key) || "");
     return {
+      teacherId: teacher.id,
       name: teacher.name || teacher.email || "Teacher",
-      messages: Number(authorCounts.get(key) || 0),
-      homeworkCount: Number(homeworkPostsByTeacher.get(key) || 0),
-      last: String(authorLast.get(key) || "—"),
-      initials: analyticsInitialsForName(teacher.name || teacher.email || "Teacher")
+      messages,
+      homeworkCount,
+      attendanceRecords: Number(attendanceByTeacher.get(String(teacher.id || "")) || 0),
+      last: lastActive || "—",
+      lastActive: lastActive || null,
+      initials: analyticsInitialsForName(teacher.name || teacher.email || "Teacher"),
+      status: messages > 0 || homeworkCount > 0 ? "active" : "inactive"
     };
   });
 
@@ -22541,6 +22779,210 @@ function buildWorkspaceDashboardSummary(workspaceId) {
     insights.push("✅ Student and class activity looks healthy this week.");
   }
 
+  let billingHealth = {
+    totalInvoices: 0,
+    openInvoices: 0,
+    paidInvoices: 0,
+    failedInvoices: 0,
+    overdueInvoices: 0,
+    outstandingCents: 0,
+    paidAmountCents: 0,
+    collectedAmountCents: 0,
+    monthlyRevenue: 0,
+    monthlyRevenueCents: 0,
+    paymentsCount: 0,
+    currency: 'EUR',
+    status: "clear"
+  };
+  try {
+    const invoiceStats = db.prepare(`
+      SELECT
+        COUNT(*) AS totalInvoices,
+        SUM(CASE WHEN lower(COALESCE(status, '')) = 'paid' THEN 1 ELSE 0 END) AS paidInvoices,
+        SUM(CASE WHEN lower(COALESCE(status, '')) NOT IN ('paid', 'void', 'canceled', 'cancelled') THEN 1 ELSE 0 END) AS openInvoices,
+        SUM(CASE WHEN lower(COALESCE(status, '')) IN ('failed', 'past_due', 'overdue') THEN 1 ELSE 0 END) AS failedInvoices,
+        SUM(CASE WHEN lower(COALESCE(status, '')) NOT IN ('paid', 'void', 'canceled', 'cancelled') AND due_date IS NOT NULL AND date(due_date) < date('now') THEN 1 ELSE 0 END) AS overdueInvoices,
+        SUM(CASE WHEN lower(COALESCE(status, '')) = 'paid' THEN COALESCE(amount_cents, 0) ELSE 0 END) AS paidAmountCents,
+        SUM(CASE WHEN lower(COALESCE(status, '')) NOT IN ('paid', 'void', 'canceled', 'cancelled') THEN COALESCE(amount_cents, 0) ELSE 0 END) AS outstandingCents,
+        MAX(COALESCE(currency, 'EUR')) AS currency
+      FROM invoices
+      WHERE workspace_id = ?
+    `).get(normalizedWorkspaceId) || {};
+    const paymentStats = db.prepare(`
+      SELECT
+        COUNT(*) AS paymentsCount,
+        SUM(COALESCE(amount_cents, 0)) AS collectedAmountCents
+      FROM payments
+      WHERE workspace_id = ?
+    `).get(normalizedWorkspaceId) || {};
+    const monthlyPaymentStats = db.prepare(`
+      SELECT SUM(COALESCE(amount_cents, 0)) AS monthlyRevenueCents
+      FROM payments
+      WHERE workspace_id = ?
+        AND (
+          CASE
+            WHEN typeof(created_at) = 'integer' THEN datetime(created_at / 1000, 'unixepoch')
+            ELSE datetime(created_at)
+          END
+        ) >= datetime('now', 'start of month')
+    `).get(normalizedWorkspaceId) || {};
+    const monthlyPaidInvoiceStats = db.prepare(`
+      SELECT SUM(COALESCE(amount_cents, 0)) AS monthlyRevenueCents
+      FROM invoices
+      WHERE workspace_id = ?
+        AND lower(COALESCE(status, '')) = 'paid'
+        AND (
+          CASE
+            WHEN typeof(COALESCE(paid_at, created_at)) = 'integer' THEN datetime(COALESCE(paid_at, created_at) / 1000, 'unixepoch')
+            ELSE datetime(COALESCE(paid_at, created_at))
+          END
+        ) >= datetime('now', 'start of month')
+    `).get(normalizedWorkspaceId) || {};
+    let failedProviderEvents = 0;
+    try {
+      const eventStats = db.prepare(`
+        SELECT COUNT(*) AS failedProviderEvents
+        FROM billing_provider_events
+        WHERE workspace_id = ?
+          AND lower(COALESCE(status, '')) IN ('failed', 'error')
+      `).get(normalizedWorkspaceId) || {};
+      failedProviderEvents = Number(eventStats.failedProviderEvents || 0);
+    } catch (_eventErr) {}
+    const monthlyRevenueCents = Number(monthlyPaymentStats.monthlyRevenueCents || monthlyPaidInvoiceStats.monthlyRevenueCents || 0);
+    const failedInvoices = Number(invoiceStats.failedInvoices || 0) + failedProviderEvents;
+    const overdueInvoices = Number(invoiceStats.overdueInvoices || 0);
+    const openInvoices = Number(invoiceStats.openInvoices || 0);
+    const status = failedInvoices > 0 ? "failed" : overdueInvoices > 0 ? "overdue" : openInvoices > 0 ? "pending" : "clear";
+    billingHealth = {
+      totalInvoices: Number(invoiceStats.totalInvoices || 0),
+      openInvoices,
+      paidInvoices: Number(invoiceStats.paidInvoices || 0),
+      failedInvoices,
+      overdueInvoices,
+      outstandingCents: Number(invoiceStats.outstandingCents || 0),
+      paidAmountCents: Number(invoiceStats.paidAmountCents || 0),
+      collectedAmountCents: Number(paymentStats.collectedAmountCents || 0),
+      monthlyRevenue: Number((monthlyRevenueCents / 100).toFixed(2)),
+      monthlyRevenueCents,
+      paymentsCount: Number(paymentStats.paymentsCount || 0),
+      currency: String(invoiceStats.currency || 'EUR'),
+      status
+    };
+  } catch (err) {
+    console.warn('[Analytics] Billing health summary unavailable', err?.message || err);
+  }
+
+  let trendComparison = {
+    currentMessages: Number(categoryCounts.messages || 0),
+    previousMessages: 0,
+    currentHomework: Number(categoryCounts.homework || 0),
+    previousHomework: 0
+  };
+  try {
+    const trendStats = db.prepare(`
+      SELECT
+        SUM(CASE WHEN datetime(COALESCE(m.created_at, m.time)) >= datetime('now', ?) THEN 1 ELSE 0 END) AS currentMessages,
+        SUM(CASE WHEN datetime(COALESCE(m.created_at, m.time)) < datetime('now', ?) AND datetime(COALESCE(m.created_at, m.time)) >= datetime('now', ?) THEN 1 ELSE 0 END) AS previousMessages,
+        SUM(CASE WHEN lower(COALESCE(c.category, '')) LIKE '%homework%' AND datetime(COALESCE(m.created_at, m.time)) >= datetime('now', ?) THEN 1 ELSE 0 END) AS currentHomework,
+        SUM(CASE WHEN lower(COALESCE(c.category, '')) LIKE '%homework%' AND datetime(COALESCE(m.created_at, m.time)) < datetime('now', ?) AND datetime(COALESCE(m.created_at, m.time)) >= datetime('now', ?) THEN 1 ELSE 0 END) AS previousHomework
+      FROM messages m
+      JOIN channels c ON c.id = m.channel_id
+      WHERE c.workspace_id = ?
+    `).get(`-${rangeDays} days`, `-${rangeDays} days`, `-${rangeDays * 2} days`, `-${rangeDays} days`, `-${rangeDays} days`, `-${rangeDays * 2} days`, normalizedWorkspaceId) || {};
+    trendComparison = {
+      currentMessages: Number(trendStats.currentMessages || 0),
+      previousMessages: Number(trendStats.previousMessages || 0),
+      currentHomework: Number(trendStats.currentHomework || 0),
+      previousHomework: Number(trendStats.previousHomework || 0)
+    };
+  } catch (err) {
+    console.warn('[Analytics] Trend comparison unavailable', err?.message || err);
+  }
+
+  const toDelta = (current, previous) => {
+    const now = Number(current || 0);
+    const before = Number(previous || 0);
+    if (!now && !before) return 0;
+    if (!before) return 100;
+    return Math.round(((now - before) / Math.max(1, before)) * 100);
+  };
+
+  let attendanceTrend = { current: 0, previous: 0 };
+  try {
+    const attendanceStats = db.prepare(`
+      SELECT
+        SUM(CASE WHEN datetime(s.session_date) >= datetime('now', ?) THEN 1 ELSE 0 END) AS current,
+        SUM(CASE WHEN datetime(s.session_date) < datetime('now', ?) AND datetime(s.session_date) >= datetime('now', ?) THEN 1 ELSE 0 END) AS previous
+      FROM attendance_records ar
+      JOIN attendance_sessions s ON s.id = ar.session_id
+      WHERE ar.workspace_id = ?
+    `).get(`-${rangeDays} days`, `-${rangeDays} days`, `-${rangeDays * 2} days`, normalizedWorkspaceId) || {};
+    attendanceTrend = {
+      current: Number(attendanceStats.current || 0),
+      previous: Number(attendanceStats.previous || 0)
+    };
+  } catch (_err) {}
+
+  const classHealth = {
+    lowActivityClasses: classRowsSorted.filter((row) => Number(row.messages || 0) <= 1).length,
+    inactiveClasses: classRowsSorted.filter((row) => Number(row.messages || 0) === 0).length,
+    classesWithoutHomework: classRowsSorted.filter((row) => Number(row.homework || 0) === 0).length
+  };
+  const atRiskStudents = students.filter((student) => {
+    const key = String(student.name || student.email || "").trim();
+    const messageCount = Number(authorCounts.get(key) || 0);
+    if (messageCount === 0) return true;
+    const performance = buildStudentPerformanceSummary(normalizedWorkspaceId, student.id);
+    return Number(performance?.attendance?.attendanceRate || 100) < 60 || Number(performance?.homework?.completionRate || 100) < 40;
+  }).length;
+  const droppedStudents = students.filter((student) => {
+    const key = String(student.name || student.email || "").trim();
+    return Number(authorCounts.get(key) || 0) === 0 && String(student.status || "").toLowerCase() !== "active";
+  }).length;
+  const trends = {
+    messagesDelta: toDelta(trendComparison.currentMessages, trendComparison.previousMessages),
+    homeworkDelta: toDelta(trendComparison.currentHomework, trendComparison.previousHomework),
+    attendanceDelta: toDelta(attendanceTrend.current, attendanceTrend.previous),
+    studentActivityDelta: toDelta(students.length - atRiskStudents, students.length ? students.length : 0)
+  };
+  const payment = {
+    monthlyRevenue: billingHealth.monthlyRevenue,
+    pendingCount: billingHealth.openInvoices,
+    failedCount: billingHealth.failedInvoices,
+    status: billingHealth.status
+  };
+  const billing = {
+    monthlyRevenue: billingHealth.monthlyRevenue,
+    pendingInvoices: billingHealth.openInvoices,
+    failedPayments: billingHealth.failedInvoices,
+    overdueInvoices: billingHealth.overdueInvoices
+  };
+  const activeTeacherRows = teacherRows.filter((row) => row.status === "active");
+  const teacherPerformance = {
+    totalTeachers: teachers.length,
+    activeTeachers: activeTeacherRows.length,
+    inactiveTeachers: Math.max(0, teachers.length - activeTeacherRows.length),
+    averageResponseActivity: teachers.length
+      ? Math.round(teacherRows.reduce((sum, row) => sum + Number(row.messages || 0), 0) / teachers.length)
+      : 0,
+    rows: teacherRows.map((row) => ({
+      teacherId: row.teacherId,
+      name: row.name,
+      messages: Number(row.messages || 0),
+      homeworkCount: Number(row.homeworkCount || 0),
+      attendanceRecords: Number(row.attendanceRecords || 0),
+      lastActive: row.lastActive,
+      status: row.status
+    }))
+  };
+  const actionRequired = buildAnalyticsActionRequired({
+    teachersCount: teachers.length,
+    lowActivityClasses: classHealth.lowActivityClasses,
+    atRiskStudents,
+    completionRate,
+    pendingInvoices: billing.pendingInvoices
+  });
+
   return {
     workspaceId: normalizedWorkspaceId,
     workspaceName: workspaceRow.name || normalizedWorkspaceId,
@@ -22561,17 +23003,41 @@ function buildWorkspaceDashboardSummary(workspaceId) {
     completionRate,
     engagementCounts,
     insights,
-    courseCounts
+    courseCounts,
+    billingHealth,
+    payment,
+    billing,
+    trendComparison,
+    trends,
+    atRiskStudents,
+    droppedStudents,
+    actionRequired,
+    classHealth,
+    teacherPerformance
   };
 }
 
-function buildSchoolAnalyticsOverview(workspaceId, user) {
-  const summary = buildWorkspaceDashboardSummary(workspaceId);
+function buildSchoolAnalyticsOverview(workspaceId, user, options = {}) {
+  const summary = buildWorkspaceDashboardSummary(workspaceId, options);
   if (!summary) return null;
   return {
     ...summary,
     scope: "school",
     viewerRole: getNormalizedUserRole(user)
+  };
+}
+
+function filterTeacherAnalyticsSummary(summary, filters = {}) {
+  if (!summary) return summary;
+  const classId = String(filters.classId || "").trim();
+  if (!classId) return summary;
+  const classRowsSorted = Array.isArray(summary.classRowsSorted)
+    ? summary.classRowsSorted.filter((row) => String(row.id || "") === classId)
+    : [];
+  return {
+    ...summary,
+    totalGroups: classRowsSorted.length,
+    classRowsSorted
   };
 }
 
