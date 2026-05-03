@@ -6669,16 +6669,17 @@ function getRequesterWorkspaceId(req) {
   return workspaceIdFromRequest(req) || 'default';
 }
 
-function getCalendarRequesterContext(req, fallbackUserId = "") {
-  const requesterId = String(getRequesterId(req) || fallbackUserId || getAuthUserId(req) || "").trim();
+function getCalendarRequesterContext(req) {
+  const authUser = req.auth || getAuthedUser(req);
+  const requesterId = String(authUser?.id || authUser?.sub || "").trim();
   const user = requesterId ? getUserById(requesterId) : null;
   const role = normalizeRoleName(
-    user?.role || getRequesterRole(req) || getAuthRole(req) || req.auth?.role || "student"
+    user?.role || authUser?.role || authUser?.userRole || "student"
   );
   const workspaceId =
     user?.workspaceId ||
-    getAuthWorkspaceId(req) ||
-    String(req.query.workspaceId || "default").trim() ||
+    authUser?.workspaceId ||
+    authUser?.workspace_id ||
     "default";
   const isAdmin = ["admin", "school_admin", "super_admin"].includes(role);
   return { requesterId, role, workspaceId, isAdmin };
@@ -10870,7 +10871,45 @@ function canManageCalendarEvent(row, targetRow, requester) {
   );
 }
 
-app.get("/api/calendar/events", (req, res) => {
+function calendarAssigneeBelongsToWorkspace(assigneeId, workspaceId) {
+  const normalizedAssigneeId = String(assigneeId || "").trim();
+  if (!normalizedAssigneeId) return true;
+  const row = db.prepare(`
+    SELECT 1
+    FROM users
+    WHERE id = ? AND workspace_id = ?
+    LIMIT 1
+  `).get(normalizedAssigneeId, String(workspaceId || "").trim());
+  return Boolean(row);
+}
+
+function calendarTargetBelongsToWorkspace(targetType, targetId, workspaceId) {
+  const normalizedType = String(targetType || "").trim();
+  const normalizedTargetId = String(targetId || "").trim();
+  const normalizedWorkspaceId = String(workspaceId || "").trim();
+  if (!normalizedType || normalizedType === "school") return true;
+  if (!normalizedTargetId || !normalizedWorkspaceId) return false;
+  if (normalizedType === "user") {
+    return Boolean(db.prepare("SELECT 1 FROM users WHERE id = ? AND workspace_id = ? LIMIT 1").get(normalizedTargetId, normalizedWorkspaceId));
+  }
+  if (normalizedType === "class" || normalizedType === "channel") {
+    return Boolean(db.prepare("SELECT 1 FROM channels WHERE id = ? AND workspace_id = ? LIMIT 1").get(normalizedTargetId, normalizedWorkspaceId));
+  }
+  return false;
+}
+
+function sendCalendarForbidden(req, res, requester, targetType, targetId, reason) {
+  void logTenantIsolationEvent(req, {
+    workspaceId: requester?.workspaceId || null,
+    targetType,
+    targetId,
+    reason,
+    type: 'security.forbidden_calendar_access'
+  });
+  return tenantForbidden(res);
+}
+
+app.get("/api/calendar/events", authRequired, (req, res) => {
   const requester = getCalendarRequesterContext(req);
   const from = req.query.from || null;
   const to = req.query.to || null;
@@ -10981,9 +11020,7 @@ function normalizeDateInput(s) {
   return "";
 }
 
-app.post("/api/calendar/events", (req, res) => {
-  console.log("CAL POST headers content-type:", req.headers["content-type"]);
-  console.log("CAL POST body:", req.body);
+app.post("/api/calendar/events", authRequired, (req, res) => {
   const {
     title,
     date,
@@ -11000,17 +11037,18 @@ app.post("/api/calendar/events", (req, res) => {
     detailsUrl = "",
     allDay = false
   } = req.body || {};
-  const fallbackCreatorId = String(createdBy || "").trim();
-  const requester = getCalendarRequesterContext(req, fallbackCreatorId);
+  const requester = getCalendarRequesterContext(req);
   const workspaceId = requester.workspaceId;
-  const requesterId = requester.requesterId || fallbackCreatorId;
+  const requesterId = requester.requesterId;
 
   const titleTrimmed = title ? String(title).trim() : "";
   const dateNorm = normalizeDateInput(date);
 
   if (!titleTrimmed || !dateNorm) {
-    console.warn("Calendar create rejected: missing title/date", { title, date });
     return res.status(400).json({ error: "title and date are required" });
+  }
+  if (!calendarAssigneeBelongsToWorkspace(assigneeId, workspaceId)) {
+    return sendCalendarForbidden(req, res, requester, 'calendar_assignee', String(assigneeId || ''), 'calendar_assignee_workspace_denied');
   }
 
   const id = generateId("ce");
@@ -11051,7 +11089,7 @@ app.post("/api/calendar/events", (req, res) => {
     meet_link: String(meetLink || ""),
     details_url: String(detailsUrl || ""),
     assignee_id: String(assigneeId || ""),
-    created_by: String(requesterId || createdBy || ""),
+    created_by: String(requesterId || ""),
     remind_min: Number(remindMin || 0),
     color: String(color || "#1a73e8"),
     repeat_json: repeatJson
@@ -11059,6 +11097,12 @@ app.post("/api/calendar/events", (req, res) => {
 
   const ev = db.prepare(`SELECT * FROM calendar_events WHERE id = ?`).get(id);
   upsertCalendarEventTarget(id, workspaceId, targetType, targetId);
+  audit('calendar.event_created', req, {
+    user: req.auth,
+    target: id,
+    workspaceId,
+    meta: { eventId: id }
+  });
   const payload = {
     event: mapCalendarRow(ev, {
       requesterContext: requester
@@ -11068,7 +11112,7 @@ app.post("/api/calendar/events", (req, res) => {
   res.status(201).json(payload);
 });
 
-app.patch("/api/calendar/events/:id", (req, res) => {
+app.patch("/api/calendar/events/:id", authRequired, (req, res) => {
   const { id } = req.params;
   const requester = getCalendarRequesterContext(req);
   const existing = db.prepare(`SELECT * FROM calendar_events WHERE id = ?`).get(id);
@@ -11079,6 +11123,13 @@ app.patch("/api/calendar/events/:id", (req, res) => {
   }
 
   const patch = req.body || {};
+  if (patch.assigneeId !== undefined && !calendarAssigneeBelongsToWorkspace(patch.assigneeId, requester.workspaceId)) {
+    return sendCalendarForbidden(req, res, requester, 'calendar_assignee', String(patch.assigneeId || ''), 'calendar_assignee_workspace_denied');
+  }
+  const access = resolveCalendarEventAccess(existing, targetRow);
+  if (!calendarTargetBelongsToWorkspace(access.targetType, access.targetId, requester.workspaceId)) {
+    return sendCalendarForbidden(req, res, requester, 'calendar_event', id, 'calendar_target_workspace_denied');
+  }
   const dateNorm = normalizeDateInput(patch.date ?? existing.date);
   const repeatJson =
     patch.repeat ? JSON.stringify(patch.repeat) : patch.repeat === null ? "" : existing.repeat_json;
@@ -11134,11 +11185,17 @@ app.patch("/api/calendar/events/:id", (req, res) => {
     targetRow,
     requesterContext: requester
   });
+  audit('calendar.event_updated', req, {
+    user: req.auth,
+    target: id,
+    workspaceId: requester.workspaceId,
+    meta: { eventId: id }
+  });
   broadcastEvent("calendar_event_updated", { event: mapped });
   res.json({ event: mapped });
 });
 
-app.delete("/api/calendar/events/:id", (req, res) => {
+app.delete("/api/calendar/events/:id", authRequired, (req, res) => {
   const { id } = req.params;
   const requester = getCalendarRequesterContext(req);
   const ev = db.prepare(`SELECT * FROM calendar_events WHERE id = ?`).get(id);
@@ -11150,6 +11207,12 @@ app.delete("/api/calendar/events/:id", (req, res) => {
 
   deleteCalendarEventTargets(id);
   db.prepare(`DELETE FROM calendar_events WHERE id = ?`).run(id);
+  audit('calendar.event_deleted', req, {
+    user: req.auth,
+    target: id,
+    workspaceId: requester.workspaceId,
+    meta: { eventId: id }
+  });
   broadcastEvent("calendar_event_deleted", { id });
   res.json({ ok: true, id });
 });
@@ -12906,10 +12969,39 @@ async function verifyPassword(password, stored) {
 
 const sseClients = new Set();
 
+function getWorkspaceIdForRealtimePayload(payload = {}) {
+  const direct = String(
+    payload.workspaceId ||
+    payload.workspace_id ||
+    payload.event?.workspaceId ||
+    payload.event?.workspace_id ||
+    payload.channel?.workspaceId ||
+    payload.channel?.workspace_id ||
+    ''
+  ).trim();
+  if (direct) return direct;
+  const channelId = String(payload.channelId || payload.channel_id || payload.event?.channelId || payload.event?.channel_id || '').trim();
+  if (channelId) {
+    const row = db.prepare('SELECT workspace_id AS workspaceId FROM channels WHERE id = ? LIMIT 1').get(channelId);
+    if (row?.workspaceId) return String(row.workspaceId).trim();
+  }
+  const sessionId = String(payload.sessionId || payload.session_id || payload.event?.sessionId || payload.event?.session_id || '').trim();
+  if (sessionId) {
+    const row = db.prepare('SELECT workspace_id AS workspaceId FROM live_sessions WHERE id = ? LIMIT 1').get(sessionId);
+    if (row?.workspaceId) return String(row.workspaceId).trim();
+  }
+  return '';
+}
+
 function broadcastEvent(eventName, payload) {
   const data = `event: ${eventName}\n` + `data: ${JSON.stringify(payload)}\n\n`;
   for (const res of sseClients) {
     try {
+      const payloadWorkspaceId = getWorkspaceIdForRealtimePayload(payload || {});
+      const clientWorkspaceId = String(res.locals?.auth?.workspaceId || res.locals?.auth?.workspace_id || '').trim();
+      if (payloadWorkspaceId && clientWorkspaceId && payloadWorkspaceId !== clientWorkspaceId) {
+        continue;
+      }
       res.write(data);
     } catch (err) {
       sseClients.delete(res);
@@ -12918,7 +13010,8 @@ function broadcastEvent(eventName, payload) {
 }
 
 // Long-lived SSE connection
-app.get('/api/events', (req, res) => {
+app.get('/api/events', authRequired, (req, res) => {
+  res.locals.auth = req.auth;
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
@@ -15971,6 +16064,21 @@ function buildAttendanceReportPayload(workspaceId, channelId, { studentId = '', 
   };
 }
 
+function validateAttendanceReportStudentFilter(workspaceId, channelId, studentId) {
+  const normalizedStudentId = String(studentId || '').trim();
+  if (!normalizedStudentId) return true;
+  const row = db.prepare(`
+    SELECT 1
+    FROM users u
+    JOIN channel_members cm ON cm.user_id = u.id
+    WHERE u.id = ?
+      AND u.workspace_id = ?
+      AND cm.channel_id = ?
+    LIMIT 1
+  `).get(normalizedStudentId, workspaceId, channelId);
+  return Boolean(row);
+}
+
 function buildAttendanceReportCsv(report = {}) {
   const cols = ['sessionDate', 'studentName', 'studentEmail', 'status', 'checkedInAt', 'checkinMethod', 'note'];
   const lines = [cols.join(',')];
@@ -16776,8 +16884,12 @@ app.get('/api/classes/:channelId/attendance/report', (req, res) => {
   }
   const chk = ensureChannelIsClass(workspaceId, channelId);
   if (!chk.ok) return chk.tenantForbidden ? tenantForbidden(res) : res.status(chk.code).json({ error: chk.error });
+  const studentId = String(req.query.studentId || '').trim();
+  if (!validateAttendanceReportStudentFilter(workspaceId, channelId, studentId)) {
+    return tenantForbidden(res);
+  }
   const report = buildAttendanceReportPayload(workspaceId, channelId, {
-    studentId: String(req.query.studentId || '').trim(),
+    studentId,
     from: String(req.query.from || '').trim(),
     to: String(req.query.to || '').trim()
   });
@@ -16806,8 +16918,12 @@ app.get('/api/classes/:channelId/attendance/report.csv', (req, res) => {
   }
   const chk = ensureChannelIsClass(workspaceId, channelId);
   if (!chk.ok) return chk.tenantForbidden ? tenantForbidden(res) : res.status(chk.code).json({ error: chk.error });
+  const studentId = String(req.query.studentId || '').trim();
+  if (!validateAttendanceReportStudentFilter(workspaceId, channelId, studentId)) {
+    return tenantForbidden(res);
+  }
   const report = buildAttendanceReportPayload(workspaceId, channelId, {
-    studentId: String(req.query.studentId || '').trim(),
+    studentId,
     from: String(req.query.from || '').trim(),
     to: String(req.query.to || '').trim()
   });
@@ -20552,7 +20668,6 @@ app.post(
   async (req, res) => {
     try {
     const { name, topic, workspaceId = 'default', memberIds, category } = req.body || {};
-    console.log('POST /api/channels payload', req.body);
   if (!name || !name.trim()) {
     return res.status(400).json({ error: 'Channel name is required' });
   }
@@ -20938,6 +21053,11 @@ app.get('/api/culture/prefs', async (req, res) => {
 
   const channelId = String(req.query.channelId || '').trim();
   if (!channelId) return res.status(400).json({ error: 'channelId required' });
+  const access = await assertChannelAccess(authed, channelId, req, { requireMembership: true });
+  if (!access.ok) {
+    if (access.status === 404) return res.status(404).json({ error: 'Channel not found' });
+    return tenantForbidden(res);
+  }
 
   const row = await messageRepository.getUserChannelPrefs(String(authed.id), channelId);
 
@@ -20958,6 +21078,11 @@ app.post('/api/culture/prefs', async (req, res) => {
   const writeLanguage = writeLanguageRaw ? normalizeLanguageCode(writeLanguageRaw) : null;
 
   if (!channelId) return res.status(400).json({ error: 'channelId required' });
+  const access = await assertChannelAccess(authed, channelId, req, { requireMembership: true });
+  if (!access.ok) {
+    if (access.status === 404) return res.status(404).json({ error: 'Channel not found' });
+    return tenantForbidden(res);
+  }
 
   // Channels/messages migration boundary: channel culture prefs now flow
   // through the message repository instead of direct SQL.
@@ -21639,6 +21764,11 @@ app.get('/api/channels/:channelId/culture-pref', async (req, res) => {
   if (!authed) return res.status(401).json({ error: 'unauthorized' });
 
   const { channelId } = req.params;
+  const access = await assertChannelAccess(authed, channelId, req, { requireMembership: true });
+  if (!access.ok) {
+    if (access.status === 404) return res.status(404).json({ error: 'Channel not found' });
+    return tenantForbidden(res);
+  }
 
   const row = await messageRepository.getUserChannelPrefs(authed.id, channelId);
 
@@ -21650,6 +21780,11 @@ app.post('/api/channels/:channelId/culture-pref', async (req, res) => {
   if (!authed) return res.status(401).json({ error: 'unauthorized' });
 
   const { channelId } = req.params;
+  const access = await assertChannelAccess(authed, channelId, req, { requireMembership: true });
+  if (!access.ok) {
+    if (access.status === 404) return res.status(404).json({ error: 'Channel not found' });
+    return tenantForbidden(res);
+  }
   const readLang = normalizeLanguageCode(req.body?.readLang || 'en');
 
   await messageRepository.saveUserChannelPrefs({
@@ -29461,12 +29596,13 @@ function formatToolResponse(toolName, payload) {
   }
 }
 
-app.get("/api/knowledge/search", (req, res) => {
+app.get("/api/knowledge/search", authRequired, (req, res) => {
   const query = String(req.query.q || "").trim();
   if (!query) return res.json({ items: [] });
-  const authed = getAuthedUser(req);
+  const authed = req.auth;
   const role = String(authed?.role || authed?.userRole || "").toLowerCase();
-  const workspaceId = authed?.workspaceId || authed?.workspace_id || "default";
+  const workspaceId = String(authed?.workspaceId || authed?.workspace_id || "").trim();
+  if (!workspaceId) return res.status(403).json({ error: "forbidden" });
   const items = searchKnowledge(workspaceId, query, role);
   res.json({ items });
 });

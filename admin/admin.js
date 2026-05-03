@@ -2,7 +2,6 @@
 const $ = (id) => document.getElementById(id);
 
 const STORAGE_USER_ID = "studis_admin_user_id";
-const STORAGE_ACCESS_TOKEN = "studis_admin_access_token";
 const STORAGE_TAB = "studis_admin_current_tab";
 
 let accessToken = "";
@@ -446,11 +445,7 @@ function persistUserId(id) {
 
 function setAccessToken(token) {
   accessToken = token || "";
-  if (!token) {
-    localStorage.removeItem(STORAGE_ACCESS_TOKEN);
-  } else {
-    localStorage.setItem(STORAGE_ACCESS_TOKEN, token);
-  }
+  window.__adminToken = accessToken || "";
 }
 
 function persistTab(tab) {
@@ -1698,6 +1693,30 @@ function gatewayBadgeTone(provider) {
   return { label: "Needs keys", tone: "failed" };
 }
 
+function gatewaySummaryIcon(title = "") {
+  const key = String(title || "").toLowerCase();
+  if (key.includes("stripe")) return "fa-brands fa-stripe";
+  if (key.includes("paypal")) return "fa-brands fa-paypal";
+  if (key.includes("mollie")) return "fa-solid fa-credit-card";
+  if (key.includes("active")) return "fa-solid fa-toggle-on";
+  if (key.includes("webhook")) return "fa-solid fa-link";
+  if (key.includes("last")) return "fa-regular fa-clock";
+  if (key.includes("failed")) return "fa-solid fa-triangle-exclamation";
+  return "fa-solid fa-circle-info";
+}
+
+function gatewayVisualKey(value = "") {
+  const key = String(value || "").toLowerCase();
+  if (key.includes("stripe")) return "stripe";
+  if (key.includes("paypal")) return "paypal";
+  if (key.includes("mollie")) return "mollie";
+  if (key.includes("active")) return "active";
+  if (key.includes("webhook")) return "webhook";
+  if (key.includes("failed")) return "failed";
+  if (key.includes("last") || key.includes("event")) return "event";
+  return "default";
+}
+
 function gatewayFieldInputType(field) {
   if (field.secret) return "password";
   if (/PRICE|PROFILE|PUBLIC|CLIENT|MODE/.test(field.keyName || "")) return "text";
@@ -1735,8 +1754,11 @@ function renderPaymentGatewaysPanel() {
       { title: "Failed events", value: String(failedEvents), tone: failedEvents ? "failed" : "ok", meta: "Latest provider/audit failures" }
     ];
     summaryEl.innerHTML = cards.map((card) => `
-      <article class="gateway-card is-${escapeHtml(card.tone || "neutral")}">
-        <span>${escapeHtml(card.title)}</span>
+      <article class="gateway-card is-${escapeHtml(card.tone || "neutral")} gateway-visual-${escapeHtml(gatewayVisualKey(card.title))}">
+        <div class="gateway-card-top">
+          <span>${escapeHtml(card.title)}</span>
+          <i class="${escapeHtml(gatewaySummaryIcon(card.title))}" aria-hidden="true"></i>
+        </div>
         <strong>${escapeHtml(card.value)}</strong>
         <small>${escapeHtml(card.meta || "")}</small>
       </article>
@@ -1749,8 +1771,9 @@ function renderPaymentGatewaysPanel() {
       { key: "webhooks", label: "Webhooks" },
       { key: "events", label: "Audit / Events" }
     ].map((item) => `
-      <button class="gateway-tab${payloadState.activeProvider === item.key ? " is-active" : ""}" type="button" data-gateway-provider="${escapeHtml(item.key)}">
-        ${escapeHtml(item.label)}
+      <button class="gateway-tab gateway-visual-${escapeHtml(gatewayVisualKey(item.key))}${payloadState.activeProvider === item.key ? " is-active" : ""}" type="button" data-gateway-provider="${escapeHtml(item.key)}">
+        <i class="${escapeHtml(gatewaySummaryIcon(item.key))}" aria-hidden="true"></i>
+        <span>${escapeHtml(item.label)}</span>
       </button>
     `).join("");
   }
@@ -1815,13 +1838,22 @@ function renderPaymentGatewaysPanel() {
   const badge = gatewayBadgeTone(activeProvider);
   const fieldRows = (activeProvider.fields || []).map((field) => {
     const current = field.maskedValue || (field.configured ? "Configured" : "Not stored");
+    const isSecret = !!field.secret;
+    const source = field.source || "unset";
     return `
       <div class="gateway-secret-row">
-        <label>
-          <span>${escapeHtml(PAYMENT_GATEWAY_FIELD_LABELS[field.keyName] || field.keyName)}</span>
+        <div class="gateway-secret-meta">
+          <div class="gateway-secret-title">
+            <span>${escapeHtml(PAYMENT_GATEWAY_FIELD_LABELS[field.keyName] || field.keyName)}</span>
+            ${isSecret ? `<span class="gateway-secret-chip">Secret</span>` : ""}
+          </div>
           <small>${escapeHtml(field.keyName)}</small>
-          <div class="secret-mask">Current: <code>${escapeHtml(current)}</code> <span class="secret-source-pill is-${escapeHtml(field.source || "unset")}">${escapeHtml(field.source || "unset")}</span></div>
-        </label>
+          <div class="gateway-secret-current">
+            <span>Current</span>
+            <code>${escapeHtml(current)}</code>
+            <span class="secret-source-pill is-${escapeHtml(source)}">${escapeHtml(source)}</span>
+          </div>
+        </div>
         <input
           class="input secret-field-input"
           type="${gatewayFieldInputType(field)}"
@@ -1844,30 +1876,40 @@ function renderPaymentGatewaysPanel() {
     <section class="gateway-provider-panel-card" data-gateway-card="${escapeHtml(activeProvider.provider)}">
       <div class="secret-card-head">
         <div>
+          <span class="gateway-provider-kicker">Provider configuration</span>
           <h3>${escapeHtml(activeProvider.label || activeProvider.provider)}</h3>
-          <p>Update-only secrets are encrypted by the platform secrets service. Stored raw values are never returned.</p>
+          <p>Encrypted update-only configuration. Stored secret values stay masked.</p>
         </div>
         <span class="gateway-status-badge is-${escapeHtml(badge.tone)}">${escapeHtml(badge.label)}</span>
       </div>
 
       <div class="gateway-controls-grid">
-        <label class="secret-toggle">
+        <label class="gateway-control-card secret-toggle">
+          <span>Gateway</span>
+          <strong>${activeProvider.enabled ? "Enabled" : "Disabled"}</strong>
           <input type="checkbox" id="gatewayEnabled_${escapeHtml(activeProvider.provider)}" ${activeProvider.enabled ? "checked" : ""} />
-          Enabled
         </label>
-        <label>
+        <label class="gateway-control-card">
           <span>Mode</span>
           <select class="input secret-field-input" id="gatewayMode_${escapeHtml(activeProvider.provider)}">
             <option value="test" ${activeProvider.mode === "test" ? "selected" : ""}>test</option>
             <option value="live" ${activeProvider.mode === "live" ? "selected" : ""}>live</option>
           </select>
         </label>
-        <div>
+        <div class="gateway-control-card">
           <span>Active provider</span>
           <button class="btn btn-secondary" type="button" data-gateway-action="set-active" data-provider="${escapeHtml(activeProvider.provider)}" ${activeProvider.active ? "disabled" : ""}>
             ${activeProvider.active ? "Currently active" : "Make active"}
           </button>
         </div>
+      </div>
+
+      <div class="gateway-section-label">
+        <div>
+          <span>Configuration keys</span>
+          <strong>${(activeProvider.fields || []).filter((field) => field.configured).length}/${(activeProvider.fields || []).length} configured</strong>
+        </div>
+        <small>Leave fields blank to keep existing values.</small>
       </div>
 
       <div class="gateway-secret-list">${fieldRows}</div>
@@ -1880,6 +1922,7 @@ function renderPaymentGatewaysPanel() {
       </div>
 
       <div class="gateway-danger-zone">
+        <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
         <span>Switching live mode, rotating, deleting, and disabling require confirmation.</span>
       </div>
 
@@ -3155,6 +3198,7 @@ function showLoginCard(visible) {
 
 function activateAdminView(me) {
   state.me = me;
+  document.body.classList.add("admin-authenticated");
   const nameEl = $("adminUserName");
   if (nameEl) nameEl.textContent = me.name || me.email || me.id;
   const metaEl = $("adminUserMeta");
@@ -3170,7 +3214,9 @@ function activateAdminView(me) {
 function clearSession() {
   state.userId = "";
   state.me = null;
+  document.body.classList.remove("admin-authenticated");
   persistUserId(null);
+  localStorage.removeItem("studis_admin_access_token");
   setAccessToken("");
   setHidden("adminApp", true);
   showLoginCard(true);
@@ -4524,10 +4570,7 @@ async function refreshAccessToken() {
 async function restoreSessionFromStorage() {
   const savedTab = localStorage.getItem(STORAGE_TAB) || "overview";
   const storedUserId = localStorage.getItem(STORAGE_USER_ID);
-  const storedToken = localStorage.getItem(STORAGE_ACCESS_TOKEN);
-  if (storedToken) {
-    setAccessToken(storedToken);
-  }
+  localStorage.removeItem("studis_admin_access_token");
   if (!storedUserId) {
     setTab(savedTab);
     return;

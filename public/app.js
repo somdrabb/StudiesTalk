@@ -736,7 +736,8 @@ async function logout() {
     // ignore
   }
   try {
-    localStorage.removeItem("currentWorkspaceId");
+    localStorage.clear();
+    sessionStorage.clear();
   } catch (_err) {
     // ignore
   }
@@ -750,6 +751,29 @@ async function logout() {
     // ignore
   }
   location.reload();
+}
+
+function clearWorkspaceSpecificCaches(previousWorkspaceId) {
+  const workspaceId = String(previousWorkspaceId || "").trim();
+  try {
+    if (typeof window?.clearCachedDashboardSummary === "function") {
+      window.clearCachedDashboardSummary({
+        userId: sessionUser?.id || sessionUser?.userId || "",
+        workspaceId
+      });
+    }
+  } catch (_err) {
+    // ignore
+  }
+  try {
+    if (workspaceId) {
+      Object.keys(localStorage)
+        .filter((key) => key.includes(workspaceId))
+        .forEach((key) => localStorage.removeItem(key));
+    }
+  } catch (_err) {
+    // ignore
+  }
 }
 
 
@@ -18180,6 +18204,9 @@ async function loadChannelsForWorkspace(workspaceId) {
       : `?workspaceId=${encodeURIComponent(resolvedWorkspaceId)}`;
     const headers = isSuper ? {} : {};
     if (!isSuper) {
+      if (currentWorkspaceId && resolvedWorkspaceId && currentWorkspaceId !== resolvedWorkspaceId) {
+        clearWorkspaceSpecificCaches(currentWorkspaceId);
+      }
       currentWorkspaceId = resolvedWorkspaceId;
       if (typeof window !== "undefined") {
         window.currentWorkspaceId = resolvedWorkspaceId;
@@ -18204,6 +18231,7 @@ function switchToAdminWorkspace() {
     adminCurrentWorkspace || adminWorkspaces[0]?.id || currentWorkspaceId || "default";
   if (!targetWorkspace) return;
   if (currentWorkspaceId !== targetWorkspace) {
+    clearWorkspaceSpecificCaches(currentWorkspaceId);
     currentWorkspaceId = targetWorkspace;
     persistCurrentWorkspace();
     renderWorkspaces();
@@ -34440,6 +34468,10 @@ function persistCurrentWorkspace() {
 
 async function loadWorkspace(workspaceId) {
   const candidate = resolveActiveWorkspaceId(workspaceId);
+  const previousWorkspaceId = currentWorkspaceId;
+  if (previousWorkspaceId && candidate && previousWorkspaceId !== candidate) {
+    clearWorkspaceSpecificCaches(previousWorkspaceId);
+  }
   currentWorkspaceId = candidate || "default";
   if (typeof window !== "undefined") {
     window.currentWorkspaceId = currentWorkspaceId;

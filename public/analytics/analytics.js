@@ -132,13 +132,15 @@ function getAnalyticsViewerRole(input = {}) {
 
 function getDashboardSummaryCacheKey(input = {}) {
   const { userId, workspaceId } = getDashboardSummaryCacheContext(input);
+  const role = getAnalyticsViewerRole(input);
   if (!userId || !workspaceId) return "";
-  return `${DASHBOARD_SUMMARY_CACHE_PREFIX}:${userId}:${workspaceId}`;
+  return `${DASHBOARD_SUMMARY_CACHE_PREFIX}:${userId}:${workspaceId}:${role || "unknown"}`;
 }
 
 function getCachedDashboardSummary(input = {}) {
   const { userId, workspaceId } = getDashboardSummaryCacheContext(input);
-  const cacheKey = getDashboardSummaryCacheKey({ userId, workspaceId });
+  const role = getAnalyticsViewerRole(input);
+  const cacheKey = getDashboardSummaryCacheKey({ userId, workspaceId, role });
   if (!cacheKey) return null;
   try {
     const raw = localStorage.getItem(cacheKey);
@@ -148,6 +150,7 @@ function getCachedDashboardSummary(input = {}) {
       !parsed ||
       parsed.userId !== userId ||
       parsed.workspaceId !== workspaceId ||
+      String(parsed.role || "") !== String(role || "unknown") ||
       !parsed.data ||
       !parsed.cachedAt
     ) {
@@ -164,11 +167,13 @@ function getCachedDashboardSummary(input = {}) {
 }
 
 function setCachedDashboardSummary({ userId, workspaceId, data, generatedAt = null } = {}) {
-  const cacheKey = getDashboardSummaryCacheKey({ userId, workspaceId });
+  const role = getAnalyticsViewerRole({ userId, workspaceId });
+  const cacheKey = getDashboardSummaryCacheKey({ userId, workspaceId, role });
   if (!cacheKey || !data) return null;
   const payload = {
     userId: String(userId || "").trim(),
     workspaceId: String(workspaceId || "").trim() || "default",
+    role: role || "unknown",
     cachedAt: new Date().toISOString(),
     generatedAt: generatedAt || null,
     data
@@ -193,7 +198,7 @@ function clearCachedDashboardSummary(input = {}) {
         continue;
       }
       if (workspaceId) {
-        if (key === `${DASHBOARD_SUMMARY_CACHE_PREFIX}:${userId}:${workspaceId}`) {
+        if (key.startsWith(`${DASHBOARD_SUMMARY_CACHE_PREFIX}:${userId}:${workspaceId}:`)) {
           keysToRemove.push(key);
         }
       } else if (key.startsWith(`${DASHBOARD_SUMMARY_CACHE_PREFIX}:${userId}:`)) {
