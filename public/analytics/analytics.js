@@ -5,10 +5,74 @@ const DASHBOARD_SUMMARY_CACHE_PREFIX = "worknest_dashboard_summary_v1";
 const DASHBOARD_SUMMARY_MAX_AGE_MS = 10 * 60 * 1000;
 const dashboardSummaryInflight = new Map();
 
+if (typeof escapeHtml !== "function") {
+  var escapeHtml = function analyticsEscapeHtml(value) {
+    return String(value || "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  };
+}
+
+if (typeof fetchJSON !== "function") {
+  var fetchJSON = async function analyticsFetchJSON(url, options = {}) {
+    const headers = {
+      ...(options.headers || {})
+    };
+    if (options.body && !headers["Content-Type"]) {
+      headers["Content-Type"] = "application/json";
+    }
+    const response = await fetch(url, {
+      credentials: "include",
+      ...options,
+      headers
+    });
+    const text = await response.text();
+    let payload = null;
+    if (text) {
+      try {
+        payload = JSON.parse(text);
+      } catch (_err) {
+        payload = { message: text };
+      }
+    }
+    if (!response.ok) {
+      const err = new Error(payload?.error || payload?.message || `Request failed (${response.status})`);
+      err.status = response.status;
+      err.payload = payload;
+      throw err;
+    }
+    return payload;
+  };
+}
+
+if (typeof getWorkspaceLabel !== "function") {
+  var getWorkspaceLabel = function analyticsGetWorkspaceLabel(workspaceId) {
+    const activeUser = getAnalyticsSessionUser();
+    return String(
+      activeUser?.workspaceName ||
+      activeUser?.workspace_name ||
+      activeUser?.schoolName ||
+      activeUser?.school_name ||
+      workspaceId ||
+      "Workspace"
+    ).trim();
+  };
+}
+
 function getAnalyticsSessionUser() {
   if (typeof sessionUser !== "undefined" && sessionUser) return sessionUser;
   if (typeof window !== "undefined" && window.currentUser) return window.currentUser;
   return null;
+}
+
+function getAnalyticsCurrentWorkspaceId() {
+  if (typeof window !== "undefined" && window.currentWorkspaceId) {
+    return window.currentWorkspaceId;
+  }
+  return "";
 }
 
 function setAnalyticsContextSnapshot(data) {
@@ -48,7 +112,7 @@ function getDashboardSummaryCacheContext(input = {}) {
   ).trim();
   const workspaceId = String(
     input.workspaceId ||
-    currentWorkspaceId ||
+    getAnalyticsCurrentWorkspaceId() ||
     activeUser?.workspaceId ||
     activeUser?.workspace_id ||
     "default"
@@ -604,6 +668,329 @@ function renderStudentAnalyticsSummary(panel, summary) {
   `;
 }
 
+function getSchoolOwnerExtendedMetrics(summary = {}) {
+  const students = Number(summary.students || 0);
+  const activeStudents = Number(summary.activeStudents || 0);
+  const inactiveStudents = Number(summary.inactiveStudents || 0);
+  const teachers = Number(summary.teachers || 0);
+  const completionRate = Number(summary.completionRate || 0);
+  const homeworkCreated = Number(summary.homeworkCreated || 0);
+  const classRows = Array.isArray(summary.classRowsSorted) ? summary.classRowsSorted : [];
+  const rawPayment = summary.payment || {};
+  const rawBilling = summary.billing || summary.billingHealth || {};
+  const trendComparison = summary.trendComparison || {};
+  const toDelta = (current, previous) => {
+    const now = Number(current || 0);
+    const before = Number(previous || 0);
+    if (!before && !now) return 0;
+    if (!before) return 100;
+    return Math.round(((now - before) / Math.max(1, before)) * 100);
+  };
+  const trends = summary.trends || {
+    messagesDelta: toDelta(trendComparison.currentMessages, trendComparison.previousMessages),
+    homeworkDelta: toDelta(trendComparison.currentHomework, trendComparison.previousHomework),
+    attendanceDelta: Number(trendComparison.attendanceDelta || 0),
+    studentActivityDelta: Number(trendComparison.studentActivityDelta || 0)
+  };
+  const paymentMonthlyRevenue = rawPayment.monthlyRevenue ?? rawPayment.revenue ?? (
+    rawPayment.collectedAmountCents != null ? Number(rawPayment.collectedAmountCents || 0) / 100 : undefined
+  );
+  const billingMonthlyRevenue = rawBilling.monthlyRevenue ?? rawBilling.revenue ?? (
+    rawBilling.collectedAmountCents != null ? Number(rawBilling.collectedAmountCents || 0) / 100 : undefined
+  );
+  const payment = {
+    ...rawPayment,
+    pendingCount: rawPayment.pendingCount ?? rawPayment.openInvoices ?? rawBilling.openInvoices ?? rawBilling.pendingInvoices,
+    failedCount: rawPayment.failedCount ?? rawPayment.failedInvoices ?? rawBilling.failedInvoices ?? rawBilling.failedPayments,
+    monthlyRevenue: paymentMonthlyRevenue
+  };
+  const billing = {
+    ...rawBilling,
+    pendingInvoices: rawBilling.pendingInvoices ?? rawBilling.openInvoices ?? rawPayment.openInvoices,
+    failedPayments: rawBilling.failedPayments ?? rawBilling.failedInvoices ?? rawPayment.failedInvoices,
+    monthlyRevenue: billingMonthlyRevenue
+  };
+
+  const lowActivityClasses = classRows.filter((row) => Number(row.messages || 0) <= 1).length;
+  const inactiveClasses = classRows.filter((row) => Number(row.messages || 0) === 0).length;
+  const classesWithoutHomework = classRows.filter((row) => Number(row.homework || 0) === 0).length;
+
+  const retentionRate = students > 0 ? Math.round((activeStudents / students) * 100) : 0;
+  const atRiskStudents = Number(summary.atRiskStudents || inactiveStudents || 0);
+  const droppedStudents = Number(summary.droppedStudents || 0);
+
+  const pendingInvoices = Number(payment.pendingCount || billing.pendingInvoices || 0);
+  const failedPayments = Number(payment.failedCount || billing.failedPayments || 0);
+  const monthlyRevenue = Number(payment.monthlyRevenue || billing.monthlyRevenue || 0);
+
+  return {
+    students,
+    activeStudents,
+    inactiveStudents,
+    teachers,
+    completionRate,
+    homeworkCreated,
+    lowActivityClasses,
+    inactiveClasses,
+    classesWithoutHomework,
+    retentionRate,
+    atRiskStudents,
+    droppedStudents,
+    pendingInvoices,
+    failedPayments,
+    monthlyRevenue,
+    trends
+  };
+}
+
+function formatAnalyticsMoney(value) {
+  return `€${Number(value || 0).toFixed(2)}`;
+}
+
+function renderTrendValue(value) {
+  const n = Number(value || 0);
+  const tone = n > 0 ? "is-up" : n < 0 ? "is-down" : "is-flat";
+  const prefix = n > 0 ? "+" : "";
+  return `<span class="trend-value ${tone}">${prefix}${n}%</span>`;
+}
+
+function buildActionRequiredPanel(summary = {}) {
+  const m = getSchoolOwnerExtendedMetrics(summary);
+  const items = [];
+
+  if (m.teachers === 0) {
+    items.push({
+      tone: "danger",
+      icon: "fa-user-xmark",
+      text: "No teacher is assigned yet. Assign at least one teacher to keep classes active."
+    });
+  }
+
+  if (m.lowActivityClasses > 0) {
+    items.push({
+      tone: "warning",
+      icon: "fa-chart-line",
+      text: `${m.lowActivityClasses} classes have low message activity. Review class engagement or notify teachers.`
+    });
+  }
+
+  if (m.inactiveStudents > 0 || m.atRiskStudents > 0) {
+    items.push({
+      tone: "warning",
+      icon: "fa-user-clock",
+      text: `${Math.max(m.inactiveStudents, m.atRiskStudents)} students may need follow-up because of low or inactive participation.`
+    });
+  }
+
+  if (m.homeworkCreated > 0 && m.completionRate < 30) {
+    items.push({
+      tone: "danger",
+      icon: "fa-book-open",
+      text: `Homework completion is only ${m.completionRate}%. Review assignment difficulty or remind students.`
+    });
+  }
+
+  if (m.pendingInvoices > 0) {
+    items.push({
+      tone: "warning",
+      icon: "fa-file-invoice-dollar",
+      text: `${m.pendingInvoices} invoices are pending. Follow up before revenue becomes overdue.`
+    });
+  }
+
+  if (!items.length) {
+    items.push({
+      tone: "success",
+      icon: "fa-circle-check",
+      text: "No urgent action required. School activity looks stable."
+    });
+  }
+
+  return `
+    <section class="analytics-panel">
+      <div class="analytics-panel-header">
+        <div>
+          <h2 class="analytics-panel-title">Action Required</h2>
+          <div class="analytics-panel-subtitle">Operational alerts for the school admin</div>
+        </div>
+      </div>
+      <div class="action-required-list">
+        ${items.map((item) => `
+          <div class="action-required-item is-${item.tone}">
+            <div class="action-required-icon"><i class="fa-solid ${item.icon}"></i></div>
+            <div>${escapeHtml(item.text)}</div>
+          </div>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function buildRevenueRetentionPanel(summary = {}) {
+  const m = getSchoolOwnerExtendedMetrics(summary);
+
+  return `
+    <section class="analytics-owner-grid">
+      <article class="owner-insight-card ${m.pendingInvoices || m.failedPayments ? "is-warning" : "is-success"}">
+        <div class="owner-insight-label">Monthly Revenue</div>
+        <div class="owner-insight-value">${formatAnalyticsMoney(m.monthlyRevenue)}</div>
+        <div class="owner-insight-meta">Pending invoices: ${m.pendingInvoices} · Failed payments: ${m.failedPayments}</div>
+      </article>
+
+      <article class="owner-insight-card ${m.retentionRate < 70 ? "is-warning" : "is-success"}">
+        <div class="owner-insight-label">Student Retention</div>
+        <div class="owner-insight-value">${m.retentionRate}%</div>
+        <div class="owner-insight-meta">Active ${m.activeStudents} · Inactive ${m.inactiveStudents} · Dropped ${m.droppedStudents}</div>
+      </article>
+
+      <article class="owner-insight-card ${m.lowActivityClasses > 0 ? "is-warning" : "is-success"}">
+        <div class="owner-insight-label">Class Health</div>
+        <div class="owner-insight-value">${m.lowActivityClasses}</div>
+        <div class="owner-insight-meta">Low activity classes · ${m.inactiveClasses} fully inactive</div>
+      </article>
+
+      <article class="owner-insight-card ${m.completionRate < 30 ? "is-danger" : "is-success"}">
+        <div class="owner-insight-label">Homework Health</div>
+        <div class="owner-insight-value">${m.completionRate}%</div>
+        <div class="owner-insight-meta">${m.classesWithoutHomework} classes without homework activity</div>
+      </article>
+    </section>
+  `;
+}
+
+function buildTrendPanel(summary = {}) {
+  const m = getSchoolOwnerExtendedMetrics(summary);
+  const trends = m.trends || {};
+
+  return `
+    <section class="analytics-panel">
+      <div class="analytics-panel-header">
+        <div>
+          <h2 class="analytics-panel-title">Trends</h2>
+          <div class="analytics-panel-subtitle">Current period compared with previous period</div>
+        </div>
+      </div>
+
+      <div>
+        <div class="trend-row">
+          <span>Messages</span>
+          ${renderTrendValue(trends.messagesDelta || 0)}
+        </div>
+        <div class="trend-row">
+          <span>Homework completion</span>
+          ${renderTrendValue(trends.homeworkDelta || 0)}
+        </div>
+        <div class="trend-row">
+          <span>Attendance</span>
+          ${renderTrendValue(trends.attendanceDelta || 0)}
+        </div>
+        <div class="trend-row">
+          <span>Student activity</span>
+          ${renderTrendValue(trends.studentActivityDelta || 0)}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function buildSmartInsightsPanel(summary = {}) {
+  const m = getSchoolOwnerExtendedMetrics(summary);
+  const classRows = Array.isArray(summary.classRowsSorted) ? summary.classRowsSorted : [];
+  const topClass = classRows[0]?.name || "your most active class";
+  const weakClass = classRows.find((row) => Number(row.messages || 0) === 0)?.name || null;
+
+  const insights = [];
+
+  if (topClass) {
+    insights.push(`Replicate the structure of "${topClass}" in weaker classes because it has the strongest activity signal.`);
+  }
+
+  if (weakClass) {
+    insights.push(`"${weakClass}" has no recent message activity. Check if the class is unused or needs teacher engagement.`);
+  }
+
+  if (m.teachers === 0) {
+    insights.push("No teachers are active yet. Add or assign teachers before onboarding more students.");
+  }
+
+  if (m.homeworkCreated > 0 && m.completionRate === 0) {
+    insights.push("Homework exists but students are not submitting. Send reminders or simplify the first assignment.");
+  }
+
+  if (!insights.length) {
+    insights.push("School activity is stable. Continue monitoring attendance, homework completion, and student engagement.");
+  }
+
+  return `
+    <section class="analytics-panel">
+      <div class="analytics-panel-header">
+        <div>
+          <h2 class="analytics-panel-title">Smart Insights</h2>
+          <div class="analytics-panel-subtitle">Suggested next steps for the school owner</div>
+        </div>
+      </div>
+
+      <div class="smart-insight-list">
+        ${insights.map((text) => `
+          <div class="smart-insight-item">
+            <div class="action-required-icon"><i class="fa-solid fa-wand-magic-sparkles"></i></div>
+            <div>${escapeHtml(text)}</div>
+          </div>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function buildQuickActionsPanel(summary = {}) {
+  const m = getSchoolOwnerExtendedMetrics(summary);
+
+  const actions = [
+    {
+      label: "Message inactive students",
+      enabled: m.inactiveStudents > 0 || m.atRiskStudents > 0,
+      action: "inactive-students"
+    },
+    {
+      label: "Create homework reminder",
+      enabled: m.homeworkCreated > 0 && m.completionRate < 50,
+      action: "homework-reminder"
+    },
+    {
+      label: "Assign teacher",
+      enabled: m.teachers === 0,
+      action: "assign-teacher"
+    },
+    {
+      label: "Review unpaid invoices",
+      enabled: m.pendingInvoices > 0,
+      action: "billing-review"
+    }
+  ];
+
+  return `
+    <section class="analytics-panel">
+      <div class="analytics-panel-header">
+        <div>
+          <h2 class="analytics-panel-title">Quick Actions</h2>
+          <div class="analytics-panel-subtitle">Fast follow-up actions from analytics</div>
+        </div>
+      </div>
+
+      <div class="quick-action-list">
+        ${actions.map((item) => `
+          <div class="quick-action-item">
+            <span>${escapeHtml(item.label)}</span>
+            <button type="button" data-analytics-action="${escapeHtml(item.action)}" ${item.enabled ? "" : "disabled"}>
+              ${item.enabled ? "Open" : "No action"}
+            </button>
+          </div>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function renderSchoolAnalyticsSummary(panel, summary) {
   if (!panel || !summary) return;
   setAnalyticsContextSnapshot(summary);
@@ -626,7 +1013,7 @@ function renderSchoolAnalyticsSummary(panel, summary) {
   const engagementCounts = summary.engagementCounts || { high: 0, medium: 0, low: 0 };
   const insights = Array.isArray(summary.insights) ? summary.insights : [];
   const courseCounts = summary.courseCounts || {};
-  const workspaceId = summary.workspaceId || currentWorkspaceId || "default";
+  const workspaceId = summary.workspaceId || getAnalyticsCurrentWorkspaceId() || "default";
   const workspaceName = summary.workspaceName || getWorkspaceLabel(workspaceId);
 
   const totalEngagement =
@@ -727,6 +1114,10 @@ function renderSchoolAnalyticsSummary(panel, summary) {
           </aside>
         </section>
 
+        ${buildActionRequiredPanel(summary)}
+
+        ${buildRevenueRetentionPanel(summary)}
+
         <section class="analytics-grid">
           <article class="stat-card">
             <div class="stat-top">
@@ -767,6 +1158,11 @@ function renderSchoolAnalyticsSummary(panel, summary) {
             <div class="stat-meta">Homework spaces ${channelCounts.homework}</div>
             <div class="stat-trend">Most used: ${escapeHtml(mostUsedTool)}</div>
           </article>
+        </section>
+
+        <section class="analytics-split">
+          ${buildTrendPanel(summary)}
+          ${buildSmartInsightsPanel(summary)}
         </section>
 
         <section class="analytics-row">
@@ -947,6 +1343,8 @@ function renderSchoolAnalyticsSummary(panel, summary) {
           </div>
         </section>
 
+        ${buildQuickActionsPanel(summary)}
+
         <section class="analytics-panel">
           <div class="analytics-panel-header">
             <div>
@@ -1056,6 +1454,83 @@ if (typeof window !== "undefined") {
   window.setCachedDashboardSummary = setCachedDashboardSummary;
   window.clearCachedDashboardSummary = clearCachedDashboardSummary;
   window.prefetchDashboardSummary = prefetchDashboardSummary;
+
+  function callAnalyticsActionFunction(name, ...args) {
+    const fn = typeof window[name] === "function" ? window[name] : null;
+    if (!fn) return false;
+    try {
+      fn(...args);
+      return true;
+    } catch (err) {
+      console.warn(`Analytics quick action failed: ${name}`, err);
+      return false;
+    }
+  }
+
+  function clickAnalyticsActionTarget(selectors = []) {
+    for (const selector of selectors) {
+      const target = document.querySelector(selector);
+      if (target && typeof target.click === "function") {
+        target.click();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function showAnalyticsActionPanel(panelId) {
+    if (!panelId || !document.getElementById(panelId)) return false;
+    return callAnalyticsActionFunction("showPanel", panelId);
+  }
+
+  function showAnalyticsActionFallback(message) {
+    if (typeof window.alert === "function") {
+      window.alert(message);
+    }
+  }
+
+  function handleAnalyticsQuickAction(action) {
+    if (action === "inactive-students") {
+      callAnalyticsActionFunction("hideAdminOverlays");
+      if (callAnalyticsActionFunction("showDirectoryList", "student", { keepEmailHeader: true })) return;
+      if (clickAnalyticsActionTarget(["#openStudentsList", "[data-directory-role='student']", "[data-role='student-list']"])) return;
+      showAnalyticsActionFallback("Open inactive student follow-up list. Connect this to your student management panel.");
+      return;
+    }
+
+    if (action === "homework-reminder") {
+      if (callAnalyticsActionFunction("openNotificationsView")) return;
+      if (showAnalyticsActionPanel("notificationsPanel")) return;
+      if (callAnalyticsActionFunction("openFirstHomeworkChannel")) return;
+      if (clickAnalyticsActionTarget(["#openHomeworkPanel", "[data-open-panel='homework']", "[data-channel-type='homework']"])) return;
+      showAnalyticsActionFallback("Open homework reminder flow. Connect this to notifications or messages.");
+      return;
+    }
+
+    if (action === "assign-teacher") {
+      callAnalyticsActionFunction("hideAdminOverlays");
+      if (callAnalyticsActionFunction("showDirectoryList", "teacher", { keepEmailHeader: true })) return;
+      if (clickAnalyticsActionTarget(["#openTeachersList", "#openTeacherRegistration", "[data-directory-role='teacher']", "[data-role='teacher-list']"])) return;
+      showAnalyticsActionFallback("Open teacher assignment flow. Connect this to users/classes management.");
+      return;
+    }
+
+    if (action === "billing-review") {
+      if (showAnalyticsActionPanel("billingPanel")) return;
+      if (clickAnalyticsActionTarget(["[data-tab='billing']", "[data-tab='billing-invoices']", "[data-owner-tab='billing']", "[data-admin-tab='billing']"])) return;
+      if (showAnalyticsActionPanel("adminPanel")) return;
+      showAnalyticsActionFallback("Open billing review. Connect this to billing panel.");
+    }
+  }
+
+  document.addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-analytics-action]");
+    if (!btn) return;
+    if (btn.disabled) return;
+
+    const action = btn.dataset.analyticsAction;
+    handleAnalyticsQuickAction(action);
+  });
 
   window.addEventListener("worknestAuthReady", (event) => {
     if (isPolicyGateBlocking()) return;
