@@ -60,6 +60,7 @@ function setMailSidebarActive(view, shortcut = schoolMailActiveShortcut) {
 }
 
 function ensureSchoolMailShell() {
+  bindSchoolEmailDomRefs();
   if (!schoolEmailSettingsPage || !sesMainSettingsBody) return;
   if (document.getElementById("schoolMailShell")) return;
 
@@ -188,77 +189,80 @@ function ensureSchoolMailShell() {
 }
 
 const SCHOOL_SETTINGS_CHANNEL_ID = "school-settings";
-const schoolEmailSettingsPage = document.getElementById("schoolEmailSettingsPage");
-const schoolEmailSettingsPageHome = schoolEmailSettingsPage?.parentElement || null;
-const schoolEmailHeaderActions = document.getElementById("schoolEmailHeaderActions");
-const schoolEmailHeaderActionsHome = schoolEmailHeaderActions?.parentElement || null;
-const schoolSettingsHeaderToggle = document.getElementById("schoolSettingsHeaderToggle");
-const schoolSettingsHeaderToggleHome = schoolSettingsHeaderToggle?.parentElement || null;
-const emailPanelHeaderActions = document.getElementById("emailPanelHeaderActions");
-const emailPanelToggle = document.getElementById("emailPanelToggle");
-const emailPanelBody = document.getElementById("emailPanelBody");
-const sesFormatBtn = document.getElementById("sesFormatBtn");
-const sesFormatCard = document.getElementById("sesFormatCard");
-const sesInboxBtn = document.getElementById("sesInboxBtn");
-const sesContactFormBtn = document.getElementById("sesContactFormBtn");
-const sesTrashBtn = document.getElementById("sesTrashBtn");
-const sesInboxPanel = document.getElementById("sesInboxPanel");
-const sesContactFormPanel = document.getElementById("sesContactFormPanel");
-const sesContactSubject = document.getElementById("sesContactSubject");
-const sesContactMessage = document.getElementById("sesContactMessage");
-const sesContactWordCount = document.getElementById("sesContactWordCount");
-const sesContactSendBtn = document.getElementById("sesContactSendBtn");
-const sesContactStatus = document.getElementById("sesContactStatus");
-const sesInboxList = document.getElementById("sesInboxList");
-const sesInboxPlaceholder = document.getElementById("sesInboxPlaceholder");
-const sesInboxCount = document.getElementById("sesInboxCount");
-const sesInboxDetail = document.getElementById("sesInboxDetail");
-const sesInboxBackBtn = document.getElementById("sesInboxBackBtn");
-const sesInboxDetailAvatar = document.getElementById("sesInboxDetailAvatar");
-const sesInboxDetailName = document.getElementById("sesInboxDetailName");
-const sesInboxDetailEmail = document.getElementById("sesInboxDetailEmail");
-const sesInboxDetailDate = document.getElementById("sesInboxDetailDate");
-const sesInboxDetailSubject = document.getElementById("sesInboxDetailSubject");
-const sesInboxDetailAttachments = document.getElementById("sesInboxDetailAttachments");
-const sesInboxDetailBody = document.getElementById("sesInboxDetailBody");
-const sesInboxRefreshBtn = document.getElementById("sesInboxRefreshBtn");
-const sesInboxMarkAllBtn = document.getElementById("sesInboxMarkAllBtn");
-const sesFormatBackBtn = document.getElementById("sesFormatBackBtn");
-const detailReplyGreeting = document.getElementById("detailReplyGreeting");
-const sesMainSettingsBody = schoolEmailSettingsPage ? schoolEmailSettingsPage.querySelector(".ses-body") : null;
-const sesClose = document.getElementById("sesClose");
-const sesCancel = document.getElementById("sesCancel");
-const sesSave = document.getElementById("sesSave");
-const sesTestBtn = document.getElementById("sesTestBtn");
-const sesStatus = document.getElementById("sesStatus");
-
-const sesEnabled = document.getElementById("sesEnabled");
-const sesSchoolName = document.getElementById("sesSchoolName");
-const sesReplyTo = document.getElementById("sesReplyTo");
-const sesFooter = document.getElementById("sesFooter");
-const sesSubjectPrefix = document.getElementById("sesSubjectPrefix");
-const sesSignatureHtml = document.getElementById("sesSignatureHtml");
-const sesSignatureHours = document.getElementById("sesSignatureHours");
-const sesSignatureAddress = document.getElementById("sesSignatureAddress");
-const sesSignaturePhone = document.getElementById("sesSignaturePhone");
-const sesSignatureEmail = document.getElementById("sesSignatureEmail");
-const sesSignatureRegistration = document.getElementById("sesSignatureRegistration");
-const sesSignaturePreview = document.getElementById("sesSignaturePreview");
-const sesLogoPreview = document.getElementById("sesLogoPreview");
-const sesLogoUploadBtn = document.getElementById("sesLogoUploadBtn");
-const sesLogoInput = document.getElementById("sesLogoInput");
-const sesTestTo = document.getElementById("sesTestTo");
-const sesBodyText = document.getElementById("sesBodyText");
-const sesBodyGreetingPreview = document.getElementById("sesBodyGreetingPreview");
-const sesBodyClosingPreview = document.getElementById("sesBodyClosingPreview");
-const sesEmailPreviewPanel = document.getElementById("sesEmailPreviewPanel");
-const sesPreviewRecipient = document.getElementById("sesPreviewRecipient");
-const sesPreviewSubject = document.getElementById("sesPreviewSubject");
-const sesPreviewBody = document.getElementById("sesPreviewBody");
-const sesPreviewTimestamp = document.getElementById("sesPreviewTimestamp");
-const sesHistoryList = document.getElementById("sesHistoryList");
-const sesHistoryEmpty = document.getElementById("sesHistoryEmpty");
-const sesHistoryClearBtn = document.getElementById("sesHistoryClearBtn");
+let emailPartialLoadPromise = null;
+let schoolEmailControlsWired = false;
+let schoolEmailProfileBindingsWired = false;
+let pendingSesRegistrationDetails = "";
+let schoolEmailSettingsPage = null;
+let schoolEmailSettingsPageHome = null;
+let schoolEmailHeaderActions = null;
+let schoolEmailHeaderActionsHome = null;
+let schoolSettingsHeaderToggle = null;
+let schoolSettingsHeaderToggleHome = null;
+let emailPanelHeaderActions = null;
+let emailPanelToggle = null;
+let emailPanelBody = null;
+let sesFormatBtn = null;
+let sesFormatCard = null;
+let sesInboxBtn = null;
+let sesContactFormBtn = null;
+let sesTrashBtn = null;
+let sesInboxPanel = null;
+let sesContactFormPanel = null;
+let sesContactSubject = null;
+let sesContactMessage = null;
+let sesContactWordCount = null;
+let sesContactSendBtn = null;
+let sesContactStatus = null;
+let sesInboxList = null;
+let sesInboxPlaceholder = null;
+let sesInboxCount = null;
+let sesInboxDetail = null;
+let sesInboxBackBtn = null;
+let sesInboxDetailAvatar = null;
+let sesInboxDetailName = null;
+let sesInboxDetailEmail = null;
+let sesInboxDetailDate = null;
+let sesInboxDetailSubject = null;
+let sesInboxDetailAttachments = null;
+let sesInboxDetailBody = null;
+let sesInboxRefreshBtn = null;
+let sesInboxMarkAllBtn = null;
+let sesFormatBackBtn = null;
+let detailReplyGreeting = null;
+let sesMainSettingsBody = null;
+let sesClose = null;
+let sesCancel = null;
+let sesSave = null;
+let sesTestBtn = null;
+let sesStatus = null;
+let sesEnabled = null;
+let sesSchoolName = null;
+let sesReplyTo = null;
+let sesFooter = null;
+let sesSubjectPrefix = null;
+let sesSignatureHtml = null;
+let sesSignatureHours = null;
+let sesSignatureAddress = null;
+let sesSignaturePhone = null;
+let sesSignatureEmail = null;
+let sesSignatureRegistration = null;
+let sesSignaturePreview = null;
+let sesLogoPreview = null;
+let sesLogoUploadBtn = null;
+let sesLogoInput = null;
+let sesTestTo = null;
+let sesBodyText = null;
+let sesBodyGreetingPreview = null;
+let sesBodyClosingPreview = null;
+let sesEmailPreviewPanel = null;
+let sesPreviewRecipient = null;
+let sesPreviewSubject = null;
+let sesPreviewBody = null;
+let sesPreviewTimestamp = null;
+let sesHistoryList = null;
+let sesHistoryEmpty = null;
+let sesHistoryClearBtn = null;
 let sesLogoUrlValue = "";
 let sesWorkspaceProfileCache = null;
 let sesEmailLogs = [];
@@ -272,23 +276,131 @@ const sesHistorySelectedIds = new Set();
 let sesFormatViewActive = false;
 let sesCurrentMailboxFolder = "inbox";
 let sesSettingsPolishState = null;
-const sesRegistrationDetails = document.getElementById("sesRegistrationDetails");
-const sesPreviewBtn = document.getElementById("sesPreviewBtn");
+let sesRegistrationDetails = null;
+let sesPreviewBtn = null;
+
+function bindSchoolEmailDomRefs() {
+  schoolEmailSettingsPage = document.getElementById("schoolEmailSettingsPage");
+  if (schoolEmailSettingsPage && !schoolEmailSettingsPageHome) schoolEmailSettingsPageHome = schoolEmailSettingsPage.parentElement;
+  schoolEmailHeaderActions = document.getElementById("schoolEmailHeaderActions");
+  if (schoolEmailHeaderActions && !schoolEmailHeaderActionsHome) schoolEmailHeaderActionsHome = schoolEmailHeaderActions.parentElement;
+  schoolSettingsHeaderToggle = document.getElementById("schoolSettingsHeaderToggle");
+  if (schoolSettingsHeaderToggle && !schoolSettingsHeaderToggleHome) schoolSettingsHeaderToggleHome = schoolSettingsHeaderToggle.parentElement;
+  emailPanelHeaderActions = document.getElementById("emailPanelHeaderActions");
+  emailPanelToggle = document.getElementById("emailPanelToggle");
+  emailPanelBody = document.getElementById("emailPanelBody");
+  sesFormatBtn = document.getElementById("sesFormatBtn");
+  sesFormatCard = document.getElementById("sesFormatCard");
+  sesInboxBtn = document.getElementById("sesInboxBtn");
+  sesContactFormBtn = document.getElementById("sesContactFormBtn");
+  sesTrashBtn = document.getElementById("sesTrashBtn");
+  sesInboxPanel = document.getElementById("sesInboxPanel");
+  sesContactFormPanel = document.getElementById("sesContactFormPanel");
+  sesContactSubject = document.getElementById("sesContactSubject");
+  sesContactMessage = document.getElementById("sesContactMessage");
+  sesContactWordCount = document.getElementById("sesContactWordCount");
+  sesContactSendBtn = document.getElementById("sesContactSendBtn");
+  sesContactStatus = document.getElementById("sesContactStatus");
+  sesInboxList = document.getElementById("sesInboxList");
+  sesInboxPlaceholder = document.getElementById("sesInboxPlaceholder");
+  sesInboxCount = document.getElementById("sesInboxCount");
+  sesInboxDetail = document.getElementById("sesInboxDetail");
+  sesInboxBackBtn = document.getElementById("sesInboxBackBtn");
+  sesInboxDetailAvatar = document.getElementById("sesInboxDetailAvatar");
+  sesInboxDetailName = document.getElementById("sesInboxDetailName");
+  sesInboxDetailEmail = document.getElementById("sesInboxDetailEmail");
+  sesInboxDetailDate = document.getElementById("sesInboxDetailDate");
+  sesInboxDetailSubject = document.getElementById("sesInboxDetailSubject");
+  sesInboxDetailAttachments = document.getElementById("sesInboxDetailAttachments");
+  sesInboxDetailBody = document.getElementById("sesInboxDetailBody");
+  sesInboxRefreshBtn = document.getElementById("sesInboxRefreshBtn");
+  sesInboxMarkAllBtn = document.getElementById("sesInboxMarkAllBtn");
+  sesFormatBackBtn = document.getElementById("sesFormatBackBtn");
+  detailReplyGreeting = document.getElementById("detailReplyGreeting");
+  sesMainSettingsBody = schoolEmailSettingsPage ? schoolEmailSettingsPage.querySelector(".ses-body") : null;
+  sesClose = document.getElementById("sesClose");
+  sesCancel = document.getElementById("sesCancel");
+  sesSave = document.getElementById("sesSave");
+  sesTestBtn = document.getElementById("sesTestBtn");
+  sesStatus = document.getElementById("sesStatus");
+  sesEnabled = document.getElementById("sesEnabled");
+  sesSchoolName = document.getElementById("sesSchoolName");
+  sesReplyTo = document.getElementById("sesReplyTo");
+  sesFooter = document.getElementById("sesFooter");
+  sesSubjectPrefix = document.getElementById("sesSubjectPrefix");
+  sesSignatureHtml = document.getElementById("sesSignatureHtml");
+  sesSignatureHours = document.getElementById("sesSignatureHours");
+  sesSignatureAddress = document.getElementById("sesSignatureAddress");
+  sesSignaturePhone = document.getElementById("sesSignaturePhone");
+  sesSignatureEmail = document.getElementById("sesSignatureEmail");
+  sesSignatureRegistration = document.getElementById("sesSignatureRegistration");
+  sesSignaturePreview = document.getElementById("sesSignaturePreview");
+  sesLogoPreview = document.getElementById("sesLogoPreview");
+  sesLogoUploadBtn = document.getElementById("sesLogoUploadBtn");
+  sesLogoInput = document.getElementById("sesLogoInput");
+  sesTestTo = document.getElementById("sesTestTo");
+  sesBodyText = document.getElementById("sesBodyText");
+  sesBodyGreetingPreview = document.getElementById("sesBodyGreetingPreview");
+  sesBodyClosingPreview = document.getElementById("sesBodyClosingPreview");
+  sesEmailPreviewPanel = document.getElementById("sesEmailPreviewPanel");
+  sesPreviewRecipient = document.getElementById("sesPreviewRecipient");
+  sesPreviewSubject = document.getElementById("sesPreviewSubject");
+  sesPreviewBody = document.getElementById("sesPreviewBody");
+  sesPreviewTimestamp = document.getElementById("sesPreviewTimestamp");
+  sesHistoryList = document.getElementById("sesHistoryList");
+  sesHistoryEmpty = document.getElementById("sesHistoryEmpty");
+  sesHistoryClearBtn = document.getElementById("sesHistoryClearBtn");
+  sesRegistrationDetails = document.getElementById("sesRegistrationDetails");
+  sesPreviewBtn = document.getElementById("sesPreviewBtn");
+  if (sesRegistrationDetails && pendingSesRegistrationDetails && !sesRegistrationDetails.value) {
+    sesRegistrationDetails.value = pendingSesRegistrationDetails;
+  }
+  return !!schoolEmailSettingsPage;
+}
+
+async function ensureEmailHtmlLoaded() {
+  if (bindSchoolEmailDomRefs()) return true;
+  const panel = document.getElementById("emailPanel");
+  if (!panel) return false;
+  if (!emailPartialLoadPromise) {
+    emailPartialLoadPromise = (async () => {
+      const partialUrl = panel.getAttribute("data-email-partial") || "email/email.html";
+      const res = await fetch(partialUrl, { credentials: "same-origin" });
+      if (!res.ok) throw new Error("Could not load " + partialUrl + " (" + res.status + ")");
+      panel.innerHTML = await res.text();
+      panel.dataset.emailPartialLoaded = "1";
+      bindSchoolEmailDomRefs();
+      wireSchoolEmailSettingsControls();
+      wireSchoolEmailProfilePreviewBindings();
+      return true;
+    })().catch((err) => {
+      emailPartialLoadPromise = null;
+      panel.innerHTML = '<div class="email-panel-load-error" role="alert">Could not load School Email. Please refresh and try again.</div>';
+      console.error("Failed to load email partial", err);
+      return false;
+    });
+  }
+  return emailPartialLoadPromise;
+}
+
+bindSchoolEmailDomRefs();
 
 function clearSchoolEmailHeaderMounts() {
+  bindSchoolEmailDomRefs();
   restoreSchoolEmailUiToChatHeader();
   setEmailHeaderChromeVisible(false);
-  if (emailPanelHeaderActions) emailPanelHeaderActions.replaceChildren();
-  if (emailPanelToggle) emailPanelToggle.replaceChildren();
 }
 
 function setSchoolEmailRegistrationDetails(value = "") {
+  pendingSesRegistrationDetails = value || "";
+  bindSchoolEmailDomRefs();
   if (sesRegistrationDetails) {
     sesRegistrationDetails.value = value || "";
   }
 }
 
 function getSchoolEmailRegistrationDetails() {
+  bindSchoolEmailDomRefs();
   return (sesRegistrationDetails?.value || "").trim();
 }
 
@@ -297,6 +409,7 @@ function setSchoolEmailWorkspaceProfileCache(profile = null) {
 }
 
 async function loadSchoolEmailSettingsForRestore() {
+  await ensureEmailHtmlLoaded();
   await loadEmailSettings();
   if (typeof loadClassSettingsSchoolDetails === "function") {
     await loadClassSettingsSchoolDetails();
@@ -1682,6 +1795,7 @@ async function updateSesBodyChrome() {
 }
 
 function setEmailHeaderChromeVisible(visible) {
+  bindSchoolEmailDomRefs();
   const nextVisible = Boolean(visible);
   if (schoolEmailHeaderActions) {
     schoolEmailHeaderActions.classList.toggle("hidden", !nextVisible);
@@ -1699,6 +1813,11 @@ async function openEmailPanel() {
       return;
     }
     showToast("Email is available for school admins and students only.", "info");
+    return;
+  }
+  const loaded = await ensureEmailHtmlLoaded();
+  if (!loaded) {
+    showToast("Could not load School Email. Please refresh and try again.");
     return;
   }
   const token = showPanel("emailPanel");
@@ -1729,6 +1848,7 @@ async function openEmailPanel() {
 }
 
 function mountSchoolEmailUiToEmailPanel() {
+  bindSchoolEmailDomRefs();
   if (!schoolEmailSettingsPage || !emailPanelBody) return;
   if (schoolEmailHeaderActions && schoolEmailHeaderActions.parentElement !== emailPanelHeaderActions) {
     emailPanelHeaderActions.replaceChildren(schoolEmailHeaderActions);
@@ -1748,6 +1868,7 @@ function mountSchoolEmailUiToEmailPanel() {
 }
 
 function restoreSchoolEmailUiToChatHeader() {
+  bindSchoolEmailDomRefs();
   if (schoolEmailHeaderActions && schoolEmailHeaderActions.parentElement !== schoolEmailHeaderActionsHome) {
     schoolEmailHeaderActionsHome?.appendChild(schoolEmailHeaderActions);
   }
@@ -1784,6 +1905,12 @@ function setSchoolEmailHeaderMode(active) {
 }
 
 function showSchoolSettingsCard() {
+  if (!schoolEmailSettingsPage) {
+    void ensureEmailHtmlLoaded().then((loaded) => {
+      if (loaded) showSchoolSettingsCard();
+    });
+    return;
+  }
   if (!schoolEmailSettingsPage) return;
   schoolEmailSettingsPage.classList.remove("hidden");
   schoolEmailSettingsPage.setAttribute("aria-hidden", "false");
@@ -1799,6 +1926,7 @@ function showSchoolSettingsCard() {
 }
 
 function hideSchoolSettingsCard() {
+  bindSchoolEmailDomRefs();
   if (!schoolEmailSettingsPage) return;
   schoolEmailSettingsPage.classList.add("hidden");
   schoolEmailSettingsPage.setAttribute("aria-hidden", "true");
@@ -1835,6 +1963,9 @@ document.addEventListener("click", (event) => {
 });
 
 function wireSchoolEmailProfilePreviewBindings() {
+  bindSchoolEmailDomRefs();
+  if (!schoolEmailSettingsPage || schoolEmailProfileBindingsWired) return;
+  schoolEmailProfileBindingsWired = true;
   [
     "sesSchoolName",
     "schoolProfileStreet",
@@ -1870,6 +2001,9 @@ function wireSchoolEmailProfilePreviewBindings() {
 }
 
 function wireSchoolEmailSettingsControls() {
+  bindSchoolEmailDomRefs();
+  if (!schoolEmailSettingsPage || schoolEmailControlsWired) return;
+  schoolEmailControlsWired = true;
   if (sesClose) sesClose.addEventListener("click", closeSchoolSettingsView);
   ensureSesDraftControls();
   if (sesCancel) sesCancel.addEventListener("click", cancelEmailCompose);

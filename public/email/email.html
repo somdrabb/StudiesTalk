@@ -1,0 +1,389 @@
+<!-- School Email partial. Loaded lazily by public/email/email.js into #emailPanel. -->
+<div class="email-panel-shell">
+  <div class="email-panel-header">
+    <div class="email-panel-title-block">
+      <h1 class="email-panel-title">School Email Settings</h1>
+    </div>
+    <div class="email-panel-header-actions" id="emailPanelHeaderActions">
+      <div class="school-email-header-actions" id="schoolEmailHeaderActions">
+                    <button class="ses-header-btn" id="sesSentBtn" type="button">
+                      <i class="fa-solid fa-pen" aria-hidden="true"></i>
+                      Compose
+                    </button>
+      
+                    <button class="ses-header-btn" id="sesHistoryBtn" type="button">
+                      <i class="fa-solid fa-history" aria-hidden="true"></i>
+                      <span>Sent</span>
+                    </button>
+      
+                    <button class="ses-header-btn" id="sesFormatBtn" type="button">Email format</button>
+                    <button class="ses-header-btn" id="sesInboxBtn" type="button">Inbox</button>
+                    <button class="ses-header-btn hidden" id="sesContactFormBtn" type="button">Contact Form</button>
+                    <button class="ses-header-btn" id="sesTrashBtn" type="button">
+                      <i class="fa-regular fa-trash-can" aria-hidden="true"></i>
+                      <span>Trash</span>
+                    </button>
+                  </div>
+    </div>
+  </div>
+  <div class="email-panel-toggle" id="emailPanelToggle">
+    <div class="school-settings-header-toggle hidden" id="schoolSettingsHeaderToggle">
+            <label class="ses-check">
+              <input type="checkbox" id="sesEnabled" />
+              <span>Enable live session email notifications</span>
+            </label>
+          </div>
+  </div>
+  <div class="email-panel-body" id="emailPanelBody" aria-label="Email panel body">
+    <!-- School Email Settings Page -->
+          <div id="schoolEmailSettingsPage" class="school-settings-page hidden" aria-hidden="true">
+            <div class="ses-body">
+              <!-- Email Format Card -->
+              <div
+                class="ses-format-card hidden"
+                id="sesFormatCard"
+                aria-live="polite"
+                aria-label="Email format view"
+              >
+                <div class="ses-template-layout">
+                  <aside class="ses-template-sidebar">
+                    <div class="ses-template-sidebar-top">
+                      <div class="ses-template-title">Email Templates</div>
+                      <input
+                        id="sesTplSearch"
+                        class="ses-template-search"
+                        type="text"
+                        placeholder="Search templates..."
+                      />
+                    </div>
+                    <div id="sesTplCards" class="ses-template-cards"></div>
+                  </aside>
+                </div>
+    
+                <section class="ses-template-editor-popup hidden" id="sesTplPopup">
+                  <div class="ses-template-editor-card">
+                    <button type="button" class="ses-template-editor-close" id="sesTplPopupCloseBtn">
+                      <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+                    </button>
+                    <div class="ses-template-editor-top">
+                      <div>
+                        <div id="sesTplLabel" class="ses-template-editor-label">Select a template</div>
+                        <div id="sesTplRequired" class="ses-template-editor-required"></div>
+                      </div>
+                    </div>
+    
+                    <div class="ses-field">
+                      <label for="sesTplSubject">Subject</label>
+                      <input id="sesTplSubject" type="text" />
+                    </div>
+    
+                    <div class="ses-field">
+                      <label for="sesTplBodyHtml">Body (HTML)</label>
+                      <textarea id="sesTplBodyHtml" rows="12"></textarea>
+                    </div>
+    
+                    <div class="ses-field">
+                      <label for="sesTplTokens">Available tokens</label>
+                      <div id="sesTplTokens" class="ses-template-tokens"></div>
+                    </div>
+    
+                    <div class="ses-field">
+                      <label>Live preview</label>
+                      <div id="sesTplPreview" class="ses-template-preview"></div>
+                    </div>
+    
+                    <div class="ses-field ses-template-test">
+                      <label for="sesTplTestTo">Send test to</label>
+                      <div class="ses-template-test-row">
+                        <input id="sesTplTestTo" type="email" placeholder="test@school.edu" />
+                        <button class="ses-btn ses-btn-secondary" id="sesTplTestBtn" type="button">
+                          <i class="fa-solid fa-paper-plane"></i>
+                        </button>
+                      </div>
+                      <div id="sesTplStatus" class="ses-status"></div>
+                    </div>
+    
+                    <div class="ses-template-editor-bottom">
+                      <div class="ses-template-editor-bottom-actions">
+                        <button class="ses-btn ses-btn-ghost" id="sesTplResetBtn" type="button">Reset</button>
+                        <button class="ses-btn ses-btn-primary" id="sesTplSaveBtn" type="button">Save</button>
+                      </div>
+                      <div class="ses-form-actions">
+                        <button class="ses-btn ses-btn-secondary" id="sesFormatBackBtn" type="button">
+                          Back to settings
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              </div>
+              <div class="ses-form">
+                <div class="ses-grid2">
+                  <div class="ses-field" hidden>
+                    <label for="sesSchoolName">School name</label>
+                    <input id="sesSchoolName" type="text" placeholder="Sprachschule Duisburg" />
+                  </div>
+    
+                  <div class="ses-field" hidden>
+                    <label for="sesReplyTo">Reply-To</label>
+                    <input id="sesReplyTo" type="Email" placeholder="admin@your-school.de" />
+                  </div>
+                </div>
+    
+                <div class="ses-field ses-field-send-to">
+                  <label for="sesTestTo">Send Email to</label>
+                  <input
+                    id="sesTestTo"
+                    type="Email"
+                    placeholder="your-email@example.com"
+                    autocomplete="off"
+                  />
+                </div>
+    
+                <div class="ses-field">
+                  <label for="sesSubjectPrefix">Subject</label>
+                  <input
+                    id="sesSubjectPrefix"
+                    type="text"
+                    placeholder="Antrag"
+                    autocomplete="off"
+                  />
+                </div>
+    
+                <div class="ses-field">
+                  <label for="sesBodyText">Email body</label>
+                  <div id="sesBodyGreetingPreview" class="ses-email-greeting" aria-live="polite"></div>
+    
+                  <textarea
+                    id="sesBodyText"
+                    rows="8"
+                    autocomplete="off"
+                    placeholder="Write your message..."
+                  ></textarea>
+    
+                  <div id="sesBodyClosingPreview" class="ses-email-closing" aria-live="polite"></div>
+                </div>
+    
+                <div class="ses-field ses-signature-field">
+                  <label for="sesFooter">Signature</label>
+    
+                  <div class="ses-signature-preview" id="sesSignaturePreview">
+                    <div class="ses-signature-top-row">
+                      <div id="sesSignatureHours" class="ses-signature-line ses-signature-hours"></div>
+                    </div>
+                    <div id="sesSignatureAddress" class="ses-signature-line"></div>
+                    <div id="sesSignaturePhone" class="ses-signature-line"></div>
+                    <div id="sesSignatureEmail" class="ses-signature-line"></div>
+                    <div id="sesSignatureRegistration" class="ses-signature-line"></div>
+                  </div>
+    
+                  <textarea id="sesFooter" hidden></textarea>
+                </div>
+    
+                <div class="ses-form-actions">
+                  <button class="ses-btn ses-btn-ghost" id="sesCancel" type="button">Cancel</button>
+                  <button class="ses-btn ses-btn-primary" id="sesSave" type="button">Save</button>
+                </div>
+    
+                <div class="ses-testRow ses-testButtonRow">
+                  <button class="ses-btn ses-btn-secondary" id="sesTestBtn" type="button">
+                    <i class="fa-solid fa-paper-plane"></i>
+                  </button>
+                </div>
+    
+                <div class="ses-status" id="sesStatus"></div>
+              </div>
+    
+              <div class="ses-meta-column">
+                <div
+                  class="ses-preview hidden"
+                  id="sesEmailPreviewPanel"
+                  role="region"
+                  aria-label="Email preview"
+                >
+                  <div class="ses-preview-title">
+                    <span>Email preview</span>
+                    <span class="ses-preview-timestamp" id="sesPreviewTimestamp">Draft</span>
+                  </div>
+                  <div class="ses-preview-recipient" id="sesPreviewRecipient"></div>
+                  <div class="ses-preview-subject" id="sesPreviewSubject"></div>
+                  <div class="ses-preview-body" id="sesPreviewBody"></div>
+                </div>
+    
+                <div class="ses-history" id="sesEmailHistory">
+                <div class="ses-history-header">
+                  <span><i class="fa-solid fa-history"></i> History</span>
+    
+                  <button class="ses-history-clear" id="sesHistoryClearBtn" type="button">
+                    Compose new
+                  </button>
+                </div>
+    
+                <div class="ses-history-list" id="sesHistoryList"></div>
+                <div class="ses-history-empty hidden" id="sesHistoryEmpty">No sent emails yet.</div>
+              </div>
+              <div class="ses-contact-form-panel hidden" id="sesContactFormPanel">
+                <div class="ses-contact-form-card">
+                  <div class="ses-contact-form-title">Contact School Admin</div>
+                  <div class="ses-contact-form-note">
+                    Send a message directly to the school admin inbox from your student email address.
+                  </div>
+    
+                  <div class="ses-field">
+                    <label for="sesContactSubject">Subject</label>
+                    <input
+                      id="sesContactSubject"
+                      type="text"
+                      maxlength="120"
+                      autocomplete="off"
+                      placeholder="Write your subject"
+                    />
+                  </div>
+    
+                  <div class="ses-field">
+                    <div class="ses-contact-form-label-row">
+                      <label for="sesContactMessage">Message</label>
+                      <span id="sesContactWordCount" class="ses-contact-word-count">0 / 500 words</span>
+                    </div>
+                    <textarea
+                      id="sesContactMessage"
+                      rows="12"
+                      maxlength="4000"
+                      autocomplete="off"
+                      placeholder="Write your message"
+                    ></textarea>
+                  </div>
+    
+                  <div class="ses-form-actions">
+                    <button class="ses-btn ses-btn-primary" id="sesContactSendBtn" type="button">
+                      <i class="fa-solid fa-paper-plane"></i>
+                      <span>Send</span>
+                    </button>
+                  </div>
+    
+                  <div class="ses-status" id="sesContactStatus"></div>
+                </div>
+              </div>
+              <div class="hidden" id="sesInboxPanel">
+                <!-- Gmail-ish Inbox (StudiesTalk) -->
+      <section class="mailbox" id="wnMailbox">
+        <header class="mbx-topbar">
+          <label class="chk mbx-header-select">
+            <input type="checkbox" id="selectAll" />
+            <span>Select</span>
+          </label>
+          <div class="mbx-title">
+            <span class="mbx-icon">📥</span>
+            <span class="mbx-name">Inbox</span>
+            <span class="mbx-count" id="mbxCount">0</span>
+          </div>
+    
+          <div class="mbx-actions">
+            <input class="mbx-search topbar-search-input" id="mbxSearch" placeholder="Search mail" autocomplete="off" />
+            <button class="btn-ghost" id="btnRefresh" type="button">Refresh</button>
+            <button class="btn-ghost" id="btnMarkAllRead" type="button">Mark all read</button>
+          </div>
+        </header>
+    
+        <div class="mbx-toolbar">
+          <div class="mbx-bulk" id="bulkActions" hidden>
+            <button class="btn-ghost" id="btnBulkRead" type="button">Mark read</button>
+            <button class="btn-ghost" id="btnBulkUnread" type="button">Mark unread</button>
+            <button class="btn-danger" id="btnBulkDelete" type="button">Delete</button>
+          </div>
+    
+          <div class="mbx-bulk" id="trashActions" hidden>
+            <button class="btn-ghost" id="btnTrashRestore" type="button">Put back</button>
+            <button class="btn-danger" id="btnTrashDeleteForever" type="button">Delete forever</button>
+            <button class="btn-ghost" id="btnEmptyTrash" type="button">Clean Trash</button>
+            <button class="btn-ghost" id="btnTrashCancel" type="button" hidden>Cancel</button>
+          </div>
+    
+          <div class="mbx-spacer"></div>
+        </div>
+    
+      <div class="mbx-body" id="mbxBody">
+        <div class="mbx-list" id="inboxList" aria-label="Inbox list"></div>
+    
+        <section class="mbx-detail-panel hidden" id="inboxDetailPanel" aria-label="Message detail">
+          <div class="detail-header">
+            <button class="detail-close" id="detailCloseBtn" type="button">
+              <i class="fa-solid fa-arrow-left" aria-hidden="true"></i>
+              <span>Back to Inbox</span>
+            </button>
+          </div>
+    
+          <div class="detail-empty" id="detailEmpty">
+            <div class="detail-empty-title">Select a message</div>
+            <div class="detail-empty-sub">To read, download attachments, or reply later.</div>
+          </div>
+    
+          <div class="detail" id="detailView" hidden>
+            <div class="detail-head">
+              <div class="detail-subject" id="dSubject"></div>
+              <div class="detail-meta">
+                <div class="detail-from" id="dFrom"></div>
+                <div class="detail-date" id="dDate"></div>
+              </div>
+            </div>
+    
+            <div class="detail-body" id="dBody"></div>
+    
+            <div class="detail-attach" id="dAttach" hidden>
+              <div class="detail-attach-summary">
+                <div class="detail-attach-summary-text">
+                  <span class="detail-attach-count" id="dAttachCount">One attachment</span>
+                  <span class="detail-attach-scan" id="dAttachScan">Scanned by Gmail</span>
+                </div>
+                <button class="detail-attach-drive" id="dAttachDrive" type="button">
+                  <i class="fa-solid fa-cloud-arrow-up" aria-hidden="true"></i>
+                  Add to Drive
+                </button>
+              </div>
+              <div class="detail-attach-grid" id="dAttachGrid"></div>
+            </div>
+            <div class="detail-actions hidden" id="detailActionsPanel">
+              <button class="detail-action-btn detail-action-btn--reply" id="detailReplyBtn" type="button">
+                <i class="fa-solid fa-arrow-rotate-left" aria-hidden="true"></i>
+                Reply
+              </button>
+              <button class="detail-action-btn detail-action-btn--forward" id="detailForwardBtn" type="button">
+                <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i>
+                Forward
+              </button>
+              <button class="detail-action-btn detail-action-btn--emoji" id="detailEmojiBtn" type="button">
+                <i class="fa-regular fa-face-smile" aria-hidden="true"></i>
+              </button>
+            </div>
+            <div class="detail-reply-divider" aria-hidden="true"></div>
+    
+            <div class="detail-reply-wrapper">
+              <div class="detail-reply-panel hidden" id="detailReplyPanel">
+                <button type="button" class="detail-reply-hide" id="detailReplyHideBtn">
+                  <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+                </button>
+                <div class="detail-reply-greeting" id="detailReplyGreeting">Sehr geehrte/r</div>
+                <textarea id="detailReplyTextarea" placeholder="Write your reply…" rows="4"></textarea>
+                <div class="detail-reply-signature" id="detailReplySignature"></div>
+              </div>
+              <div class="detail-reply-actions hidden" id="detailReplyActions">
+                <button class="detail-reply-send" id="detailReplySendBtn" type="button">
+                  Send
+                </button>
+                <button class="detail-reply-cancel" id="detailReplyCancelBtn" type="button">
+                  Cancel
+                </button>
+              </div>
+            </div>
+    
+            <div class="detail-replies hidden" id="detailReplies"></div>
+          </div>
+        </section>
+      </div>
+    </section>
+              </div>
+            </div>
+          </div>
+          </div>
+  </div>
+</div>

@@ -1,4 +1,14 @@
 /* Email styles moved from public/styles.refactor.css. Keep before the existing email.css rules to preserve cascade. */
+.email-panel-load-error {
+  margin: 24px;
+  padding: 16px 18px;
+  border: 1px solid #fecaca;
+  border-radius: 12px;
+  background: #fef2f2;
+  color: #991b1b;
+  font-weight: 700;
+}
+
 /* Moved from styles.refactor.css: school email header controls */
 #chatHeader.school-settings-header .channel-line-2,
 #chatHeader.school-settings-header .channel-header-bottom,
