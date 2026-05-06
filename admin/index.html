@@ -847,11 +847,12 @@
           <section class="panel payment-gateways-panel" id="panel-payment-gateways" hidden>
             <div class="panel-head">
               <div>
+                <span class="gateway-eyebrow"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i> Secure payment operations</span>
                 <h2>Payment Gateways</h2>
-                <p class="muted">Configure Stripe, PayPal, Mollie, webhooks, and payment secrets.</p>
+                <p class="muted">Configure providers, encrypted secrets, webhook health, and payment gateway audit evidence.</p>
               </div>
               <div class="panel-actions">
-                <button class="btn btn-ghost" type="button" id="btnPaymentGatewaysRefresh"><i class="fa-solid fa-rotate-right"></i><span>Refresh</span></button>
+                <button class="btn btn-ghost gateway-refresh-btn" type="button" id="btnPaymentGatewaysRefresh"><i class="fa-solid fa-rotate-right"></i><span>Refresh status</span></button>
               </div>
             </div>
             <div class="alert" id="paymentGatewaysError" hidden></div>

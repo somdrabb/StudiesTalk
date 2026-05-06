@@ -598,7 +598,13 @@ function createSqliteOnboardingRepository(sqliteDb) {
       FROM workspace_billing
       WHERE workspace_id = ?
     `).get(workspaceId);
-    const aiBudget = sqliteDb.prepare('SELECT monthly_cap_eur FROM ai_budget_settings WHERE workspace_id = ?').get(workspaceId);
+    const aiBudget = sqliteDb.prepare(`
+      SELECT monthly_limit_eur AS monthly_cap_eur
+      FROM ai_budget_settings
+      WHERE workspace_id = ? OR workspace_id IS NULL
+      ORDER BY CASE WHEN workspace_id = ? THEN 0 ELSE 1 END, datetime(COALESCE(updated_at, created_at)) DESC
+      LIMIT 1
+    `).get(workspaceId, workspaceId);
     const emailSettings = sqliteDb.prepare(`
       SELECT enabled, brand_school_name, reply_to_email, signature_html, subject_prefix
       FROM workspace_email_settings WHERE workspace_id = ?
@@ -1181,7 +1187,13 @@ function createPostgresOnboardingRepository() {
         FROM workspace_billing
         WHERE workspace_id = ?
       `, [workspaceId]),
-      postgres.one('SELECT monthly_cap_eur FROM ai_budget_settings WHERE workspace_id = ?', [workspaceId]),
+      postgres.one(`
+        SELECT monthly_limit_eur AS monthly_cap_eur
+        FROM ai_budget_settings
+        WHERE workspace_id = ? OR workspace_id IS NULL
+        ORDER BY CASE WHEN workspace_id = ? THEN 0 ELSE 1 END, COALESCE(updated_at, created_at) DESC
+        LIMIT 1
+      `, [workspaceId, workspaceId]),
       postgres.one('SELECT enabled, brand_school_name, reply_to_email, signature_html, subject_prefix FROM workspace_email_settings WHERE workspace_id = ?', [workspaceId]),
       postgres.one(`
         SELECT

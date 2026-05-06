@@ -42,8 +42,8 @@ function makeProvider() {
   if (provider === "disabled") {
     return {
       name: "disabled",
-      async send({ to, subject }) {
-        console.log("[EMAIL disabled]", { to, subject });
+      async send({ to, cc, bcc, subject }) {
+        console.log("[EMAIL disabled]", { to, cc, bcc, subject });
         return { ok: true, disabled: true };
       }
     };
@@ -71,15 +71,18 @@ function makeProvider() {
 
     return {
       name: "gmail",
-      async send({ to, subject, text, html, replyTo, fromName, headers }) {
+      async send({ to, cc, bcc, subject, text, html, replyTo, fromName, headers, attachments }) {
         return transporter.sendMail({
           from: buildFrom(fromName),
           to,
+          cc,
+          bcc,
           subject,
           text,
           html,
           replyTo,
-          headers
+          headers,
+          attachments
         });
       }
     };
@@ -110,15 +113,18 @@ function makeProvider() {
 
     return {
       name: "ionos",
-      async send({ to, subject, text, html, replyTo, fromName, headers }) {
+      async send({ to, cc, bcc, subject, text, html, replyTo, fromName, headers, attachments }) {
         return transporter.sendMail({
           from: buildFrom(fromName),
           to,
+          cc,
+          bcc,
           subject,
           text,
           html,
           replyTo,
-          headers
+          headers,
+          attachments
         });
       }
     };
@@ -129,11 +135,11 @@ function makeProvider() {
 
 const provider = makeProvider();
 
-async function sendPlatformEmail({ to, subject, text, html, replyTo, fromName, headers }) {
+async function sendPlatformEmail({ to, cc, bcc, subject, text, html, replyTo, fromName, headers, attachments }) {
   if (!to || !to.includes("@")) {
     throw new Error("Invalid recipient email.");
   }
-  return provider.send({ to, subject, text, html, replyTo, fromName, headers });
+  return provider.send({ to, cc, bcc, subject, text, html, replyTo, fromName, headers, attachments });
 }
 
 module.exports = {

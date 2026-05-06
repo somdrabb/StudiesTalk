@@ -28,7 +28,7 @@
     salespitch: "sales",
     news: "briefing"
   };
-  const LEGACY_SPEAKING_TOPICS = [
+  const FALLBACK_SPEAKING_TOPICS = [
     {
       id: "smalltalk",
       title: "Small Talk starten",
@@ -38,471 +38,18 @@
       levels: ["A1", "A2"],
       skills: ["introducing", "small_talk", "follow_up_questions"],
       objective: "Eine lockere erste Unterhaltung beginnen und am Laufen halten.",
+      userRole: "Lernender",
+      aiRole: "Gespraechspartner",
       aiContext: "friendly first meeting, short natural questions, introductions, hobbies, gentle corrections",
-      theme: "violet"
-    },
-    {
-      id: "restaurant",
-      title: "Essen bestellen",
-      subtitle: "Bestellen, nachfragen & höflich reagieren",
-      icon: "fa-solid fa-utensils",
-      category: "everyday",
-      levels: ["A1", "A2"],
-      skills: ["ordering", "politeness", "clarifying"],
-      objective: "Sicher Essen und Getränke bestellen und auf Rückfragen reagieren.",
-      aiContext: "restaurant roleplay, waiter and customer, polite requests, menu vocabulary, short turns",
-      theme: "orange"
-    },
-    {
-      id: "interview",
-      title: "Vorstellungsgespraech",
-      subtitle: "Antworten strukturiert & selbstsicher geben",
-      icon: "fa-solid fa-user-tie",
-      category: "work",
-      levels: ["B1", "B2"],
-      skills: ["self_presentation", "professional_answers", "confidence"],
-      objective: "Berufliche Fragen klar, strukturiert und glaubwürdig beantworten.",
-      aiContext: "job interview coach, experience, strengths, motivation, follow-up questions, concise feedback",
-      theme: "sky"
-    },
-    {
-      id: "travel",
-      title: "Hotel Check-in",
-      subtitle: "Einchecken, fragen & Probleme loesen",
-      icon: "fa-solid fa-plane-departure",
-      category: "practical",
-      levels: ["A2", "B1"],
-      skills: ["travel_language", "requesting_help", "clarifying"],
-      objective: "Reisesituationen am Hotel sicher und höflich lösen.",
-      aiContext: "hotel front desk roleplay, reservations, room questions, practical travel conversation",
-      theme: "lime"
-    },
-    {
-      id: "exam",
-      title: "TestDaF Sprechen",
-      subtitle: "Pruefungsnah antworten & Zeit gut nutzen",
-      icon: "fa-solid fa-graduation-cap",
-      category: "academic",
-      levels: ["B2", "C1"],
-      skills: ["exam_fluency", "structuring", "timed_speaking"],
-      objective: "Prüfungsnahe Antworten mit klarer Struktur und passendem Tempo geben.",
-      aiContext: "exam simulator, time pressure, structured answers, academic tone, light correction after response",
-      theme: "pink"
-    },
-    {
-      id: "support",
-      title: "Kundenservice Gespraech",
-      subtitle: "Probleme erklaeren & Loesungen finden",
-      icon: "fa-solid fa-headset",
-      category: "work",
-      levels: ["A2", "B1"],
-      skills: ["problem_description", "clarification", "service_language"],
-      objective: "Ein Problem ruhig beschreiben und gemeinsam eine Lösung finden.",
-      aiContext: "service call roleplay, issue explanation, troubleshooting, polite support language",
-      theme: "teal"
-    },
-    {
-      id: "project",
-      title: "Projekt-Update geben",
-      subtitle: "Fortschritt, Risiken & naechste Schritte",
-      icon: "fa-solid fa-list-check",
-      category: "work",
-      levels: ["B1", "B2"],
-      skills: ["status_reporting", "summarizing", "planning"],
-      objective: "Fortschritt klar zusammenfassen und nächste Schritte benennen.",
-      aiContext: "team update, deadlines, blockers, concise project language, one question at a time",
-      theme: "indigo"
-    },
-    {
-      id: "networking",
-      title: "Kontakte knuepfen",
-      subtitle: "Sich vorstellen & professionell vernetzen",
-      icon: "fa-solid fa-user-group",
-      category: "social",
-      levels: ["A2", "B1"],
-      skills: ["introducing", "networking", "small_talk"],
-      objective: "Sich natürlich vorstellen und ein Gespräch professionell weiterführen.",
-      aiContext: "networking event, introductions, interests, work background, friendly but professional tone",
-      theme: "rose"
-    },
-    {
-      id: "presentation",
-      title: "Praesentation halten",
-      subtitle: "Ideen klar vorstellen & erklaeren",
-      icon: "fa-solid fa-person-chalkboard",
-      category: "work",
-      levels: ["B1", "B2"],
-      skills: ["presenting", "explaining", "signposting"],
-      objective: "Eine Idee oder ein Thema strukturiert und verständlich präsentieren.",
-      aiContext: "presentation audience, signposting, transitions, explaining visuals, confident speaking",
-      theme: "amber"
-    },
-    {
-      id: "feedback",
-      title: "Feedback geben & annehmen",
-      subtitle: "Verbessern, reagieren & gemeinsam loesen",
-      icon: "fa-solid fa-comment-dots",
-      category: "social",
-      levels: ["B1", "B2"],
-      skills: ["feedback", "responding", "polite_disagreement"],
-      objective: "Konstruktives Feedback geben und offen darauf reagieren.",
-      aiContext: "feedback conversation, praise plus improvement, tactful wording, calm responses",
-      theme: "violet"
-    },
-    {
-      id: "story",
-      title: "Eine Geschichte erzaehlen",
-      subtitle: "Erlebnisse lebendig und spannend schildern",
-      icon: "fa-solid fa-book-open",
-      category: "everyday",
-      levels: ["A2", "B1"],
-      skills: ["narration", "past_tense", "detail"],
-      objective: "Ein Erlebnis lebendig erzählen und wichtige Details einbauen.",
-      aiContext: "storytelling partner, ask for details, sequence events, encourage vivid language",
-      theme: "red"
-    },
-    {
-      id: "negotiation",
-      title: "Verhandeln",
-      subtitle: "Optionen abwaegen & Kompromisse finden",
-      icon: "fa-solid fa-handshake-angle",
-      category: "work",
-      levels: ["B1", "B2"],
-      skills: ["persuasion", "compromise", "clarifying_terms"],
-      objective: "Preise, Termine oder Optionen flexibel verhandeln.",
-      aiContext: "negotiation roleplay, options, trade-offs, persuasive but polite language",
-      theme: "yellow"
-    },
-    {
-      id: "medical",
-      title: "Beim Arzt sprechen",
-      subtitle: "Symptome erklaeren & Rueckfragen verstehen",
-      icon: "fa-solid fa-stethoscope",
-      category: "practical",
-      levels: ["A2", "B1"],
-      skills: ["symptoms", "medical_vocabulary", "clarification"],
-      objective: "Symptome verständlich erklären und Nachfragen beantworten.",
-      aiContext: "doctor appointment roleplay, symptoms, duration, advice, patient-friendly questions",
-      theme: "cyan"
-    },
-    {
-      id: "coldcall",
-      title: "Telefonischer Erstkontakt",
-      subtitle: "Anrufen, vorstellen & Anliegen nennen",
-      icon: "fa-solid fa-phone-volume",
-      category: "work",
-      levels: ["A2", "B1"],
-      skills: ["phone_language", "introducing", "purpose"],
-      objective: "Ein Gespräch telefonisch klar eröffnen und zum Punkt kommen.",
-      aiContext: "phone call opener, formal greetings, purpose of call, polite clarification",
-      theme: "blue"
-    },
-    {
-      id: "review",
-      title: "Deutsch verbessern",
-      subtitle: "Fehler erkennen & bessere Formulierungen finden",
-      icon: "fa-solid fa-pen-to-square",
-      category: "learning",
-      levels: ["A2", "B2"],
-      skills: ["self_correction", "rephrasing", "accuracy"],
-      objective: "Eigene Sätze verbessern und natürlichere Formulierungen üben.",
-      aiContext: "language coach, rephrase learner sentences, explain corrections simply, encourage retries",
-      theme: "emerald"
-    },
-    {
-      id: "academic",
-      title: "Uni-Diskussion",
-      subtitle: "Standpunkte klar darstellen & begruenden",
-      icon: "fa-solid fa-building-columns",
-      category: "academic",
-      levels: ["B2", "C1"],
-      skills: ["argumentation", "opinion", "academic_language"],
-      objective: "Ein Thema an der Uni diskutieren und mit Gründen untermauern.",
-      aiContext: "academic seminar partner, discuss arguments, examples, contrast, formal tone",
-      theme: "indigo"
-    },
-    {
-      id: "tour",
-      title: "Stadt erklaeren",
-      subtitle: "Orte beschreiben & Tipps geben",
-      icon: "fa-solid fa-map-location-dot",
-      category: "everyday",
-      levels: ["A2", "B1"],
-      skills: ["describing_places", "recommending", "giving_directions"],
-      objective: "Eine Stadt oder Gegend anschaulich beschreiben und empfehlen.",
-      aiContext: "city guide roleplay, landmarks, directions, recommendations, practical follow-up questions",
-      theme: "lime"
-    },
-    {
-      id: "emergency",
-      title: "Notfall melden",
-      subtitle: "Schnell, klar & ruhig Hilfe holen",
-      icon: "fa-solid fa-triangle-exclamation",
-      category: "practical",
-      levels: ["A2", "B1"],
-      skills: ["urgency", "describing_situation", "clear_speech"],
-      objective: "In einer Notlage klar erklären, was passiert ist und was gebraucht wird.",
-      aiContext: "emergency call roleplay, short urgent questions, location, people involved, immediate needs",
-      theme: "red"
-    },
-    {
-      id: "booking",
-      title: "Termin vereinbaren",
-      subtitle: "Planen, bestaetigen & umplanen",
-      icon: "fa-solid fa-calendar-check",
-      category: "practical",
-      levels: ["A1", "A2"],
-      skills: ["scheduling", "confirming", "rescheduling"],
-      objective: "Einen Termin sicher planen, bestätigen oder verschieben.",
-      aiContext: "appointment scheduling, time slots, confirmations, polite date and time language",
-      theme: "blue"
-    },
-    {
-      id: "debate",
-      title: "Diskutieren",
-      subtitle: "Meinung begruenden & widersprechen",
-      icon: "fa-solid fa-scale-balanced",
-      category: "social",
-      levels: ["B1", "B2"],
-      skills: ["opinion", "agreement", "disagreement"],
-      objective: "Eine Meinung klar vertreten und auf Gegenargumente reagieren.",
-      aiContext: "structured discussion, reasons, counterarguments, respectful disagreement, concise follow-up",
-      theme: "indigo"
-    },
-    {
-      id: "briefing",
-      title: "Nachrichten zusammenfassen",
-      subtitle: "Wichtiges kurz erklaeren & einordnen",
-      icon: "fa-solid fa-newspaper",
-      category: "media",
-      levels: ["B1", "B2"],
-      skills: ["summarizing", "reporting", "main_points"],
-      objective: "Ereignisse oder Tagesrückblicke knapp und verständlich zusammenfassen.",
-      aiContext: "news briefing, summarize key points, explain relevance, short follow-up questions",
-      theme: "amber"
-    },
-    {
-      id: "culture",
-      title: "Kultur vergleichen",
-      subtitle: "Traditionen erklaeren & Unterschiede besprechen",
-      icon: "fa-solid fa-earth-europe",
-      category: "social",
-      levels: ["B1", "B2"],
-      skills: ["comparison", "explaining_customs", "reflection"],
-      objective: "Kulturelle Unterschiede respektvoll vergleichen und erklären.",
-      aiContext: "cross-cultural discussion, traditions, differences, similarities, respectful tone",
-      theme: "green"
-    },
-    {
-      id: "recipe",
-      title: "Ein Rezept erklaeren",
-      subtitle: "Schritte, Reihenfolge & Mengen nennen",
-      icon: "fa-solid fa-list-ol",
-      category: "everyday",
-      levels: ["A2", "B1"],
-      skills: ["sequencing", "instructions", "quantities"],
-      objective: "Ein Rezept oder einen Ablauf Schritt für Schritt erklären.",
-      aiContext: "recipe explanation, sequence words, quantities, kitchen actions, clarity over complexity",
-      theme: "pink"
-    },
-    {
-      id: "podcast",
-      title: "Podcast starten",
-      subtitle: "Begruessen, Thema setzen & weiterfuehren",
-      icon: "fa-solid fa-podcast",
-      category: "media",
-      levels: ["B1", "B2"],
-      skills: ["hosting", "introducing_topics", "flow"],
-      objective: "Ein Gespräch wie in einem Podcast eröffnen und moderieren.",
-      aiContext: "podcast host style, opening lines, transitions, inviting the other speaker in",
-      theme: "orange"
-    },
-    {
-      id: "onboarding",
-      title: "Neue Kunden begruessen",
-      subtitle: "Ablauf erklaeren & Sicherheit geben",
-      icon: "fa-solid fa-handshake-simple",
-      category: "work",
-      levels: ["A2", "B1"],
-      skills: ["welcoming", "explaining_process", "reassurance"],
-      objective: "Neue Kunden freundlich begrüßen und den Ablauf klar erklären.",
-      aiContext: "customer onboarding, welcoming tone, explain next steps, answer basic questions",
-      theme: "yellow"
-    },
-    {
-      id: "sales",
-      title: "Etwas verkaufen",
-      subtitle: "Vorteile erklaeren & Interesse wecken",
-      icon: "fa-solid fa-store",
-      category: "work",
-      levels: ["B1", "B2"],
-      skills: ["persuasion", "benefits", "objection_handling"],
-      objective: "Ein Angebot verständlich vorstellen und auf Einwände reagieren.",
-      aiContext: "sales conversation, explain benefits, ask needs questions, handle objections politely",
-      theme: "rose"
-    },
-    {
-      id: "coach",
-      title: "Coachen & motivieren",
-      subtitle: "Tipps geben & zum Weitermachen ermutigen",
-      icon: "fa-solid fa-person-chalkboard",
-      category: "social",
-      levels: ["B1", "B2"],
-      skills: ["advice", "motivation", "goal_setting"],
-      objective: "Jemanden motivieren, beraten und nächste Schritte formulieren.",
-      aiContext: "coach conversation, encouragement, goals, actionable advice, supportive tone",
-      theme: "violet"
-    },
-    {
-      id: "techsupport",
-      title: "Technikproblem loesen",
-      subtitle: "Fehler beschreiben & Schritte durchgehen",
-      icon: "fa-solid fa-laptop-code",
-      category: "practical",
-      levels: ["A2", "B1"],
-      skills: ["problem_description", "step_by_step", "clarifying"],
-      objective: "Ein technisches Problem erklären und Lösungsschritte besprechen.",
-      aiContext: "tech support roleplay, issue details, troubleshooting steps, confirmation after each step",
-      theme: "teal"
-    },
-    {
-      id: "creative",
-      title: "Ideen sammeln",
-      subtitle: "Vorschlaege machen & gemeinsam waehlen",
-      icon: "fa-solid fa-lightbulb",
-      category: "creative",
-      levels: ["A2", "B1"],
-      skills: ["brainstorming", "suggesting", "choosing"],
-      objective: "Mehrere Ideen entwickeln und zusammen eine auswählen.",
-      aiContext: "brainstorming partner, offer options, ask preferences, encourage variety and selection",
-      theme: "orange"
-    },
-    {
-      id: "finance",
-      title: "Finanzen besprechen",
-      subtitle: "Kosten, Budget & Prioritaeten erklaeren",
-      icon: "fa-solid fa-wallet",
-      category: "work",
-      levels: ["B1", "B2"],
-      skills: ["budgeting", "numbers", "priorities"],
-      objective: "Ausgaben, Einnahmen und Prioritäten nachvollziehbar besprechen.",
-      aiContext: "finance discussion, budget limits, costs, trade-offs, clear numeric language",
-      theme: "green"
-    },
-    {
-      id: "policy",
-      title: "Regeln erklaeren",
-      subtitle: "Richtlinien kurz & klar zusammenfassen",
-      icon: "fa-solid fa-gavel",
-      category: "work",
-      levels: ["B1", "B2"],
-      skills: ["explaining_rules", "formal_language", "clarity"],
-      objective: "Regeln oder Richtlinien klar und verständlich erklären.",
-      aiContext: "policy explanation, formal but simple wording, explain reasons and examples",
-      theme: "indigo"
-    },
-    {
-      id: "wellness",
-      title: "Ueber Gefuehle sprechen",
-      subtitle: "Befinden beschreiben & empathisch nachfragen",
-      icon: "fa-solid fa-heart-pulse",
-      category: "everyday",
-      levels: ["A2", "B1"],
-      skills: ["feelings", "empathy", "follow_up_questions"],
-      objective: "Gefühle ausdrücken und empathisch auf andere reagieren.",
-      aiContext: "well-being conversation, feelings, empathy, support, calm patient replies",
-      theme: "green"
-    },
-    {
-      id: "holiday",
-      title: "Urlaub planen",
-      subtitle: "Optionen vergleichen & Entscheidungen treffen",
-      icon: "fa-solid fa-suitcase-rolling",
-      category: "everyday",
-      levels: ["A2", "B1"],
-      skills: ["planning", "preferences", "comparing_options"],
-      objective: "Eine Reise planen und zwischen Möglichkeiten entscheiden.",
-      aiContext: "travel planning, destinations, budget, dates, compare options and choose",
-      theme: "amber"
-    },
-    {
-      id: "charity",
-      title: "Spendenaktion erklaeren",
-      subtitle: "Ziel beschreiben & um Hilfe bitten",
-      icon: "fa-solid fa-hands-holding-heart",
-      category: "social",
-      levels: ["B1", "B2"],
-      skills: ["persuasion", "purpose", "call_to_action"],
-      objective: "Ein soziales Anliegen erklären und um Unterstützung bitten.",
-      aiContext: "charity pitch, explain cause, impact, appeal for support, sincere tone",
-      theme: "teal"
-    },
-    {
-      id: "bookclub",
-      title: "Buchclub Gespraech",
-      subtitle: "Inhalte zusammenfassen & Meinung teilen",
-      icon: "fa-solid fa-book",
-      category: "academic",
-      levels: ["B1", "B2"],
-      skills: ["summarizing", "opinion", "discussion"],
-      objective: "Ein Kapitel oder Buch zusammenfassen und darüber diskutieren.",
-      aiContext: "book club discussion, summarize chapter, favorite parts, interpretation questions",
-      theme: "violet"
-    },
-    {
-      id: "collaboration",
-      title: "Team-Abstimmung",
-      subtitle: "Aufgaben klaeren & naechste Schritte planen",
-      icon: "fa-solid fa-people-arrows",
-      category: "work",
-      levels: ["B1", "B2"],
-      skills: ["coordination", "planning", "task_assignment"],
-      objective: "Im Team Aufgaben verteilen und den nächsten Plan abstimmen.",
-      aiContext: "team coordination, responsibilities, deadlines, next steps, concise collaboration language",
-      theme: "blue"
-    },
-    {
-      id: "inspection",
-      title: "Besichtigung",
-      subtitle: "Zustand beschreiben & gezielt nachfragen",
-      icon: "fa-solid fa-magnifying-glass",
-      category: "practical",
-      levels: ["A2", "B1"],
-      skills: ["observing", "asking_questions", "describing_condition"],
-      objective: "Bei einer Besichtigung Beobachtungen formulieren und Fragen stellen.",
-      aiContext: "inspection walk-through, condition, details, follow-up questions, practical vocabulary",
-      theme: "green"
-    },
-    {
-      id: "science",
-      title: "Ergebnisse erklaeren",
-      subtitle: "Daten einordnen & Schluessen ziehen",
-      icon: "fa-solid fa-flask",
-      category: "academic",
-      levels: ["B2", "C1"],
-      skills: ["explaining_results", "evidence", "conclusions"],
-      objective: "Ergebnisse klar erklären und daraus Schlüsse ableiten.",
-      aiContext: "science explanation, findings, evidence, interpretation, clear structured phrasing",
-      theme: "sky"
-    },
-    {
-      id: "media",
-      title: "Interview mit Medien",
-      subtitle: "Kurz, ruhig & praezise antworten",
-      icon: "fa-solid fa-microphone-lines",
-      category: "media",
-      levels: ["B2", "C1"],
-      skills: ["interviewing", "concise_answers", "public_speaking"],
-      objective: "Medienfragen kurz, professionell und kontrolliert beantworten.",
-      aiContext: "media interview roleplay, concise answers, stay calm, bridge back to key message",
-      theme: "amber"
+      theme: "violet",
+      voice: "nova"
     }
   ];
   const SHARED_SCENARIO_CONFIG = globalThis.AI_SPEAKING_SCENARIO_CONFIG || {};
   const SPEAKING_TOPIC_ALIASES = SHARED_SCENARIO_CONFIG.aliases || LEGACY_SPEAKING_TOPIC_ALIASES;
   const SPEAKING_TOPICS = Array.isArray(SHARED_SCENARIO_CONFIG.topics) && SHARED_SCENARIO_CONFIG.topics.length
     ? SHARED_SCENARIO_CONFIG.topics
-    : LEGACY_SPEAKING_TOPICS;
+    : FALLBACK_SPEAKING_TOPICS;
   const SPEAKING_TOPIC_MAP = new Map(SPEAKING_TOPICS.map((topic) => [topic.id, topic]));
   const DEFAULT_TOPIC_ID = SPEAKING_TOPICS[0]?.id || "smalltalk";
 
@@ -522,6 +69,8 @@
   let startOverlayWired = false;
   let debugStreamRows = new Map();
   let aiAudioUnlockWired = false;
+  let pageCleanupWired = false;
+  let pageCleanupDone = false;
 
   function formatEUR(value) {
     const v = Number(value || 0);
@@ -920,6 +469,27 @@
     return headers;
   }
 
+  function getRealtimeErrorMessage(err) {
+    const message = String(err?.message || err || "");
+    const lower = message.toLowerCase();
+    if (lower.includes("microphone") || lower.includes("permission") || lower.includes("notallowederror") || lower.includes("permissiondeniederror")) {
+      return "Microphone access is blocked. Allow microphone permission in your browser and try again.";
+    }
+    if (lower.includes("notfounderror") || lower.includes("no microphone")) {
+      return "No microphone was found. Connect a microphone and try again.";
+    }
+    if (lower.includes("webrtc") || lower.includes("rtcpeerconnection") || lower.includes("unsupported")) {
+      return "This browser does not support the realtime voice connection. Use a current Chrome, Edge, or Safari browser.";
+    }
+    if (lower.includes("budget") || lower.includes("limit") || lower.includes("blocked")) {
+      return "AI voice practice is blocked by the workspace AI budget. Ask an admin to increase the budget or wait for the next billing period.";
+    }
+    if (lower.includes("network") || lower.includes("fetch") || lower.includes("connection failed")) {
+      return "The realtime voice service could not be reached. Check your internet connection and try again.";
+    }
+    return message || "Failed to initialize AI session. Please try again.";
+  }
+
   async function fetchBudget() {
     try {
     const response = await fetch(BUDGET_ENDPOINT, {
@@ -1046,6 +616,60 @@
       credentials: "include"
     }).catch(() => {});
     conversationId = null;
+  }
+
+  function postJsonOnPageExit(url, payload = null) {
+    const body = payload ? JSON.stringify(payload) : "";
+    try {
+      fetch(url, {
+        method: "POST",
+        headers: jsonHeaders(),
+        credentials: "include",
+        keepalive: true,
+        body
+      }).catch(() => {});
+      return;
+    } catch {}
+    try {
+      if (navigator.sendBeacon) {
+        const blob = new Blob([body], { type: "application/json" });
+        if (navigator.sendBeacon(url, blob)) return;
+      }
+    } catch {}
+  }
+
+  function cleanupSessionOnPageExit() {
+    if (pageCleanupDone) return;
+    pageCleanupDone = true;
+    if (hbTimer) {
+      clearInterval(hbTimer);
+      hbTimer = null;
+    }
+    try { realtimeConnection?.stop?.(); } catch {}
+    realtimeConnection = null;
+    unwindPushToTalk();
+    setAudioUnlockVisible(false);
+    if (runtimeId) {
+      postJsonOnPageExit(RUNTIME_END_ENDPOINT, { runtime_id: runtimeId });
+      runtimeId = null;
+    }
+    if (conversationId) {
+      if (transcriptBuffer.length) {
+        const batch = transcriptBuffer.splice(0, transcriptBuffer.length);
+        clearTimeout(flushTimer);
+        flushTimer = null;
+        postJsonOnPageExit(CONV_MSG_ENDPOINT(conversationId), { messages: batch });
+      }
+      postJsonOnPageExit(CONV_END_ENDPOINT(conversationId));
+      conversationId = null;
+    }
+  }
+
+  function wirePageCleanup() {
+    if (pageCleanupWired) return;
+    pageCleanupWired = true;
+    window.addEventListener("pagehide", cleanupSessionOnPageExit, { capture: true });
+    window.addEventListener("beforeunload", cleanupSessionOnPageExit, { capture: true });
   }
 
   function applyVADConfig(conn, voice = "alloy") {
@@ -1302,18 +926,31 @@
   }
 
   async function startOpenAIRealtimeWebRTC({ ephemeralKey, onEvent, onStatus }) {
+    if (!window.RTCPeerConnection || !navigator.mediaDevices?.getUserMedia) {
+      throw new Error("Unsupported WebRTC browser");
+    }
     const pc = new RTCPeerConnection();
     const audioEl = document.createElement("audio");
     audioEl.autoplay = true;
     audioEl.playsInline = true;
     audioEl.style.display = "none";
     document.body.appendChild(audioEl);
+    let stream = null;
+    let localTrack = null;
     let resolveReady;
     let rejectReady;
     const readyPromise = new Promise((resolve, reject) => {
       resolveReady = resolve;
       rejectReady = reject;
     });
+
+    function cleanupPartialConnection() {
+      try { localTrack?.stop?.(); } catch {}
+      try { stream?.getTracks?.().forEach((track) => track.stop()); } catch {}
+      try { pc.close(); } catch {}
+      try { audioEl.remove(); } catch {}
+      setAudioUnlockVisible(false);
+    }
 
     pc.ontrack = (event) => {
       logRealtimeDebug("audio track received", {
@@ -1353,36 +990,58 @@
       rejectReady?.(err);
     };
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true
+    try {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
+      } catch (err) {
+        const name = String(err?.name || "");
+        if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+          throw new Error("Microphone permission denied");
+        }
+        if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+          throw new Error("No microphone found");
+        }
+        throw new Error("Microphone could not be started");
       }
-    });
 
-    const localTrack = stream.getAudioTracks()[0];
-    pc.addTrack(localTrack, stream);
+      localTrack = stream.getAudioTracks()[0];
+      if (!localTrack) throw new Error("No microphone found");
+      pc.addTrack(localTrack, stream);
 
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
 
-    const sdpResponse = await fetch("https://api.openai.com/v1/realtime/calls", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${ephemeralKey}`,
-        "Content-Type": "application/sdp"
-      },
-      body: offer.sdp
-    });
+      let sdpResponse;
+      try {
+        sdpResponse = await fetch("https://api.openai.com/v1/realtime/calls", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${ephemeralKey}`,
+            "Content-Type": "application/sdp"
+          },
+          body: offer.sdp
+        });
+      } catch (err) {
+        throw new Error("Network connection failed");
+      }
 
-    if (!sdpResponse.ok) {
-      const txt = await sdpResponse.text();
-      throw new Error(`Realtime SDP exchange failed: ${sdpResponse.status} ${txt}`);
+      if (!sdpResponse.ok) {
+        const txt = await sdpResponse.text().catch(() => "");
+        throw new Error(`Realtime connection failed (${sdpResponse.status}): ${txt}`);
+      }
+
+      const remoteSdp = await sdpResponse.text();
+      await pc.setRemoteDescription({ type: "answer", sdp: remoteSdp });
+    } catch (err) {
+      cleanupPartialConnection();
+      throw err;
     }
-
-    const remoteSdp = await sdpResponse.text();
-    await pc.setRemoteDescription({ type: "answer", sdp: remoteSdp });
 
     function sendEvent(payload) {
       if (dc.readyState !== "open") {
@@ -1439,10 +1098,11 @@
       return;
     }
     if (isBlocked()) {
-      showBlockedUI("Budget exhausted. Ask your admin to top it up.");
+      showBlockedUI("AI voice practice is blocked because the workspace AI budget is used up. Ask an admin to increase the AI budget or wait for the next billing period.");
       return;
     }
 
+    pageCleanupDone = false;
     startBtn.disabled = true;
     setStatus("Checking budget…");
     setActiveControlsVisible(true);
@@ -1463,11 +1123,15 @@
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
+        if ([402, 403, 429].includes(response.status) && /budget|limit|blocked/i.test(String(data?.error || data?.reason || ""))) {
+          throw new Error(data?.error || data?.reason || "Budget blocked");
+        }
         throw new Error(data?.error || `Realtime session request failed (${response.status})`);
       }
       if (data.blocked) {
         await fetchBudget();
-        showBlockedUI(data.reason || "Budget limit reached");
+        await endConversation().catch(() => {});
+        showBlockedUI(getRealtimeErrorMessage(data.reason || "Budget blocked"));
         return;
       }
       if (!data.client_secret?.value) {
@@ -1501,6 +1165,7 @@
     } catch (err) {
       console.error("Realtime session failed", err);
       await teardownRealtime();
+      await endConversation().catch(() => {});
       setStatus("Idle");
       const startBtn = $("aiStartBtn");
       if (startBtn) {
@@ -1508,7 +1173,7 @@
         startBtn.textContent = "Start speaking";
       }
       const note = $("aiBudgetNote");
-      if (note) note.textContent = "Failed to initialize AI session. Please try again.";
+      if (note) note.textContent = getRealtimeErrorMessage(err);
     }
   }
 
@@ -1592,6 +1257,7 @@
     updateBudgetUI();
     initModeOverlay();
     initStartOverlay();
+    wirePageCleanup();
   }
 
   if (document.readyState === "loading") {

@@ -17,6 +17,23 @@ const IMAP_LOGGER = {
 const ATTACHMENTS_DIR = path.join(process.cwd(), 'storage', 'email_attachments');
 const MAX_ATTACHMENT_SIZE = 15 * 1024 * 1024; // 15 MB
 const MAX_ATTACHMENTS_PER_EMAIL = 20;
+const SPAM_WORDS = [
+  'free money',
+  'winner',
+  'prize',
+  'urgent offer',
+  'click here',
+  'limited time',
+  'act now',
+  'crypto',
+  'wire transfer',
+  'guaranteed',
+  'viagra',
+  'casino',
+  'loan approved'
+];
+const SUSPICIOUS_TLDS = new Set(['zip', 'mov', 'click', 'xyz', 'top', 'gq', 'tk', 'ml']);
+const SUSPICIOUS_ATTACHMENT_EXTENSIONS = new Set(['exe', 'scr', 'bat', 'cmd', 'js', 'vbs', 'jar', 'iso']);
 
 const IMAP_CONFIG = {
   host: process.env.IONOS_IMAP_HOST,
@@ -121,6 +138,64 @@ function extractPrimaryAddress(value) {
 
 function normalizeMessageId(value = '') {
   return String(value || '').trim();
+}
+
+function classifyInboundSpam({ sender = '', subject = '', bodyText = '', bodyHtml = '', attachments = [], headers = {} } = {}) {
+  const reasons = [];
+  let score = 0;
+  const senderText = String(sender || '').toLowerCase();
+  const senderDomain = (senderText.match(/@([^>\s]+)/)?.[1] || '').replace(/[>),.;]+$/g, '');
+  const tld = senderDomain.split('.').pop() || '';
+  const plainBody = String(bodyText || bodyHtml || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  const combined = `${senderText} ${String(subject || '').toLowerCase()} ${plainBody.toLowerCase()}`;
+
+  if (!senderDomain || SUSPICIOUS_TLDS.has(tld)) {
+    score += 18;
+    reasons.push(senderDomain ? `suspicious sender domain .${tld}` : 'missing sender domain');
+  }
+  if (plainBody.length < 18) {
+    score += 18;
+    reasons.push('empty or very short body');
+  }
+  const links = combined.match(/https?:\/\/|www\./g) || [];
+  if (links.length >= 5) {
+    score += 28;
+    reasons.push('many links');
+  } else if (links.length >= 2) {
+    score += 14;
+    reasons.push('multiple links');
+  }
+  if (/(.)\1{7,}/.test(combined)) {
+    score += 12;
+    reasons.push('repeated characters');
+  }
+  const matchedWords = SPAM_WORDS.filter((word) => combined.includes(word));
+  if (matchedWords.length) {
+    score += Math.min(30, matchedWords.length * 10);
+    reasons.push(`spam terms: ${matchedWords.slice(0, 4).join(', ')}`);
+  }
+  const suspiciousAttachments = (Array.isArray(attachments) ? attachments : []).filter((att) => {
+    const filename = String(att?.filename || att?.name || '').toLowerCase();
+    const ext = filename.includes('.') ? filename.split('.').pop() : '';
+    return SUSPICIOUS_ATTACHMENT_EXTENSIONS.has(ext);
+  });
+  if (suspiciousAttachments.length) {
+    score += 25;
+    reasons.push('suspicious attachment type');
+  }
+  const authText = JSON.stringify(headers || {}).toLowerCase();
+  if (/(spf|dkim|dmarc)[^a-z0-9]+(fail|failed|none|temperror|permerror)/.test(authText)) {
+    score += 24;
+    reasons.push('mail authentication failure');
+  }
+
+  const finalScore = Math.max(0, Math.min(100, score));
+  const status = finalScore >= 70 ? 'spam' : finalScore >= 40 ? 'suspected' : 'clean';
+  return {
+    status,
+    reason: reasons.join('; '),
+    score: finalScore
+  };
 }
 
 function joinReferenceHeader(value) {
@@ -449,9 +524,10 @@ async function syncInboundEmails(dbInstance, limit) {
         text_body, html_body, in_reply_to, references_header, related_email_log_id,
         folder, attachments_json, received_at, is_read,
         mailbox_type, mailbox_owner_user_id, sender_user_id, recipient_user_id,
-        direction, visibility_scope, sender_role
+        direction, visibility_scope, sender_role,
+        spam_status, spam_reason, spam_score
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'inbox', ?, ?, 0, 'workspace', '', ?, '', 'inbound', 'workspace', ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'inbox', ?, ?, 0, 'workspace', '', ?, '', 'inbound', 'workspace', ?, ?, ?, ?)
     `);
   const existsStmt = dbInstance.prepare(`
       SELECT 1 FROM inbound_emails WHERE message_id = ? LIMIT 1
@@ -508,6 +584,14 @@ async function syncInboundEmails(dbInstance, limit) {
       const assignment = resolveInboundWorkspaceAssignment(threadLink, senderLink);
       const attachmentsMeta = await persistAttachments(parsed.attachments);
       const attachmentsJson = JSON.stringify(attachmentsMeta);
+      const spamClassification = classifyInboundSpam({
+        sender,
+        subject,
+        bodyText,
+        bodyHtml,
+        attachments: attachmentsMeta,
+        headers: parsed.headers ? Object.fromEntries(parsed.headers) : {}
+      });
       rows.push({
         uid,
         envelope: msg.envelope,
@@ -527,7 +611,10 @@ async function syncInboundEmails(dbInstance, limit) {
         senderUserId: senderLink.senderUserId,
         senderRole: senderLink.senderRole,
         routingReason: assignment.reason,
-        senderEmail: senderLink.senderEmail
+        senderEmail: senderLink.senderEmail,
+        spamStatus: spamClassification.status,
+        spamReason: spamClassification.reason,
+        spamScore: spamClassification.score
       });
     }
     rows.sort((a, b) => {
@@ -557,7 +644,10 @@ async function syncInboundEmails(dbInstance, limit) {
         row.attachmentsJson,
         row.receivedAt,
         row.senderUserId,
-        row.senderRole
+        row.senderRole,
+        row.spamStatus,
+        row.spamReason,
+        row.spamScore
       );
       await client.messageFlagsAdd(row.uid, ['\\Seen']);
     }
@@ -635,6 +725,7 @@ async function cleanupOrphanAttachments(dbInstance) {
 }
 
 module.exports = {
+  classifyInboundSpam,
   fetchLatestMessages,
   isConfigured,
   syncInboundEmails,

@@ -28,6 +28,7 @@ const ONBOARDING_ROUTE_ALLOWLIST = [
   { methods: ['GET', 'PATCH'], pattern: /^\/api\/workspaces\/[^/]+\/billing-profile$/, reason: 'billing contact setup' },
   { methods: ['POST'], pattern: /^\/api\/workspaces\/[^/]+\/logo$/, reason: 'workspace branding setup' },
   { methods: ['GET', 'POST'], pattern: /^\/api\/workspaces\/[^/]+\/email-settings$/, reason: 'communication setup' },
+  { methods: ['GET', 'PATCH'], pattern: /^\/api\/workspace\/email-settings$/, reason: 'communication setup' },
   { methods: ['POST'], pattern: /^\/api\/workspaces\/[^/]+\/email-settings\/test$/, reason: 'communication verification' },
   { methods: ['GET'], pattern: /^\/api\/workspaces\/[^/]+\/email-templates$/, reason: 'communication template list' },
   { methods: ['GET', 'PUT'], pattern: /^\/api\/workspaces\/[^/]+\/email-templates\/[^/]+$/, reason: 'communication template edit' },

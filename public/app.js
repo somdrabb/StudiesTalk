@@ -215,6 +215,7 @@ function renderUiState(container, options = {}) {
 }
 const CURRENT_CHANNEL_STORAGE_KEY = "worknest_current_channel";
 const LAST_VIEW_STORAGE_KEY = "worknest_last_view";
+const SCHOOL_MAIL_IMPORTANT_ICON_SRC = "/assets/Important.png";
 const LOGIN_LAND_HOMEWORK_FLAG = "worknest_login_land_homework_once";
 const AUTH_SESSION_HINT_STORAGE_KEY = "studiestalk_auth_session_hint";
 const LAST_ACTIVE_VIEW_KEY = "worknest_last_active_view";
@@ -1368,10 +1369,9 @@ async function restoreLastView(lastView = null) {
       }
     } else if (channelId) {
       await selectChannel(channelId);
-      if (channelId === SCHOOL_SETTINGS_CHANNEL_ID) {
+      if (isSchoolSettingsChannel(channelId)) {
         try {
-          await loadEmailSettings();
-          await loadClassSettingsSchoolDetails();
+          await loadSchoolEmailSettingsForRestore();
         } catch (err) {
           console.error("Failed to load school email settings during restore", err);
         }
@@ -3325,6 +3325,269 @@ function parseLearningMaterialsBucket(text = "") {
 
 function stripLearningMaterialsBucketMarker(text = "") {
   return String(text || "").replace(/\s*\[LM:[A-Za-z0-9_-]+\]\s*/i, "").trim();
+}
+
+function canManageLearningMaterials() {
+  return isAdminUser() || isTeacherUser();
+}
+
+function getLearningMaterialEntryTime(entry) {
+  const raw =
+    entry?.timestamp ||
+    entry?.msg?.updatedAt ||
+    entry?.msg?.updated_at ||
+    entry?.msg?.createdAt ||
+    entry?.msg?.created_at ||
+    entry?.msg?.timestamp ||
+    entry?.msg?.ts ||
+    "";
+  const date = parseChatDate(raw);
+  return date ? date.getTime() : 0;
+}
+
+let learningMaterialsPreviewState = null;
+let learningMaterialsPreviewKeyHandlerBound = false;
+
+function getLearningMaterialFileMeta(entry = {}) {
+  const file = entry.file || {};
+  const name = String(file.originalName || file.name || entry.fileName || "Document").trim();
+  const url = String(file.url || "").trim();
+  const mime = String(file.mimeType || file.type || "").trim();
+  const lowerName = name.toLowerCase();
+  const lowerMime = mime.toLowerCase();
+  const isPdf = lowerMime.includes("pdf") || lowerName.endsWith(".pdf");
+  const isImage = lowerMime.startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(lowerName);
+  const typeLabel = isPdf
+    ? "PDF"
+    : isImage
+      ? "Image"
+      : (mime ? mime.split("/").pop() || mime : (lowerName.split(".").pop() || "File")).toUpperCase();
+  const sizeValue = Number(file.size || 0);
+  return {
+    name,
+    url,
+    mime,
+    typeLabel,
+    sizeLabel: sizeValue ? humanSize(sizeValue) : "Unknown size",
+    isPdf,
+    isImage,
+    icon: iconForMime(mime, name),
+    author: String(entry.msg?.author || "School").trim(),
+    uploadedDate: entry.dateLabel || "Unknown date",
+    level: entry.bucketLabel || getLearningMaterialsBucketMeta(entry.bucketKey)?.label || "Learning Materials"
+  };
+}
+
+function closeLearningMaterialsPreviewModal() {
+  const modal = document.getElementById("learningMaterialsPreviewModal");
+  if (modal) modal.remove();
+  document.body?.classList.remove("materials-preview-open");
+  learningMaterialsPreviewState = null;
+}
+
+function ensureLearningMaterialsPreviewKeyHandler() {
+  if (learningMaterialsPreviewKeyHandlerBound || typeof document === "undefined") return;
+  learningMaterialsPreviewKeyHandlerBound = true;
+  document.addEventListener("keydown", (event) => {
+    if (!learningMaterialsPreviewState) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeLearningMaterialsPreviewModal();
+      return;
+    }
+    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      const direction = event.key === "ArrowLeft" ? -1 : 1;
+      const state = learningMaterialsPreviewState;
+      if (!state?.entries?.length) return;
+      const nextIndex = Math.max(0, Math.min(Number(state.index || 0) + direction, state.entries.length - 1));
+      if (nextIndex === state.index) return;
+      event.preventDefault();
+      state.index = nextIndex;
+      renderLearningMaterialsPreviewModal();
+    }
+  });
+}
+
+function renderLearningMaterialsPreviewBody(meta) {
+  if (meta.isImage && meta.url) {
+    return `<img class="materials-preview-image" src="${escapeHtml(meta.url)}" alt="${escapeHtml(meta.name)}" />`;
+  }
+  if (meta.isPdf && meta.url) {
+    return `<iframe class="materials-preview-frame" src="${escapeHtml(meta.url)}#view=FitH" title="${escapeHtml(meta.name)}"></iframe>`;
+  }
+  return `
+    <div class="materials-preview-unavailable">
+      <div class="materials-preview-file-icon"><i class="${escapeHtml(meta.icon)}" aria-hidden="true"></i></div>
+      <h3>Preview not available</h3>
+      <p>Download the file or open it in a new tab to view it.</p>
+    </div>
+  `;
+}
+
+function renderLearningMaterialsPreviewModal() {
+  const state = learningMaterialsPreviewState;
+  if (!state || !Array.isArray(state.entries) || !state.entries.length) return;
+  const index = Math.max(0, Math.min(Number(state.index || 0), state.entries.length - 1));
+  state.index = index;
+  const entry = state.entries[index];
+  const meta = getLearningMaterialFileMeta(entry);
+  const canManage = canManageLearningMaterials();
+  const hasPrev = index > 0;
+  const hasNext = index < state.entries.length - 1;
+  const rows = [
+    ["File name", meta.name],
+    ["File type", meta.typeLabel],
+    ["Size", meta.sizeLabel],
+    ["Uploaded by", meta.author],
+    ["Uploaded date", meta.uploadedDate],
+    ["Level/folder", meta.level],
+    ["Visibility", "Students"]
+  ];
+
+  let modal = document.getElementById("learningMaterialsPreviewModal");
+  if (!modal) {
+    modal = document.createElement("div");
+    modal.id = "learningMaterialsPreviewModal";
+    modal.className = "materials-preview-modal";
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    document.body.appendChild(modal);
+  }
+
+  modal.innerHTML = `
+    <div class="materials-preview-backdrop" data-material-preview-close="1"></div>
+    <div class="materials-preview-shell">
+      <header class="materials-preview-topbar">
+        <div class="materials-preview-title">
+          <i class="${escapeHtml(meta.icon)}" aria-hidden="true"></i>
+          <div>
+            <strong title="${escapeHtml(meta.name)}">${escapeHtml(meta.name)}</strong>
+            <span>${escapeHtml(meta.typeLabel)}</span>
+          </div>
+        </div>
+        <button type="button" class="materials-preview-close" data-material-preview-close="1" aria-label="Close preview">
+          <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+        </button>
+      </header>
+      <div class="materials-preview-body">
+        <main class="materials-preview-stage">
+          <button type="button" class="materials-preview-nav is-prev" data-material-preview-nav="prev" ${hasPrev ? "" : "disabled"} aria-label="Previous document">
+            <i class="fa-solid fa-chevron-left" aria-hidden="true"></i>
+          </button>
+          <div class="materials-preview-canvas">${renderLearningMaterialsPreviewBody(meta)}</div>
+          <button type="button" class="materials-preview-nav is-next" data-material-preview-nav="next" ${hasNext ? "" : "disabled"} aria-label="Next document">
+            <i class="fa-solid fa-chevron-right" aria-hidden="true"></i>
+          </button>
+        </main>
+        <aside class="materials-preview-meta">
+          <div class="materials-preview-meta-title">Details</div>
+          ${rows.map(([label, value]) => `
+            <div class="materials-preview-meta-row">
+              <span>${escapeHtml(label)}</span>
+              <strong title="${escapeHtml(value)}">${escapeHtml(value)}</strong>
+            </div>
+          `).join("")}
+        </aside>
+      </div>
+      <footer class="materials-preview-actions">
+        <a class="materials-preview-action" href="${escapeHtml(meta.url || "#")}" download data-material-preview-download="1">
+          <i class="fa-solid fa-download" aria-hidden="true"></i>
+          <span>Download</span>
+        </a>
+        <a class="materials-preview-action" href="${escapeHtml(meta.url || "#")}" target="_blank" rel="noopener noreferrer">
+          <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i>
+          <span>Open in new tab</span>
+        </a>
+        ${canManage ? `
+          <button type="button" class="materials-preview-action" data-material-preview-manage="1">
+            <i class="fa-solid ${meta.isPdf ? "fa-trash" : "fa-sliders"}" aria-hidden="true"></i>
+            <span>${meta.isPdf ? "Delete" : "Manage"}</span>
+          </button>
+        ` : ""}
+      </footer>
+    </div>
+  `;
+
+  document.body?.classList.add("materials-preview-open");
+
+  modal.querySelectorAll("[data-material-preview-close]").forEach((el) => {
+    el.addEventListener("click", closeLearningMaterialsPreviewModal);
+  });
+  modal.querySelectorAll("[data-material-preview-nav]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const direction = button.getAttribute("data-material-preview-nav") === "prev" ? -1 : 1;
+      learningMaterialsPreviewState.index = Math.max(0, Math.min(learningMaterialsPreviewState.index + direction, learningMaterialsPreviewState.entries.length - 1));
+      renderLearningMaterialsPreviewModal();
+    });
+  });
+  modal.querySelector("[data-material-preview-download]")?.addEventListener("click", () => {
+    if (meta.isPdf) {
+      const card = messagesContainer?.querySelector(`.pdf-card-modern[data-file-url="${CSS.escape(meta.url)}"]`);
+      recordPdfStat(meta.url, "download", card);
+    }
+  });
+  modal.querySelector("[data-material-preview-manage]")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const card = messagesContainer?.querySelector(`.pdf-card-modern[data-file-url="${CSS.escape(meta.url)}"]`);
+    if (meta.isPdf && card?.dataset.messageId) {
+      showPdfDeletePrompt(event.currentTarget, () => {
+        closeLearningMaterialsPreviewModal();
+        deleteSinglePdfCard(card, state.channelId);
+      });
+      return;
+    }
+    showToast("Use the document actions on the card to manage this file.");
+  });
+
+  if (meta.isPdf) {
+    const card = messagesContainer?.querySelector(`.pdf-card-modern[data-file-url="${CSS.escape(meta.url)}"]`);
+    recordPdfStat(meta.url, "view", card);
+  }
+}
+
+function openLearningMaterialsPreview(entries, index) {
+  ensureLearningMaterialsPreviewKeyHandler();
+  learningMaterialsPreviewState = {
+    entries: Array.isArray(entries) ? entries : [],
+    index: Number(index || 0),
+    channelId: currentChannelId
+  };
+  renderLearningMaterialsPreviewModal();
+}
+
+function isLearningMaterialsPreviewControl(target) {
+  return !!target?.closest?.("a, button, input, select, textarea, [data-action], .pdf-mini-btn, .att-actions, .att-options, .pdf-card-ellipsis");
+}
+
+function bindLearningMaterialsPreviewGrid(folderEntries = []) {
+  const grid = messagesContainer?.querySelector(".materials-files-grid");
+  if (!grid || !Array.isArray(folderEntries) || !folderEntries.length) return;
+  const cards = Array.from(grid.querySelectorAll(".pdf-card-modern[data-file-url], .att-card[data-att-url], .file-card"));
+  cards.forEach((card, index) => {
+    const entry = folderEntries[index] || {};
+    card.dataset.materialIndex = String(index);
+    if (entry.msg?.id) card.dataset.messageId = String(entry.msg.id);
+    if (currentChannelId) card.dataset.channelId = String(currentChannelId);
+    card.tabIndex = card.tabIndex >= 0 ? card.tabIndex : 0;
+    card.setAttribute("role", "button");
+    card.setAttribute("aria-label", `Preview ${getLearningMaterialFileMeta(entry).name}`);
+  });
+  const openFromCard = (event) => {
+    const card = event.target.closest(".pdf-card-modern[data-file-url], .att-card[data-att-url], .file-card");
+    if (!card || !grid.contains(card)) return;
+    if (isLearningMaterialsPreviewControl(event.target)) return;
+    const index = Number(card.dataset.materialIndex || 0);
+    if (!folderEntries[index]) return;
+    event.preventDefault();
+    event.stopPropagation();
+    openLearningMaterialsPreview(folderEntries, index);
+  };
+  grid.addEventListener("click", openFromCard, true);
+  grid.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    openFromCard(event);
+  }, true);
 }
 
 // ===================== RICH TEXT COMPOSER =====================
@@ -7518,23 +7781,9 @@ function isNavigationTokenCurrent(token, panelId) {
   return !!(panel && !panel.classList.contains("hidden"));
 }
 
-function setEmailHeaderChromeVisible(visible) {
-  const nextVisible = Boolean(visible);
-  if (schoolEmailHeaderActions) {
-    schoolEmailHeaderActions.classList.toggle("hidden", !nextVisible);
-    schoolEmailHeaderActions.setAttribute("aria-hidden", nextVisible ? "false" : "true");
-  }
-  if (schoolSettingsHeaderToggle) {
-    schoolSettingsHeaderToggle.classList.toggle("hidden", !nextVisible);
-    schoolSettingsHeaderToggle.setAttribute("aria-hidden", nextVisible ? "false" : "true");
-  }
-}
 
 function clearSectionHeaderState() {
-  restoreSchoolEmailUiToChatHeader();
-  setEmailHeaderChromeVisible(false);
-  if (emailPanelHeaderActions) emailPanelHeaderActions.replaceChildren();
-  if (emailPanelToggle) emailPanelToggle.replaceChildren();
+  clearSchoolEmailHeaderMounts();
   const chatHeaderEl = document.getElementById("chatHeader");
   if (chatHeaderEl) {
     chatHeaderEl.classList.remove(
@@ -8267,36 +8516,6 @@ function openLivePanel() {
 function openAnalyticsPanel() {
   const token = showPanel("analyticsPanel");
   renderAnalyticsPanel(token);
-}
-
-async function openEmailPanel() {
-  if (!canAccessSchoolMailbox()) {
-    if (!sessionUser) {
-      return;
-    }
-    showToast("Email is available for school admins and students only.", "info");
-    return;
-  }
-  const token = showPanel("emailPanel");
-  closeAdminDock();
-  setSuperAdminLanding(false);
-  mountSchoolEmailUiToEmailPanel();
-  updateSesMailboxPermissionsUI();
-  setSesSettingsView(getDefaultSesSettingsView());
-  schoolEmailSettingsPage?.classList.remove("hidden");
-  schoolEmailSettingsPage?.setAttribute("aria-hidden", "false");
-  if (canManageSchoolMailbox()) {
-    try {
-      await loadEmailSettings();
-      if (!isNavigationTokenCurrent(token, "emailPanel")) return;
-      await loadClassSettingsSchoolDetails();
-      if (!isNavigationTokenCurrent(token, "emailPanel")) return;
-    } catch (err) {
-      console.error("Failed to load email settings", err);
-      if (!isNavigationTokenCurrent(token, "emailPanel")) return;
-      showToast("Could not load settings");
-    }
-  }
 }
 
 async function openAdminProfilePanel() {
@@ -9757,794 +9976,6 @@ async function activateOnboardingWorkspace() {
   await hydrateWorkspaceAfterOnboardingIfNeeded(true);
   renderWorkspaceOnboarding(workspaceOnboarding);
   showToast("Workspace activated.");
-}
-
-function previewEmailTemplate() {
-  if (!sesPreviewBtn) return;
-  const logoUrl = document.getElementById("sesLogoPreview")?.src || "";
-  const schoolName = sesSchoolName?.value || "StudisNest School";
-  const subjectPrefix = sesSubjectPrefix?.value || "";
-  const subject = subjectPrefix ? `${subjectPrefix} Live class notification` : "Live class notification";
-  const footer = sesFooter?.value || "";
-  const signature = sesSignatureHtml?.value || `<p>Kind regards,<br>${schoolName}</p>`;
-
-  const html = `
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <title>${subject}</title>
-      </head>
-      <body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;line-height:1.5;color:#0f172a;padding:24px;">
-        ${logoUrl ? `<img src="${logoUrl}" alt="School logo" style="width:80px;height:80px;object-fit:contain;border-radius:16px;margin-bottom:18px;" />` : ""}
-        <h2 style="margin-bottom:4px;">${subject}</h2>
-        <p style="margin-bottom:8px;">School: <strong>${schoolName}</strong></p>
-        <p style="margin-bottom:8px;">Link: <a href="#">https://yourdomain.com/live-session</a></p>
-        <p style="margin-bottom:8px;">When: Tomorrow, 4:00 PM</p>
-        <div style="margin-top:16px;">${footer.replace(/\n/g, "<br>")}</div>
-        <div style="margin-top:24px;">${signature}</div>
-      </body>
-    </html>
-  `.trim();
-
-  const previewWindow = window.open("", "_blank", "width=760,height=700,menubar=no");
-  if (!previewWindow) {
-    showToast("Allow pop-ups to preview the email");
-    return;
-  }
-  previewWindow.document.open();
-  previewWindow.document.write(html);
-  previewWindow.document.close();
-}
-
-const SES_HISTORY_LIMIT = 35;
-const SES_LAST_TEST_KEY = "worknest_ses_last_test_sent";
-// Keep saved subject prefix (DB) separate from the test-email subject input.
-let sesSavedSubjectPrefix = "";
-
-async function loadEmailSettings() {
-  const ws = await resolveProfileWorkspaceId();
-  const s = await fetchJSON(`/api/workspaces/${encodeURIComponent(ws)}/email-settings`, {
-    headers: {}
-  });
-
-  const isEmpty =
-    !s.brand_school_name &&
-    !s.reply_to_email &&
-    !s.footer_text &&
-    !s.subject_prefix &&
-    !s.logo_url &&
-    !s.signature_html;
-
-  if (isEmpty) {
-    const schoolName = currentSchoolNameFallback();
-    s.brand_school_name = schoolName;
-    s.reply_to_email = sessionUser?.email || "";
-    s.subject_prefix = schoolName ? `[${schoolName}]` : "";
-    s.footer_text = `Kind regards,\n${schoolName || "School Team"}`;
-    s.logo_url = currentSchoolLogoFallback();
-  }
-
-  sesEnabled.checked = !!s.enabled;
-  sesSchoolName.value = s.brand_school_name || "";
-  sesReplyTo.value = s.reply_to_email || "";
-  sesFooter.value = s.footer_text || "";
-  // Save DB value, but DON'T force it into the test subject input
-sesSavedSubjectPrefix = String(s.subject_prefix || "");
-
-// Test email subject should start empty every time (even after refresh)
-if (sesSubjectPrefix) {
-  sesSubjectPrefix.value = "";
-  sesSubjectPrefix.placeholder = sesSavedSubjectPrefix || "Subject";
-}
-
-  if (sesSignatureHtml) {
-    sesSignatureHtml.value = s.signature_html || "";
-  }
-
-  sesLogoUrlValue = s.logo_url || "";
-  if (sesLogoPreview) {
-    if (sesLogoUrlValue) {
-      sesLogoPreview.src = sesLogoUrlValue;
-      sesLogoPreview.style.display = "block";
-    } else {
-      sesLogoPreview.style.display = "none";
-    }
-  }
-  sesStatus.textContent = "";
-  const workspaceId = getProfileWorkspaceId();
-  if (workspaceId) {
-    try {
-      sesWorkspaceProfileCache = await fetchWorkspaceProfile(workspaceId);
-    } catch (err) {
-      console.error("Failed to load workspace profile for email settings side card", err);
-      sesWorkspaceProfileCache = null;
-    }
-  } else {
-    sesWorkspaceProfileCache = null;
-  }
-  sesUpdateSideCard();
-
-  if (sesRegistrationDetails) {
-    sesRegistrationDetails.value = (sesWorkspaceProfileCache?.registrationDetails || "");
-  }
-
-// --- Always start test UI empty on open/refresh ---
-clearSesTestFields({ clearBody: true });
-await updateSesBodyChrome().catch(() => {});
-await loadSesEmailLogs().catch((err) => {
-  console.warn("Failed to load email history", err);
-});
-
-}
-
-function formatSesHistoryTimestamp(value) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleString();
-}
-
-function stripSesHtml(value) {
-  if (!value) return "";
-  return String(value)
-    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
-    .replace(/<\/?[^>]+(>|$)/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function formatSesHistoryRecipient(log) {
-  return log.toName || log.toEmail || "Unknown recipient";
-}
-
-function formatSenderRole(role) {
-  const normalized = String(role || "admin").trim();
-  if (!normalized) return "Admin";
-  return normalized
-    .split("_")
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1).toLowerCase())
-    .join(" ");
-}
-
-function renderSesEmailHistory() {
-  if (!sesHistoryList || !sesHistoryEmpty) return;
-  sesHistoryList.innerHTML = "";
-  if (!sesEmailLogs || !sesEmailLogs.length) {
-    sesHistoryEmpty.classList.remove("hidden");
-    return;
-  }
-  sesHistoryEmpty.classList.add("hidden");
-
-  sesEmailLogs.forEach((log) => {
-    const card = document.createElement("button");
-    card.type = "button";
-    card.className = "ses-history-card";
-    card.dataset.logId = log.id || "";
-    if (log.id === sesActiveHistoryLogId) {
-      card.classList.add("is-active");
-    }
-    const nameEl = document.createElement("div");
-    nameEl.className = "ses-history-name";
-    nameEl.textContent = formatSesHistoryRecipient(log);
-
-    const metaEl = document.createElement("div");
-    metaEl.className = "ses-history-meta";
-    metaEl.textContent = formatSesHistoryTimestamp(log.createdAt);
-
-    const subjectEl = document.createElement("div");
-    subjectEl.className = "ses-history-subject";
-    subjectEl.textContent = log.subject || "No subject";
-
-    const header = document.createElement("div");
-    header.className = "ses-history-card-header";
-    header.appendChild(nameEl);
-    const badge = document.createElement("span");
-    badge.className = "ses-history-badge";
-    badge.textContent = formatSenderRole(log.senderRole);
-    header.appendChild(badge);
-    card.appendChild(header);
-    card.appendChild(metaEl);
-    card.appendChild(subjectEl);
-
-    const previewSection = document.createElement("div");
-    previewSection.className = "ses-history-preview";
-    previewSection.innerHTML = `
-      <div class="ses-history-preview-inner">
-        <div class="ses-history-preview-title">Preview</div>
-        <div class="ses-history-preview-recipient"></div>
-        <div class="ses-history-preview-subject"></div>
-        <div class="ses-history-preview-body"></div>
-      </div>
-    `;
-    card.appendChild(previewSection);
-
-    card.addEventListener("click", (event) => {
-      event.stopPropagation();
-      if (sesActiveHistoryLogId === log.id) {
-        clearSesHistorySelection();
-        return;
-      }
-      loadSesEmailLogPreview(log.id);
-    });
-    sesHistoryList.appendChild(card);
-  });
-}
-
-function formatInboxSnippet(value, length = 200) {
-  const normalized = String(value || "")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!normalized) return "";
-  if (normalized.length <= length) return normalized;
-  return `${normalized.slice(0, length).trim()}…`;
-}
-
-function isInboxMessageUnread(message) {
-  if (!message) return false;
-  if (message._wnReadOverride) return false;
-  if (typeof message.is_read === "boolean") return !message.is_read;
-  if (typeof message.read === "boolean") return !message.read;
-  if (typeof message.isUnread === "boolean") return message.isUnread;
-  if (typeof message.unread === "boolean") return message.unread;
-  if (typeof message.is_unread === "boolean") return message.is_unread;
-  if (typeof message.status === "string") return message.status.toLowerCase() !== "read";
-  return false;
-}
-
-function renderSesInboxView() {
-  if (!sesInboxPanel || !sesInboxPlaceholder || !sesInboxCount || !sesInboxList) return;
-  const hasMessages = Array.isArray(sesInboxMessages) && sesInboxMessages.length > 0;
-  sesInboxPlaceholder.classList.toggle("hidden", hasMessages);
-  const detailVisible = Boolean(sesInboxDetailVisible && sesInboxActiveMessage);
-  if (sesInboxDetail) {
-    sesInboxDetail.classList.toggle("hidden", !detailVisible);
-  }
-  sesInboxList.classList.toggle("hidden", detailVisible || !hasMessages);
-  const count = hasMessages ? sesInboxMessages.length : 0;
-  sesInboxCount.textContent = String(count);
-  if (sesInboxMarkAllBtn) {
-    sesInboxMarkAllBtn.disabled = !hasMessages;
-  }
-
-  sesInboxList.innerHTML = "";
-  if (!hasMessages) {
-    return;
-  }
-
-  sesInboxMessages.forEach((message) => {
-    const rawSender = message.sender || message.from || "Unknown sender";
-    const senderName = getInboxDisplayName(rawSender);
-    const sender = escapeHtml(senderName);
-    const emailLine = escapeHtml(getInboxSenderEmail(message));
-    const subject = escapeHtml(message.subject || "No Subject");
-    const avatarLetter = escapeHtml((senderName.trim().charAt(0) || "I").toUpperCase());
-    const receivedDate = formatSesHistoryTimestamp(message.received_at || message.receivedAt);
-    const attachments = Array.isArray(message.attachments) ? message.attachments : [];
-    const attachmentCount = attachments.length;
-    const attachmentsTotalBytes =
-      Number(message.totalAttachmentBytes || 0) || attachments.reduce((sum, att) => sum + (Number(att?.size) || 0), 0);
-    const tooltipText = attachmentCount
-      ? `${attachmentCount} attachment${attachmentCount === 1 ? '' : 's'} • ${humanSize(attachmentsTotalBytes)}`
-      : '';
-    const chipsHtml = attachments
-      .slice(0, 2)
-      .map((att) => {
-        const label = `${att.filename || 'Attachment'} • ${humanSize(att.size || 0)}`;
-        const url = getInboxViewUrl(message, att) || getInboxDownloadUrl(message, att);
-        if (!url) return '';
-        return `<a class="att-chip" href="${url}" target="_blank" rel="noopener noreferrer">${escapeHtml(
-          label
-        )}</a>`;
-      })
-      .filter(Boolean)
-      .join('');
-    const moreCount = Math.max(0, attachmentCount - 2);
-    const moreHtml = moreCount
-      ? `<span class="att-more" aria-label="${moreCount} more attachments">+${moreCount} more</span>`
-      : '';
-    const attachmentsContent = `${chipsHtml}${moreHtml}`;
-    const attachmentsBlock = attachmentCount
-      ? `<div class="row-attachments" ${tooltipText ? `title="${escapeHtml(tooltipText)}"` : ''}>${
-          attachmentsContent || '<span class="att-more">Attachments</span>'
-        }</div>`
-      : '';
-    const rowActionsHtml = `
-      <div class="row-actions" aria-label="Inbox row actions">
-        <button type="button" class="row-action-btn" data-action="mark" title="Mark read/unread">
-          <i class="fa-solid fa-circle-check" aria-hidden="true"></i>
-        </button>
-        <button type="button" class="row-action-btn" data-action="delete" title="Delete">
-          <i class="fa-regular fa-trash-can" aria-hidden="true"></i>
-        </button>
-        <button type="button" class="row-action-btn" data-action="star" title="Star message">
-          <i class="fa-regular fa-star" aria-hidden="true"></i>
-        </button>
-      </div>
-    `;
-    const row = document.createElement("div");
-    const classes = ["wn-mail-row"];
-    if (isInboxMessageUnread(message)) {
-      classes.push("wn-unread");
-    }
-    row.className = classes.join(" ");
-    row.dataset.id = message.id || message.messageId || message.message_id || "";
-
-    row.innerHTML = `
-      <div class="wn-mail-left">
-        <div class="wn-avatar">${avatarLetter}</div>
-        <div class="wn-mail-main">
-          <div class="wn-mail-info">
-            <span class="wn-from-col">${sender}</span>
-            <span class="wn-subject-col">${subject}</span>
-            ${emailLine ? `<span class="wn-email-col">${emailLine}</span>` : '<span class="wn-email-col"></span>'}
-          </div>
-          ${attachmentsBlock}
-        </div>
-      </div>
-      ${rowActionsHtml}
-      <div class="wn-mail-right">
-        <span class="wn-date">${receivedDate}</span>
-      </div>
-    `;
-
-    row.querySelectorAll(".row-action-btn").forEach((button) => {
-      button.addEventListener("click", (event) => {
-        event.stopPropagation();
-        event.preventDefault();
-        const action = button.dataset.action || "action";
-        showToast(`${action.charAt(0).toUpperCase() + action.slice(1)} coming soon`, "info");
-      });
-    });
-    row.addEventListener("click", () => showSesInboxDetail(message));
-    sesInboxList.appendChild(row);
-  });
-}
-
-function getInboxDisplayName(value) {
-  if (!value) return "Unknown sender";
-  if (typeof value === "string") {
-    const split = value.split("<")[0].trim();
-    return split || value;
-  }
-  if (typeof value === "object") {
-    const candidate = value.name || value.displayName || value.email || "";
-    if (candidate) {
-      return getInboxDisplayName(String(candidate));
-    }
-  }
-  return "Unknown sender";
-}
-
-function getInboxSenderEmail(message) {
-  if (!message) return "";
-  const candidates = [
-    message.senderEmail,
-    message.fromEmail,
-    message.email,
-    message.from,
-    message.sender,
-    message.replyTo
-  ];
-  for (const raw of candidates) {
-    if (!raw || typeof raw !== "string") continue;
-    const match = raw.match(/<([^>]+)>/);
-    const candidate = match ? match[1] : raw;
-    if (/@/.test(candidate)) {
-      return candidate.trim();
-    }
-  }
-  return "";
-}
-
-const INLINE_PREVIEW_MIMES_UI = new Set([
-  "application/pdf",
-  "image/png",
-  "image/jpeg",
-  "image/jpg",
-  "image/webp"
-]);
-
-function normalizeMimeForAttachments(value = "") {
-  return String(value || "")
-    .split(";")[0]
-    .trim()
-    .toLowerCase();
-}
-
-function isInlinePreviewAvailable(attachment) {
-  if (!attachment) return false;
-  const type = normalizeMimeForAttachments(attachment.contentType);
-  return INLINE_PREVIEW_MIMES_UI.has(type);
-}
-
-function resolveInboxEmailId(message) {
-  if (!message) return "";
-  return String(message.id || message.emailId || message.message_id || message.messageId || "").trim();
-}
-
-function buildInboxAttachmentBaseUrl(message, attachment) {
-  const emailId = resolveInboxEmailId(message);
-  const attachmentId = String(attachment?.id || "").trim();
-  if (!emailId || !attachmentId) return "";
-  return `${API_BASE}/api/admin/inbox/${encodeURIComponent(emailId)}/attachments/${encodeURIComponent(attachmentId)}`;
-}
-
-function getInboxDownloadUrl(message, attachment) {
-  return buildInboxAttachmentBaseUrl(message, attachment);
-}
-
-function getInboxViewUrl(message, attachment) {
-  if (!isInlinePreviewAvailable(attachment)) return "";
-  const base = buildInboxAttachmentBaseUrl(message, attachment);
-  if (!base) return "";
-  return `${base}/view`;
-}
-
-function renderSesInboxDetailAttachments(message) {
-  if (!sesInboxDetailAttachments) return;
-  const attachments = Array.isArray(message?.attachments) ? message.attachments : [];
-  if (!attachments.length) {
-    sesInboxDetailAttachments.classList.add("hidden");
-    sesInboxDetailAttachments.innerHTML = "";
-    return;
-  }
-  const attachmentsHtml = attachments
-    .map((att) => {
-      if (!att || !att.id) return "";
-      const name = escapeHtml(String(att.filename || "Attachment"));
-      const sizeLabel = humanSize(att.size || 0);
-      const previewUrl = getInboxViewUrl(message, att);
-      const downloadUrl = getInboxDownloadUrl(message, att);
-      const previewButton = previewUrl
-        ? `<a class="wn-detail-attachment-button" href="${previewUrl}" target="_blank" rel="noopener noreferrer">
-            Preview
-          </a>`
-        : `<span class="wn-detail-attachment-button wn-detail-attachment-button--disabled">Preview</span>`;
-      const downloadButton = downloadUrl
-        ? `<a class="wn-detail-attachment-button" href="${downloadUrl}" target="_blank" rel="noopener noreferrer" download>
-            Download
-          </a>`
-        : "";
-      return `<div class="wn-detail-attachment-row">
-        <div class="wn-detail-attachment-title">
-          <span>${name}</span>
-          <span class="wn-detail-attachment-size">${sizeLabel}</span>
-        </div>
-        <div class="wn-detail-attachment-actions">
-          ${previewButton}
-          ${downloadButton}
-        </div>
-      </div>`;
-    })
-    .filter(Boolean)
-    .join("");
-  if (!attachmentsHtml) {
-    sesInboxDetailAttachments.classList.add("hidden");
-    sesInboxDetailAttachments.innerHTML = "";
-    return;
-  }
-  sesInboxDetailAttachments.classList.remove("hidden");
-  sesInboxDetailAttachments.innerHTML = `
-    <div class="wn-detail-attachments-title">
-      <i class="fa-solid fa-paperclip" aria-hidden="true"></i>
-      Attachments (${attachments.length})
-    </div>
-    <div class="wn-detail-attachments-list">
-      ${attachmentsHtml}
-    </div>
-  `;
-}
-
-function replaceCidSources(html, message) {
-  if (!html) return "";
-  const attachments = Array.isArray(message?.attachments) ? message.attachments : [];
-  if (!attachments.length) return html;
-  return html.replace(/src\s*=\s*(['"])cid:([^'"]+)\1/gi, (match, quote, cid) => {
-    const normalizedCid = String(cid || "").replace(/^<|>$/g, "").trim();
-    if (!normalizedCid) return match;
-    const attachment = attachments.find((att) => {
-      const candidate = String(att.contentId || "").replace(/^<|>$/g, "").trim();
-      return candidate && candidate === normalizedCid;
-    });
-    if (!attachment) return match;
-    const previewUrl = getInboxViewUrl(message, attachment);
-    if (!previewUrl) return match;
-    return `src=${quote}${previewUrl}${quote}`;
-  });
-}
-
-function populateSesInboxDetail(message) {
-  if (!message || !sesInboxDetail) return;
-  const senderName = getInboxDisplayName(message.sender || message.from || "Unknown sender");
-  const avatarLetter = (senderName.trim().charAt(0) || "I").toUpperCase();
-  const emailAddress = getInboxSenderEmail(message);
-  const subject = message.subject || "No subject";
-  const bodyText =
-    message.text_body ||
-    message.bodyText ||
-    stripSesHtml(message.html_body || message.bodyHtml || message.snippet || "");
-  const htmlSource = message.html_body || message.bodyHtml || "";
-  let renderedBody = "";
-  if (htmlSource) {
-    renderedBody = sanitizeMessageHTML(replaceCidSources(htmlSource, message));
-  } else if (bodyText) {
-    renderedBody = escapeHtml(bodyText).replace(/\n/g, "<br>");
-  }
-  if (sesInboxDetailAvatar) sesInboxDetailAvatar.textContent = avatarLetter;
-  if (sesInboxDetailName) sesInboxDetailName.textContent = senderName;
-  if (sesInboxDetailEmail) sesInboxDetailEmail.textContent = emailAddress;
-  if (sesInboxDetailSubject) sesInboxDetailSubject.textContent = subject;
-  if (sesInboxDetail) {
-    sesInboxDetail.dataset.emailId = String(message.id || "");
-  }
-  if (sesInboxDetailBody) {
-    sesInboxDetailBody.innerHTML = renderedBody || "No message content captured.";
-  }
-  const timestamp = formatSesHistoryTimestamp(message.received_at || message.receivedAt || message.ts || message.date);
-  if (sesInboxDetailDate) sesInboxDetailDate.textContent = timestamp;
-  const senderRaw =
-    message.from_name ||
-    (typeof message.sender === "string"
-      ? message.sender
-      : message.sender?.name || message.sender?.displayName || message.sender?.email || message.from);
-  const friendlyName = getInboxDisplayName(senderRaw || senderName);
-  updateReplyGreeting(friendlyName);
-  renderSesInboxDetailAttachments(message);
-}
-
-function showSesInboxDetail(message) {
-  if (!message) return;
-  sesInboxActiveMessage = message;
-  sesInboxDetailVisible = true;
-  populateSesInboxDetail(message);
-  renderSesInboxView();
-}
-
-function closeSesInboxDetail() {
-  sesInboxDetailVisible = false;
-  sesInboxActiveMessage = null;
-  renderSesInboxView();
-}
-
-function markAllSesInboxRead() {
-  if (!Array.isArray(sesInboxMessages) || !sesInboxMessages.length) return;
-  sesInboxMessages = sesInboxMessages.map((msg) => ({ ...msg, _wnReadOverride: true }));
-  renderSesInboxView();
-}
-
-function clearSesHistorySelection() {
-  if (!sesHistoryList) return;
-  sesHistoryList
-    .querySelectorAll(".ses-history-card.is-active")
-    .forEach((card) => {
-      card.classList.remove("is-active");
-      const preview = card.querySelector(".ses-history-preview");
-    });
-  sesActiveHistoryLogId = null;
-  hideSesEmailPreview();
-  renderSesEmailHistory();
-}
-
-async function loadSesEmailLogs() {
-  const ws = await resolveProfileWorkspaceId();
-  if (!ws) return;
-  const endpoint = `/api/workspaces/${encodeURIComponent(ws)}/email-logs?limit=${SES_HISTORY_LIMIT}`;
-  try {
-    const res = await fetchJSON(endpoint, { headers: {} });
-    sesEmailLogs = Array.isArray(res?.logs) ? res.logs : [];
-    if (sesActiveHistoryLogId && !sesEmailLogs.some((log) => log.id === sesActiveHistoryLogId)) {
-      sesActiveHistoryLogId = null;
-      hideSesEmailPreview();
-    }
-    renderSesEmailHistory();
-    if (sesActiveHistoryLogId) {
-      const activeLog = sesEmailLogs.find((log) => log.id === sesActiveHistoryLogId);
-      if (activeLog) {
-        populateSesHistoryCardPreview(activeLog);
-      }
-    }
-  } catch (err) {
-    console.error("Failed to refresh email history", err);
-    throw err;
-  }
-}
-
-async function loadSesEmailLogPreview(logId) {
-  if (!logId) return;
-  const ws = await resolveProfileWorkspaceId();
-  if (!ws) return;
-  const endpoint = `/api/workspaces/${encodeURIComponent(ws)}/email-logs/${encodeURIComponent(logId)}`;
-  try {
-    const payload = await fetchJSON(endpoint, { headers: {} });
-    const log = payload?.log;
-    if (!log) {
-      throw new Error("Log payload missing");
-    }
-    sesActiveHistoryLogId = log.id;
-    populateSesHistoryCardPreview(log);
-  } catch (err) {
-    console.error("Failed to load SES log preview", err);
-    showToast("Could not load email preview");
-  }
-}
-
-async function loadSesInboxMessages(options = {}) {
-  if (options?.folder) {
-    sesCurrentMailboxFolder = String(options.folder).trim().toLowerCase() === "trash" ? "trash" : "inbox";
-  }
-  if (window.refreshGmailishInbox) {
-    return window.refreshGmailishInbox({
-      folder: sesCurrentMailboxFolder,
-      sync: !!options?.sync
-    });
-  }
-  return;
-}
-
-function populateSesHistoryCardPreview(log) {
-  if (!log || !sesHistoryList) return;
-  const card = sesHistoryList.querySelector(`[data-log-id="${log.id}"]`);
-  if (!card) return;
-  sesHistoryList
-    .querySelectorAll(".ses-history-card.is-active")
-    .forEach((el) => {
-      if (el !== card) {
-        el.classList.remove("is-active");
-        const otherPreview = el.querySelector(".ses-history-preview");
-        if (otherPreview) otherPreview.classList.add("hidden");
-      }
-    });
-  card.classList.add("is-active");
-  const preview = card.querySelector(".ses-history-preview");
-  if (!preview) return;
-  const recipientEl = preview.querySelector(".ses-history-preview-recipient");
-  const subjectEl = preview.querySelector(".ses-history-preview-subject");
-  const bodyEl = preview.querySelector(".ses-history-preview-body");
-  const recipient = formatSesHistoryRecipient(log);
-  if (recipientEl) recipientEl.textContent = recipient ? `To: ${recipient}` : "";
-  if (subjectEl) subjectEl.textContent = log.subject || "No subject";
-  if (bodyEl) {
-    const previewBody = log.bodyText || stripSesHtml(log.bodyHtml);
-    bodyEl.textContent = previewBody || "No content captured.";
-  }
-}
-
-function markTestEmailSent() {
-  try {
-    localStorage.setItem(SES_LAST_TEST_KEY, Date.now().toString());
-  } catch (_err) {
-    /* ignore */
-  }
-}
-
-
-function updateClassSettingsSchoolDetails(data = {}) {
-  if (!classSchoolDetails) return;
-  const name = data.workspaceName || currentSchoolNameFallback() || "School details pending";
-  const street = (data.street || "").trim();
-  const house = (data.houseNumber || "").trim();
-  const postal = (data.postalCode || "").trim();
-  const city = (data.city || "").trim();
-  const country = (data.country || "").trim() || (data.state || "").trim();
-
-  if (classSchoolDetailName) {
-    classSchoolDetailName.textContent = name;
-  }
-  if (classSchoolDetailAddress) {
-    const addressLine = [street, house].filter(Boolean).join(" ").trim() || "Address not set";
-    classSchoolDetailAddress.textContent = addressLine;
-  }
-  if (classSchoolDetailPostal) {
-    const postalLine = [postal, city].filter(Boolean).join(" ").trim() || "Postal code unavailable";
-    classSchoolDetailPostal.textContent = postalLine;
-  }
-  if (classSchoolDetailCountry) {
-    classSchoolDetailCountry.textContent = country || "Country not set";
-  }
-}
-
-async function loadClassSettingsSchoolDetails(force = false) {
-  const workspaceId = getProfileWorkspaceId();
-  if (!workspaceId) {
-    updateClassSettingsSchoolDetails();
-    return;
-  }
-  try {
-    const profile = await fetchWorkspaceProfile(workspaceId, { force });
-    updateClassSettingsSchoolDetails(profile || {});
-  } catch (err) {
-    console.error("Failed to load school profile details for class settings", err);
-    updateClassSettingsSchoolDetails();
-  }
-}
-
-function fileToDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
-async function uploadSchoolLogo(file) {
-  const ws = await resolveProfileWorkspaceId();
-  const dataUrl = await fileToDataUrl(file);
-
-  const resp = await fetchJSON(`/api/workspaces/${encodeURIComponent(ws)}/logo`, {
-    method: "POST",
-    headers: {},
-    body: JSON.stringify({ dataUrl })
-  });
-
-  sesLogoUrlValue = resp.logo_url || "";
-  if (sesLogoPreview) {
-    if (sesLogoUrlValue) {
-      sesLogoPreview.src = sesLogoUrlValue;
-      sesLogoPreview.style.display = "block";
-    } else {
-      sesLogoPreview.style.display = "none";
-    }
-  }
-}
-
-async function saveEmailSettings() {
-  const ws = await resolveProfileWorkspaceId();
-  if (!sesStatus) return;
-  sesStatus.textContent = "Saving…";
-  const manualBodyText = sesBodyText?.value || "";
-  await fetchJSON(`/api/workspaces/${encodeURIComponent(ws)}/email-settings`, {
-    method: "POST",
-    headers: {},
-    body: JSON.stringify({
-      enabled: sesEnabled.checked ? 1 : 0,
-      brand_school_name: sesSchoolName.value || "",
-      reply_to_email: sesReplyTo.value || "",
-      footer_text: sesFooter.value || "",
-      subject_prefix: sesSubjectPrefix.value || "",
-      manual_body_text: manualBodyText,
-      logo_url: sesLogoUrlValue || "",
-      signature_html: sesSignatureHtml?.value || ""
-    })
-  });
-  sesStatus.textContent = "Saved ✅";
-  setTimeout(() => {
-    if (sesStatus) sesStatus.textContent = "";
-  }, 1200);
-}
-
-async function sendTestEmail() {
-  const ws = await resolveProfileWorkspaceId();
-  if (!sesStatus) return;
-  const to = (sesTestTo.value || "").trim();
-  if (!to.includes("@")) {
-    return showToast("Enter a valid test email");
-  }
-
-  const finalBody = buildFinalTestEmailBody();
-
-  sesStatus.textContent = "Sending test email…";
-  try {
-    await fetchJSON(`/api/workspaces/${encodeURIComponent(ws)}/email-settings/test`, {
-      method: "POST",
-      headers: {},
-      body: JSON.stringify({
-        to,
-        manual_body_text: finalBody,
-        subject: (sesSubjectPrefix?.value || "").trim()
-      })
-    });
-    sesStatus.textContent = "Test email sent ✅";
-    clearSesTestFields({ clearBody: true });
-    markTestEmailSent();
-    sesActiveHistoryLogId = null;
-    hideSesEmailPreview();
-    await loadSesEmailLogs().catch((err) => {
-      console.warn("Failed to refresh email history", err);
-    });
-  } catch (e) {
-    sesStatus.textContent = `Test failed: ${String(e.message || e)}`;
-  }
 }
 
 function isFilesPanelActive() {
@@ -12165,37 +11596,7 @@ async function openCurrentUserProfile() {
   await openUserProfile(name, avatarUrl, sessionUser || null);
 }
 
-function mountSchoolEmailUiToEmailPanel() {
-  if (!schoolEmailSettingsPage || !emailPanelBody) return;
-  if (schoolEmailHeaderActions && schoolEmailHeaderActions.parentElement !== emailPanelHeaderActions) {
-    emailPanelHeaderActions.replaceChildren(schoolEmailHeaderActions);
-  }
-  if (schoolSettingsHeaderToggle && schoolSettingsHeaderToggle.parentElement !== emailPanelToggle) {
-    emailPanelToggle.replaceChildren(schoolSettingsHeaderToggle);
-  }
-  if (schoolEmailSettingsPage.parentElement !== emailPanelBody) {
-    emailPanelBody.replaceChildren(schoolEmailSettingsPage);
-  }
-  document.body.classList.remove("no-school-scroll");
-  setSchoolEmailHeaderMode(false);
-  setEmailHeaderChromeVisible(true);
-}
 
-function restoreSchoolEmailUiToChatHeader() {
-  if (schoolEmailHeaderActions && schoolEmailHeaderActions.parentElement !== schoolEmailHeaderActionsHome) {
-    schoolEmailHeaderActionsHome?.appendChild(schoolEmailHeaderActions);
-  }
-  if (schoolSettingsHeaderToggle && schoolSettingsHeaderToggle.parentElement !== schoolSettingsHeaderToggleHome) {
-    schoolSettingsHeaderToggleHome?.appendChild(schoolSettingsHeaderToggle);
-  }
-  if (schoolEmailSettingsPage && schoolEmailSettingsPage.parentElement !== schoolEmailSettingsPageHome) {
-    schoolEmailSettingsPageHome?.appendChild(schoolEmailSettingsPage);
-  }
-  schoolEmailSettingsPage?.classList.add("hidden");
-  schoolEmailSettingsPage?.setAttribute("aria-hidden", "true");
-  document.body.classList.remove("no-school-scroll");
-  setSchoolEmailHeaderMode(false);
-}
 
 function mountUserProfileCardToAdminPanel() {
   if (!adminPanelContent || !userProfileInnerCard || !userProfileModal) return;
@@ -14935,32 +14336,7 @@ function attachLiveEvents() {
   });
 }
 
-  [sesClose, sesCancel].forEach((btn) => {
-    if (btn) btn.addEventListener("click", closeSchoolSettingsView);
-  });
-  if (sesSave) sesSave.addEventListener("click", saveEmailSettings);
-  if (sesTestBtn) sesTestBtn.addEventListener("click", sendTestEmail);
-  if (sesPreviewBtn) sesPreviewBtn.addEventListener("click", previewEmailTemplate);
-  if (sesLogoUploadBtn && sesLogoInput) {
-    sesLogoUploadBtn.addEventListener("click", () => sesLogoInput.click());
-    sesLogoInput.addEventListener("change", async (e) => {
-      const file = e.target?.files?.[0];
-      if (!file) return;
-      try {
-        sesStatus.textContent = "Uploading logo…";
-        await uploadSchoolLogo(file);
-        sesStatus.textContent = "Logo uploaded ✅";
-        setTimeout(() => {
-          if (sesStatus) sesStatus.textContent = "";
-        }, 1200);
-      } catch (err) {
-         console.error(err);
-         sesStatus.textContent = "Logo upload failed.";
-      } finally {
-        sesLogoInput.value = "";
-      }
-    });
-  }
+  wireSchoolEmailSettingsControls();
   if (classDeleteCancel) classDeleteCancel.addEventListener("click", closeClassDeleteModal);
   if (classDeleteConfirm) classDeleteConfirm.addEventListener("click", confirmClassDelete);
   if (classDeleteModal) {
@@ -14970,68 +14346,11 @@ function attachLiveEvents() {
       }
     });
   }
-  if (sesHistoryClearBtn) {
-    sesHistoryClearBtn.addEventListener("click", () => {
-      clearSesHistorySelection();
-      clearSesTestFields({ clearBody: true });
-    });
-  }
-  wireSesTabButtons();
-  wireSesContactForm();
-  wireSesInboxActions();
-  wireSesInboxDetailControls();
-  updateSesMailboxPermissionsUI();
-  setSesSettingsView(getDefaultSesSettingsView());
-  [sesTestTo, sesSubjectPrefix, sesBodyText].forEach((input) => {
-    if (!input) return;
-    input.addEventListener("input", updateSesEmailPreview);
-  });
 }
 
-function clearSesTestFields({ clearBody = true } = {}) {
-  if (sesSubjectPrefix) sesSubjectPrefix.value = "";
-  if (sesTestTo) sesTestTo.value = "";
-  if (sesBodyText && clearBody) {
-    sesBodyText.value = "";
-  }
-  setSesGreetingAndClosing();
-  updateSesEmailPreview();
-}
 
-function isSchoolSettingsChannel(channelId) {
-  return String(channelId || "").trim() === SCHOOL_SETTINGS_CHANNEL_ID;
-}
 
-function getSchoolSettingsChannelMeta() {
-  return {
-    id: SCHOOL_SETTINGS_CHANNEL_ID,
-    name: "School Email Settings",
-    category: "tools",
-    topic: "Control campus email templates and notifications",
-    workspaceId: currentWorkspaceId || "default"
-  };
-}
 
-function setSchoolEmailHeaderMode(active) {
-  const chatHeaderEl = document.getElementById("chatHeader");
-  if (!chatHeaderEl) return;
-  chatHeaderEl.classList.toggle("school-settings-header", Boolean(active));
-}
-
-function showSchoolSettingsCard() {
-  if (!schoolEmailSettingsPage) return;
-  schoolEmailSettingsPage.classList.remove("hidden");
-  schoolEmailSettingsPage.setAttribute("aria-hidden", "false");
-  if (messagesContainer) messagesContainer.classList.add("hidden");
-  if (composer) composer.classList.add("hidden");
-  if (typingIndicator) typingIndicator.classList.add("hidden");
-  if (newMsgsBtn) newMsgsBtn.classList.add("hidden");
-  if (releaseSchoolSettingsTrap) releaseSchoolSettingsTrap();
-  releaseSchoolSettingsTrap = trapFocus(schoolEmailSettingsPage);
-  document.body.classList.add("no-school-scroll");
-  setSchoolEmailHeaderMode(true);
-  setEmailHeaderChromeVisible(true);
-}
 
 function showClassSettingsPage() {
   if (!classSettingsPage) return;
@@ -15395,753 +14714,10 @@ function updateCardVisibilityBadge(card, status) {
   badge.classList.toggle("private", normalized === "private");
 }
 
-function hideSchoolSettingsCard() {
-  if (!schoolEmailSettingsPage) return;
-  schoolEmailSettingsPage.classList.add("hidden");
-  schoolEmailSettingsPage.setAttribute("aria-hidden", "true");
-  if (messagesContainer) messagesContainer.classList.remove("hidden");
-  if (composer) composer.classList.remove("hidden");
-  if (typingIndicator) typingIndicator.classList.remove("hidden");
-  if (newMsgsBtn) newMsgsBtn.classList.remove("hidden");
-  if (releaseSchoolSettingsTrap) {
-    releaseSchoolSettingsTrap();
-    releaseSchoolSettingsTrap = null;
-  }
-  document.body.classList.remove("no-school-scroll");
-  setSchoolEmailHeaderMode(false);
-}
 
 function hideAdminOverlays() {
   hideSchoolSettingsCard();
   collapseClassSettingsView();
-}
-
-function closeSchoolSettingsView() {
-  const target =
-    schoolSettingsPreviousChannelId ||
-    (channels && channels.length ? channels[0].id : null) ||
-    currentChannelId;
-  schoolSettingsPreviousChannelId = null;
-  hideSchoolSettingsCard();
-  if (target && !isSchoolSettingsChannel(target)) {
-    selectChannel(target);
-  }
-}
-
-function setSesFormatView(active) {
-  if (!sesFormatCard || !sesMainSettingsBody || !sesFormatBtn) return;
-  sesFormatViewActive = Boolean(active);
-  sesMainSettingsBody.classList.toggle("hidden", sesFormatViewActive);
-  sesFormatCard.classList.toggle("hidden", !sesFormatViewActive);
-  sesFormatBtn.textContent = sesFormatViewActive ? "Back to settings" : "Email format";
-  sesFormatBtn.setAttribute("aria-pressed", sesFormatViewActive ? "true" : "false");
-}
-
-function toggleSesFormatView() {
-  setSesFormatView(!sesFormatViewActive);
-}
-
-function canManageSchoolMailbox() {
-  return isAdminUser();
-}
-
-function canAccessSchoolMailbox() {
-  return canManageSchoolMailbox() || isStudentUser();
-}
-
-function canUseStudentContactForm() {
-  return isStudentUser();
-}
-
-function getDefaultSesSettingsView() {
-  return canManageSchoolMailbox() ? "sent" : "inbox";
-}
-
-function normalizeSesSettingsView(view) {
-  const requested = String(view || "").trim().toLowerCase();
-  if (canManageSchoolMailbox()) {
-    if (["sent", "history", "format", "inbox", "trash"].includes(requested)) {
-      return requested;
-    }
-    return "sent";
-  }
-  if (["inbox", "trash", "contact"].includes(requested)) {
-    return requested;
-  }
-  return "inbox";
-}
-
-function updateSesMailboxPermissionsUI() {
-  const allowManagement = canManageSchoolMailbox();
-  const allowMailbox = canAccessSchoolMailbox();
-  const sentBtn = document.getElementById("sesSentBtn");
-  const historyBtn = document.getElementById("sesHistoryBtn");
-  const formatBtn = document.getElementById("sesFormatBtn");
-  const inboxBtn = document.getElementById("sesInboxBtn");
-  const contactBtn = document.getElementById("sesContactFormBtn");
-  const trashBtn = document.getElementById("sesTrashBtn");
-  const headerActions = document.getElementById("schoolEmailHeaderActions");
-  const replyBtn = document.getElementById("detailReplyBtn");
-  const forwardBtn = document.getElementById("detailForwardBtn");
-  const emojiBtn = document.getElementById("detailEmojiBtn");
-  const replyPanel = document.getElementById("detailReplyPanel");
-  const replyActions = document.getElementById("detailReplyActions");
-
-  [sentBtn, historyBtn, formatBtn].forEach((btn) => {
-    if (!btn) return;
-    btn.classList.toggle("hidden", !allowManagement);
-    btn.setAttribute("aria-hidden", allowManagement ? "false" : "true");
-  });
-  [inboxBtn, trashBtn].forEach((btn) => {
-    if (!btn) return;
-    btn.classList.toggle("hidden", !allowMailbox);
-    btn.setAttribute("aria-hidden", allowMailbox ? "false" : "true");
-  });
-  if (contactBtn) {
-    const allowContactForm = canUseStudentContactForm();
-    contactBtn.classList.toggle("hidden", !allowContactForm);
-    contactBtn.setAttribute("aria-hidden", allowContactForm ? "false" : "true");
-  }
-  if (headerActions) {
-    headerActions.classList.toggle("hidden", !allowMailbox);
-    headerActions.setAttribute("aria-hidden", allowMailbox ? "false" : "true");
-  }
-  if (replyBtn) replyBtn.hidden = !allowManagement;
-  if (forwardBtn) forwardBtn.hidden = !allowManagement;
-  if (emojiBtn) emojiBtn.hidden = !allowManagement;
-  if (!allowManagement) {
-    replyPanel?.classList.add("hidden");
-    replyActions?.classList.add("hidden");
-  }
-  if (
-    !allowManagement &&
-    !["inbox", "trash", "contact"].includes(normalizeSesSettingsView(sesCurrentMailboxFolder))
-  ) {
-    sesCurrentMailboxFolder = "inbox";
-  }
-}
-
-// --- SES tab routing (Sent / History / Email format) ---
-function setSesSettingsView(view) {
-  collapseClassSettingsView();
-  // view: "sent" | "history" | "format" | "inbox" | "trash" | "contact"
-  view = normalizeSesSettingsView(view);
-  const body = document.querySelector(".ses-body");
-  const formCol = document.querySelector(".ses-form");
-  const metaCol = document.querySelector(".ses-meta-column");
-
-  const historyPanel = document.getElementById("sesEmailHistory");
-  const formatCard = document.getElementById("sesFormatCard");
-  const inboxPanel = document.getElementById("sesInboxPanel");
-  const contactPanel = document.getElementById("sesContactFormPanel");
-
-  const sentBtn = document.getElementById("sesSentBtn");
-  const historyBtn = document.getElementById("sesHistoryBtn");
-  const formatBtn = document.getElementById("sesFormatBtn");
-  const inboxBtn = document.getElementById("sesInboxBtn");
-  const contactBtn = document.getElementById("sesContactFormBtn");
-  const trashBtn = document.getElementById("sesTrashBtn");
-
-  if (!body || !formCol || !metaCol || !historyPanel || !formatCard) return;
-
-  body.classList.remove("ses-view-sent", "ses-view-history", "ses-view-format");
-  body.classList.remove("ses-view-inbox", "ses-view-trash", "ses-view-contact");
-  body.classList.remove("hidden");
-
-  formCol.classList.add("hidden");
-  metaCol.classList.add("hidden");
-  historyPanel.classList.add("hidden");
-  if (inboxPanel) {
-    inboxPanel.classList.add("hidden");
-  }
-  if (contactPanel) {
-    contactPanel.classList.add("hidden");
-  }
-  formatCard.classList.add("hidden");
-
-  if (view !== "format") {
-    hideSesTplPopup();
-  }
-
-  const setActive = (btn, isActive) => {
-    if (!btn) return;
-    btn.classList.toggle("is-active", isActive);
-    btn.setAttribute("aria-pressed", isActive ? "true" : "false");
-  };
-  setActive(sentBtn, view === "sent");
-  setActive(historyBtn, view === "history");
-  setActive(formatBtn, view === "format");
-  setActive(inboxBtn, view === "inbox");
-  setActive(contactBtn, view === "contact");
-  setActive(trashBtn, view === "trash");
-
-  updateSesMailboxPermissionsUI();
-
-  if (view === "sent") {
-    body.classList.add("ses-view-sent");
-    formCol.classList.remove("hidden");
-    metaCol.classList.add("hidden");
-  } else if (view === "history") {
-    body.classList.add("ses-view-history");
-    metaCol.classList.remove("hidden");
-    historyPanel.classList.remove("hidden");
-  } else if (view === "format") {
-    body.classList.add("ses-view-format");
-
-    body.classList.remove("hidden");
-    formatCard.classList.remove("hidden");
-    wireSesTemplateEditorUIOnce();
-    sesTplLoadList().catch(console.warn);
-    hideSesTplPopup();
-  } else if (view === "inbox") {
-    body.classList.add("ses-view-inbox");
-    metaCol.classList.remove("hidden");
-    if (inboxPanel) {
-      inboxPanel.classList.remove("hidden");
-    }
-    historyPanel.classList.add("hidden");
-    sesCurrentMailboxFolder = "inbox";
-    loadSesInboxMessages({ folder: "inbox", sync: false });
-    renderSesInboxView();
-  } else if (view === "trash") {
-    body.classList.add("ses-view-trash");
-    metaCol.classList.remove("hidden");
-    if (inboxPanel) {
-      inboxPanel.classList.remove("hidden");
-    }
-    historyPanel.classList.add("hidden");
-    sesCurrentMailboxFolder = "trash";
-    loadSesInboxMessages({ folder: "trash", sync: false });
-    renderSesInboxView();
-  } else if (view === "contact") {
-    body.classList.add("ses-view-contact");
-    metaCol.classList.remove("hidden");
-    if (contactPanel) {
-      contactPanel.classList.remove("hidden");
-    }
-    historyPanel.classList.add("hidden");
-    sesCurrentMailboxFolder = "contact";
-    updateSesContactWordCount();
-  }
-}
-
-function wireSesTabButtons() {
-  const sentBtn = document.getElementById("sesSentBtn");
-  const historyBtn = document.getElementById("sesHistoryBtn");
-  const formatBtn = document.getElementById("sesFormatBtn");
-  const formatBackBtn = document.getElementById("sesFormatBackBtn");
-  const inboxBtn = document.getElementById("sesInboxBtn");
-  const contactBtn = document.getElementById("sesContactFormBtn");
-  const trashBtn = document.getElementById("sesTrashBtn");
-
-  sentBtn?.addEventListener("click", () => setSesSettingsView("sent"));
-  historyBtn?.addEventListener("click", async () => {
-    setSesSettingsView("history");
-    try {
-      await loadSesEmailLogs();
-    } catch (e) {
-      console.warn("Failed to load email history", e);
-    }
-  });
-  formatBtn?.addEventListener("click", () => setSesSettingsView("format"));
-  formatBackBtn?.addEventListener("click", () => setSesSettingsView("sent"));
-  inboxBtn?.addEventListener("click", () => setSesSettingsView("inbox"));
-  contactBtn?.addEventListener("click", () => setSesSettingsView("contact"));
-  trashBtn?.addEventListener("click", () => setSesSettingsView("trash"));
-}
-
-function getSesContactWordCount() {
-  const text = (sesContactMessage?.value || "").trim();
-  if (!text) return 0;
-  return text.split(/\s+/).filter(Boolean).length;
-}
-
-function updateSesContactWordCount() {
-  if (!sesContactWordCount) return;
-  sesContactWordCount.textContent = `${getSesContactWordCount()} / 500 words`;
-}
-
-function clearSesContactForm({ keepStatus = false } = {}) {
-  if (sesContactSubject) sesContactSubject.value = "";
-  if (sesContactMessage) sesContactMessage.value = "";
-  updateSesContactWordCount();
-  if (!keepStatus && sesContactStatus) sesContactStatus.textContent = "";
-}
-
-function wireSesContactForm() {
-  sesContactMessage?.addEventListener("input", () => {
-    updateSesContactWordCount();
-  });
-
-  sesContactSendBtn?.addEventListener("click", async () => {
-    if (!canUseStudentContactForm()) {
-      showToast("Only students can use the contact form.", "info");
-      return;
-    }
-    const subject = (sesContactSubject?.value || "").trim();
-    const message = (sesContactMessage?.value || "").trim();
-    const wordCount = getSesContactWordCount();
-
-    if (!subject) {
-      showToast("Enter a subject.", "info");
-      sesContactSubject?.focus();
-      return;
-    }
-    if (!message) {
-      showToast("Write your message before sending.", "info");
-      sesContactMessage?.focus();
-      return;
-    }
-    if (wordCount > 500) {
-      showToast("Keep the message within 500 words.", "info");
-      sesContactMessage?.focus();
-      return;
-    }
-
-    if (sesContactStatus) sesContactStatus.textContent = "Sending...";
-    if (sesContactSendBtn) sesContactSendBtn.disabled = true;
-
-    try {
-      const response = await apiFetch("/api/admin/inbox/contact-form", {
-        method: "POST",
-        body: JSON.stringify({ subject, message })
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(data.error || "Could not send contact form");
-      }
-      if (sesContactStatus) sesContactStatus.textContent = "Message sent to school admin.";
-      clearSesContactForm({ keepStatus: true });
-      showToast("Contact form sent", "success");
-    } catch (error) {
-      console.error("Contact form send failed", error);
-      if (sesContactStatus) sesContactStatus.textContent = error.message || "Could not send contact form.";
-      showToast(error.message || "Could not send contact form", "error");
-    } finally {
-      if (sesContactSendBtn) sesContactSendBtn.disabled = false;
-    }
-  });
-}
-
-function wireSesInboxActions() {
-  if (sesInboxRefreshBtn) {
-    sesInboxRefreshBtn.addEventListener("click", () => {
-      loadSesInboxMessages();
-    });
-  }
-  if (sesInboxMarkAllBtn) {
-    sesInboxMarkAllBtn.addEventListener("click", () => {
-      markAllSesInboxRead();
-    });
-  }
-}
-
-function wireSesInboxDetailControls() {
-  if (!sesInboxBackBtn) return;
-  sesInboxBackBtn.addEventListener("click", () => {
-    closeSesInboxDetail();
-  });
-}
-
-let sesTplCache = [];
-let sesTplSelectedKey = null;
-let sesTplWired = false;
-const getSesTplPopup = () => document.getElementById("sesTplPopup");
-const getSesTplPopupCloseBtn = () => document.getElementById("sesTplPopupCloseBtn");
-const getSesFormatCard = () => document.getElementById("sesFormatCard");
-
-function showSesTplPopup() {
-  const popup = getSesTplPopup();
-  if (popup) {
-    popup.classList.remove("hidden");
-    const card = getSesFormatCard();
-    card?.classList.add("ses-format-editing");
-  }
-}
-
-function hideSesTplPopup() {
-  const popup = getSesTplPopup();
-  if (popup) {
-    popup.classList.add("hidden");
-    const card = getSesFormatCard();
-    card?.classList.remove("ses-format-editing");
-  }
-}
-function sesTplAutoResizeTextarea(el) {
-  if (!el) return;
-  el.style.height = "auto";
-  el.style.height = `${el.scrollHeight}px`;
-}
-let sesTplPopup = null;
-
-function sesTplTokenizeRequired(required) {
-  if (!required || !required.length) return "Required tokens: none";
-  return "Required tokens: " + required.map((t) => `{{${t}}}`).join(", ");
-}
-
-function sesTplRenderTokenChips(required) {
-  const el = document.getElementById("sesTplTokens");
-  if (!el) return;
-  el.innerHTML = "";
-  const all = new Set([
-    ...(required || []),
-    "school_name",
-    "support_email",
-    "login_url",
-    "set_password_link",
-    "reset_link",
-    "otp_code",
-    "session_link",
-    "invoice_link",
-    "receipt_link"
-  ]);
-  [...all]
-    .sort()
-    .forEach((t) => {
-      const chip = document.createElement("button");
-      chip.type = "button";
-      chip.className = "ses-template-token";
-      chip.textContent = `{{${t}}}`;
-      chip.addEventListener("click", () => {
-        const ta = document.getElementById("sesTplBodyHtml");
-        if (!ta) return;
-        const insert = `{{${t}}}`;
-        const start = ta.selectionStart || 0;
-        const end = ta.selectionEnd || 0;
-        const v = ta.value || "";
-        ta.value = v.slice(0, start) + insert + v.slice(end);
-        ta.focus();
-        ta.selectionStart = ta.selectionEnd = start + insert.length;
-        sesTplUpdatePreview();
-      });
-      el.appendChild(chip);
-    });
-}
-
-function sesTplUpdatePreview() {
-  const subject = document.getElementById("sesTplSubject")?.value || "";
-  const bodyHtml = document.getElementById("sesTplBodyHtml")?.value || "";
-  const preview = document.getElementById("sesTplPreview");
-  if (!preview) return;
-
-  const vars = {
-    school_name: "School Name",
-    support_email: "support@school.com",
-    student_name: "Student Name",
-    teacher_name: "Teacher Name",
-    user_name: "User Name",
-    login_url: "https://example.com/login",
-    set_password_link: "https://example.com/set-password?token=TEST",
-    link_expiry_hours: "48",
-    reset_link: "https://example.com/reset?token=TEST",
-    reset_expiry_minutes: "30",
-    otp_code: "123456",
-    otp_expiry_minutes: "5",
-    session_title: "Live Class",
-    session_start: "2026-02-10 10:00",
-    session_end: "2026-02-10 11:00",
-    session_link: "https://example.com/live/TEST",
-    invoice_number: "INV-1001",
-    amount: "99.00",
-    currency: "EUR",
-    invoice_link: "https://example.com/invoice/INV-1001",
-    receipt_link: "https://example.com/receipt/TEST",
-    course_name: "Course Name",
-    course_end_date: "2026-03-01",
-    course_link: "https://example.com/courses/TEST",
-    class_name: "Class Name",
-    class_date: "2026-02-14",
-    exam_name: "Exam Name",
-    exam_date: "2026-03-10",
-    exam_location: "Main Campus"
-  };
-
-  const render = (s) =>
-    String(s || "").replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => {
-      const val = Object.prototype.hasOwnProperty.call(vars, key) ? vars[key] : "";
-      return val == null ? "" : String(val);
-    });
-
-  preview.innerHTML = `
-    <div style="font-weight:800;margin-bottom:8px;">${escapeHtml(render(subject))}</div>
-    <div>${render(bodyHtml)}</div>
-  `;
-}
-
-async function sesTplLoadList() {
-  const ws = await resolveProfileWorkspaceId();
-  const data = await fetchJSON(`/api/workspaces/${encodeURIComponent(ws)}/email-templates`, {
-    headers: {}
-  });
-  sesTplCache = data?.templates || [];
-  sesTplRenderList();
-}
-
-function sesTplRenderList(filterText = "") {
-  sesTplRenderCards(filterText);
-}
-
-function sesTplPreviewText(template = {}) {
-  if (!template) return "";
-  if (template.body_text) return template.body_text;
-  if (template.body_html) return stripHtmlToText(template.body_html);
-  return "";
-}
-
-function sesTplRenderCards(filterText = "") {
-  const container = document.getElementById("sesTplCards");
-  if (!container) return;
-  container.innerHTML = "";
-  const q = String(filterText || "").trim().toLowerCase();
-  sesTplCache
-    .filter((t) => !q || String(t.label || t.template_key).toLowerCase().includes(q))
-    .forEach((t) => {
-      const previewText = sesTplPreviewText(t).trim();
-      const snippet =
-        previewText.length > 220 ? `${previewText.slice(0, 220).trim()}…` : previewText;
-      const card = document.createElement("div");
-      card.className = "ses-template-card";
-      card.innerHTML = `
-        <div class="ses-template-card-row">
-          <div class="ses-template-card-title">${escapeHtml(t.label || t.template_key)}</div>
-          <span class="ses-template-badge">${t.enabled ? "Enabled" : "Disabled"}</span>
-        </div>
-        <div class="ses-template-card-subject">${escapeHtml(t.subject || "No subject")}</div>
-        <div class="ses-template-card-thumbnail">${escapeHtml(snippet)}</div>
-      `;
-      card.addEventListener("click", () => sesTplSelect(t.template_key));
-      container.appendChild(card);
-    });
-}
-
-function sesTplSelect(templateKey) {
-  const t = sesTplCache.find((x) => x.template_key === templateKey);
-  if (!t) return;
-  sesTplSelectedKey = templateKey;
-
-  document.getElementById("sesTplLabel").textContent = t.label || t.template_key;
-  document.getElementById("sesTplRequired").textContent = sesTplTokenizeRequired(t.required_tokens || []);
-  document.getElementById("sesTplSubject").value = t.subject || "";
-  document.getElementById("sesTplBodyHtml").value = t.body_html || "";
-  sesTplAutoResizeTextarea(document.getElementById("sesTplBodyHtml"));
-
-  sesTplRenderTokenChips(t.required_tokens || []);
-  sesTplRenderList(document.getElementById("sesTplSearch")?.value || "");
-  sesTplUpdatePreview();
-  showSesTplPopup();
-}
-
-async function sesTplSaveSelected() {
-  if (!sesTplSelectedKey) return;
-  const ws = await resolveProfileWorkspaceId();
-  const subject = document.getElementById("sesTplSubject")?.value || "";
-  const body_html = document.getElementById("sesTplBodyHtml")?.value || "";
-  const status = document.getElementById("sesTplStatus");
-  try {
-    status && (status.textContent = "Saving...");
-    await fetchJSON(`/api/workspaces/${encodeURIComponent(ws)}/email-templates/${encodeURIComponent(sesTplSelectedKey)}`, {
-      method: "PUT",
-      headers: {},
-      body: JSON.stringify({ subject, body_html, enabled: true })
-    });
-    status && (status.textContent = "Saved ✅");
-    await sesTplLoadList();
-    sesTplSelect(sesTplSelectedKey);
-  } catch (e) {
-    status && (status.textContent = `Save failed: ${e.message || e}`);
-  }
-}
-
-async function sesTplResetSelected() {
-  if (!sesTplSelectedKey) return;
-  const ws = await resolveProfileWorkspaceId();
-  const status = document.getElementById("sesTplStatus");
-  try {
-    status && (status.textContent = "Resetting...");
-    await fetchJSON(`/api/workspaces/${encodeURIComponent(ws)}/email-templates/${encodeURIComponent(sesTplSelectedKey)}/reset`, {
-      method: "POST",
-      headers: {}
-    });
-    status && (status.textContent = "Reset ✅");
-    await sesTplLoadList();
-    sesTplSelect(sesTplSelectedKey);
-  } catch (e) {
-    status && (status.textContent = `Reset failed: ${e.message || e}`);
-  }
-}
-
-async function sesTplSendTest() {
-  if (!sesTplSelectedKey) return;
-  const ws = await resolveProfileWorkspaceId();
-  const to = document.getElementById("sesTplTestTo")?.value || "";
-  const status = document.getElementById("sesTplStatus");
-  try {
-    status && (status.textContent = "Sending test...");
-    await fetchJSON(`/api/workspaces/${encodeURIComponent(ws)}/email-templates/${encodeURIComponent(sesTplSelectedKey)}/test`, {
-      method: "POST",
-      headers: {},
-      body: JSON.stringify({ to })
-    });
-    status && (status.textContent = "Test sent ✅");
-  } catch (e) {
-    status && (status.textContent = `Test failed: ${e.message || e}`);
-  }
-}
-
-function wireSesTemplateEditorUIOnce() {
-  if (sesTplWired) return;
-  sesTplWired = true;
-  document.getElementById("sesTplSearch")?.addEventListener("input", (e) => {
-    sesTplRenderList(e.target.value);
-  });
-  document.getElementById("sesTplSubject")?.addEventListener("input", sesTplUpdatePreview);
-  const body = document.getElementById("sesTplBodyHtml");
-  if (body) {
-    body.addEventListener("input", () => {
-      sesTplUpdatePreview();
-      sesTplAutoResizeTextarea(body);
-    });
-  }
-
-  document.getElementById("sesTplSaveBtn")?.addEventListener("click", sesTplSaveSelected);
-  document.getElementById("sesTplResetBtn")?.addEventListener("click", sesTplResetSelected);
-  document.getElementById("sesTplTestBtn")?.addEventListener("click", sesTplSendTest);
-  document.getElementById("sesTplPopupCloseBtn")?.addEventListener("click", () => {
-    hideSesTplPopup();
-  });
-}
-
-function getGreetingForCurrentTimeDE() {
-  const hour = new Date().getHours();
-  if (hour >= 18) return "Guten Abend";
-  if (hour >= 11) return "Guten Tag";
-  return "Guten Morgen";
-}
-
-function buildRecipientName(meta){
-  if (!meta) return "";
-  const gender = String(meta.gender || "").trim();
-  const lastName = String(meta.lastName || meta.last_name || "").trim();
-  const firstName = String(meta.firstName || meta.first_name || "").trim();
-  const name = lastName || firstName || "";
-  if (!name) return "";
-  return gender ? `${gender} ${name}`:name;
-}
-
-async function resolveRecipientDisplayDetails(email){
-  if (!email) return null;
-  await loadUserDirectory();
-  const candidateEmail = String(email).trim().toLowerCase();
-  if (!candidateEmail) return null;
-  const match = (userDirectoryCache || []).find((u) => {
-    const normalized = String(u.email || u.user_email || u.username || "").trim().toLowerCase();
-    return normalized && normalized === candidateEmail;
-  });
-  if (!match) return null;
-  const firstName = match.first_name || match.firstName || "";
-  const lastName = match.last_name || match.lastName || "";
-  const displayName = match.name || match.displayName || `${firstName} ${lastName}`.trim();
-  return {
-    firstName,
-    lastName,
-    displayName,
-    gender: match.gender || ""
-  };
-}
-
-function setSesGreetingAndClosing({ greeting = "", closing = "" } = {}) {
-  if (sesBodyGreetingPreview) {
-    sesBodyGreetingPreview.textContent = greeting;
-  }
-  if (sesBodyClosingPreview) {
-    sesBodyClosingPreview.textContent = closing;
-  }
-}
-
-function getSesGreetingText() {
-  const g = document.getElementById("sesBodyGreetingPreview");
-  return (g?.textContent || "").trim();
-}
-
-function getSesClosingText() {
-  const c = document.getElementById("sesBodyClosingPreview");
-  return (c?.textContent || "").trim();
-}
-
-function buildFinalTestEmailBody() {
-  const greeting = getSesGreetingText();
-  const closing = getSesClosingText();
-  const body = (sesBodyText?.value || "").trim();
-  const middle = body ? body : "";
-  const parts = [];
-
-  if (greeting) parts.push(greeting);
-  parts.push(middle);
-  if (closing) parts.push(closing);
-
-  return parts.join("\n\n").trim();
-}
-
-function hideSesEmailPreview() {
-  if (!sesEmailPreviewPanel) return;
-  sesEmailPreviewPanel.classList.add("hidden");
-}
-
-function updateSesEmailPreview() {
-  if (!sesEmailPreviewPanel) return;
-  if (sesActiveHistoryLogId) return;
-  const to = (sesTestTo?.value || "").trim();
-  if (!to) {
-    hideSesEmailPreview();
-    return;
-  }
-  const subject = (sesSubjectPrefix?.value || "").trim() || "School Email Settings";
-  const bodyContent = buildFinalTestEmailBody() || "No message yet.";
-  const signatureBlock = buildSesSignaturePreviewText();
-  const body = signatureBlock ? `${bodyContent}\n\n${signatureBlock}` : bodyContent;
-  if (sesPreviewRecipient) sesPreviewRecipient.textContent = `To: ${to}`;
-  if (sesPreviewSubject) sesPreviewSubject.textContent = subject;
-  if (sesPreviewBody) sesPreviewBody.textContent = body;
-  if (sesPreviewTimestamp) sesPreviewTimestamp.textContent = `Draft • ${new Date().toLocaleString()}`;
-  sesEmailPreviewPanel.classList.remove("hidden");
-}
-
-function extractPreviewTextLines(el) {
-  if (!el) return [];
-  return Array.from(el.childNodes)
-    .map((child) => child.textContent?.trim())
-    .filter(Boolean);
-}
-
-function buildSesSignaturePreviewText() {
-  const lines = [
-    ...extractPreviewTextLines(sesSignatureHours),
-    ...extractPreviewTextLines(sesSignatureAddress),
-    ...extractPreviewTextLines(sesSignaturePhone),
-    ...extractPreviewTextLines(sesSignatureEmail),
-    ...extractPreviewTextLines(sesSignatureRegistration)
-  ];
-  return lines.length ? lines.join("\n") : "";
-}
-
-async function updateSesBodyChrome() {
-  const to = (sesTestTo?.value || "").trim();
-  if (!to) {
-    setSesGreetingAndClosing();
-    return;
-  }
-
-  const recipientMeta = await resolveRecipientDisplayDetails(to).catch(() => null);
-  const schoolName =
-    (sesSchoolName?.value || "").trim() || currentSchoolNameFallback() || "Sprachschule";
-
-  const namePart = buildRecipientName(recipientMeta);
-  const greet = namePart
-    ? `${getGreetingForCurrentTimeDE()} ${namePart},`
-    : `${getGreetingForCurrentTimeDE()},`;
-  const closing = `Mit freundlichen Grüßen\n${schoolName}`;
-
-  setSesGreetingAndClosing({ greeting: greet, closing });
 }
 
 
@@ -18487,78 +17063,6 @@ const liveBreakoutRoomName = document.getElementById("liveBreakoutRoomName");
 const liveBreakoutCreateBtn = document.getElementById("liveBreakoutCreateBtn");
 const liveBreakoutListStatus = document.getElementById("liveBreakoutListStatus");
 const liveBreakoutList = document.getElementById("liveBreakoutList");
-const SCHOOL_SETTINGS_CHANNEL_ID = "school-settings";
-const schoolEmailSettingsPage = document.getElementById("schoolEmailSettingsPage");
-const schoolEmailSettingsPageHome = schoolEmailSettingsPage?.parentElement || null;
-const schoolEmailHeaderActions = document.getElementById("schoolEmailHeaderActions");
-const schoolEmailHeaderActionsHome = schoolEmailHeaderActions?.parentElement || null;
-const schoolSettingsHeaderToggle = document.getElementById("schoolSettingsHeaderToggle");
-const schoolSettingsHeaderToggleHome = schoolSettingsHeaderToggle?.parentElement || null;
-const emailPanelHeaderActions = document.getElementById("emailPanelHeaderActions");
-const emailPanelToggle = document.getElementById("emailPanelToggle");
-const emailPanelBody = document.getElementById("emailPanelBody");
-const sesFormatBtn = document.getElementById("sesFormatBtn");
-const sesFormatCard = document.getElementById("sesFormatCard");
-const sesInboxBtn = document.getElementById("sesInboxBtn");
-const sesContactFormBtn = document.getElementById("sesContactFormBtn");
-const sesTrashBtn = document.getElementById("sesTrashBtn");
-const sesInboxPanel = document.getElementById("sesInboxPanel");
-const sesContactFormPanel = document.getElementById("sesContactFormPanel");
-const sesContactSubject = document.getElementById("sesContactSubject");
-const sesContactMessage = document.getElementById("sesContactMessage");
-const sesContactWordCount = document.getElementById("sesContactWordCount");
-const sesContactSendBtn = document.getElementById("sesContactSendBtn");
-const sesContactStatus = document.getElementById("sesContactStatus");
-const sesInboxList = document.getElementById("sesInboxList");
-const sesInboxPlaceholder = document.getElementById("sesInboxPlaceholder");
-const sesInboxCount = document.getElementById("sesInboxCount");
-const sesInboxDetail = document.getElementById("sesInboxDetail");
-const sesInboxBackBtn = document.getElementById("sesInboxBackBtn");
-const sesInboxDetailAvatar = document.getElementById("sesInboxDetailAvatar");
-const sesInboxDetailName = document.getElementById("sesInboxDetailName");
-const sesInboxDetailEmail = document.getElementById("sesInboxDetailEmail");
-const sesInboxDetailDate = document.getElementById("sesInboxDetailDate");
-const sesInboxDetailSubject = document.getElementById("sesInboxDetailSubject");
-const sesInboxDetailAttachments = document.getElementById("sesInboxDetailAttachments");
-const sesInboxDetailBody = document.getElementById("sesInboxDetailBody");
-const sesInboxRefreshBtn = document.getElementById("sesInboxRefreshBtn");
-const sesInboxMarkAllBtn = document.getElementById("sesInboxMarkAllBtn");
-const sesFormatBackBtn = document.getElementById("sesFormatBackBtn");
-const detailReplyGreeting = document.getElementById("detailReplyGreeting");
-const sesMainSettingsBody = schoolEmailSettingsPage ? schoolEmailSettingsPage.querySelector(".ses-body") : null;
-const sesClose = document.getElementById("sesClose");
-const sesCancel = document.getElementById("sesCancel");
-const sesSave = document.getElementById("sesSave");
-const sesTestBtn = document.getElementById("sesTestBtn");
-const sesStatus = document.getElementById("sesStatus");
-
-const sesEnabled = document.getElementById("sesEnabled");
-const sesSchoolName = document.getElementById("sesSchoolName");
-const sesReplyTo = document.getElementById("sesReplyTo");
-const sesFooter = document.getElementById("sesFooter");
-const sesSubjectPrefix = document.getElementById("sesSubjectPrefix");
-const sesSignatureHtml = document.getElementById("sesSignatureHtml");
-const sesSignatureHours = document.getElementById("sesSignatureHours");
-const sesSignatureAddress = document.getElementById("sesSignatureAddress");
-const sesSignaturePhone = document.getElementById("sesSignaturePhone");
-const sesSignatureEmail = document.getElementById("sesSignatureEmail");
-const sesSignatureRegistration = document.getElementById("sesSignatureRegistration");
-const sesSignaturePreview = document.getElementById("sesSignaturePreview");
-const sesLogoPreview = document.getElementById("sesLogoPreview");
-const sesLogoUploadBtn = document.getElementById("sesLogoUploadBtn");
-const sesLogoInput = document.getElementById("sesLogoInput");
-const sesTestTo = document.getElementById("sesTestTo");
-const sesBodyText = document.getElementById("sesBodyText");
-const sesBodyGreetingPreview = document.getElementById("sesBodyGreetingPreview");
-const sesBodyClosingPreview = document.getElementById("sesBodyClosingPreview");
-const sesEmailPreviewPanel = document.getElementById("sesEmailPreviewPanel");
-const sesPreviewRecipient = document.getElementById("sesPreviewRecipient");
-const sesPreviewSubject = document.getElementById("sesPreviewSubject");
-const sesPreviewBody = document.getElementById("sesPreviewBody");
-const sesPreviewTimestamp = document.getElementById("sesPreviewTimestamp");
-const sesHistoryList = document.getElementById("sesHistoryList");
-const sesHistoryEmpty = document.getElementById("sesHistoryEmpty");
-const sesHistoryClearBtn = document.getElementById("sesHistoryClearBtn");
 const classSchoolDetails = document.getElementById("classSchoolDetails");
 const classSchoolDetailName = document.getElementById("classSchoolDetailName");
 const classSchoolDetailAddress = document.getElementById("classSchoolDetailAddress");
@@ -18570,17 +17074,6 @@ const classSettingsList = document.getElementById("classSettingsList");
 const classSettingsClose = document.getElementById("classSettingsClose");
 const classSettingsSearch = document.getElementById("classSettingsSearch");
 const openClassSettingsListBtn = document.getElementById("openClassSettingsList");
-let sesLogoUrlValue = "";
-let sesWorkspaceProfileCache = null;
-let sesEmailLogs = [];
-let sesInboxMessages = [];
-let sesInboxDetailVisible = false;
-let sesInboxActiveMessage = null;
-let sesActiveHistoryLogId = null;
-let sesFormatViewActive = false;
-let sesCurrentMailboxFolder = "inbox";
-const sesRegistrationDetails = document.getElementById("sesRegistrationDetails");
-const sesPreviewBtn = document.getElementById("sesPreviewBtn");
 let liveScope = "all";
 let liveSessions = [];
 let liveAttendanceData = null;
@@ -18803,13 +17296,6 @@ document.addEventListener("click", (event) => {
   }
   hideClearCulturePopup();
 });
-document.addEventListener("click", (event) => {
-  if (!sesHistoryList || sesHistoryList.contains(event.target)) return;
-  if (sesActiveHistoryLogId) {
-    clearSesHistorySelection();
-  }
-});
-
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     hideClearCulturePopup();
@@ -20136,7 +18622,8 @@ function updateComposerForChannel(channelId) {
   if (showSavedOnly) return;
   const isMaterialsUploadChannel = isLearningMaterialsChannel(channelId);
   const activeMaterialsBucket = getLearningMaterialsActiveBucket(channelId);
-  const showMaterialsUploader = isMaterialsUploadChannel && !!activeMaterialsBucket;
+  const showMaterialsUploader =
+    isMaterialsUploadChannel && !!activeMaterialsBucket && canManageLearningMaterials();
   document.body?.classList.toggle("learning-materials-upload-mode", isMaterialsUploadChannel);
   document.documentElement?.classList.toggle("learning-materials-upload-mode", isMaterialsUploadChannel);
   const isPrivacyChannel = isPrivacyRulesChannel(channelId);
@@ -20222,7 +18709,7 @@ function updateComposerForChannel(channelId) {
   }
 
   if (isMaterialsUploadChannel) {
-    if (composer) composer.classList.remove("hidden");
+    if (composer) composer.classList.add("hidden");
     if (messageInput) {
       messageInput.disabled = true;
       messageInput.placeholder = "";
@@ -20231,13 +18718,13 @@ function updateComposerForChannel(channelId) {
       rteEditor.setAttribute("contenteditable", "false");
       if (rteEditor.dataset) rteEditor.dataset.placeholder = "";
     }
-    if (attachFileBtn) attachFileBtn.disabled = !canCompose;
+    if (attachFileBtn) attachFileBtn.disabled = !canCompose || !canManageLearningMaterials();
     if (videoBtn) videoBtn.disabled = true;
     if (audioBtn) audioBtn.disabled = true;
     if (emojiInputBtn) emojiInputBtn.disabled = true;
     if (sendButton) {
-      sendButton.disabled = !canCompose;
-      sendButton.style.opacity = canCompose ? "1" : "0.55";
+      sendButton.disabled = !canCompose || !canManageLearningMaterials();
+      sendButton.style.opacity = canCompose && canManageLearningMaterials() ? "1" : "0.55";
       sendButton.classList.add("learning-materials-upload-btn");
       const bucketMeta = getLearningMaterialsBucketMeta(activeMaterialsBucket);
       sendButton.innerHTML = `<i class="fa-solid fa-file-arrow-up" aria-hidden="true"></i><span class="send-label">Upload to ${escapeHtml(bucketMeta?.label || "Folder")}</span>`;
@@ -22159,9 +20646,7 @@ function populateSchoolProfileForm(data = {}) {
     schoolProfileWebsite.value = data.website || "";
   }
   syncSchoolProfileEmailUi(data);
-  if (sesRegistrationDetails) {
-    sesRegistrationDetails.value = data.registrationDetails || "";
-  }
+  setSchoolEmailRegistrationDetails(data.registrationDetails || "");
   showSchoolProfileStatus("", false);
 }
 
@@ -22176,7 +20661,7 @@ async function refreshSchoolProfileForm({ force } = {}) {
       showSchoolProfileStatus("No profile found", true);
       return;
     }
-    sesWorkspaceProfileCache = profile;
+    setSchoolEmailWorkspaceProfileCache(profile);
     populateSchoolProfileForm(profile);
   } catch (err) {
     console.error("Failed to load workspace profile", err);
@@ -22198,7 +20683,7 @@ async function handleSchoolProfileSave() {
   if (schoolProfileOpeningHours) {
     schoolProfileOpeningHours.value = openingHoursSummary;
   }
-  const registrationDetails = (sesRegistrationDetails?.value || "").trim();
+  const registrationDetails = getSchoolEmailRegistrationDetails();
   const payload = {
     workspaceName: (schoolProfileWorkspaceName?.value || "").trim(),
     street: (schoolProfileStreet?.value || "").trim(),
@@ -22227,11 +20712,9 @@ async function handleSchoolProfileSave() {
       }
     );
     workspaceProfileCache.set(workspaceId, updated);
-    sesWorkspaceProfileCache = updated;
+    setSchoolEmailWorkspaceProfileCache(updated);
     populateSchoolProfileForm(updated);
-    if (typeof sesUpdateSideCard === "function") {
-      sesUpdateSideCard();
-    }
+    refreshSchoolEmailSideCard();
     showSchoolProfileStatus("Saved", false);
     setTimeout(() => showSchoolProfileStatus("", false), 2200);
     await refreshOnboardingAfterWorkspaceMutation();
@@ -22839,6 +21322,7 @@ function canPostInChannel(channelId) {
   if (isAnnouncementChannel(channelId)) return isAdminUser();
   if (isAdminOnlyToolChannel(channelId)) return isAdminUser();
   if (isTeacherOnlyToolChannel(channelId)) return isAdminUser() || isTeacherUser();
+  if (isLearningMaterialsChannel(channelId)) return canManageLearningMaterials();
   if (isRestrictedExamGroupChannel(channelId)) return isAdminUser() || isTeacherUser();
   if (isExamChannel(channelId)) return isAdminUser() || isTeacherUser();
   return true;
@@ -22852,7 +21336,7 @@ function normalizeChannelCategory(raw) {
 
 const SHARED_CHANNEL_TOPIC_DEFAULTS = {
   "announcements": "Important school updates",
-  "learning materials": "Study guides and resources",
+  "learning materials": "Course Library for student-visible documents",
   "speaking practice": "Speaking drills and prompts",
   "listening practice": "Listening activities and audio",
   "wordmeaning": "Word meaning discussion and usage",
@@ -24684,6 +23168,7 @@ function renderChannelHeader(channelId) {
   const isGrammar = isGrammarChannel(channelId);
   const isListeningPractice = isListeningPracticeChannel(channelId);
   const isPlacementTestChannel = normalizedChannelName === "placement test";
+  const isLearningMaterialsHeader = normalizedChannelName === "learning materials";
   if (examRegistrationPanels) {
     examRegistrationPanels.classList.toggle("admin-visible", isExamRegistration && isAdminUser());
   }
@@ -24720,7 +23205,9 @@ function renderChannelHeader(channelId) {
         ? noteHeaderTitle
         : isHomework
           ? homeworkHeaderTitle
-          : ch.name;
+          : isLearningMaterialsHeader
+            ? "Learning Materials"
+            : ch.name;
   }
   if (headerChannelTopic) {
     const rawTopic = isPrivacy
@@ -24729,7 +23216,9 @@ function renderChannelHeader(channelId) {
         ? noteHeaderSubtitle
         : isHomework
           ? homeworkHeaderSubtitle
-          : resolveSharedChannelTopic(ch);
+          : isLearningMaterialsHeader
+            ? "Course Library for student-visible documents"
+            : resolveSharedChannelTopic(ch);
     const nextTopic = isPlacementTestChannel ? "" : rawTopic;
     headerChannelTopic.textContent = nextTopic;
     headerChannelTopic.classList.toggle("hidden", !nextTopic);
@@ -24857,7 +23346,11 @@ function renderChannelHeader(channelId) {
   }
   if (channelSearchInput) {
     channelSearchInput.closest(".channel-search")?.classList.toggle("hidden", isPrivacy);
-    channelSearchInput.placeholder = isNoteChannel ? "Search notes..." : "Search this channel…";
+    channelSearchInput.placeholder = isLearningMaterialsHeader
+      ? "Search course library..."
+      : isNoteChannel
+        ? "Search notes..."
+        : "Search this channel…";
   }
   if (dmAddMemberBtn) dmAddMemberBtn.classList.add("hidden");
   syncChannelSearchForChannel(channelId);
@@ -26558,19 +25051,38 @@ function buildLearningMaterialsEntries(channelId, searchTerm = "") {
 
 function buildLearningMaterialsHome(channelId, entries, searchTerm = "") {
   const normalizedTerm = String(searchTerm || "").trim().toLowerCase();
+  const canManage = canManageLearningMaterials();
   const cards = LEARNING_MATERIAL_BUCKETS
     .map((bucket) => {
-      const docCount = entries.filter((item) => item.bucketKey === bucket.key).length;
-      const matchable = `${bucket.label} ${docCount}`.toLowerCase();
+      const bucketEntries = entries.filter((item) => item.bucketKey === bucket.key);
+      const docCount = bucketEntries.length;
+      const latestEntry = bucketEntries
+        .slice()
+        .sort((a, b) => getLearningMaterialEntryTime(b) - getLearningMaterialEntryTime(a))[0];
+      const lastUpdated = latestEntry?.dateLabel || "";
+      const bucketSearchText = bucketEntries
+        .map((item) => `${item.fileName || ""} ${item.msg?.author || ""}`)
+        .join(" ");
+      const matchable = `${bucket.label} ${docCount} visible to students ${lastUpdated} ${bucketSearchText}`.toLowerCase();
       if (normalizedTerm && !matchable.includes(normalizedTerm)) return "";
       return `
         <button type="button" class="materials-folder-card ${bucket.accent}" data-material-folder="${escapeHtml(bucket.key)}">
-          <div class="materials-folder-icon"><i class="${bucket.icon}" aria-hidden="true"></i></div>
-          <div class="materials-folder-main">
-            <div class="materials-folder-title">${escapeHtml(bucket.label)}</div>
-            <div class="materials-folder-sub">${docCount} ${docCount === 1 ? "document" : "documents"}</div>
+          <div class="materials-folder-left">
+            <div class="materials-folder-icon"><i class="${bucket.icon}" aria-hidden="true"></i></div>
+            <div class="materials-folder-content">
+              <div class="materials-folder-top">
+                <div class="materials-folder-title">${escapeHtml(bucket.label)}</div>
+                <span class="materials-folder-action">
+                  <span>${canManage ? "Manage" : "Open"}</span>
+                  <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>
+                </span>
+              </div>
+              <div class="materials-folder-meta">
+                <span>${docCount} ${docCount === 1 ? "doc" : "docs"}</span>
+                ${lastUpdated ? `<span aria-hidden="true">•</span><span>Updated ${escapeHtml(lastUpdated)}</span>` : ""}
+              </div>
+            </div>
           </div>
-          <div class="materials-folder-arrow"><i class="fa-solid fa-arrow-right" aria-hidden="true"></i></div>
         </button>
       `;
     })
@@ -26579,8 +25091,24 @@ function buildLearningMaterialsHome(channelId, entries, searchTerm = "") {
 
   return `
     <section class="materials-home-shell">
+      <div class="materials-library-hero">
+        <div>
+          <div class="materials-library-kicker">Course Library</div>
+          <h2>Learning Materials</h2>
+          <p>School document library for course resources, grouped by level and visible to allowed students.</p>
+        </div>
+        ${canManage ? `
+          <div class="materials-library-actions">
+            <span class="materials-manage-pill"><i class="fa-solid fa-upload" aria-hidden="true"></i> Upload and manage</span>
+          </div>
+        ` : `
+          <div class="materials-library-actions">
+            <span class="materials-manage-pill is-view-only"><i class="fa-solid fa-download" aria-hidden="true"></i> View and download</span>
+          </div>
+        `}
+      </div>
       <div class="materials-home-grid">
-        ${cards || `<div class="materials-folder-empty"><i class="fa-regular fa-folder-open" aria-hidden="true"></i><h3>No folders matched</h3><p>Try another search term or create uploads inside one of the level folders.</p></div>`}
+        ${cards || `<div class="materials-folder-empty"><i class="fa-regular fa-folder-open" aria-hidden="true"></i><h3>${normalizedTerm ? "No materials matched" : "No materials uploaded yet."}</h3><p>${normalizedTerm ? "Try another search term or level name." : canManage ? "Open a level to upload the first course document." : "Documents will appear here when your school uploads them."}</p></div>`}
       </div>
     </section>
   `;
@@ -26606,26 +25134,57 @@ function renderLearningMaterialsWorkspace(channelId, searchTerm = "") {
   }
 
   const folderEntries = entries.filter((item) => item.bucketKey === activeMeta.key);
+  const canManage = canManageLearningMaterials();
   const cardsMarkup = folderEntries.length
     ? folderEntries.map((entry) => buildAttachmentCard(entry.file)).join("")
-    : `<div class="materials-folder-empty is-inner"><i class="fa-regular fa-file-lines" aria-hidden="true"></i><h3>No files in ${escapeHtml(activeMeta.label)}</h3><p>Use the upload button below to add files that will stay saved inside this folder.</p></div>`;
+    : `<div class="materials-folder-empty is-inner"><i class="fa-regular fa-file-lines" aria-hidden="true"></i><h3>No materials uploaded yet.</h3><p>${canManage ? `Use the upload button below to add files to ${escapeHtml(activeMeta.label)}.` : `No documents are available for ${escapeHtml(activeMeta.label)} yet.`}</p></div>`;
+  const latestEntry = folderEntries
+    .slice()
+    .sort((a, b) => getLearningMaterialEntryTime(b) - getLearningMaterialEntryTime(a))[0];
+  const lastUpdated = latestEntry?.dateLabel || "";
+  const subtitleParts = [
+    `${folderEntries.length} ${folderEntries.length === 1 ? "document" : "documents"}`,
+    "Visible to students",
+    lastUpdated ? `Last updated ${lastUpdated}` : ""
+  ].filter(Boolean);
 
   messagesContainer.innerHTML = `
     <section class="materials-folder-shell">
-      <div class="materials-folder-topbar">
+      <div class="materials-folder-action-row">
         <button type="button" class="materials-back-btn" data-material-folder-back="1">
           <i class="fa-solid fa-arrow-left" aria-hidden="true"></i>
           <span>Back to folders</span>
         </button>
-        <div class="materials-folder-heading">
-          <div class="materials-folder-kicker">Learning Materials</div>
-          <h2>${escapeHtml(activeMeta.label)}</h2>
-          <p>${folderEntries.length} ${folderEntries.length === 1 ? "file" : "files"} saved in this folder.</p>
-        </div>
+        ${canManage ? `
+          <button type="button" class="materials-folder-mode" data-material-upload-trigger="1">
+            <i class="fa-solid fa-upload" aria-hidden="true"></i>
+            <span>Upload/manage enabled</span>
+          </button>
+        ` : ""}
+      </div>
+      <div class="materials-folder-heading">
+        <div class="materials-folder-kicker">Course Library</div>
+        <h2>${escapeHtml(activeMeta.label)}</h2>
+        <p>${escapeHtml(subtitleParts.join(" · "))}</p>
       </div>
       <div class="materials-files-grid">${cardsMarkup}</div>
+      ${canManage ? `
+        <div class="materials-upload-bar">
+          <button type="button" class="materials-upload-cta" data-material-upload-trigger="1">
+            <i class="fa-solid fa-file-arrow-up" aria-hidden="true"></i>
+            <span>Upload to ${escapeHtml(activeMeta.label)}</span>
+          </button>
+        </div>
+      ` : ""}
     </section>
   `;
+
+  messagesContainer.querySelectorAll("[data-material-upload-trigger]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (!canManageLearningMaterials()) return;
+      fileInput?.click();
+    });
+  });
 
   const backBtn = messagesContainer.querySelector("[data-material-folder-back]");
   if (backBtn) {
@@ -26639,6 +25198,12 @@ function renderLearningMaterialsWorkspace(channelId, searchTerm = "") {
   hydratePdfThumbs(messagesContainer);
   hydratePdfStats(messagesContainer);
   bindPdfMiniCardClicks(messagesContainer);
+  bindLearningMaterialsPreviewGrid(folderEntries);
+  if (!canManage) {
+    messagesContainer
+      .querySelectorAll('[data-action="edit"], [data-action="delete"], .att-options')
+      .forEach((node) => node.remove());
+  }
   updateLearningMaterialsDocCount(channelId);
 }
 
@@ -31063,6 +29628,10 @@ async function sendMessage(options = {}) {
   }
   if (!canPostInChannel(currentChannelId)) {
     showToast("You do not have permission to post in this channel.");
+    return;
+  }
+  if (isLearningMaterialsChannel(currentChannelId) && !canManageLearningMaterials()) {
+    showToast("Students can view and download learning materials.");
     return;
   }
   if (isLearningMaterialsChannel(currentChannelId) && !bypassMaterialsPicker) {
@@ -36848,195 +35417,6 @@ function plainToSafeHtml(s = "") {
 }
 
 
-/* =========================================================
-   SES – School Email Settings side card auto update
-   ========================================================= */
-
-function sesUpdateSideCard() {
-  const nameInput = document.getElementById("sesSchoolName");
-  const sideName = document.getElementById("sesSideSchoolName");
-
-  if (sideName) {
-    sideName.textContent = nameInput?.value?.trim() || "—";
-  }
-
-// Set registration details from the textarea (live edit) or cached profile
-  const profile = sesWorkspaceProfileCache || {};
-  const inlineRegistrationInput = (sesRegistrationDetails?.value || "").trim();
-  const registrationDetails = inlineRegistrationInput || (profile.registrationDetails || "");
-  const readField = (id, fallback = "") =>
-    document.getElementById(id)?.value?.trim() || fallback || "";
-  const street = readField("schoolProfileStreet", profile.street);
-  const house = readField("schoolProfileHouseNumber", profile.houseNumber);
-  const zip = readField("schoolProfilePostalCode", profile.postalCode);
-  const city = readField("schoolProfileCity", profile.city);
-  const country = readField(
-    "schoolProfileCountry",
-    profile.country || profile.state || ""
-  );
-  const phone = readField("schoolProfilePhone", profile.phone);
-  const adminEmail = getEffectiveSchoolContactEmail({
-    ...profile,
-    usePlatformContactEmail: !!schoolProfileUsePlatformEmail?.checked
-  });
-
-  const addressLines = [];
-  const line1 = [street, house].filter(Boolean).join(" ");
-  const line2 = [zip, city].filter(Boolean).join(" ");
-
-  if (line1) addressLines.push(line1);
-  if (line2) addressLines.push(line2);
-  if (country) addressLines.push(country);
-  const sideLines = [...addressLines];
-  if (phone) sideLines.push(`Phone: ${phone}`);
-  if (adminEmail) sideLines.push(`Admin email: ${adminEmail}`);
-
-  const sideAddress = document.getElementById("sesSideAddress");
-  if (sideAddress) {
-    sideAddress.innerHTML = sideLines.length
-      ? sideLines.map((l) => `<div>${escapeHtmlText(l)}</div>`).join("")
-      : "";
-  }
-  updateSesSignaturePreview({
-    profile,
-    addressLines,
-    phone,
-    adminEmail,
-    registrationDetails
-  });
-  updateSesBodyChrome().catch(() => {});
-}
-
-function buildSignatureOpeningHoursLines(profile = {}) {
-  const detailDays = Array.isArray(profile.openingHoursDetails?.days)
-    ? profile.openingHoursDetails.days
-    : [];
-  const formatEntry = (day, entry) => {
-    if (!entry) {
-      return { label: day.label, detail: "Hours not set" };
-    }
-    if (entry.status === "closed") {
-      return { label: day.label, detail: "Closed" };
-    }
-    const statusLabel =
-      OPENING_HOURS_STATUS_LABELS[entry.status] ||
-      OPENING_HOURS_STATUS_LABELS.open;
-    const hasTimes = entry.openTime && entry.closeTime;
-    const detail = hasTimes
-      ? `${entry.openTime} - ${entry.closeTime}`
-      : statusLabel;
-    const breakText =
-      entry.breakStart && entry.breakEnd
-        ? ` · Break ${entry.breakStart} - ${entry.breakEnd}`
-        : "";
-    return { label: day.label, detail: `${detail}${breakText}` };
-  };
-
-  const entries = detailDays.length
-    ? (() => {
-        const map = new Map(
-          detailDays.map((entry) => [
-            String(entry.day || "").toLowerCase(),
-            entry || {}
-          ])
-        );
-        return OPENING_HOURS_DAYS.map((day) => formatEntry(day, map.get(day.key)));
-      })()
-    : [];
-
-  if (!entries.length) {
-    const fallback = String(profile.openingHours || "").trim();
-    return fallback ? [{ label: "", detail: fallback }] : [];
-  }
-
-  const groups = [];
-  let current = null;
-  entries.forEach((entry) => {
-    if (!current) {
-      current = { start: entry.label, end: entry.label, detail: entry.detail };
-      return;
-    }
-    if (current.detail === entry.detail) {
-      current.end = entry.label;
-    } else {
-      groups.push(current);
-      current = { start: entry.label, end: entry.label, detail: entry.detail };
-    }
-  });
-  if (current) groups.push(current);
-
-  return groups.map((group) => {
-    const label =
-      group.start === group.end ? group.start : `${group.start} - ${group.end}`;
-    return { label, detail: group.detail };
-  });
-}
-
-function refreshReplySignature() {
-  const target = document.getElementById("detailReplySignature");
-  if (!target) return;
-  const previewHtml = (sesSignaturePreview?.innerHTML || "").trim();
-  const schoolName = (sesSchoolName?.value || "").trim();
-  const builder = [];
-  builder.push('<div><strong>Mit Freundlichen Grüßen</strong></div>');
-  if (schoolName) {
-    builder.push(`<div class="signature-school">${escapeHtmlText(schoolName)}</div>`);
-  }
-  if (previewHtml) {
-    builder.push('<div class="signature-lines">');
-    builder.push(previewHtml);
-    builder.push("</div>");
-  }
-  target.innerHTML = builder.join("");
-}
-
-function updateReplyGreeting(name) {
-  if (!detailReplyGreeting) return;
-  const trimmed = String(name || "").trim();
-  detailReplyGreeting.textContent = trimmed
-    ? `Sehr geehrte/r ${trimmed}`
-    : "Sehr geehrte/r";
-}
-
-function updateSesSignaturePreview({
-  profile = {},
-  addressLines = [],
-  phone = "",
-  adminEmail = "",
-  registrationDetails = ""
-}) {
-  if (sesSignatureHours) {
-    const hoursLines = buildSignatureOpeningHoursLines(profile);
-    sesSignatureHours.innerHTML = hoursLines.length
-      ? hoursLines
-          .map((line) => {
-            const label = line.label ? `<strong>${escapeHtmlText(line.label)}:</strong>` : "";
-            const detail = escapeHtmlText(line.detail || "");
-            return `<div>${label} ${detail}</div>`;
-          })
-          .join("")
-      : "";
-  }
-  if (sesSignatureAddress) {
-    const singleAddress = addressLines.filter(Boolean).join(", ");
-    sesSignatureAddress.innerHTML = singleAddress
-      ? `<div>${escapeHtmlText(singleAddress)}</div>`
-      : "";
-  }
-  if (sesSignaturePhone) {
-    sesSignaturePhone.textContent = phone ? `Phone: ${phone}` : "";
-  }
-  if (sesSignatureEmail) {
-    sesSignatureEmail.textContent = adminEmail ? `Email: ${adminEmail}` : "";
-  }
-  const registrationText =
-    (registrationDetails || profile.registrationDetails || "").trim();
-  if (sesSignatureRegistration) {
-    sesSignatureRegistration.textContent = registrationText;
-  }
-  refreshReplySignature();
-}
-
 /* Attach listeners safely AFTER page load */
 document.addEventListener("DOMContentLoaded", () => {
   updateChannelFullscreenButton();
@@ -37046,38 +35426,7 @@ document.addEventListener("DOMContentLoaded", () => {
   } else {
     restoreLastActivePanel();
   }
-  [
-    "sesSchoolName",
-    "schoolProfileStreet",
-    "schoolProfileHouseNumber",
-    "schoolProfilePostalCode",
-    "schoolProfileCity",
-    "schoolProfileCountry",
-    "schoolProfilePhone",
-    "sesRegistrationDetails"
-  ].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.addEventListener("input", sesUpdateSideCard);
-  });
-  if (schoolProfileUsePlatformEmail) {
-    schoolProfileUsePlatformEmail.addEventListener("change", () => {
-      const profile = {
-        ...(sesWorkspaceProfileCache || {}),
-        usePlatformContactEmail: !!schoolProfileUsePlatformEmail.checked
-      };
-      syncSchoolProfileEmailUi(profile);
-      sesUpdateSideCard();
-    });
-  }
-  sesUpdateSideCard();
-  updateSesBodyChrome().catch(() => {});
-
-  if (sesTestTo) {
-    sesTestTo.addEventListener("input", () => {
-      updateSesBodyChrome().catch(() => {});
-    });
-  }
-  updateSesBodyChrome().catch(() => {});
+  wireSchoolEmailProfilePreviewBindings();
   const liveMeetLeaveBtn = document.getElementById("liveMeetLeaveBtn");
   if (liveMeetLeaveBtn) {
     liveMeetLeaveBtn.addEventListener("click", async () => {
@@ -37584,1017 +35933,6 @@ window.addEventListener("popstate", () => {
       if (state.selectedTaskId) await loadComments(state.selectedTaskId);
     });
   }
-
-  // ===== Gmail-ish Inbox (vanilla) =====
-  (function initGmailishInbox() {
-    const emailPanelEl = document.getElementById("emailPanel");
-    const listEl = document.getElementById("inboxList");
-    const countEl = document.getElementById("mbxCount");
-    const titleEl = document.querySelector("#wnMailbox .mbx-name");
-    const iconEl = document.querySelector("#wnMailbox .mbx-icon");
-    const refreshBtn = document.getElementById("btnRefresh");
-    const markAllBtn = document.getElementById("btnMarkAllRead");
-    const searchEl = document.getElementById("mbxSearch");
-    const selectAllEl = document.getElementById("selectAll");
-    const selectHeaderEl = document.querySelector(".mbx-header-select");
-    const bulkEl = document.getElementById("bulkActions");
-    const bulkDeleteBtn = bulkEl?.querySelector('[data-action="delete"], .btn-danger');
-    const trashActionsEl = document.getElementById("trashActions");
-    const trashRestoreBtn = document.getElementById("btnTrashRestore");
-    const trashDeleteForeverBtn = document.getElementById("btnTrashDeleteForever");
-    const trashEmptyBtn = document.getElementById("btnEmptyTrash");
-    const trashCancelBtn = document.getElementById("btnTrashCancel");
-
-    const detailPanel = document.getElementById("inboxDetailPanel");
-    const detailCloseBtn = document.getElementById("detailCloseBtn");
-    const detailEmpty = document.getElementById("detailEmpty");
-    const detailView = document.getElementById("detailView");
-    const inboxListEl = document.getElementById("inboxList");
-    const mailboxEl = document.getElementById("wnMailbox");
-    const dSubject = document.getElementById("dSubject");
-    const dFrom = document.getElementById("dFrom");
-    const dDate = document.getElementById("dDate");
-    const dBody = document.getElementById("dBody");
-    const dAttach = document.getElementById("dAttach");
-    const dAttachGrid = document.getElementById("dAttachGrid");
-    const dAttachCount = document.getElementById("dAttachCount");
-    const dAttachScan = document.getElementById("dAttachScan");
-    const dAttachDrive = document.getElementById("dAttachDrive");
-    const detailActionsPanel = document.getElementById("detailActionsPanel");
-    const detailReplyBtn = document.getElementById("detailReplyBtn");
-    const detailForwardBtn = document.getElementById("detailForwardBtn");
-    const detailEmojiBtn = document.getElementById("detailEmojiBtn");
-    const detailReplyPanel = document.getElementById("detailReplyPanel");
-    const detailReplyTextarea = document.getElementById("detailReplyTextarea");
-    const detailReplySendBtn = document.getElementById("detailReplySendBtn");
-    const detailReplyCancelBtn = document.getElementById("detailReplyCancelBtn");
-    const detailReplyHideBtn = document.getElementById("detailReplyHideBtn");
-    const detailReplyActions = document.getElementById("detailReplyActions");
-    const detailReplies = document.getElementById("detailReplies");
-
-    function formatReplyTimestamp(value) {
-      const date = value ? new Date(value) : new Date();
-      if (Number.isNaN(date.getTime())) return "";
-      return date.toLocaleString();
-    }
-
-    function renderDetailReplies(mail) {
-      if (!detailReplies) return;
-      const entries = Array.isArray(mail?.replies) ? mail.replies : [];
-      if (!entries.length) {
-        detailReplies.classList.add("hidden");
-        detailReplies.innerHTML = "";
-        return;
-      }
-      detailReplies.classList.remove("hidden");
-      detailReplies.innerHTML = entries
-        .map((entry) => {
-          return `
-            <div class="detail-reply-thread">
-              <div class="detail-reply-thread-header">
-                Reply sent ${formatReplyTimestamp(entry.created_at)}
-              </div>
-              <div class="detail-reply-thread-body">${escapeHtml(entry.body || "").replace(/\n/g, "<br>")}</div>
-            </div>
-          `;
-        })
-        .join("");
-    }
-    if (dAttachScan) {
-      dAttachScan.textContent = "Scanned by Gmail";
-    }
-    if (dAttachDrive) {
-      dAttachDrive.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        showToast("Add to Drive is coming soon", "info");
-      });
-    }
-    if (detailForwardBtn) {
-      detailForwardBtn.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        showToast("Forward will be added soon", "info");
-      });
-    }
-    if (detailEmojiBtn) {
-      detailEmojiBtn.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        showToast("Emoji reactions coming soon", "info");
-      });
-    }
-    const showReplyComposer = () => {
-      detailReplyPanel?.classList.remove("hidden");
-      detailReplyActions?.classList.remove("hidden");
-      refreshReplySignature();
-      detailReplyTextarea?.focus();
-      detailReplyTextarea?.setAttribute("aria-expanded", "true");
-      detailReplyTextarea?.scrollIntoView({ behavior: "smooth", block: "start" });
-    };
-    const hideReplyComposer = () => {
-      detailReplyPanel?.classList.add("hidden");
-      detailReplyActions?.classList.add("hidden");
-      detailReplyTextarea?.setAttribute("aria-expanded", "false");
-    };
-    detailReplyBtn?.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      showReplyComposer();
-    });
-    detailReplyCancelBtn?.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      hideReplyComposer();
-    });
-    detailReplyHideBtn?.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      hideReplyComposer();
-    });
-    detailReplySendBtn?.addEventListener("click", async (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      const activeEmailId = sesInboxDetail?.dataset?.emailId || (sesInboxActiveMessage ? String(sesInboxActiveMessage.id || "") : "");
-      if (!activeEmailId) {
-        showToast("Select an email to reply", "error");
-        return;
-      }
-      const replyText = detailReplyTextarea?.value.trim() || "";
-      if (!replyText) {
-        showToast("Write something before sending", "info");
-        detailReplyTextarea?.focus();
-        return;
-      }
-      detailReplySendBtn.disabled = true;
-      try {
-        const targetMessageId = sesInboxActiveMessage && String(sesInboxActiveMessage.id) === activeEmailId
-          ? sesInboxActiveMessage.id
-          : activeEmailId;
-        const csrfToken = getCsrfToken();
-        const greetingText = detailReplyGreeting?.textContent?.trim() || "";
-        const signatureText =
-          detailReplySignature?.innerText?.trim() ||
-          detailReplySignature?.textContent?.trim() ||
-          "";
-        const messageParts = [];
-        if (greetingText) messageParts.push(greetingText);
-        if (replyText) messageParts.push(replyText);
-        if (signatureText) messageParts.push(signatureText);
-        const finalReplyBody = messageParts.join("\n\n");
-        const response = await fetch(`/api/admin/inbox/${targetMessageId}/reply`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-csrf-token": csrfToken
-          },
-          credentials: "include",
-          body: JSON.stringify({ text: finalReplyBody })
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "Reply failed");
-        showToast("Reply sent", "success");
-        detailReplyTextarea.value = "";
-        hideReplyComposer();
-        const newReplyEntry = {
-          body: finalReplyBody,
-          created_at: new Date().toISOString()
-        };
-        if (sesInboxActiveMessage) {
-          const existing = Array.isArray(sesInboxActiveMessage.replies)
-            ? [...sesInboxActiveMessage.replies, newReplyEntry]
-            : [newReplyEntry];
-          sesInboxActiveMessage.replies = existing;
-        }
-        renderDetailReplies(sesInboxActiveMessage);
-      } catch (error) {
-        console.error("Reply failed", error);
-        showToast(`Reply failed: ${error.message || "unknown error"}`, "error");
-      } finally {
-        detailReplySendBtn.disabled = false;
-      }
-    });
-
-    if (!listEl) return; // inbox not present on this page
-
-    let inbox = [];
-    let filtered = [];
-    let activeId = null;
-    let currentFolder = "inbox";
-    let currentTrashAction = null;
-    const selected = new Set();
-    let mailboxBootstrapped = false;
-    let mailboxRequestSeq = 0;
-    let mailboxDataSignature = "";
-    let mailboxPollTimer = null;
-    let mailboxPollInFlight = false;
-    let mailboxFailureCount = 0;
-
-    function isElementActuallyVisible(element) {
-      if (!element) return false;
-      if (element.classList.contains("hidden")) return false;
-      if (element.getAttribute("aria-hidden") === "true") return false;
-      return element.offsetParent !== null;
-    }
-
-    function canCurrentUserAccessMailbox() {
-      const role = normalizeRole(sessionUser?.role || sessionUser?.userRole || "");
-      return !!(
-        sessionUser &&
-        (role === "student" || role === "admin" || role === "school_admin" || role === "super_admin")
-      );
-    }
-
-    function isTrashSelectionMode() {
-      return currentFolder === "trash" && !!currentTrashAction;
-    }
-
-    function syncMailboxHeading() {
-      if (titleEl) titleEl.textContent = currentFolder === "trash" ? "Trash" : "Inbox";
-      if (iconEl) iconEl.textContent = currentFolder === "trash" ? "🗑️" : "📥";
-    }
-
-    function updateMailboxModeUI() {
-      const inTrash = currentFolder === "trash";
-      const selectingTrash = isTrashSelectionMode();
-      if (markAllBtn) {
-        markAllBtn.hidden = inTrash;
-      }
-      if (trashActionsEl) {
-        trashActionsEl.hidden = !inTrash;
-      }
-      if (selectHeaderEl) {
-        selectHeaderEl.hidden = inTrash && !selectingTrash;
-      }
-      if (selectAllEl && (inTrash && !selectingTrash)) {
-        selectAllEl.checked = false;
-      }
-      if (trashRestoreBtn) {
-        trashRestoreBtn.textContent = currentTrashAction === "restore" ? "Confirm put back" : "Put back";
-      }
-      if (trashDeleteForeverBtn) {
-        trashDeleteForeverBtn.textContent =
-          currentTrashAction === "deleteForever" ? "Confirm delete forever" : "Delete forever";
-      }
-      if (trashCancelBtn) {
-        trashCancelBtn.hidden = !selectingTrash;
-      }
-      if (bulkEl) {
-        bulkEl.hidden = inTrash || selected.size === 0;
-      }
-    }
-
-    function resetTrashSelectionMode() {
-      currentTrashAction = null;
-      selected.clear();
-      if (selectAllEl) selectAllEl.checked = false;
-      updateMailboxModeUI();
-    }
-
-    function resetMailboxState() {
-      inbox = [];
-      filtered = [];
-      activeId = null;
-      currentTrashAction = null;
-      selected.clear();
-      if (selectAllEl) selectAllEl.checked = false;
-      renderDetail(null);
-      exitDetailView();
-      renderList();
-      updateBulkUI();
-    }
-
-    function fmtDate(ts) {
-      try {
-        const d = new Date(ts);
-        const now = new Date();
-        const sameDay = d.toDateString() === now.toDateString();
-        return sameDay
-          ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-          : d.toLocaleDateString([], { year: "numeric", month: "2-digit", day: "2-digit" });
-      } catch {
-        return "";
-      }
-    }
-
-    function parseSender(sender) {
-      const s = (sender || "").trim();
-      const m = s.match(/^(.*?)\s*<([^>]+)>$/);
-      if (m) return { name: m[1].trim(), email: m[2].trim() };
-      if (s.includes("@")) return { name: "", email: s };
-      return { name: s, email: "" };
-    }
-
-    function isReadFlag(v) {
-      return Number(v) === 1;
-    }
-
-    function buildPreview(mail) {
-      if (mail.preview) return mail.preview;
-      if (mail.text_body) return mail.text_body.replace(/\s+/g, " ").trim().slice(0, 140);
-      if (mail.html_body)
-        return mail.html_body.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 140);
-      return "";
-    }
-
-    function initials(nameOrEmail) {
-      const s = (nameOrEmail || "").trim();
-      if (!s) return "?";
-      const parts = s.split(/\s+/).filter(Boolean);
-      if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
-      return s.slice(0, 1).toUpperCase();
-    }
-
-    function safeText(s) {
-      return (s ?? "").toString();
-    }
-
-    function bytesToSize(n) {
-      if (!Number.isFinite(n)) return "";
-      const units = ["B", "KB", "MB", "GB"];
-      let i = 0, v = n;
-      while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
-      return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
-    }
-
-    function attachmentChipLabel(att) {
-      const name = att.filename || att.name || "attachment";
-      const ext = (name.split(".").pop() || "").toUpperCase();
-      const size = att.size ? bytesToSize(att.size) : "";
-      if (ext && ext !== name.toUpperCase()) return `${ext}${size ? " • " + size : ""}`;
-      return `${name}${size ? " • " + size : ""}`;
-    }
-
-    function buildRow(mail) {
-      const isUnread = !mail.is_read;
-      const isActive = mail.id === activeId;
-      const fromLabel = mail.from_name || mail.from_email || "(unknown)";
-      const subj = mail.subject || "(no subject)";
-      const snip = mail.preview || "";
-      const date = fmtDate(mail.received_at);
-
-      const row = document.createElement("div");
-      row.className = `mbx-row ${isUnread ? "is-unread" : ""} ${isActive ? "is-active" : ""}`;
-      row.dataset.id = mail.id;
-
-    const chk = document.createElement("div");
-    chk.className = "row-check";
-    if (currentFolder === "trash" && !isTrashSelectionMode()) {
-      chk.style.visibility = "hidden";
-    }
-    chk.innerHTML = `<input type="checkbox" ${selected.has(mail.id) ? "checked" : ""} aria-label="Select email">`;
-    chk.querySelector("input").addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (e.target.checked) selected.add(mail.id);
-      else selected.delete(mail.id);
-        updateBulkUI();
-      });
-
-    const from = document.createElement("div");
-    from.className = "from";
-    from.textContent = safeText(fromLabel);
-
-      const subject = document.createElement("div");
-      subject.className = "subject";
-      subject.textContent = safeText(subj);
-
-      const snippet = document.createElement("div");
-      snippet.className = "snip";
-      snippet.textContent = safeText(snip);
-
-      const dateEl = document.createElement("div");
-      dateEl.className = "date";
-      dateEl.textContent = date;
-
-    row.appendChild(chk);
-    const starBtn = document.createElement("button");
-    starBtn.className = "row-star-btn";
-    starBtn.type = "button";
-    starBtn.setAttribute("aria-pressed", "false");
-    starBtn.title = "Star this message";
-    starBtn.innerHTML = `<i class="fa-regular fa-star" aria-hidden="true"></i>`;
-    starBtn.addEventListener("click", (event) => {
-      event.stopPropagation();
-      const isStarred = starBtn.classList.toggle("is-starred");
-      starBtn.setAttribute("aria-pressed", String(isStarred));
-      const icon = starBtn.querySelector("i");
-      if (icon) {
-        icon.className = isStarred ? "fa-solid fa-star" : "fa-regular fa-star";
-      }
-    });
-    row.appendChild(starBtn);
-    row.appendChild(from);
-      row.appendChild(subject);
-      row.appendChild(snippet);
-      row.appendChild(dateEl);
-
-      const atts = Array.isArray(mail.attachments) ? mail.attachments : [];
-      if (mail.hasAttachments && atts.length) {
-        const chips = document.createElement("div");
-        chips.className = "chips";
-
-        const show = atts.slice(0, 2);
-        show.forEach((att) => {
-          const a = document.createElement("a");
-          a.className = "chip";
-          a.href = `/api/admin/inbox/${mail.id}/attachments/${att.id}`;
-          const isPdfChip = /^application\/pdf$/i.test(att.contentType || att.mime || "");
-          a.innerHTML = `
-            ${isPdfChip ? '<i class="fa-solid fa-file-pdf att-icon-pdf" aria-hidden="true"></i> ' : ""}
-            ${attachmentChipLabel(att)}
-          `.trim();
-          a.addEventListener("click", (e) => e.stopPropagation());
-          chips.appendChild(a);
-        });
-
-        if (atts.length > 2) {
-          const more = document.createElement("span");
-          more.className = "snip";
-          more.textContent = `+${atts.length - 2} more`;
-          chips.appendChild(more);
-        }
-
-        row.appendChild(chips);
-      }
-
-      row.addEventListener("click", () => openMail(mail.id));
-      return row;
-    }
-
-    function renderList() {
-      listEl.innerHTML = "";
-      countEl.textContent = String(filtered.length);
-      updateMailboxModeUI();
-
-      if (!filtered.length) {
-        renderUiState(listEl, {
-          message: "No messages"
-        });
-        return;
-      }
-
-      const frag = document.createDocumentFragment();
-      filtered.forEach((m) => frag.appendChild(buildRow(m)));
-      listEl.appendChild(frag);
-    }
-
-    function enterDetailView() {
-      if (detailPanel) detailPanel.classList.remove("hidden");
-      if (inboxListEl) inboxListEl.classList.add("hidden");
-      if (mailboxEl) mailboxEl.classList.add("detail-open");
-    }
-
-    function exitDetailView() {
-      if (detailPanel) detailPanel.classList.add("hidden");
-      if (inboxListEl) inboxListEl.classList.remove("hidden");
-      if (mailboxEl) mailboxEl.classList.remove("detail-open");
-    }
-
-    function renderDetail(mail) {
-      if (!mail) {
-        detailEmpty.hidden = false;
-        detailView.hidden = true;
-        sesInboxActiveMessage = null;
-        updateReplyGreeting("");
-        renderDetailReplies(null);
-        if (detailActionsPanel) {
-          detailActionsPanel.classList.add("hidden");
-        }
-        return;
-      }
-
-      detailEmpty.hidden = true;
-      detailView.hidden = false;
-
-      dSubject.textContent = mail.subject || "(no subject)";
-      dFrom.textContent = `${mail.from_name || ""} <${mail.from_email || ""}>`;
-      dDate.textContent = new Date(mail.received_at).toLocaleString();
-
-      sesInboxActiveMessage = mail;
-      updateReplyGreeting(mail.from_name || mail.from_email || mail.sender || "");
-      if (detailActionsPanel) {
-        detailActionsPanel.classList.toggle("hidden", !canManageSchoolMailbox());
-      }
-
-      const bodyHtml = mail.html_body || "";
-      if (bodyHtml) {
-        dBody.innerHTML = bodyHtml; // only safe if your backend ensures HTML is sanitized
-      } else {
-        dBody.textContent = mail.text_body || mail.preview || "";
-      }
-
-      const atts = Array.isArray(mail.attachments) ? mail.attachments : [];
-      const attachmentCount = atts.length;
-      if (mail.hasAttachments && attachmentCount) {
-        dAttach.hidden = false;
-        dAttachGrid.innerHTML = "";
-        if (dAttachCount) {
-          dAttachCount.textContent =
-            attachmentCount === 1 ? "One attachment" : `${attachmentCount} attachments`;
-        }
-
-        for (const att of atts) {
-          const name = att.filename || att.name || "attachment";
-          const mime = att.contentType || att.mime || "file";
-          const size = att.size ? att.size : 0;
-          const sizeLabel = att.size ? bytesToSize(att.size) : "";
-          const viewable = /^(application\/pdf|image\/png|image\/jpe?g|image\/webp)$/i.test(mime);
-          const isPdf = /^application\/pdf$/i.test(mime);
-          const viewHref = `/api/admin/inbox/${mail.id}/attachments/${att.id}/view`;
-          const dlHref = `/api/admin/inbox/${mail.id}/attachments/${att.id}`;
-          let container;
-
-          if (isPdf) {
-            const temp = document.createElement("div");
-            temp.innerHTML = buildPdfGmailMarkup({
-              name,
-              url: viewHref,
-              sizeLabel,
-              sizeBytes: size
-            }).trim();
-            container = temp.firstElementChild;
-          } else {
-            container = document.createElement("div");
-            container.className = "att-preview-card";
-            container.innerHTML = `
-              <div class="att-preview-media">
-                <i class="fa-solid fa-${mime.includes("image") ? "image" : "file"} att-placeholder-icon" aria-hidden="true"></i>
-                <div class="att-preview-overlay">
-                  ${viewable ? `<a href="${viewHref}" target="_blank" rel="noopener" title="Preview"><i class="fa-solid fa-eye"></i></a>` : ""}
-                  <a href="${dlHref}" target="_blank" rel="noopener" title="Download"><i class="fa-solid fa-download"></i></a>
-                </div>
-              </div>
-              <div class="att-preview-meta">
-                <div class="att-file-name" title="${name.replace(/"/g, "&quot;")}">${name}</div>
-                <div class="att-file-size">${mime}${sizeLabel ? " • " + sizeLabel : ""}</div>
-              </div>
-            `;
-          }
-
-          container.querySelectorAll("a").forEach((anchor) =>
-            anchor.addEventListener("click", (event) => event.stopPropagation())
-          );
-
-          dAttachGrid.appendChild(container);
-          if (isPdf) {
-            attachPdfIframeFallback(container, viewHref);
-            hydratePdfThumbs(container);
-          }
-        }
-      } else {
-        dAttach.hidden = true;
-        dAttachGrid.innerHTML = "";
-        if (dAttachCount) {
-          dAttachCount.textContent = "";
-        }
-      }
-      renderDetailReplies(mail);
-    }
-
-    function openMail(id) {
-      activeId = id;
-
-      const m = inbox.find((x) => x.id === id);
-      if (m) m.is_read = true;
-
-      enterDetailView();
-      renderList();
-      renderDetail(m);
-    }
-
-    function applySearch() {
-      const q = (searchEl.value || "").trim().toLowerCase();
-      if (!q) filtered = [...inbox];
-      else {
-        filtered = inbox.filter((m) => {
-          return (
-            (m.from_name || "").toLowerCase().includes(q) ||
-            (m.from_email || "").toLowerCase().includes(q) ||
-            (m.subject || "").toLowerCase().includes(q) ||
-            (m.preview || "").toLowerCase().includes(q)
-          );
-        });
-      }
-      renderList();
-    }
-
-    function updateBulkUI() {
-      const has = selected.size > 0;
-      if (bulkEl) {
-        bulkEl.hidden = currentFolder === "trash" || !has;
-      }
-      if (selectAllEl) {
-        selectAllEl.checked = has && selected.size === filtered.length;
-      }
-      updateMailboxModeUI();
-    }
-
-    function buildMailboxDataSignature(rows) {
-      return JSON.stringify(
-        (Array.isArray(rows) ? rows : []).map((row) => [
-          String(row?.id || ""),
-          String(row?.folder || ""),
-          String(row?.received_at || ""),
-          String(row?.subject || ""),
-          Number(row?.is_read || 0),
-          Number(row?.attachmentsCount || 0)
-        ])
-      );
-    }
-
-    function isMailboxPanelVisible() {
-      return Boolean(
-        isElementActuallyVisible(emailPanelEl) &&
-        isElementActuallyVisible(sesInboxPanel) &&
-        isElementActuallyVisible(mailboxEl) &&
-        currentFolder &&
-        ["inbox", "trash"].includes(currentFolder)
-      );
-    }
-
-    function syncInboxInBackground(folder = currentFolder) {
-      const normalizedFolder = String(folder || "").trim().toLowerCase() === "trash" ? "trash" : "inbox";
-      if (!canManageSchoolMailbox() || normalizedFolder !== "inbox") return;
-      loadInbox({ sync: true, folder: normalizedFolder }).catch((error) => {
-        console.error("Inbox background sync failed", error);
-      });
-    }
-
-    function scheduleMailboxAutoRefresh(delayMs = 5000) {
-      if (mailboxPollTimer) {
-        clearTimeout(mailboxPollTimer);
-      }
-      mailboxPollTimer = setTimeout(async () => {
-        if (mailboxPollInFlight) {
-          scheduleMailboxAutoRefresh(delayMs);
-          return;
-        }
-        if (document.hidden || !isMailboxPanelVisible()) {
-          scheduleMailboxAutoRefresh(delayMs);
-          return;
-        }
-        mailboxPollInFlight = true;
-        try {
-          await loadInbox({ sync: false, folder: currentFolder });
-          syncInboxInBackground(currentFolder);
-          mailboxFailureCount = 0;
-        } catch (error) {
-          console.error("Mailbox auto-refresh failed", error);
-          mailboxFailureCount = Math.min(mailboxFailureCount + 1, 6);
-        } finally {
-          mailboxPollInFlight = false;
-          const nextDelay = mailboxFailureCount
-            ? Math.min(delayMs * Math.pow(2, mailboxFailureCount), 60000)
-            : delayMs;
-          scheduleMailboxAutoRefresh(nextDelay);
-        }
-      }, delayMs);
-    }
-
-    async function bootstrapMailbox(force = false) {
-      if (!canCurrentUserAccessMailbox()) {
-        mailboxBootstrapped = false;
-        resetMailboxState();
-        return;
-      }
-      if (!isMailboxPanelVisible() && !force) return;
-      if (mailboxBootstrapped && !force) return;
-      mailboxBootstrapped = true;
-      await loadInbox({ sync: false, folder: currentFolder });
-      syncInboxInBackground(currentFolder);
-    }
-
-    async function loadInbox({ sync = false, folder } = {}) {
-      const previousFolder = currentFolder;
-      if (folder) {
-        currentFolder = String(folder).trim().toLowerCase() === "trash" ? "trash" : "inbox";
-      }
-      const folderChanged = previousFolder !== currentFolder;
-      if (!canCurrentUserAccessMailbox()) {
-        mailboxBootstrapped = false;
-        resetMailboxState();
-        return;
-      }
-      if (folderChanged) {
-        activeId = null;
-        renderDetail(null);
-        exitDetailView();
-      }
-      if (currentFolder !== "trash") {
-        currentTrashAction = null;
-      }
-      syncMailboxHeading();
-      updateMailboxModeUI();
-      const params = new URLSearchParams();
-      params.set("folder", currentFolder);
-      if (sync) params.set("sync", "1");
-      const url = `/api/admin/inbox?${params.toString()}`;
-      const requestSeq = ++mailboxRequestSeq;
-      const requestFolder = currentFolder;
-      const res = await apiFetch(url);
-      if (requestSeq !== mailboxRequestSeq || requestFolder !== currentFolder) {
-        return;
-      }
-      if (res.status === 401 || res.status === 403) {
-        mailboxBootstrapped = false;
-        resetMailboxState();
-        return;
-      }
-      if (!res.ok) {
-        throw new Error(`Inbox request failed (${res.status})`);
-      }
-      const data = await res.json();
-      if (requestSeq !== mailboxRequestSeq || requestFolder !== currentFolder) {
-        return;
-      }
-
-      const raw = Array.isArray(data) ? data : (Array.isArray(data?.rows) ? data.rows : []);
-      const nextSignature = buildMailboxDataSignature(raw);
-      if (!folderChanged && nextSignature === mailboxDataSignature) {
-        return;
-      }
-      mailboxDataSignature = nextSignature;
-      inbox = raw.map((m) => {
-        const { name, email } = parseSender(m.sender);
-        return {
-          ...m,
-          from_name: name || email || "(unknown)",
-          from_email: email || "",
-          subject: m.subject || "(no subject)",
-          preview: buildPreview(m),
-          received_at: m.received_at,
-          is_read: isReadFlag(m.is_read),
-          hasAttachments: !!m.hasAttachments,
-          attachments: Array.isArray(m.attachments) ? m.attachments : [],
-          replies: Array.isArray(m.replies) ? m.replies : []
-        };
-      });
-      filtered = [...inbox];
-      selected.clear();
-      if (selectAllEl) selectAllEl.checked = false;
-
-      if (activeId && !inbox.some((m) => m.id === activeId)) {
-        activeId = null;
-        renderDetail(null);
-        exitDetailView();
-      } else if (activeId) {
-        renderDetail(inbox.find((m) => m.id === activeId));
-        enterDetailView();
-      }
-
-      applySearch();
-      updateBulkUI();
-    }
-
-    async function deleteSelectedInboxMessages() {
-      const ids = Array.from(selected).map((value) => Number.parseInt(String(value), 10)).filter(Number.isFinite);
-      if (!ids.length) {
-        showToast("Select at least one email", "info");
-        return;
-      }
-
-      const ok = await openConfirmModal({
-        title: currentFolder === "trash" ? "Move to trash again?" : "Move selected emails to trash?",
-        message:
-          currentFolder === "trash"
-            ? `These ${ids.length} email${ids.length === 1 ? "" : "s"} are already in trash.`
-            : `Move ${ids.length} selected email${ids.length === 1 ? "" : "s"} to trash?`,
-        confirmText: currentFolder === "trash" ? "OK" : "Move to trash",
-        danger: true
-      });
-      if (!ok) return;
-      if (currentFolder === "trash") return;
-
-      const response = await fetch("/api/admin/inbox/bulk-delete", {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          "x-csrf-token": getCsrfToken()
-        },
-        body: JSON.stringify({ ids })
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(data.error || "Delete failed");
-      }
-
-      const selectedIds = new Set(ids.map(String));
-      inbox = inbox.filter((mail) => !selectedIds.has(String(mail.id)));
-      filtered = filtered.filter((mail) => !selectedIds.has(String(mail.id)));
-      selected.clear();
-      if (activeId && selectedIds.has(String(activeId))) {
-        activeId = null;
-        renderDetail(null);
-        exitDetailView();
-      }
-      applySearch();
-      updateBulkUI();
-      showToast(`${data.deleted || ids.length} email${(data.deleted || ids.length) === 1 ? "" : "s"} moved to trash`, "success");
-    }
-
-    async function restoreSelectedTrashMessages() {
-      const ids = Array.from(selected).map((value) => Number.parseInt(String(value), 10)).filter(Number.isFinite);
-      if (!ids.length) {
-        showToast("Select at least one trash email", "info");
-        return;
-      }
-      const response = await fetch("/api/admin/inbox/bulk-restore", {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          "x-csrf-token": getCsrfToken()
-        },
-        body: JSON.stringify({ ids })
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(data.error || "Restore failed");
-      }
-      const selectedIds = new Set(ids.map(String));
-      inbox = inbox.filter((mail) => !selectedIds.has(String(mail.id)));
-      filtered = filtered.filter((mail) => !selectedIds.has(String(mail.id)));
-      if (activeId && selectedIds.has(String(activeId))) {
-        activeId = null;
-        renderDetail(null);
-        exitDetailView();
-      }
-      resetTrashSelectionMode();
-      applySearch();
-      showToast(`${data.restored || ids.length} email${(data.restored || ids.length) === 1 ? "" : "s"} put back`, "success");
-    }
-
-    async function deleteTrashForever() {
-      const ids = Array.from(selected).map((value) => Number.parseInt(String(value), 10)).filter(Number.isFinite);
-      if (!ids.length) {
-        showToast("Select at least one trash email", "info");
-        return;
-      }
-      const ok = await openConfirmModal({
-        title: "Delete forever?",
-        message: `Permanently delete ${ids.length} trash email${ids.length === 1 ? "" : "s"}?`,
-        confirmText: "Delete forever",
-        danger: true
-      });
-      if (!ok) return;
-      const response = await fetch("/api/admin/inbox/bulk-delete-forever", {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          "x-csrf-token": getCsrfToken()
-        },
-        body: JSON.stringify({ ids })
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(data.error || "Permanent delete failed");
-      }
-      const selectedIds = new Set(ids.map(String));
-      inbox = inbox.filter((mail) => !selectedIds.has(String(mail.id)));
-      filtered = filtered.filter((mail) => !selectedIds.has(String(mail.id)));
-      if (activeId && selectedIds.has(String(activeId))) {
-        activeId = null;
-        renderDetail(null);
-        exitDetailView();
-      }
-      resetTrashSelectionMode();
-      applySearch();
-      showToast(`${data.deleted || ids.length} email${(data.deleted || ids.length) === 1 ? "" : "s"} deleted forever`, "success");
-    }
-
-    async function emptyTrash() {
-      const ok = await openConfirmModal({
-        title: "Clean Trash?",
-        message: "Delete all emails in Trash forever?",
-        confirmText: "Clean Trash",
-        danger: true
-      });
-      if (!ok) return;
-      const response = await fetch("/api/admin/inbox/empty-trash", {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          "x-csrf-token": getCsrfToken()
-        },
-        body: JSON.stringify({})
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(data.error || "Clean trash failed");
-      }
-      inbox = [];
-      filtered = [];
-      activeId = null;
-      renderDetail(null);
-      exitDetailView();
-      resetTrashSelectionMode();
-      renderList();
-      showToast(`${data.deleted || 0} email${(data.deleted || 0) === 1 ? "" : "s"} deleted forever`, "success");
-    }
-
-    refreshBtn?.addEventListener("click", () => {
-      loadInbox({ sync: false, folder: currentFolder }).catch((error) => {
-        console.error("Inbox refresh failed", error);
-      });
-      syncInboxInBackground(currentFolder);
-    });
-    searchEl?.addEventListener("input", () => applySearch());
-    bulkDeleteBtn?.addEventListener("click", async () => {
-      try {
-        await deleteSelectedInboxMessages();
-      } catch (error) {
-        console.error("Inbox delete failed", error);
-        showToast(error.message || "Delete failed", "error");
-      }
-    });
-    trashRestoreBtn?.addEventListener("click", async () => {
-      try {
-        if (currentFolder !== "trash") return;
-        if (currentTrashAction !== "restore") {
-          currentTrashAction = "restore";
-          selected.clear();
-          renderList();
-          showToast("Select trash emails to put back", "info");
-          return;
-        }
-        await restoreSelectedTrashMessages();
-      } catch (error) {
-        console.error("Trash restore failed", error);
-        showToast(error.message || "Restore failed", "error");
-      }
-    });
-    trashDeleteForeverBtn?.addEventListener("click", async () => {
-      try {
-        if (currentFolder !== "trash") return;
-        if (currentTrashAction !== "deleteForever") {
-          currentTrashAction = "deleteForever";
-          selected.clear();
-          renderList();
-          showToast("Select trash emails to delete forever", "info");
-          return;
-        }
-        await deleteTrashForever();
-      } catch (error) {
-        console.error("Trash permanent delete failed", error);
-        showToast(error.message || "Delete forever failed", "error");
-      }
-    });
-    trashEmptyBtn?.addEventListener("click", async () => {
-      try {
-        if (currentFolder !== "trash") return;
-        await emptyTrash();
-      } catch (error) {
-        console.error("Trash empty failed", error);
-        showToast(error.message || "Clean trash failed", "error");
-      }
-    });
-    trashCancelBtn?.addEventListener("click", () => {
-      resetTrashSelectionMode();
-      renderList();
-    });
-
-    selectAllEl?.addEventListener("change", (e) => {
-      selected.clear();
-      if (e.target.checked) filtered.forEach((m) => selected.add(m.id));
-      updateBulkUI();
-      renderList();
-    });
-
-    markAllBtn?.addEventListener("click", async () => {
-      inbox.forEach((m) => (m.is_read = true));
-      renderList();
-      if (activeId) renderDetail(inbox.find((m) => m.id === activeId));
-    });
-
-    syncMailboxHeading();
-    window.addEventListener("worknestWorkspaceReady", () => {
-      if (!isMailboxPanelVisible()) return;
-      bootstrapMailbox(true).catch((e) => {
-        console.error("Inbox load failed", e);
-      });
-    });
-    document.addEventListener("worknest:panel-shown", (event) => {
-      if (event?.detail?.panelId !== "emailPanel") return;
-      bootstrapMailbox(true).catch((e) => {
-        console.error("Inbox load failed", e);
-      });
-    });
-    scheduleMailboxAutoRefresh();
-
-    detailCloseBtn?.addEventListener("click", () => {
-      detailEmpty.hidden = false;
-      detailView.hidden = true;
-      exitDetailView();
-      activeId = null;
-      sesInboxActiveMessage = null;
-      updateReplyGreeting("");
-    });
-
-    window.refreshGmailishInbox = (options) => loadInbox(options || {});
-  })();
 
   let lastChannelId = null;
   setInterval(() => {

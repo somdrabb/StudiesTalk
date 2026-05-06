@@ -31,6 +31,7 @@
 
 <!-- Styles -->
 <link href="styles.refactor.css" rel="stylesheet" />
+<link href="css/homework.css" rel="stylesheet" />
 <link href="Announcements/announcements.css" rel="stylesheet" />
 <link href="PlacementTest/placement-test.css" rel="stylesheet" />
 <link rel="stylesheet" href="/AIvoicepractice/aiVoicePractice.css" />
@@ -41,6 +42,7 @@
 <link href="Privacy%20%26%20Rules.css" rel="stylesheet" />
 
 <link href="/integration-assets/integration.css" rel="stylesheet" />
+<link href="email/email.css" rel="stylesheet" />
   
 </head>
 
@@ -137,17 +139,7 @@
 
 
     <!-- Home -->
-    <button
-      class="app-rail-btn app-rail-btn-home app-rail-logo"
-      data-rail-id="home"
-      type="button"
-      title="Home"
-      aria-label="Home">
-      <img src="assets/icons8-chat.gif"
-           alt=""
-           class="rail-icon-img"
-           aria-hidden="true" />
-    </button>
+   
 
     <!-- Notifications -->
     <button
@@ -310,15 +302,6 @@
       <i class="fa-solid fa-right-from-bracket"
          aria-hidden="true"></i>
     </button>
-
-    <div class="app-rail-legal-links" aria-label="Legal links">
-      <a href="/privacy" class="app-rail-legal-link">Privacy</a>
-      <a href="/terms" class="app-rail-legal-link">Terms</a>
-      <a href="/impressum" class="app-rail-legal-link">Impressum</a>
-      <a href="/dpa" class="app-rail-legal-link">DPA</a>
-      <a href="/trust" class="app-rail-legal-link">Trust</a>
-      <a href="#" class="app-rail-legal-link" id="appManageCookiesLink">Cookie settings</a>
-    </div>
 
   </div>
 </nav>
@@ -1511,7 +1494,7 @@
               <input
                 id="sesSubjectPrefix"
                 type="text"
-                placeholder="Example: [Sprachschule Duisburg]"
+                placeholder="Antrag"
                 autocomplete="off"
               />
             </div>
@@ -1524,7 +1507,7 @@
                 id="sesBodyText"
                 rows="8"
                 autocomplete="off"
-                placeholder="Write your email…"
+                placeholder="Write your message..."
               ></textarea>
 
               <div id="sesBodyClosingPreview" class="ses-email-closing" aria-live="polite"></div>
@@ -4893,8 +4876,6 @@
     </div>
   </div>
 
-  <div id="homeworkHtmlMount"></div>
-
   <div class="confirm-overlay hidden" id="confirmOverlay" aria-hidden="true">
     <div class="confirm-card" role="dialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmMessage">
       <div class="confirm-title" id="confirmTitle">Confirm</div>
@@ -5679,41 +5660,8 @@
   }
 </script>
 <script src="vendor/jsQR.js"></script>
-<script>
-  (function loadHomeworkHtml() {
-    const mount = document.getElementById("homeworkHtmlMount");
-    if (!mount) return;
-    try {
-      const request = new XMLHttpRequest();
-      request.open("GET", "homework.html", false);
-      request.send(null);
-      if (request.status >= 200 && request.status < 300) {
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(request.responseText, "text/html");
-        const styleNodes = doc.querySelectorAll("style");
-        styleNodes.forEach((styleNode) => {
-          const style = document.createElement("style");
-          style.textContent = styleNode.textContent || "";
-          document.head.appendChild(style);
-          styleNode.remove();
-        });
-        const scriptNodes = doc.querySelectorAll("script");
-        scriptNodes.forEach((scriptNode) => scriptNode.remove());
-        mount.innerHTML = doc.body.innerHTML;
-        scriptNodes.forEach((scriptNode) => {
-          const script = document.createElement("script");
-          script.textContent = scriptNode.textContent || "";
-          document.body.appendChild(script);
-        });
-      } else {
-        console.error("Failed to load homework HTML", request.status);
-      }
-    } catch (error) {
-      console.error("Failed to inject homework HTML", error);
-    }
-  })();
-</script>
 <!-- ✅ app.js must load BEFORE announcements.js (announcements uses helpers from app.js) -->
+<script src="email/email.js"></script>
 <script src="app.js"></script>
 <script src="calendar/calendar.js"></script>
 

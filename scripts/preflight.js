@@ -49,6 +49,58 @@ async function listDbManagedSecretRows() {
   }
 }
 
+async function inspectCostControlTables() {
+  const providerSql = `SELECT COUNT(*) AS count FROM provider_catalog`;
+  const limitsSql = `SELECT COUNT(*) AS count FROM workspace_provider_limits`;
+
+  if (ENV.DB_ENGINE === 'sqlite') {
+    if (!ENV.DB_PATH || !fs.existsSync(ENV.DB_PATH)) {
+      return { note: 'SQLite database does not exist yet; cost-control table check skipped.', warnings: [] };
+    }
+    const db = new Database(ENV.DB_PATH, { readonly: true });
+    try {
+      const providers = db.prepare(providerSql).get();
+      const limits = db.prepare(limitsSql).get();
+      const warnings = [];
+      if (!Number(providers?.count || 0)) {
+        warnings.push('provider_catalog is empty. Cost Control provider seeding has not run yet.');
+      }
+      return { note: '', warnings };
+    } catch (error) {
+      return { note: `Cost-control table check skipped: ${error.message}`, warnings: [] };
+    } finally {
+      db.close();
+    }
+  }
+
+  if (!ENV.DATABASE_URL) {
+    return { note: 'DATABASE_URL is not configured; cost-control table check skipped.', warnings: [] };
+  }
+
+  const client = new Client({
+    connectionString: ENV.DATABASE_URL,
+    ssl: ENV.PGSSL ? { rejectUnauthorized: false } : false
+  });
+
+  try {
+    await client.connect();
+    const [providerResult, limitsResult] = await Promise.all([
+      client.query(providerSql),
+      client.query(limitsSql)
+    ]);
+    const warnings = [];
+    if (!Number(providerResult.rows?.[0]?.count || 0)) {
+      warnings.push('provider_catalog is empty. Cost Control provider seeding has not run yet.');
+    }
+    void limitsResult;
+    return { note: '', warnings };
+  } catch (error) {
+    return { note: `PostgreSQL cost-control table check skipped: ${error.message}`, warnings: [] };
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
 function getDbSecretOverrideWarnings(rows = []) {
   const warnings = [];
   for (const row of rows) {
@@ -113,6 +165,12 @@ async function main() {
   }
   envWarnings.push(...getDbSecretOverrideWarnings(dbSecretCheck.rows));
   envWarnings.push(...getGoogleCredentialWarnings(dbSecretCheck.rows));
+
+  const costControlCheck = await inspectCostControlTables();
+  if (costControlCheck.note) {
+    envWarnings.push(costControlCheck.note);
+  }
+  envWarnings.push(...(costControlCheck.warnings || []));
 
   if (dbSecretCheck.rows.length) {
     console.log('[preflight] db managed secrets detected:', dbSecretCheck.rows.length);

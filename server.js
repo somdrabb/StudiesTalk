@@ -1191,7 +1191,10 @@ function isMailboxStudentRole(role = '') {
 }
 
 function normalizeMailboxFolder(folder = '') {
-  return String(folder || '').trim().toLowerCase() === 'trash' ? 'trash' : 'inbox';
+  const normalized = String(folder || '').trim().toLowerCase();
+  if (normalized === 'trash') return 'trash';
+  if (normalized === 'spam' || normalized === 'junk') return 'spam';
+  return 'inbox';
 }
 
 function getMailboxViewer(user) {
@@ -1231,8 +1234,17 @@ function buildMailboxWhereClause(viewer, { alias = '', folder = null, ids = null
   const params = [];
 
   if (folder !== null) {
-    conditions.push(`${alias}folder = ?`);
-    params.push(normalizeMailboxFolder(folder));
+    const normalizedFolder = normalizeMailboxFolder(folder);
+    if (normalizedFolder === 'spam') {
+      conditions.push(`COALESCE(NULLIF(${alias}spam_status, ''), 'clean') IN ('spam', 'suspected')`);
+      conditions.push(`${alias}folder != 'trash'`);
+    } else {
+      conditions.push(`${alias}folder = ?`);
+      params.push(normalizedFolder);
+      if (normalizedFolder === 'inbox') {
+        conditions.push(`COALESCE(NULLIF(${alias}spam_status, ''), 'clean') = 'clean'`);
+      }
+    }
   }
   if (emailId !== null && emailId !== undefined) {
     conditions.push(`${alias}id = ?`);
@@ -1267,6 +1279,91 @@ function findAccessibleMailboxRow(viewer, emailId) {
   if (!Number.isFinite(parsedEmailId)) return null;
   const { where, params } = buildMailboxWhereClause(viewer, { emailId: parsedEmailId });
   return db.prepare(`SELECT * FROM inbound_emails WHERE ${where} LIMIT 1`).get(...params) || null;
+}
+
+function requireMailboxAdminViewer(req, res) {
+  const viewer = getMailboxViewer(req.auth);
+  if (!viewer.canAccess || !viewer.isAdmin) {
+    res.status(403).json({ error: 'Forbidden' });
+    return null;
+  }
+  return viewer;
+}
+
+function getAccessibleMailboxRowsByIds(viewer, ids = [], { folder = null } = {}) {
+  const uniqueIds = Array.from(new Set((Array.isArray(ids) ? ids : [])
+    .map((value) => Number.parseInt(String(value || '').trim(), 10))
+    .filter((value) => Number.isFinite(value))));
+  if (!uniqueIds.length) return { ids: [], rows: [] };
+  const scoped = buildMailboxWhereClause(viewer, { folder, ids: uniqueIds });
+  const rows = db.prepare(`SELECT * FROM inbound_emails WHERE ${scoped.where}`).all(...scoped.params);
+  return { ids: uniqueIds, rows };
+}
+
+function serializeInboundEmailRow(row, repliesStmt = null) {
+  const attachments = parseAttachmentsForRow(row);
+  const safeAttachments = attachments
+    .filter(Boolean)
+    .map((att) => ({
+      id: String(att.id || '').trim(),
+      filename: String(att.filename || 'attachment'),
+      size: Number(att.size || 0),
+      contentType: String(att.contentType || ''),
+      inline: Boolean(att.inline),
+      contentId: String(att.contentId || '')
+    }))
+    .filter((att) => att.id);
+  const { attachments_json, ...rest } = row;
+  return {
+    ...rest,
+    spam_status: String(row.spam_status || 'clean'),
+    is_spam: ['spam', 'suspected'].includes(String(row.spam_status || '').toLowerCase()),
+    is_important: Number(row.is_important || 0) ? 1 : 0,
+    isImportant: Boolean(Number(row.is_important || 0)),
+    important: Boolean(Number(row.is_important || 0)),
+    replies: repliesStmt
+      ? (repliesStmt.all(row.id) || []).map((reply) => ({
+          id: reply?.id,
+          body: reply?.body || '',
+          created_at: reply?.created_at || ''
+        }))
+      : [],
+    attachments: safeAttachments,
+    hasAttachments: safeAttachments.length > 0,
+    attachmentsCount: safeAttachments.length,
+    totalAttachmentBytes: safeAttachments.reduce((sum, att) => sum + (Number(att.size) || 0), 0),
+    hasInline: safeAttachments.some((att) => Boolean(att.inline || att.contentId))
+  };
+}
+
+function getMailboxCounts(viewer) {
+  if (!viewer?.canAccess) {
+    return { inbox: 0, sent: 0, trash: 0, spam: 0, suspected: 0, unread: 0 };
+  }
+  const base = buildMailboxWhereClause(viewer, {});
+  const rows = db.prepare(`
+    SELECT folder, spam_status, is_read
+    FROM inbound_emails
+    WHERE ${base.where}
+  `).all(...base.params);
+  const cleanInbox = rows.filter((row) =>
+    String(row.folder || 'inbox') === 'inbox' &&
+    String(row.spam_status || 'clean') === 'clean'
+  );
+  const spamRows = rows.filter((row) => ['spam', 'suspected'].includes(String(row.spam_status || '').toLowerCase()) && String(row.folder || '') !== 'trash');
+  return {
+    inbox: cleanInbox.length,
+    sent: 0,
+    trash: rows.filter((row) => String(row.folder || '') === 'trash').length,
+    spam: spamRows.length,
+    suspected: spamRows.filter((row) => String(row.spam_status || '').toLowerCase() === 'suspected').length,
+    important: rows.filter((row) =>
+      Number(row.is_important || 0) === 1 &&
+      String(row.folder || 'inbox') !== 'trash' &&
+      String(row.spam_status || 'clean') === 'clean'
+    ).length,
+    unread: cleanInbox.filter((row) => Number(row.is_read || 0) !== 1).length
+  };
 }
 
 function buildQuotedText(original = {}) {
@@ -4329,6 +4426,8 @@ function recordEmailLog({
   sentByUserId,
   toEmail,
   toName,
+  cc = '',
+  bcc = '',
   subject,
   bodyText,
   bodyHtml,
@@ -4345,6 +4444,8 @@ function recordEmailLog({
     sentByUserId || null,
     toEmail,
     toName || null,
+    cc || '',
+    bcc || '',
     subject || '',
     bodyText || '',
     bodyHtml || '',
@@ -4464,9 +4565,9 @@ function ensureEmailLogStmt() {
   if (!insertEmailLogStmt) {
     insertEmailLogStmt = db.prepare(`
       INSERT INTO workspace_email_logs (
-        id, workspace_id, sent_by_user_id, to_email, to_name,
+        id, workspace_id, sent_by_user_id, to_email, to_name, cc, bcc,
         subject, body_text, body_html, type, status, error_message, message_id, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
   }
   return insertEmailLogStmt;
@@ -6908,41 +7009,48 @@ app.post("/api/register/send-link", async (req, res) => {
     const link = `${getBaseUrl(PORT)}/register?token=${encodeURIComponent(token)}`;
     const displayName = `${String(firstName || '').trim()} ${String(lastName || '').trim()}`.trim() || 'Student';
     const schoolName = getWorkspaceName(workspaceId);
+    const emailSettings = buildWorkspaceEmailSettingsResponse(workspaceId, authed);
+    const registrationEmailsEnabled = normalizeBooleanFlag(emailSettings.registration_emails_enabled, 1);
     const vars = {
       student_name: displayName,
-      school_name: schoolName,
+      school_name: emailSettings.from_name || emailSettings.brand_school_name || schoolName,
       login_url: link,
       registration_url: link,
-      support_email: getSupportEmailFallback()
+      support_email: emailSettings.support_email || emailSettings.reply_to_email || getSupportEmailFallback(),
+      signature: emailSettings.signature || ''
     };
     const rendered = renderWorkspaceTemplate(workspaceId, 'welcome_email', vars);
-    const subject = rendered.subject || `Welcome to ${schoolName}`;
+    const subject = rendered.subject || `Welcome to ${vars.school_name || schoolName}`;
     const html = rendered.bodyInnerHtml || `<p>Hi ${displayName},</p><p>Your registration link: <a href="${link}">${link}</a></p>`;
     const text = rendered.bodyText || `Welcome to ${schoolName}. Open your registration link: ${link}`;
-    const fromName = buildAutomatedEmailSenderName(schoolName, 'welcome_email');
+    const fromName = buildAutomatedEmailSenderName(vars.school_name || schoolName, 'welcome_email');
+    const replyTo = String(emailSettings.reply_to_email || '').trim();
 
     if (!ENV.IS_PROD) {
       logEvent('info', 'SEND-LINK: preparing welcome email', {
         requestId: req.id || null,
         workspaceId,
         provider: providerName,
-        recipientDomain: String(emailNorm || '').split('@')[1] || ''
+        recipientDomain: String(emailNorm || '').split('@')[1] || '',
+        emailSkipped: !registrationEmailsEnabled
       });
     }
 
-    try {
-      await sendPlatformEmail({ to: emailNorm, subject, html, text, fromName });
-      logEvent('info', 'SEND-LINK: email sent', { requestId: req.id || null, workspaceId });
-    } catch (err) {
-      logEvent('error', 'SEND-LINK: email failed', {
-        requestId: req.id || null,
-        workspaceId,
-        error: safeSerializeError(err, { includeStack: !ENV.IS_PROD })
-      });
-      return res.status(500).json({ error: 'Could not send registration email' });
+    if (registrationEmailsEnabled) {
+      try {
+        await sendPlatformEmail({ to: emailNorm, subject, html, text, fromName, replyTo });
+        logEvent('info', 'SEND-LINK: email sent', { requestId: req.id || null, workspaceId });
+      } catch (err) {
+        logEvent('error', 'SEND-LINK: email failed', {
+          requestId: req.id || null,
+          workspaceId,
+          error: safeSerializeError(err, { includeStack: !ENV.IS_PROD })
+        });
+        return res.status(500).json({ error: 'Could not send registration email' });
+      }
     }
 
-    return res.json({ ok: true, token, link });
+    return res.json({ ok: true, token, link, emailSkipped: !registrationEmailsEnabled });
   } catch (e) {
     console.error("send-link failed:", e);
     return res.status(500).json({ error: "Could not create/send link" });
@@ -8324,9 +8432,16 @@ function renderWorkspaceTemplate(workspaceId, templateKey, vars) {
   if (!merged) {
     return { subject: '', bodyInnerHtml: '', bodyText: '' };
   }
-  const subject = renderTokensPlain(merged.subject, vars);
-  const bodyInnerHtml = renderTokensHtml(merged.body_html, vars);
-  const bodyText = renderTokensPlain(merged.body_text, vars);
+  const settings = buildWorkspaceEmailSettingsResponse(workspaceId);
+  const allVars = {
+    school_name: settings.from_name || settings.brand_school_name || vars?.school_name || '',
+    support_email: settings.support_email || settings.reply_to_email || vars?.support_email || getSupportEmailFallback(),
+    signature: settings.signature || vars?.signature || '',
+    ...(vars || {})
+  };
+  const subject = renderTokensPlain(merged.subject, allVars);
+  const bodyInnerHtml = renderTokensHtml(merged.body_html, allVars);
+  const bodyText = renderTokensPlain(merged.body_text, allVars);
   return { subject, bodyInnerHtml, bodyText };
 }
 
@@ -8864,6 +8979,8 @@ CREATE TABLE IF NOT EXISTS announcements (
     sent_by_user_id TEXT,
     to_email TEXT NOT NULL,
     to_name TEXT,
+    cc TEXT DEFAULT '',
+    bcc TEXT DEFAULT '',
     subject TEXT,
     body_text TEXT,
     body_html TEXT,
@@ -8876,6 +8993,51 @@ CREATE TABLE IF NOT EXISTS announcements (
   );
   CREATE INDEX IF NOT EXISTS idx_workspace_email_logs_ws
     ON workspace_email_logs(workspace_id);
+
+  /* ========== SCHOOL EMAIL DRAFTS ========== */
+  CREATE TABLE IF NOT EXISTS email_drafts (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    author_user_id TEXT NOT NULL,
+    to_email TEXT DEFAULT '',
+    cc TEXT DEFAULT '',
+    bcc TEXT DEFAULT '',
+    subject TEXT DEFAULT '',
+    body TEXT DEFAULT '',
+    body_html TEXT DEFAULT '',
+    signature TEXT DEFAULT '',
+    attachments_json TEXT DEFAULT '',
+    status TEXT DEFAULT 'draft',
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    deleted_at TEXT DEFAULT '',
+    sent_at TEXT DEFAULT '',
+    FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_email_drafts_workspace
+    ON email_drafts(workspace_id);
+  CREATE INDEX IF NOT EXISTS idx_email_drafts_author
+    ON email_drafts(author_user_id);
+  CREATE INDEX IF NOT EXISTS idx_email_drafts_status
+    ON email_drafts(status);
+  CREATE INDEX IF NOT EXISTS idx_email_drafts_updated
+    ON email_drafts(updated_at);
+
+  CREATE TABLE IF NOT EXISTS email_attachments (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    uploaded_by_user_id TEXT NOT NULL,
+    original_name TEXT NOT NULL,
+    stored_name TEXT NOT NULL,
+    mime_type TEXT DEFAULT 'application/octet-stream',
+    size_bytes INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'active',
+    created_at TEXT DEFAULT (datetime('now')),
+    deleted_at TEXT DEFAULT '',
+    FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_email_attachments_workspace
+    ON email_attachments(workspace_id);
 
   /* ======================== */
   /* Learning & progress tables */
@@ -9417,12 +9579,20 @@ try {
       workspace_id TEXT PRIMARY KEY,
       enabled INTEGER DEFAULT 0,
       brand_school_name TEXT DEFAULT '',
+      from_name TEXT DEFAULT '',
       reply_to_email TEXT DEFAULT '',
+      support_email TEXT DEFAULT '',
       footer_text TEXT DEFAULT '',
+      signature TEXT DEFAULT '',
       subject_prefix TEXT DEFAULT '',
       manual_body_text TEXT DEFAULT '',
       logo_url TEXT DEFAULT '',
       signature_html TEXT DEFAULT '',
+      live_session_notifications_enabled INTEGER DEFAULT 0,
+      registration_emails_enabled INTEGER DEFAULT 1,
+      password_reset_emails_enabled INTEGER DEFAULT 1,
+      invoice_payment_emails_enabled INTEGER DEFAULT 1,
+      exam_course_reminder_emails_enabled INTEGER DEFAULT 1,
       updated_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -9501,7 +9671,16 @@ try {
       recipient_user_id TEXT DEFAULT '',
       direction TEXT DEFAULT 'inbound',
       visibility_scope TEXT DEFAULT 'workspace',
-      sender_role TEXT DEFAULT ''
+      sender_role TEXT DEFAULT '',
+      spam_status TEXT DEFAULT 'clean',
+      spam_reason TEXT DEFAULT '',
+      spam_score REAL DEFAULT 0,
+      marked_spam_at TEXT DEFAULT '',
+      marked_spam_by TEXT DEFAULT '',
+      restored_from_spam_at TEXT DEFAULT '',
+      is_important INTEGER DEFAULT 0,
+      important_at TEXT DEFAULT '',
+      important_by TEXT DEFAULT ''
     );
 
     CREATE TABLE IF NOT EXISTS email_replies (
@@ -9587,6 +9766,14 @@ try {
 tryAlter("ALTER TABLE workspace_email_settings ADD COLUMN logo_url TEXT DEFAULT ''");
 tryAlter("ALTER TABLE workspace_email_settings ADD COLUMN signature_html TEXT DEFAULT ''");
 tryAlter("ALTER TABLE workspace_email_settings ADD COLUMN manual_body_text TEXT DEFAULT ''");
+tryAlter("ALTER TABLE workspace_email_settings ADD COLUMN from_name TEXT DEFAULT ''");
+tryAlter("ALTER TABLE workspace_email_settings ADD COLUMN support_email TEXT DEFAULT ''");
+tryAlter("ALTER TABLE workspace_email_settings ADD COLUMN signature TEXT DEFAULT ''");
+tryAlter("ALTER TABLE workspace_email_settings ADD COLUMN live_session_notifications_enabled INTEGER DEFAULT 0");
+tryAlter("ALTER TABLE workspace_email_settings ADD COLUMN registration_emails_enabled INTEGER DEFAULT 1");
+tryAlter("ALTER TABLE workspace_email_settings ADD COLUMN password_reset_emails_enabled INTEGER DEFAULT 1");
+tryAlter("ALTER TABLE workspace_email_settings ADD COLUMN invoice_payment_emails_enabled INTEGER DEFAULT 1");
+tryAlter("ALTER TABLE workspace_email_settings ADD COLUMN exam_course_reminder_emails_enabled INTEGER DEFAULT 1");
 tryAlter("ALTER TABLE users ADD COLUMN date_of_birth TEXT");
 tryAlter("ALTER TABLE users ADD COLUMN salutation TEXT DEFAULT ''");
 tryAlter("ALTER TABLE users ADD COLUMN phone_country TEXT DEFAULT ''");
@@ -9611,10 +9798,19 @@ tryAlter(`
   ADD COLUMN use_platform_contact_email INTEGER DEFAULT 0
 `);
 tryAlter("ALTER TABLE workspace_email_logs ADD COLUMN message_id TEXT DEFAULT ''");
+tryAlter("ALTER TABLE workspace_email_logs ADD COLUMN cc TEXT DEFAULT ''");
+tryAlter("ALTER TABLE workspace_email_logs ADD COLUMN bcc TEXT DEFAULT ''");
 tryAlter("ALTER TABLE workspace_email_logs ADD COLUMN direction TEXT DEFAULT 'outbound'");
 tryAlter("ALTER TABLE workspace_email_logs ADD COLUMN from_email TEXT DEFAULT ''");
 tryAlter("ALTER TABLE workspace_email_logs ADD COLUMN provider_key TEXT DEFAULT ''");
 tryAlter("ALTER TABLE workspace_email_logs ADD COLUMN metadata_json TEXT DEFAULT ''");
+tryAlter("ALTER TABLE email_drafts ADD COLUMN cc TEXT DEFAULT ''");
+tryAlter("ALTER TABLE email_drafts ADD COLUMN bcc TEXT DEFAULT ''");
+tryAlter("ALTER TABLE email_drafts ADD COLUMN body_html TEXT DEFAULT ''");
+tryAlter("ALTER TABLE email_drafts ADD COLUMN signature TEXT DEFAULT ''");
+tryAlter("ALTER TABLE email_drafts ADD COLUMN attachments_json TEXT DEFAULT ''");
+tryAlter("ALTER TABLE email_drafts ADD COLUMN deleted_at TEXT DEFAULT ''");
+tryAlter("ALTER TABLE email_drafts ADD COLUMN sent_at TEXT DEFAULT ''");
 tryAlter("ALTER TABLE workspace_email_settings ADD COLUMN created_at TEXT DEFAULT ''");
 tryAlter("ALTER TABLE workspace_email_settings ADD COLUMN owner_email TEXT DEFAULT ''");
 tryAlter("ALTER TABLE workspace_email_settings ADD COLUMN owner_name TEXT DEFAULT ''");
@@ -9648,6 +9844,15 @@ tryAlter("ALTER TABLE inbound_emails ADD COLUMN recipient_user_id TEXT DEFAULT '
 tryAlter("ALTER TABLE inbound_emails ADD COLUMN direction TEXT DEFAULT 'inbound'");
 tryAlter("ALTER TABLE inbound_emails ADD COLUMN visibility_scope TEXT DEFAULT 'workspace'");
 tryAlter("ALTER TABLE inbound_emails ADD COLUMN sender_role TEXT DEFAULT ''");
+tryAlter("ALTER TABLE inbound_emails ADD COLUMN spam_status TEXT DEFAULT 'clean'");
+tryAlter("ALTER TABLE inbound_emails ADD COLUMN spam_reason TEXT DEFAULT ''");
+tryAlter("ALTER TABLE inbound_emails ADD COLUMN spam_score REAL DEFAULT 0");
+tryAlter("ALTER TABLE inbound_emails ADD COLUMN marked_spam_at TEXT DEFAULT ''");
+tryAlter("ALTER TABLE inbound_emails ADD COLUMN marked_spam_by TEXT DEFAULT ''");
+tryAlter("ALTER TABLE inbound_emails ADD COLUMN restored_from_spam_at TEXT DEFAULT ''");
+tryAlter("ALTER TABLE inbound_emails ADD COLUMN is_important INTEGER DEFAULT 0");
+tryAlter("ALTER TABLE inbound_emails ADD COLUMN important_at TEXT DEFAULT ''");
+tryAlter("ALTER TABLE inbound_emails ADD COLUMN important_by TEXT DEFAULT ''");
 tryAlter("ALTER TABLE live_sessions ADD COLUMN invited_user_ids TEXT DEFAULT ''");
 db.exec(`
   CREATE TABLE IF NOT EXISTS deleted_inbound_emails (
@@ -9658,6 +9863,36 @@ db.exec(`
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_inbound_emails_workspace_folder
     ON inbound_emails(workspace_id, folder)
+`);
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_inbound_emails_workspace_spam
+    ON inbound_emails(workspace_id, spam_status, folder)
+`);
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_inbound_emails_workspace_important
+    ON inbound_emails(workspace_id, is_important, folder)
+`);
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_email_drafts_workspace_status
+    ON email_drafts(workspace_id, status, updated_at)
+`);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS email_attachments (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    uploaded_by_user_id TEXT NOT NULL,
+    original_name TEXT NOT NULL,
+    stored_name TEXT NOT NULL,
+    mime_type TEXT DEFAULT 'application/octet-stream',
+    size_bytes INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'active',
+    created_at TEXT DEFAULT (datetime('now')),
+    deleted_at TEXT DEFAULT ''
+  )
+`);
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_email_attachments_workspace
+    ON email_attachments(workspace_id, status, created_at)
 `);
 ensureInboundEmailMailboxOwnerIndex();
 tryAlter("ALTER TABLE registration_links ADD COLUMN first_name TEXT");
@@ -13082,6 +13317,10 @@ const csvUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 2_000_000 }
 });
+const emailAttachmentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024, files: 10 }
+});
 
 function runFfmpeg(args, { strict = false } = {}) {
   return new Promise((resolve, reject) => {
@@ -14966,45 +15205,158 @@ app.get('/api/admin/security/events/export.csv', async (req, res) => {
   }
 });
 
+app.get('/api/workspace/email-settings', authRequired, (req, res) => {
+  const ctx = getCurrentWorkspaceEmailSettingsContext(req, res);
+  if (!ctx) return;
+  res.json(buildWorkspaceEmailSettingsResponse(ctx.workspaceId, ctx.user));
+});
+
+app.patch('/api/workspace/email-settings', authRequired, express.json(), (req, res) => {
+  const ctx = getCurrentWorkspaceEmailSettingsContext(req, res);
+  if (!ctx) return;
+  try {
+    const input = sanitizeEmailSettingsInput(req.body || {});
+    saveWorkspaceEmailSettings(ctx.workspaceId, input);
+    audit('workspace.email_settings_updated', req, {
+      user: ctx.user,
+      workspaceId: ctx.workspaceId,
+      meta: {
+        fields: [
+          'from_name',
+          'reply_to_email',
+          'support_email',
+          'signature',
+          'live_session_notifications_enabled',
+          'registration_emails_enabled',
+          'password_reset_emails_enabled',
+          'invoice_payment_emails_enabled',
+          'exam_course_reminder_emails_enabled'
+        ]
+      }
+    });
+    res.json({ ok: true, settings: buildWorkspaceEmailSettingsResponse(ctx.workspaceId, ctx.user) });
+  } catch (error) {
+    handleOnboardingRouteError(res, error, '[Onboarding] Failed to update email settings');
+  }
+});
+
 app.get('/api/workspaces/:workspaceId/email-settings', authRequired, (req, res) => {
   const ctx = getManagedWorkspaceRequestContext(req, res);
   if (!ctx) return;
-  const { user, workspaceId } = ctx;
+  res.json(buildWorkspaceEmailSettingsResponse(ctx.workspaceId, ctx.user));
+});
 
-  const workspaceRow = db
-    .prepare('SELECT name, logo_url AS logoUrl FROM workspaces WHERE id = ?')
-    .get(workspaceId) || {};
-  const row = db
-    .prepare('SELECT * FROM workspace_email_settings WHERE workspace_id = ?')
-    .get(workspaceId);
+app.post('/api/admin/email/attachments', authRequired, (req, res) => {
+  const ctx = getCurrentWorkspaceEmailSettingsContext(req, res);
+  if (!ctx) return;
+  emailAttachmentUpload.array('files', EMAIL_ATTACHMENT_MAX_FILES)(req, res, (uploadErr) => {
+    if (uploadErr) {
+      const status = uploadErr instanceof multer.MulterError ? 400 : Number(uploadErr.statusCode || 400);
+      return res.status(status).json({ error: uploadErr.message || 'Attachment upload failed' });
+    }
+    const files = Array.from(req.files || []);
+    if (!files.length) return res.status(400).json({ error: 'No files selected' });
+    try {
+      const rows = files.map((file) => {
+        const originalName = normalizeUploadOriginalName(file.originalname || 'attachment', 'attachment');
+        const ext = sanitizeUploadExtension(originalName);
+        if (BLOCKED_EMAIL_ATTACHMENT_EXTENSIONS.has(ext)) {
+          throw new OnboardingValidationError(`Files of type ${ext} are not allowed.`, 'blocked_email_attachment_type');
+        }
+        if (Number(file.size || 0) > EMAIL_ATTACHMENT_MAX_BYTES) {
+          throw new OnboardingValidationError('Attachment exceeds 10 MB.', 'email_attachment_too_large');
+        }
+        const id = `eatt_${crypto.randomUUID()}`;
+        const workspaceDir = resolveSafePath(ATTACHMENTS_DIR, ctx.workspaceId);
+        if (!workspaceDir) throw new Error('Invalid workspace attachment path');
+        ensureDir(workspaceDir);
+        const storedName = `${ctx.workspaceId}/${id}${ext || ''}`;
+        const storedPath = resolveSafePath(ATTACHMENTS_DIR, storedName);
+        if (!storedPath) throw new Error('Invalid attachment path');
+        fs.writeFileSync(storedPath, file.buffer);
+        db.prepare(`
+          INSERT INTO email_attachments
+          (id, workspace_id, uploaded_by_user_id, original_name, stored_name, mime_type, size_bytes, status, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'))
+        `).run(
+          id,
+          ctx.workspaceId,
+          ctx.user.id,
+          originalName,
+          storedName,
+          file.mimetype || 'application/octet-stream',
+          Number(file.size || 0)
+        );
+        return db.prepare('SELECT * FROM email_attachments WHERE id = ?').get(id);
+      });
+      res.status(201).json({ ok: true, attachments: rows.map(serializeEmailAttachmentRow) });
+    } catch (error) {
+      handleOnboardingRouteError(res, error, '[EmailAttachments] Upload failed');
+    }
+  });
+});
 
-  const adminEmail = getWorkspaceAdminEmail(workspaceId);
-  const ownerEmail = String(getPlatformOwnerEmailSettings().owner_email || '').trim();
-  const replyToDefault = adminEmail || ownerEmail || String(user?.email || '').trim();
-  const defaults = {
-    workspace_id: workspaceId,
-    enabled: 0,
-    brand_school_name: workspaceRow.name || '',
-    reply_to_email: replyToDefault,
-    footer_text: '',
-    subject_prefix: '',
-    manual_body_text: '',
-    logo_url: workspaceRow.logoUrl || '',
-    signature_html: ''
-  };
-
-  const merged = { ...defaults, ...(row || {}), workspace_id: workspaceId };
-  if (!merged.reply_to_email) {
-    merged.reply_to_email = replyToDefault;
+app.delete('/api/admin/email/attachments/:attachmentId', authRequired, (req, res) => {
+  const ctx = getCurrentWorkspaceEmailSettingsContext(req, res);
+  if (!ctx) return;
+  const id = String(req.params.attachmentId || '').trim();
+  const row = id ? db.prepare(`
+    SELECT *
+    FROM email_attachments
+    WHERE id = ? AND workspace_id = ? AND COALESCE(status, 'active') = 'active'
+    LIMIT 1
+  `).get(id, ctx.workspaceId) : null;
+  if (!row) return res.status(404).json({ error: 'Attachment not found' });
+  db.prepare(`
+    UPDATE email_attachments
+    SET status = 'deleted', deleted_at = datetime('now')
+    WHERE id = ? AND workspace_id = ?
+  `).run(id, ctx.workspaceId);
+  const filePath = resolveSafePath(ATTACHMENTS_DIR, row.stored_name || '');
+  if (filePath && fs.existsSync(filePath)) {
+    try { fs.unlinkSync(filePath); } catch (error) { console.warn('[EmailAttachments] unlink failed', error.message); }
   }
-  if (!merged.brand_school_name) {
-    merged.brand_school_name = workspaceRow.name || '';
-  }
-  if (!merged.logo_url) {
-    merged.logo_url = workspaceRow.logoUrl || '';
-  }
+  res.json({ ok: true, deleted: true, attachmentId: id });
+});
 
-  res.json(merged);
+app.get('/api/admin/email/recipient-suggestions', authRequired, (req, res) => {
+  const ctx = getCurrentWorkspaceEmailSettingsContext(req, res);
+  if (!ctx) return;
+  const q = String(req.query.q || '').trim().toLowerCase();
+  const wildcardlessQ = q.replace(/[%_]/g, '').trim();
+  if (wildcardlessQ.length < 2) return res.json({ rows: [] });
+  const escapedQ = q.replace(/[\\%_]/g, (char) => `\\${char}`);
+  const like = `%${escapedQ}%`;
+  const rows = db.prepare(`
+    SELECT id, name, first_name, last_name, email, role, avatar_url AS avatarUrl
+    FROM users
+    WHERE workspace_id = ?
+      AND status = 'active'
+      AND lower(COALESCE(email, '')) <> ''
+      AND (
+        lower(COALESCE(name, '')) LIKE ? ESCAPE '\\'
+        OR lower(COALESCE(first_name, '') || ' ' || COALESCE(last_name, '')) LIKE ? ESCAPE '\\'
+        OR lower(COALESCE(email, '')) LIKE ? ESCAPE '\\'
+      )
+    ORDER BY
+      CASE
+        WHEN lower(COALESCE(email, '')) = ? THEN 0
+        WHEN lower(COALESCE(email, '')) LIKE ? ESCAPE '\\' THEN 1
+        WHEN lower(COALESCE(name, '')) LIKE ? ESCAPE '\\' THEN 2
+        ELSE 3
+      END,
+      lower(COALESCE(name, email, id)) ASC
+    LIMIT 10
+  `).all(ctx.workspaceId, like, like, like, q, `${escapedQ}%`, `${escapedQ}%`);
+  res.json({
+    rows: rows.map((row) => ({
+      id: row.id,
+      name: row.name || `${row.first_name || ''} ${row.last_name || ''}`.trim() || row.email,
+      email: row.email || '',
+      role: row.role || '',
+      avatarUrl: row.avatarUrl || null
+    }))
+  });
 });
 
 app.post('/api/workspaces/:workspaceId/email-settings', authRequired, express.json(), (req, res) => {
@@ -15012,35 +15364,156 @@ app.post('/api/workspaces/:workspaceId/email-settings', authRequired, express.js
   if (!ctx) return;
   try {
     const input = sanitizeEmailSettingsInput(req.body || {});
-    db.prepare(`
-      INSERT INTO workspace_email_settings
-        (workspace_id, enabled, brand_school_name, reply_to_email, footer_text, subject_prefix, manual_body_text, logo_url, signature_html, updated_at)
-      VALUES
-        (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-      ON CONFLICT(workspace_id) DO UPDATE SET
-        enabled = excluded.enabled,
-        brand_school_name = excluded.brand_school_name,
-        reply_to_email = excluded.reply_to_email,
-        footer_text = excluded.footer_text,
-        subject_prefix = excluded.subject_prefix,
-        manual_body_text = excluded.manual_body_text,
-        logo_url = excluded.logo_url,
-        signature_html = excluded.signature_html,
-        updated_at = datetime('now')
-    `).run(
-      ctx.workspaceId,
-      input.enabled,
-      input.brandSchoolName,
-      input.replyTo,
-      input.footerText,
-      input.subjectPrefix,
-      input.manualBodyText,
-      input.logoUrl,
-      input.signatureHtml
-    );
+    saveWorkspaceEmailSettings(ctx.workspaceId, input);
     res.json({ ok: true });
   } catch (error) {
     handleOnboardingRouteError(res, error, '[Onboarding] Failed to update email settings');
+  }
+});
+
+app.get('/api/admin/email/drafts', authRequired, (req, res) => {
+  const ctx = getCurrentWorkspaceEmailSettingsContext(req, res);
+  if (!ctx) return;
+  const rows = db.prepare(`
+    SELECT d.*, u.name AS author_name, u.email AS author_email
+    FROM email_drafts d
+    LEFT JOIN users u ON u.id = d.author_user_id
+    WHERE d.workspace_id = ?
+      AND COALESCE(d.status, 'draft') = 'draft'
+    ORDER BY datetime(COALESCE(d.updated_at, d.created_at, 'now')) DESC, d.id DESC
+  `).all(ctx.workspaceId);
+  res.json({ drafts: rows.map(serializeEmailDraftRow), count: rows.length });
+});
+
+app.get('/api/admin/email/drafts/:draftId', authRequired, (req, res) => {
+  const ctx = getCurrentWorkspaceEmailSettingsContext(req, res);
+  if (!ctx) return;
+  const row = getWorkspaceDraftRow(ctx, req.params.draftId);
+  if (!row || String(row.status || 'draft') !== 'draft') return res.status(404).json({ error: 'Draft not found' });
+  res.json({ draft: serializeEmailDraftRow(row) });
+});
+
+app.post('/api/admin/email/drafts', authRequired, express.json(), (req, res) => {
+  const ctx = getCurrentWorkspaceEmailSettingsContext(req, res);
+  if (!ctx) return;
+  try {
+    const input = sanitizeEmailDraftInput(req.body || {});
+    const attachmentRows = getEmailAttachmentRows(ctx, getAttachmentIdsFromBody(req.body || {}));
+    input.attachmentsJson = JSON.stringify(attachmentRows.map(serializeEmailAttachmentRow));
+    if (!input.toEmail && !input.subject && !input.body && !input.signature) {
+      return res.status(400).json({ error: 'Draft is empty' });
+    }
+    const row = insertEmailDraft(ctx, input);
+    audit('workspace.email_draft_created', req, {
+      user: ctx.user,
+      workspaceId: ctx.workspaceId,
+      target: row?.id || null,
+      meta: { hasRecipient: !!input.toEmail }
+    });
+    res.status(201).json({ ok: true, draft: serializeEmailDraftRow(row) });
+  } catch (error) {
+    handleOnboardingRouteError(res, error, '[EmailDrafts] Failed to create draft');
+  }
+});
+
+app.patch('/api/admin/email/drafts/:draftId', authRequired, express.json(), (req, res) => {
+  const ctx = getCurrentWorkspaceEmailSettingsContext(req, res);
+  if (!ctx) return;
+  try {
+    const input = sanitizeEmailDraftInput(req.body || {});
+    const attachmentRows = getEmailAttachmentRows(ctx, getAttachmentIdsFromBody(req.body || {}));
+    input.attachmentsJson = JSON.stringify(attachmentRows.map(serializeEmailAttachmentRow));
+    const row = updateEmailDraft(ctx, req.params.draftId, input);
+    if (!row) return res.status(404).json({ error: 'Draft not found' });
+    audit('workspace.email_draft_updated', req, {
+      user: ctx.user,
+      workspaceId: ctx.workspaceId,
+      target: row.id
+    });
+    res.json({ ok: true, draft: serializeEmailDraftRow(row) });
+  } catch (error) {
+    handleOnboardingRouteError(res, error, '[EmailDrafts] Failed to update draft');
+  }
+});
+
+app.delete('/api/admin/email/drafts/:draftId', authRequired, (req, res) => {
+  const ctx = getCurrentWorkspaceEmailSettingsContext(req, res);
+  if (!ctx) return;
+  const row = getWorkspaceDraftRow(ctx, req.params.draftId);
+  if (!row || String(row.status || 'draft') !== 'draft') return res.status(404).json({ error: 'Draft not found' });
+  db.prepare(`
+    UPDATE email_drafts
+    SET status = 'deleted',
+        deleted_at = datetime('now'),
+        updated_at = datetime('now')
+    WHERE id = ? AND workspace_id = ? AND status = 'draft'
+  `).run(row.id, ctx.workspaceId);
+  audit('workspace.email_draft_deleted', req, {
+    user: ctx.user,
+    workspaceId: ctx.workspaceId,
+    target: row.id
+  });
+  res.json({ ok: true, deleted: true, draftId: row.id });
+});
+
+app.post('/api/admin/email/drafts/:draftId/send', authRequired, express.json(), async (req, res) => {
+  const ctx = getCurrentWorkspaceEmailSettingsContext(req, res);
+  if (!ctx) return;
+  try {
+    const existing = getWorkspaceDraftRow(ctx, req.params.draftId);
+    if (!existing || String(existing.status || 'draft') !== 'draft') {
+      return res.status(404).json({ error: 'Draft not found' });
+    }
+    const payload = Object.keys(req.body || {}).length ? req.body : existing;
+    const input = sanitizeEmailDraftInput(
+      {
+        toEmail: payload.toEmail ?? payload.to_email ?? existing.to_email,
+        cc: payload.cc ?? existing.cc,
+        bcc: payload.bcc ?? existing.bcc,
+        subject: payload.subject ?? existing.subject,
+        body: payload.body ?? existing.body,
+        bodyHtml: payload.bodyHtml ?? payload.body_html ?? existing.body_html,
+        bodyText: payload.bodyText ?? payload.body ?? existing.body,
+        signature: payload.signature ?? existing.signature,
+        attachments: payload.attachments
+      },
+      { requireRecipient: true }
+    );
+    const attachmentRows = getEmailAttachmentRows(ctx, getAttachmentIdsFromBody(payload));
+    if (attachmentRows.length) {
+      input.attachmentsJson = JSON.stringify(attachmentRows.map(serializeEmailAttachmentRow));
+    }
+    await updateEmailDraft(ctx, existing.id, input);
+    const result = await sendWorkspaceManualEmail({
+      workspaceId: ctx.workspaceId,
+      user: ctx.user,
+      to: input.toEmail,
+      subject: input.subject,
+      bodyText: input.body,
+      bodyHtml: input.bodyHtml,
+      cc: input.cc,
+      bcc: input.bcc,
+      signature: input.signature,
+      attachments: attachmentRows,
+      type: 'draft',
+      draftId: existing.id
+    });
+    db.prepare(`
+      UPDATE email_drafts
+      SET status = 'sent',
+          sent_at = datetime('now'),
+          updated_at = datetime('now')
+      WHERE id = ? AND workspace_id = ?
+    `).run(existing.id, ctx.workspaceId);
+    audit('workspace.email_draft_sent', req, {
+      user: ctx.user,
+      workspaceId: ctx.workspaceId,
+      target: existing.id,
+      meta: { logId: result.logId }
+    });
+    res.json({ ok: true, sent: true, draftId: existing.id, logId: result.logId, provider: result.provider });
+  } catch (error) {
+    handleOnboardingRouteError(res, error, '[EmailDrafts] Failed to send draft');
   }
 });
 
@@ -15049,28 +15522,41 @@ app.post('/api/workspaces/:workspaceId/email-settings/test', authRequired, expre
   if (!ctx) return;
   const workspaceId = ctx.workspaceId;
   const user = ctx.user || null;
-  let to = '';
+  let recipientsInput = null;
   try {
-    to = normalizeOptionalEmail(req.body?.to || '', 'to');
+    recipientsInput = sanitizeEmailDraftInput(
+      {
+        toEmail: req.body?.toEmail ?? req.body?.to ?? '',
+        cc: req.body?.cc ?? '',
+        bcc: req.body?.bcc ?? ''
+      },
+      { requireRecipient: true }
+    );
   } catch (error) {
     return handleOnboardingRouteError(res, error, '[Onboarding] Failed to send email test');
   }
+  const to = recipientsInput.toEmail;
+  const cc = recipientsInput.cc;
+  const bcc = recipientsInput.bcc;
   if (!to) return res.status(400).json({ error: "Valid 'to' required" });
 
-  const s = db.prepare('SELECT * FROM workspace_email_settings WHERE workspace_id = ?').get(workspaceId) || {};
+  const s = buildWorkspaceEmailSettingsResponse(workspaceId, user);
   const workspaceRow =
     db.prepare('SELECT name, admin_email FROM workspaces WHERE id = ?').get(workspaceId) || {};
   const profileRow = db.prepare('SELECT * FROM workspace_profile WHERE workspace_id = ?').get(workspaceId) || {};
-  const ownerEmail = String(getPlatformOwnerEmailSettings().owner_email || '').trim();
-  const replyTo = String(s.reply_to_email || workspaceRow.admin_email || ownerEmail || '').trim();
+  const replyTo = String(s.reply_to_email || workspaceRow.admin_email || '').trim();
   const requestBodyText = String(req.body?.manual_body_text || '').trim();
+  const requestBodyHtml = sanitizeComposeEmailHtml(req.body?.bodyHtml || req.body?.body_html || '');
   const subjectText = String(req.body?.subject || '').trim();
 
   const normalizedSettings = {
     ...s,
-    brand_school_name: String(s.brand_school_name || workspaceRow.name || '').trim(),
+    brand_school_name: String(s.from_name || s.brand_school_name || workspaceRow.name || '').trim(),
+    from_name: String(s.from_name || s.brand_school_name || workspaceRow.name || '').trim(),
     reply_to_email: replyTo,
-    footer_text: String(s.footer_text || '').trim()
+    footer_text: String(s.signature || s.footer_text || '').trim(),
+    signature: String(s.signature || s.footer_text || '').trim(),
+    support_email: String(s.support_email || replyTo || '').trim()
   };
   const brandName = normalizedSettings.brand_school_name || workspaceRow.name || '';
   const brandLabel = brandName ? `${brandName} · Powered by StudiesTalk` : 'StudiesTalk';
@@ -15085,7 +15571,9 @@ app.post('/api/workspaces/:workspaceId/email-settings/test', authRequired, expre
     workspaceRow,
     settings: normalizedSettings
   });
-  const bodyHtml = `<div style="margin-bottom:12px;">${escapedText.replace(/\n/g, '<br>')}</div>`;
+  const bodyHtml = requestBodyHtml
+    ? `<div style="margin-bottom:12px;">${requestBodyHtml}</div>`
+    : `<div style="margin-bottom:12px;">${escapedText.replace(/\n/g, '<br>')}</div>`;
   const html = `
     <!DOCTYPE html>
     <html>
@@ -15109,7 +15597,7 @@ app.post('/api/workspaces/:workspaceId/email-settings/test', authRequired, expre
   const recipientName =
     String(req.body?.toName || '').trim() || resolveRecipientName(workspaceId, to);
   const fromName = buildSchoolDisplayName(
-    String(normalizedSettings.brand_school_name || workspaceRow.name || '').trim()
+    String(normalizedSettings.from_name || normalizedSettings.brand_school_name || workspaceRow.name || '').trim()
   );
   const baseLog = {
     id: logId,
@@ -15117,11 +15605,21 @@ app.post('/api/workspaces/:workspaceId/email-settings/test', authRequired, expre
     sentByUserId: user.id,
     toEmail: to,
     toName: recipientName,
+    cc,
+    bcc,
     subject,
     bodyText: text,
     bodyHtml: html,
     type: 'test'
   };
+  let attachmentRows = [];
+  try {
+    attachmentRows = getEmailAttachmentRows({ workspaceId, user }, getAttachmentIdsFromBody(req.body || {}));
+  } catch (error) {
+    return handleOnboardingRouteError(res, error, '[Onboarding] Invalid email test attachment');
+  }
+  const mailAttachments = buildEmailTransportAttachments(attachmentRows);
+  baseLog.attachments = attachmentRows.map(serializeEmailAttachmentRow);
   const monitoredReplyTo = getInboundMailboxEmail() || replyTo;
   const outboundHeaders = {
     'X-StudiesTalk-Workspace': workspaceId,
@@ -15131,12 +15629,15 @@ app.post('/api/workspaces/:workspaceId/email-settings/test', authRequired, expre
   try {
     const info = await sendPlatformEmail({
       to,
+      cc,
+      bcc,
       subject,
       html,
       text,
       replyTo: monitoredReplyTo,
       fromName,
-      headers: outboundHeaders
+      headers: outboundHeaders,
+      attachments: mailAttachments
     });
     recordEmailLog({
       ...baseLog,
@@ -15436,37 +15937,65 @@ app.get('/api/admin/inbox', requireAccessToken, async (req, res) => {
     ORDER BY created_at ASC
   `);
 
-  const inboxRows = rows.map((row) => {
-    const attachments = parseAttachmentsForRow(row);
-    const safeAttachments = attachments
-      .filter(Boolean)
-      .map((att) => ({
-        id: String(att.id || '').trim(),
-        filename: String(att.filename || 'attachment'),
-        size: Number(att.size || 0),
-        contentType: String(att.contentType || ''),
-        inline: Boolean(att.inline),
-        contentId: String(att.contentId || '')
-      }))
-      .filter((att) => att.id);
-
-    const { attachments_json, ...rest } = row;
-    return {
-      ...rest,
-      replies: (repliesStmt.all(row.id) || []).map((reply) => ({
-        id: reply?.id,
-        body: reply?.body || '',
-        created_at: reply?.created_at || ''
-      })),
-      attachments: safeAttachments,
-      hasAttachments: safeAttachments.length > 0,
-      attachmentsCount: safeAttachments.length,
-      totalAttachmentBytes: safeAttachments.reduce((sum, att) => sum + (Number(att.size) || 0), 0),
-      hasInline: safeAttachments.some((att) => Boolean(att.inline || att.contentId))
-    };
+  res.json({
+    rows: rows.map((row) => serializeInboundEmailRow(row, repliesStmt)),
+    counts: getMailboxCounts(viewer)
   });
+});
 
-  res.json(inboxRows);
+app.get('/api/admin/inbox/spam', requireAccessToken, async (req, res) => {
+  const viewer = requireMailboxAdminViewer(req, res);
+  if (!viewer) return;
+
+  const { where, params } = buildMailboxWhereClause(viewer, { folder: 'spam' });
+  const rows = db
+    .prepare(`
+      SELECT *
+      FROM inbound_emails
+      WHERE ${where}
+      ORDER BY spam_score DESC, received_at DESC
+    `)
+    .all(...params);
+  const repliesStmt = db.prepare(`
+    SELECT id, body, created_at
+    FROM email_replies
+    WHERE inbound_email_id = ?
+    ORDER BY created_at ASC
+  `);
+
+  res.json({
+    rows: rows.map((row) => serializeInboundEmailRow(row, repliesStmt)),
+    counts: getMailboxCounts(viewer)
+  });
+});
+
+app.get('/api/admin/inbox/important', requireAccessToken, async (req, res) => {
+  const viewer = requireMailboxAdminViewer(req, res);
+  if (!viewer) return;
+
+  const base = buildMailboxWhereClause(viewer, {});
+  const rows = db
+    .prepare(`
+      SELECT *
+      FROM inbound_emails
+      WHERE ${base.where}
+        AND COALESCE(is_important, 0) = 1
+        AND COALESCE(NULLIF(folder, ''), 'inbox') != 'trash'
+        AND COALESCE(NULLIF(spam_status, ''), 'clean') = 'clean'
+      ORDER BY datetime(COALESCE(NULLIF(important_at, ''), received_at)) DESC, received_at DESC
+    `)
+    .all(...base.params);
+  const repliesStmt = db.prepare(`
+    SELECT id, body, created_at
+    FROM email_replies
+    WHERE inbound_email_id = ?
+    ORDER BY created_at ASC
+  `);
+
+  res.json({
+    rows: rows.map((row) => serializeInboundEmailRow(row, repliesStmt)),
+    counts: getMailboxCounts(viewer)
+  });
 });
 
 app.post(
@@ -15602,6 +16131,277 @@ function deleteInboxRowsForever(rows = []) {
     }
   }
 }
+
+app.post(
+  '/api/admin/inbox/:emailId/spam',
+  requireAccessToken,
+  express.json(),
+  async (req, res) => {
+    try {
+      const viewer = requireMailboxAdminViewer(req, res);
+      if (!viewer) return;
+      const row = findAccessibleMailboxRow(viewer, req.params.emailId);
+      if (!row) return res.status(404).json({ error: 'Email not found' });
+
+      db.prepare(`
+        UPDATE inbound_emails
+        SET spam_status = 'spam',
+            spam_reason = COALESCE(NULLIF(spam_reason, ''), 'Marked manually'),
+            spam_score = CASE WHEN COALESCE(spam_score, 0) < 70 THEN 70 ELSE spam_score END,
+            marked_spam_at = datetime('now'),
+            marked_spam_by = ?,
+            restored_from_spam_at = ''
+        WHERE id = ?
+      `).run(viewer.userId, row.id);
+      res.json({ ok: true, id: row.id, spam_status: 'spam' });
+    } catch (err) {
+      console.error('[InboundEmail] Mark spam failed', err?.message || err);
+      res.status(500).json({ error: 'Failed to mark email as spam' });
+    }
+  }
+);
+
+app.post(
+  '/api/admin/inbox/:emailId/important',
+  requireAccessToken,
+  express.json(),
+  async (req, res) => {
+    try {
+      const viewer = requireMailboxAdminViewer(req, res);
+      if (!viewer) return;
+      const row = findAccessibleMailboxRow(viewer, req.params.emailId);
+      if (!row) return res.status(404).json({ error: 'Email not found' });
+      db.prepare(`
+        UPDATE inbound_emails
+        SET is_important = 1,
+            important_at = datetime('now'),
+            important_by = ?
+        WHERE id = ?
+      `).run(viewer.userId, row.id);
+      res.json({ ok: true, id: row.id, important: true });
+    } catch (err) {
+      console.error('[InboundEmail] Mark important failed', err?.message || err);
+      res.status(500).json({ error: 'Failed to mark email important' });
+    }
+  }
+);
+
+app.delete(
+  '/api/admin/inbox/:emailId/important',
+  requireAccessToken,
+  async (req, res) => {
+    try {
+      const viewer = requireMailboxAdminViewer(req, res);
+      if (!viewer) return;
+      const row = findAccessibleMailboxRow(viewer, req.params.emailId);
+      if (!row) return res.status(404).json({ error: 'Email not found' });
+      db.prepare(`
+        UPDATE inbound_emails
+        SET is_important = 0,
+            important_at = '',
+            important_by = ''
+        WHERE id = ?
+      `).run(row.id);
+      res.json({ ok: true, id: row.id, important: false });
+    } catch (err) {
+      console.error('[InboundEmail] Unmark important failed', err?.message || err);
+      res.status(500).json({ error: 'Failed to unmark email important' });
+    }
+  }
+);
+
+app.post(
+  '/api/admin/inbox/bulk-important',
+  requireAccessToken,
+  express.json(),
+  async (req, res) => {
+    try {
+      const viewer = requireMailboxAdminViewer(req, res);
+      if (!viewer) return;
+      const ids = parseInboxBulkIds(req.body);
+      if (!ids.length) return res.status(400).json({ error: 'No emails selected' });
+      const { ids: uniqueIds, rows } = getAccessibleMailboxRowsByIds(viewer, ids);
+      if (rows.length !== uniqueIds.length) {
+        return res.status(403).json({ error: 'Selected emails must belong to your workspace mailbox' });
+      }
+      db.prepare(`
+        UPDATE inbound_emails
+        SET is_important = 1,
+            important_at = datetime('now'),
+            important_by = ?
+        WHERE id IN (${rows.map(() => '?').join(',')})
+      `).run(viewer.userId, ...rows.map((row) => row.id));
+      res.json({ ok: true, marked: rows.length, important: true });
+    } catch (err) {
+      console.error('[InboundEmail] Bulk important failed', err?.message || err);
+      res.status(500).json({ error: 'Failed to mark selected emails important' });
+    }
+  }
+);
+
+app.post(
+  '/api/admin/inbox/bulk-unimportant',
+  requireAccessToken,
+  express.json(),
+  async (req, res) => {
+    try {
+      const viewer = requireMailboxAdminViewer(req, res);
+      if (!viewer) return;
+      const ids = parseInboxBulkIds(req.body);
+      if (!ids.length) return res.status(400).json({ error: 'No emails selected' });
+      const { ids: uniqueIds, rows } = getAccessibleMailboxRowsByIds(viewer, ids);
+      if (rows.length !== uniqueIds.length) {
+        return res.status(403).json({ error: 'Selected emails must belong to your workspace mailbox' });
+      }
+      db.prepare(`
+        UPDATE inbound_emails
+        SET is_important = 0,
+            important_at = '',
+            important_by = ''
+        WHERE id IN (${rows.map(() => '?').join(',')})
+      `).run(...rows.map((row) => row.id));
+      res.json({ ok: true, unmarked: rows.length, important: false });
+    } catch (err) {
+      console.error('[InboundEmail] Bulk unimportant failed', err?.message || err);
+      res.status(500).json({ error: 'Failed to unmark selected emails important' });
+    }
+  }
+);
+
+app.post(
+  '/api/admin/inbox/:emailId/not-spam',
+  requireAccessToken,
+  express.json(),
+  async (req, res) => {
+    try {
+      const viewer = requireMailboxAdminViewer(req, res);
+      if (!viewer) return;
+      const row = findAccessibleMailboxRow(viewer, req.params.emailId);
+      if (!row) return res.status(404).json({ error: 'Email not found' });
+
+      db.prepare(`
+        UPDATE inbound_emails
+        SET spam_status = 'clean',
+            spam_reason = '',
+            spam_score = 0,
+            folder = 'inbox',
+            restored_from_spam_at = datetime('now')
+        WHERE id = ?
+      `).run(row.id);
+      res.json({ ok: true, id: row.id, spam_status: 'clean', restoredTo: 'inbox' });
+    } catch (err) {
+      console.error('[InboundEmail] Restore not-spam failed', err?.message || err);
+      res.status(500).json({ error: 'Failed to restore spam email' });
+    }
+  }
+);
+
+app.post(
+  '/api/admin/inbox/bulk-spam',
+  requireAccessToken,
+  express.json(),
+  async (req, res) => {
+    try {
+      const viewer = requireMailboxAdminViewer(req, res);
+      if (!viewer) return;
+      const ids = parseInboxBulkIds(req.body);
+      if (!ids.length) return res.status(400).json({ error: 'No emails selected' });
+      const { ids: uniqueIds, rows } = getAccessibleMailboxRowsByIds(viewer, ids);
+      if (rows.length !== uniqueIds.length) {
+        return res.status(403).json({ error: 'Selected emails must belong to your workspace mailbox' });
+      }
+      db.prepare(`
+        UPDATE inbound_emails
+        SET spam_status = 'spam',
+            spam_reason = COALESCE(NULLIF(spam_reason, ''), 'Marked manually'),
+            spam_score = CASE WHEN COALESCE(spam_score, 0) < 70 THEN 70 ELSE spam_score END,
+            marked_spam_at = datetime('now'),
+            marked_spam_by = ?,
+            restored_from_spam_at = ''
+        WHERE id IN (${rows.map(() => '?').join(',')})
+      `).run(viewer.userId, ...rows.map((row) => row.id));
+      res.json({ ok: true, marked: rows.length });
+    } catch (err) {
+      console.error('[InboundEmail] Bulk spam failed', err?.message || err);
+      res.status(500).json({ error: 'Failed to mark selected emails as spam' });
+    }
+  }
+);
+
+app.post(
+  '/api/admin/inbox/bulk-not-spam',
+  requireAccessToken,
+  express.json(),
+  async (req, res) => {
+    try {
+      const viewer = requireMailboxAdminViewer(req, res);
+      if (!viewer) return;
+      const ids = parseInboxBulkIds(req.body);
+      if (!ids.length) return res.status(400).json({ error: 'No spam emails selected' });
+      const { ids: uniqueIds, rows } = getAccessibleMailboxRowsByIds(viewer, ids, { folder: 'spam' });
+      if (rows.length !== uniqueIds.length) {
+        return res.status(403).json({ error: 'Selected spam emails must belong to your workspace mailbox' });
+      }
+      db.prepare(`
+        UPDATE inbound_emails
+        SET spam_status = 'clean',
+            spam_reason = '',
+            spam_score = 0,
+            folder = 'inbox',
+            restored_from_spam_at = datetime('now')
+        WHERE id IN (${rows.map(() => '?').join(',')})
+      `).run(...rows.map((row) => row.id));
+      res.json({ ok: true, restored: rows.length });
+    } catch (err) {
+      console.error('[InboundEmail] Bulk not-spam failed', err?.message || err);
+      res.status(500).json({ error: 'Failed to restore selected spam emails' });
+    }
+  }
+);
+
+app.delete(
+  '/api/admin/inbox/spam/:emailId/permanent',
+  requireAccessToken,
+  async (req, res) => {
+    try {
+      const viewer = requireMailboxAdminViewer(req, res);
+      if (!viewer) return;
+      const id = Number.parseInt(String(req.params.emailId || '').trim(), 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid email id' });
+      const { rows } = getAccessibleMailboxRowsByIds(viewer, [id], { folder: 'spam' });
+      if (!rows.length) return res.status(404).json({ error: 'Spam email not found' });
+      deleteInboxRowsForever(rows);
+      db.prepare(`DELETE FROM inbound_emails WHERE id = ?`).run(rows[0].id);
+      res.json({ ok: true, deleted: 1 });
+    } catch (err) {
+      console.error('[InboundEmail] Spam permanent delete failed', err?.message || err);
+      res.status(500).json({ error: 'Failed to delete spam email forever' });
+    }
+  }
+);
+
+app.post(
+  '/api/admin/inbox/empty-spam',
+  requireAccessToken,
+  express.json(),
+  async (req, res) => {
+    try {
+      const viewer = requireMailboxAdminViewer(req, res);
+      if (!viewer) return;
+      const { where, params } = buildMailboxWhereClause(viewer, { folder: 'spam' });
+      const rows = db
+        .prepare(`SELECT id, message_id, attachments_json FROM inbound_emails WHERE ${where}`)
+        .all(...params);
+      if (!rows.length) return res.json({ ok: true, deleted: 0 });
+      deleteInboxRowsForever(rows);
+      db.prepare(`DELETE FROM inbound_emails WHERE ${where}`).run(...params);
+      res.json({ ok: true, deleted: rows.length });
+    } catch (err) {
+      console.error('[InboundEmail] Empty spam failed', err?.message || err);
+      res.status(500).json({ error: 'Failed to empty spam' });
+    }
+  }
+);
 
 app.post(
   '/api/admin/inbox/bulk-delete',
@@ -17540,16 +18340,540 @@ function sanitizeSchoolProfileInput(body = {}) {
 }
 
 function sanitizeEmailSettingsInput(body = {}) {
+  const enabled = normalizeBooleanFlag(
+    body.live_session_notifications_enabled ?? body.enableLiveSessionEmailNotifications ?? body.enabled,
+    0
+  );
+  const brandSchoolName = normalizeTrimmedText(
+    body.from_name || body.fromName || body.senderName || body.brand_school_name || '',
+    160,
+    'fromName'
+  );
+  const signature = normalizeTrimmedText(
+    body.signature || body.defaultSignature || body.footer_text || '',
+    5000,
+    'signature',
+    { multiline: true }
+  );
   return {
-    enabled: body.enabled ? 1 : 0,
-    brandSchoolName: normalizeTrimmedText(body.brand_school_name || '', 160, 'brandSchoolName'),
+    enabled,
+    liveSessionNotificationsEnabled: enabled,
+    registrationEmailsEnabled: normalizeBooleanFlag(
+      body.registration_emails_enabled ?? body.sendRegistrationEmails,
+      1
+    ),
+    passwordResetEmailsEnabled: normalizeBooleanFlag(
+      body.password_reset_emails_enabled ?? body.sendPasswordResetEmails,
+      1
+    ),
+    invoicePaymentEmailsEnabled: normalizeBooleanFlag(
+      body.invoice_payment_emails_enabled ?? body.sendInvoicePaymentEmails,
+      1
+    ),
+    examCourseReminderEmailsEnabled: normalizeBooleanFlag(
+      body.exam_course_reminder_emails_enabled ?? body.sendExamCourseReminderEmails,
+      1
+    ),
+    brandSchoolName,
+    fromName: brandSchoolName,
     replyTo: normalizeOptionalEmail(body.reply_to_email || '', 'replyToEmail'),
-    footerText: normalizeTrimmedText(body.footer_text || '', 1200, 'footerText', { multiline: true }),
+    supportEmail: normalizeOptionalEmail(body.support_email || body.supportEmail || '', 'supportEmail'),
+    footerText: signature,
+    signature,
     subjectPrefix: normalizeTrimmedText(body.subject_prefix || '', 160, 'subjectPrefix'),
     logoUrl: normalizeOptionalUrl(body.logo_url || '', 'logoUrl'),
     signatureHtml: normalizeTrimmedText(body.signature_html || '', 12000, 'signatureHtml', { multiline: true }),
     manualBodyText: normalizeTrimmedText(body.manual_body_text || '', 4000, 'manualBodyText', { multiline: true })
   };
+}
+
+function normalizeBooleanFlag(value, fallback = 0) {
+  if (value === undefined || value === null || value === '') return fallback ? 1 : 0;
+  if (typeof value === 'boolean') return value ? 1 : 0;
+  if (typeof value === 'number') return value ? 1 : 0;
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return 1;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return 0;
+  return fallback ? 1 : 0;
+}
+
+function getCurrentWorkspaceEmailSettingsContext(req, res, { requireManager = true, allowSuperAdmin = false } = {}) {
+  const user = req.auth || getAuthedUser(req);
+  if (!user) {
+    res.status(401).json({ error: 'Not authenticated' });
+    return null;
+  }
+  if (requireManager && !canManageWorkspaceSettings(user)) {
+    res.status(403).json({ error: 'Forbidden' });
+    return null;
+  }
+  if (!allowSuperAdmin && isSuperAdminRole(user)) {
+    res.status(403).json({ error: 'Use the audited admin email settings route for platform-level changes' });
+    return null;
+  }
+  const workspaceId = String(user.workspaceId || user.workspace_id || '').trim();
+  if (!workspaceId) {
+    res.status(400).json({ error: 'workspaceId required' });
+    return null;
+  }
+  return { user, workspaceId };
+}
+
+function buildWorkspaceEmailSettingsResponse(workspaceId, user = null) {
+  const workspaceRow = db
+    .prepare('SELECT name, admin_email, logo_url AS logoUrl FROM workspaces WHERE id = ?')
+    .get(workspaceId) || {};
+  const profileRow = db
+    .prepare('SELECT * FROM workspace_profile WHERE workspace_id = ?')
+    .get(workspaceId) || {};
+  const row = db
+    .prepare('SELECT * FROM workspace_email_settings WHERE workspace_id = ?')
+    .get(workspaceId) || {};
+  const adminEmail = getWorkspaceAdminEmail(workspaceId);
+  const ownerEmail = String(getPlatformOwnerEmailSettings().owner_email || '').trim();
+  const profileContactEmail = String(
+    profileRow.contact_email || profileRow.support_email || profileRow.email || ''
+  ).trim();
+  const replyToDefault = adminEmail || profileContactEmail || ownerEmail || String(user?.email || '').trim();
+  const fromName = String(row.from_name || row.brand_school_name || workspaceRow.name || '').trim();
+  const replyTo = String(row.reply_to_email || replyToDefault || '').trim();
+  const supportEmail = String(row.support_email || profileContactEmail || replyTo || '').trim();
+  const signature = String(row.signature || row.footer_text || row.workspace_signature || '').trim();
+  const liveEnabled = normalizeBooleanFlag(
+    row.live_session_notifications_enabled ?? row.enabled,
+    normalizeBooleanFlag(row.enabled, 0)
+  );
+
+  return {
+    ...row,
+    workspace_id: workspaceId,
+    enabled: liveEnabled,
+    brand_school_name: fromName,
+    from_name: fromName,
+    senderName: fromName,
+    reply_to_email: replyTo,
+    support_email: supportEmail,
+    footer_text: signature,
+    signature,
+    defaultSignature: signature,
+    subject_prefix: row.subject_prefix || '',
+    manual_body_text: row.manual_body_text || '',
+    logo_url: row.logo_url || workspaceRow.logoUrl || '',
+    signature_html: row.signature_html || '',
+    live_session_notifications_enabled: liveEnabled,
+    registration_emails_enabled: normalizeBooleanFlag(row.registration_emails_enabled, 1),
+    password_reset_emails_enabled: normalizeBooleanFlag(row.password_reset_emails_enabled, 1),
+    invoice_payment_emails_enabled: normalizeBooleanFlag(row.invoice_payment_emails_enabled, 1),
+    exam_course_reminder_emails_enabled: normalizeBooleanFlag(row.exam_course_reminder_emails_enabled, 1)
+  };
+}
+
+function saveWorkspaceEmailSettings(workspaceId, input) {
+  db.prepare(`
+    INSERT INTO workspace_email_settings
+      (
+        workspace_id, enabled, live_session_notifications_enabled,
+        registration_emails_enabled, password_reset_emails_enabled,
+        invoice_payment_emails_enabled, exam_course_reminder_emails_enabled,
+        brand_school_name, from_name, reply_to_email, support_email,
+        footer_text, signature, subject_prefix, manual_body_text,
+        logo_url, signature_html, updated_at
+      )
+    VALUES
+      (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(workspace_id) DO UPDATE SET
+      enabled = excluded.enabled,
+      live_session_notifications_enabled = excluded.live_session_notifications_enabled,
+      registration_emails_enabled = excluded.registration_emails_enabled,
+      password_reset_emails_enabled = excluded.password_reset_emails_enabled,
+      invoice_payment_emails_enabled = excluded.invoice_payment_emails_enabled,
+      exam_course_reminder_emails_enabled = excluded.exam_course_reminder_emails_enabled,
+      brand_school_name = excluded.brand_school_name,
+      from_name = excluded.from_name,
+      reply_to_email = excluded.reply_to_email,
+      support_email = excluded.support_email,
+      footer_text = excluded.footer_text,
+      signature = excluded.signature,
+      subject_prefix = excluded.subject_prefix,
+      manual_body_text = excluded.manual_body_text,
+      logo_url = excluded.logo_url,
+      signature_html = excluded.signature_html,
+      updated_at = datetime('now')
+  `).run(
+    workspaceId,
+    input.enabled,
+    input.liveSessionNotificationsEnabled,
+    input.registrationEmailsEnabled,
+    input.passwordResetEmailsEnabled,
+    input.invoicePaymentEmailsEnabled,
+    input.examCourseReminderEmailsEnabled,
+    input.brandSchoolName,
+    input.fromName,
+    input.replyTo,
+    input.supportEmail,
+    input.footerText,
+    input.signature,
+    input.subjectPrefix,
+    input.manualBodyText,
+    input.logoUrl,
+    input.signatureHtml
+  );
+}
+
+const MAX_COMPOSE_RECIPIENTS = 50;
+
+function normalizeRecipientList(value, fieldName = 'email') {
+  const rawItems = Array.isArray(value) ? value : [value];
+  const seen = new Set();
+  const recipients = [];
+  rawItems.forEach((entry) => {
+    String(entry || '')
+      .split(/[,\n;]/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .forEach((item) => {
+        const normalized = normalizeOptionalEmail(item, `${fieldName}${recipients.length ? ` ${recipients.length + 1}` : ''}`);
+        const key = normalized.toLowerCase();
+        if (seen.has(key)) return;
+        seen.add(key);
+        recipients.push(normalized);
+      });
+  });
+  return recipients;
+}
+
+function stringifyRecipientList(value) {
+  const recipients = Array.isArray(value) ? value : normalizeRecipientList(value);
+  return recipients.join(', ');
+}
+
+function parseEmailList(value, fieldName = 'email') {
+  return stringifyRecipientList(normalizeRecipientList(value, fieldName));
+}
+
+const EMAIL_ATTACHMENT_MAX_FILES = 10;
+const EMAIL_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
+const BLOCKED_EMAIL_ATTACHMENT_EXTENSIONS = new Set(['.exe', '.bat', '.cmd', '.sh', '.js', '.msi']);
+
+function serializeEmailAttachmentRow(row = {}) {
+  return {
+    id: row.id,
+    attachmentId: row.id,
+    name: row.original_name || 'attachment',
+    originalName: row.original_name || 'attachment',
+    filename: row.original_name || 'attachment',
+    mimeType: row.mime_type || 'application/octet-stream',
+    size: Number(row.size_bytes || 0),
+    sizeBytes: Number(row.size_bytes || 0)
+  };
+}
+
+function getEmailAttachmentRows(ctx, attachmentIds = []) {
+  const ids = Array.from(new Set((Array.isArray(attachmentIds) ? attachmentIds : [])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean)));
+  if (!ids.length) return [];
+  if (ids.length > EMAIL_ATTACHMENT_MAX_FILES) {
+    throw new OnboardingValidationError(`Maximum ${EMAIL_ATTACHMENT_MAX_FILES} attachments allowed`, 'email_attachment_limit');
+  }
+  const rows = ids.map((id) => db.prepare(`
+    SELECT *
+    FROM email_attachments
+    WHERE id = ?
+      AND workspace_id = ?
+      AND COALESCE(status, 'active') = 'active'
+    LIMIT 1
+  `).get(id, ctx.workspaceId));
+  if (rows.some((row) => !row)) {
+    throw new OnboardingValidationError('Invalid email attachment', 'invalid_email_attachment');
+  }
+  return rows;
+}
+
+function getAttachmentIdsFromBody(body = {}) {
+  const source = Array.isArray(body.attachmentIds)
+    ? body.attachmentIds
+    : Array.isArray(body.attachments)
+      ? body.attachments.map((item) => item?.id || item?.attachmentId || item)
+      : [];
+  return source.map((id) => String(id || '').trim()).filter(Boolean);
+}
+
+function buildEmailTransportAttachments(attachments = []) {
+  return (Array.isArray(attachments) ? attachments : [])
+    .map((row) => {
+      const filePath = resolveSafePath(ATTACHMENTS_DIR, row.stored_name || '');
+      if (!filePath || !fs.existsSync(filePath)) return null;
+      return {
+        filename: normalizeUploadOriginalName(row.original_name || 'attachment', 'attachment'),
+        path: filePath,
+        contentType: row.mime_type || 'application/octet-stream'
+      };
+    })
+    .filter(Boolean);
+}
+
+function sanitizeComposeEmailHtml(value = '') {
+  let html = String(value || '');
+  if (!html.trim()) return '';
+  html = html
+    .replace(/<\s*(script|style)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, '')
+    .replace(/<\s*\/?\s*([a-z0-9-]+)([^>]*)>/gi, (match, tagName, attrs = '') => {
+      const tag = String(tagName || '').toLowerCase();
+      const allowedTags = new Set(['b', 'strong', 'i', 'em', 'u', 'p', 'br', 'ul', 'ol', 'li', 'a']);
+      if (!allowedTags.has(tag)) return '';
+      const closing = /^<\s*\//.test(match) ? '/' : '';
+      if (closing || tag === 'br') return `<${closing}${tag}>`;
+      if (tag !== 'a') return `<${tag}>`;
+      const hrefMatch = String(attrs || '').match(/\shref\s*=\s*(['"])(.*?)\1/i);
+      const href = hrefMatch ? String(hrefMatch[2] || '').trim() : '';
+      if (!/^(https?:|mailto:|tel:)/i.test(href)) return '<a>';
+      return `<a href="${escapeHtml(href)}">`;
+    })
+    .replace(/\son[a-z]+\s*=\s*(['"]).*?\1/gi, '')
+    .replace(/\s(style|class|id)\s*=\s*(['"]).*?\2/gi, '');
+  return html.trim();
+}
+
+function sanitizeEmailDraftInput(body = {}, { requireRecipient = false } = {}) {
+  const toRecipients = normalizeRecipientList(body.toEmail ?? body.to_email ?? body.to ?? '', 'toEmail');
+  const ccRecipients = normalizeRecipientList(body.cc ?? '', 'cc');
+  const bccRecipients = normalizeRecipientList(body.bcc ?? '', 'bcc');
+  if (requireRecipient && !toRecipients.length) {
+    throw new OnboardingValidationError('toEmail is required', 'invalid_toemail');
+  }
+  const totalRecipients = toRecipients.length + ccRecipients.length + bccRecipients.length;
+  if (totalRecipients > MAX_COMPOSE_RECIPIENTS) {
+    throw new OnboardingValidationError(`Maximum ${MAX_COMPOSE_RECIPIENTS} recipients allowed`, 'recipient_limit_exceeded');
+  }
+  const bodyHtml = sanitizeComposeEmailHtml(body.bodyHtml || body.body_html || '');
+  const bodyText = normalizeTrimmedText(
+    body.bodyText || body.body || body.manual_body_text || (bodyHtml ? stripHtmlToText(bodyHtml) : ''),
+    50000,
+    'body',
+    { multiline: true }
+  );
+  return {
+    toEmail: stringifyRecipientList(toRecipients),
+    toRecipients,
+    cc: stringifyRecipientList(ccRecipients),
+    ccRecipients,
+    bcc: stringifyRecipientList(bccRecipients),
+    bccRecipients,
+    subject: normalizeTrimmedText(body.subject || '', 500, 'subject'),
+    body: bodyText,
+    bodyHtml,
+    signature: normalizeTrimmedText(body.signature || '', 5000, 'signature', { multiline: true }),
+    attachmentsJson: JSON.stringify(Array.isArray(body.attachments) ? body.attachments.slice(0, EMAIL_ATTACHMENT_MAX_FILES) : [])
+  };
+}
+
+function serializeEmailDraftRow(row = {}) {
+  const attachments = parseJsonSafely(row.attachments_json, []) || [];
+  const body = String(row.body || '');
+  const toRecipients = normalizeRecipientList(row.to_email || '');
+  const ccRecipients = normalizeRecipientList(row.cc || '');
+  const bccRecipients = normalizeRecipientList(row.bcc || '');
+  return {
+    id: row.id,
+    workspace_id: row.workspace_id || '',
+    workspaceId: row.workspace_id || '',
+    author_user_id: row.author_user_id || '',
+    authorUserId: row.author_user_id || '',
+    authorName: row.author_name || row.author_email || '',
+    authorEmail: row.author_email || '',
+    to_email: row.to_email || '',
+    toEmail: toRecipients,
+    toEmailText: row.to_email || '',
+    cc: ccRecipients,
+    ccText: row.cc || '',
+    bcc: bccRecipients,
+    bccText: row.bcc || '',
+    subject: row.subject || '',
+    body,
+    bodyText: body,
+    bodyHtml: row.body_html || '',
+    body_html: row.body_html || '',
+    signature: row.signature || '',
+    attachments,
+    status: row.status || 'draft',
+    created_at: row.created_at || '',
+    createdAt: row.created_at || '',
+    updated_at: row.updated_at || '',
+    updatedAt: row.updated_at || '',
+    deleted_at: row.deleted_at || '',
+    sent_at: row.sent_at || '',
+    preview: body.replace(/\s+/g, ' ').trim().slice(0, 160)
+  };
+}
+
+function getWorkspaceDraftRow(ctx, draftId) {
+  const id = String(draftId || '').trim();
+  if (!id) return null;
+  return db.prepare(`
+    SELECT d.*, u.name AS author_name, u.email AS author_email
+    FROM email_drafts d
+    LEFT JOIN users u ON u.id = d.author_user_id
+    WHERE d.id = ?
+      AND d.workspace_id = ?
+      AND COALESCE(d.status, 'draft') != 'deleted'
+    LIMIT 1
+  `).get(id, ctx.workspaceId);
+}
+
+function insertEmailDraft(ctx, input) {
+  const id = `draft_${crypto.randomUUID()}`;
+  db.prepare(`
+    INSERT INTO email_drafts (
+      id, workspace_id, author_user_id, to_email, cc, bcc, subject, body, body_html,
+      signature, attachments_json, status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', datetime('now'), datetime('now'))
+  `).run(
+    id,
+    ctx.workspaceId,
+    ctx.user.id,
+    input.toEmail,
+    input.cc,
+    input.bcc,
+    input.subject,
+    input.body,
+    input.bodyHtml,
+    input.signature,
+    input.attachmentsJson
+  );
+  return getWorkspaceDraftRow(ctx, id);
+}
+
+function updateEmailDraft(ctx, draftId, input) {
+  const row = getWorkspaceDraftRow(ctx, draftId);
+  if (!row || String(row.status || 'draft') !== 'draft') return null;
+  db.prepare(`
+    UPDATE email_drafts
+    SET to_email = ?,
+        cc = ?,
+        bcc = ?,
+        subject = ?,
+        body = ?,
+        body_html = ?,
+        signature = ?,
+        attachments_json = ?,
+        updated_at = datetime('now')
+    WHERE id = ? AND workspace_id = ? AND status = 'draft'
+  `).run(
+    input.toEmail,
+    input.cc,
+    input.bcc,
+    input.subject,
+    input.body,
+    input.bodyHtml,
+    input.signature,
+    input.attachmentsJson,
+    row.id,
+    ctx.workspaceId
+  );
+  return getWorkspaceDraftRow(ctx, row.id);
+}
+
+async function sendWorkspaceManualEmail({ workspaceId, user, to, cc = '', bcc = '', subject, bodyText, bodyHtml = '', signature = '', type = 'manual', draftId = '', attachments = [] }) {
+  const settings = buildWorkspaceEmailSettingsResponse(workspaceId, user);
+  const workspaceRow =
+    db.prepare('SELECT name, admin_email FROM workspaces WHERE id = ?').get(workspaceId) || {};
+  const profileRow = db.prepare('SELECT * FROM workspace_profile WHERE workspace_id = ?').get(workspaceId) || {};
+  const replyTo = String(settings.reply_to_email || workspaceRow.admin_email || '').trim();
+  const normalizedSettings = {
+    ...settings,
+    brand_school_name: String(settings.from_name || settings.brand_school_name || workspaceRow.name || '').trim(),
+    from_name: String(settings.from_name || settings.brand_school_name || workspaceRow.name || '').trim(),
+    reply_to_email: replyTo,
+    footer_text: String(signature || settings.signature || settings.footer_text || '').trim(),
+    signature: String(signature || settings.signature || settings.footer_text || '').trim(),
+    support_email: String(settings.support_email || replyTo || '').trim()
+  };
+  const safeSubject = String(subject || '').trim() || '(no subject)';
+  const safeBody = String(bodyText || '').trim();
+  const safeBodyHtml = sanitizeComposeEmailHtml(bodyHtml || '');
+  const escapedText = escapeHtml(safeBody || ' ');
+  const signatureHtml = buildEmailSignatureBlock({
+    profileRow,
+    workspaceRow,
+    settings: normalizedSettings
+  });
+  const html = `
+    <!DOCTYPE html>
+    <html>
+      <head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1.0" /></head>
+      <body style="margin:0;background:#fff;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;color:#0f172a;">
+        <div style="padding:18px;width:100%;box-sizing:border-box;">
+          <div style="width:100%;background:#fff;border-radius:16px;padding:22px;box-shadow:0 20px 40px rgba(15,23,42,0.08);box-sizing:border-box;">
+            <div style="margin-bottom:12px;">${safeBodyHtml || escapedText.replace(/\n/g, '<br>')}</div>
+            ${signatureHtml}
+          </div>
+        </div>
+      </body>
+    </html>
+  `.trim();
+  const logId = `elog_${crypto.randomUUID()}`;
+  const recipientName = resolveRecipientName(workspaceId, to);
+  const fromName = buildSchoolDisplayName(
+    String(normalizedSettings.from_name || normalizedSettings.brand_school_name || workspaceRow.name || '').trim()
+  );
+  const monitoredReplyTo = getInboundMailboxEmail() || replyTo;
+  const outboundHeaders = {
+    'X-StudiesTalk-Workspace': workspaceId,
+    'X-StudiesTalk-Email-Log': logId
+  };
+  if (draftId) outboundHeaders['X-StudiesTalk-Draft'] = draftId;
+  const mailAttachments = buildEmailTransportAttachments(attachments);
+  const baseLog = {
+    id: logId,
+    workspaceId,
+    sentByUserId: user.id,
+    toEmail: to,
+    toName: recipientName,
+    cc,
+    bcc,
+    subject: safeSubject,
+    bodyText: safeBody,
+    bodyHtml: html,
+    attachments: mailAttachments.map((att) => ({ filename: att.filename, contentType: att.contentType })),
+    type
+  };
+  try {
+    const info = await sendPlatformEmail({
+      to,
+      cc,
+      bcc,
+      subject: safeSubject,
+      html,
+      text: safeBody,
+      replyTo: monitoredReplyTo,
+      fromName,
+      headers: outboundHeaders,
+      attachments: mailAttachments
+    });
+    recordEmailLog({
+      ...baseLog,
+      status: 'sent',
+      messageId: normalizeEmailMessageId(info?.messageId || '')
+    });
+    await recordProviderUsageSafe({
+      workspaceId,
+      providerKey: 'ionos_email',
+      featureKey: 'transactional_email',
+      units: 1,
+      unitName: 'email',
+      costEur: 0,
+      metadata: {
+        userId: user?.id || null,
+        to,
+        scope: draftId ? 'workspace_email_draft_send' : 'workspace_email_manual'
+      }
+    });
+    return { ok: true, provider: providerName, logId };
+  } catch (error) {
+    recordEmailLog({ ...baseLog, status: 'failed', errorMessage: String(error.message || error) });
+    throw error;
+  }
 }
 
 function extractIdempotencyKey(req) {
@@ -23463,7 +24787,24 @@ function buildEmailOpeningHoursLines(profileRow = {}) {
   });
 }
 
+function buildEmailOfficeHoursText(profileRow = {}) {
+  const details = parseOpeningHoursDetails(profileRow.opening_hours_json);
+  const detailDays = Array.isArray(details?.days) ? details.days : [];
+  if (!detailDays.length) return parseOpeningHoursJson(profileRow.opening_hours_json);
+  const entryMap = new Map(
+    detailDays.map((entry) => [String(entry.day || "").toLowerCase(), entry])
+  );
+  return EMAIL_OPENING_HOURS_DAYS.map((day) => {
+    const entry = entryMap.get(day.key);
+    if (!entry) return `${day.label} Hours not set`;
+    if (entry.status === "closed") return `${day.label} CLOSED`;
+    if (entry.openTime && entry.closeTime) return `${day.label} ${entry.openTime} - ${entry.closeTime}`;
+    return `${day.label} ${EMAIL_OPENING_HOURS_STATUS_LABELS[entry.status] || EMAIL_OPENING_HOURS_STATUS_LABELS.open}`;
+  }).join(", ");
+}
+
 function buildEmailSignatureBlock({ profileRow = {}, workspaceRow = {}, settings = {} }) {
+  const defaultSignature = String(settings.signature || settings.footer_text || '').trim();
   const addressLines = [];
   const street = String(profileRow.street || "").trim();
   const house = String(profileRow.house_number || "").trim();
@@ -23477,10 +24818,10 @@ function buildEmailSignatureBlock({ profileRow = {}, workspaceRow = {}, settings
   if (line2) addressLines.push(line2);
   if (country) addressLines.push(country);
 
-  const hoursLines = buildEmailOpeningHoursLines(profileRow);
+  const officeHours = buildEmailOfficeHoursText(profileRow);
   const phone = String(profileRow.phone || "").trim();
   const ownerEmail = String(getPlatformOwnerEmailSettings().owner_email || "").trim();
-  const replyEmail = resolveWorkspaceContactEmail({
+  const replyEmail = String(settings.support_email || '').trim() || resolveWorkspaceContactEmail({
     profileRow,
     workspaceRow: {
       ...workspaceRow,
@@ -23488,49 +24829,36 @@ function buildEmailSignatureBlock({ profileRow = {}, workspaceRow = {}, settings
     }
   });
   const registrationDetails = String(profileRow.registration_details || "").trim();
-  const contactLines = [];
-  if (phone) contactLines.push(`Phone: ${phone}`);
-  if (replyEmail) contactLines.push(`Email: ${replyEmail}`);
 
   const sections = [];
-  if (hoursLines.length) {
+  if (officeHours) {
     sections.push(`
-      <div style="margin-bottom:10px">
-        <strong style="display:block;margin-bottom:4px;font-size:13px;color:#0f172a">Opening hours</strong>
-        ${hoursLines
-          .map((entry) => {
-            const label = entry.label || "";
-            const detail = entry.detail || "";
-            return `<div style="font-size:13px;color:#475569;line-height:1.4">${escapeHtml(label)}${label && detail ? ": " : ""}${escapeHtml(detail)}</div>`;
-          })
-          .join("")}
-      </div>
+      <div style="font-size:13px;color:#475569;line-height:1.5"><strong style="color:#0f172a">Office hours:</strong> ${escapeHtml(officeHours)}</div>
     `);
   }
   if (addressLines.length) {
     const singleAddress = addressLines.filter(Boolean).join(", ");
     sections.push(`
-      <div style="margin-bottom:10px">
-        <strong style="display:block;margin-bottom:4px;font-size:13px;color:#0f172a">Address</strong>
-        <div style="font-size:13px;color:#475569;line-height:1.4">${escapeHtml(singleAddress)}</div>
-      </div>
+      <div style="font-size:13px;color:#475569;line-height:1.5"><strong style="color:#0f172a">Address:</strong> ${escapeHtml(singleAddress)}</div>
     `);
   }
-  if (contactLines.length) {
-    const contactLine = contactLines.filter(Boolean).join(" | ");
+  if (phone) {
     sections.push(`
-      <div style="margin-bottom:0">
-        <strong style="display:block;margin-bottom:4px;font-size:13px;color:#0f172a">Contact</strong>
-        <div style="font-size:13px;color:#475569;line-height:1.4">${escapeHtml(contactLine)}</div>
-      </div>
+      <div style="font-size:13px;color:#475569;line-height:1.5"><strong style="color:#0f172a">Phone:</strong> ${escapeHtml(phone)}</div>
+    `);
+  }
+  if (replyEmail) {
+    sections.push(`
+      <div style="font-size:13px;color:#475569;line-height:1.5"><strong style="color:#0f172a">Email:</strong> ${escapeHtml(replyEmail)}</div>
     `);
   }
   if (registrationDetails) {
     sections.push(`
-      <div style="margin-bottom:0">
-        <strong style="display:block;margin-bottom:4px;font-size:13px;color:#0f172a">Registration</strong>
-        <div style="font-size:13px;color:#475569;line-height:1.4">${escapeHtml(registrationDetails)}</div>
-      </div>
+      <div style="margin-top:12px;font-size:13px;color:#475569;line-height:1.5;white-space:pre-line">${escapeHtml(registrationDetails)}</div>
+    `);
+  } else if (!sections.length && defaultSignature) {
+    sections.push(`
+      <div style="font-size:13px;color:#475569;line-height:1.5;white-space:pre-line">${escapeHtml(defaultSignature)}</div>
     `);
   }
 
@@ -25208,9 +26536,8 @@ function autopostLiveSessionMessage(session, user, options = {}) {
 async function sendLiveSessionEmails({ workspaceId, channelId, session }) {
   if (!channelId) return { sent: 0, total: 0 };
 
-  const settings =
-    db.prepare('SELECT * FROM workspace_email_settings WHERE workspace_id = ?').get(workspaceId) || {};
-  if (!settings.enabled) {
+  const settings = buildWorkspaceEmailSettingsResponse(workspaceId);
+  if (!normalizeBooleanFlag(settings.live_session_notifications_enabled ?? settings.enabled, 0)) {
     return { sent: 0, total: 0 };
   }
 
@@ -25221,9 +26548,12 @@ async function sendLiveSessionEmails({ workspaceId, channelId, session }) {
   const ownerEmail = String(getPlatformOwnerEmailSettings().owner_email || '').trim();
   const normalizedSettings = {
     ...settings,
-    brand_school_name: String(settings.brand_school_name || workspaceRow.name || '').trim(),
+    brand_school_name: String(settings.from_name || settings.brand_school_name || workspaceRow.name || '').trim(),
+    from_name: String(settings.from_name || settings.brand_school_name || workspaceRow.name || '').trim(),
     reply_to_email: String(settings.reply_to_email || workspaceRow.admin_email || ownerEmail || '').trim(),
-    footer_text: String(settings.footer_text || '').trim()
+    support_email: String(settings.support_email || settings.reply_to_email || workspaceRow.admin_email || ownerEmail || '').trim(),
+    footer_text: String(settings.signature || settings.footer_text || '').trim(),
+    signature: String(settings.signature || settings.footer_text || '').trim()
   };
   const replyTo = normalizedSettings.reply_to_email;
   const fromName = buildAutomatedEmailSenderName(
@@ -25239,7 +26569,8 @@ async function sendLiveSessionEmails({ workspaceId, channelId, session }) {
   if (session.start_time) whenParts.push(session.start_time + (session.end_time ? `–${session.end_time}` : ''));
   const when = whenParts.join(' ');
 
-  const brandName = normalizedSettings.brand_school_name || workspaceRow.name || '';
+  const brandName = normalizedSettings.from_name || normalizedSettings.brand_school_name || workspaceRow.name || '';
+  const brandLabel = brandName ? `${brandName} · Powered by StudiesTalk` : 'StudiesTalk';
   const signatureHtml = buildEmailSignatureBlock({
     profileRow,
     workspaceRow,
@@ -30867,7 +32198,41 @@ function getEmailControlOverview(workspaceId = '') {
   const workspaceClause = normalizedWorkspaceId ? 'WHERE workspace_id = ?' : '';
   const params = normalizedWorkspaceId ? [normalizedWorkspaceId] : [];
   const inboxCount = Number(
-    db.prepare(`SELECT COUNT(*) AS c FROM inbound_emails ${workspaceClause}`).get(...params)?.c || 0
+    db.prepare(`
+      SELECT COUNT(*) AS c
+      FROM inbound_emails
+      ${normalizedWorkspaceId ? 'WHERE workspace_id = ? AND' : 'WHERE'}
+        COALESCE(NULLIF(spam_status, ''), 'clean') = 'clean'
+        AND COALESCE(NULLIF(folder, ''), 'inbox') = 'inbox'
+    `).get(...params)?.c || 0
+  );
+  const spamCount = Number(
+    db.prepare(`
+      SELECT COUNT(*) AS c
+      FROM inbound_emails
+      ${normalizedWorkspaceId ? 'WHERE workspace_id = ? AND' : 'WHERE'}
+        COALESCE(NULLIF(spam_status, ''), 'clean') IN ('spam', 'suspected')
+        AND COALESCE(NULLIF(folder, ''), 'inbox') != 'trash'
+    `).get(...params)?.c || 0
+  );
+  const importantCount = Number(
+    db.prepare(`
+      SELECT COUNT(*) AS c
+      FROM inbound_emails
+      ${normalizedWorkspaceId ? 'WHERE workspace_id = ? AND' : 'WHERE'}
+        COALESCE(is_important, 0) = 1
+        AND COALESCE(NULLIF(folder, ''), 'inbox') != 'trash'
+        AND COALESCE(NULLIF(spam_status, ''), 'clean') = 'clean'
+    `).get(...params)?.c || 0
+  );
+  const suspectedCount = Number(
+    db.prepare(`
+      SELECT COUNT(*) AS c
+      FROM inbound_emails
+      ${normalizedWorkspaceId ? 'WHERE workspace_id = ? AND' : 'WHERE'}
+        COALESCE(NULLIF(spam_status, ''), 'clean') = 'suspected'
+        AND COALESCE(NULLIF(folder, ''), 'inbox') != 'trash'
+    `).get(...params)?.c || 0
   );
   const templateCount = Number(
     db.prepare(`SELECT COUNT(*) AS c FROM workspace_email_templates ${workspaceClause}`).get(...params)?.c || 0
@@ -30912,6 +32277,9 @@ function getEmailControlOverview(workspaceId = '') {
   return {
     workspaceId: normalizedWorkspaceId || '',
     inboxCount,
+    spamCount,
+    suspectedCount,
+    importantCount,
     sentCount,
     failedCount,
     templatesCount: templateCount,

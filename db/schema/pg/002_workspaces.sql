@@ -57,12 +57,20 @@ CREATE TABLE IF NOT EXISTS workspace_email_settings (
   workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
   enabled INTEGER NOT NULL DEFAULT 0,
   brand_school_name TEXT DEFAULT '',
+  from_name TEXT DEFAULT '',
   reply_to_email TEXT DEFAULT '',
+  support_email TEXT DEFAULT '',
   subject_prefix TEXT DEFAULT '',
   footer_text TEXT DEFAULT '',
+  signature TEXT DEFAULT '',
   logo_url TEXT DEFAULT '',
   signature_html TEXT DEFAULT '',
   manual_body_text TEXT DEFAULT '',
+  live_session_notifications_enabled INTEGER DEFAULT 0,
+  registration_emails_enabled INTEGER DEFAULT 1,
+  password_reset_emails_enabled INTEGER DEFAULT 1,
+  invoice_payment_emails_enabled INTEGER DEFAULT 1,
+  exam_course_reminder_emails_enabled INTEGER DEFAULT 1,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP::text
 );
 

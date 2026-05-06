@@ -193,11 +193,28 @@ async function main() {
     await request(baseUrl, 'super_admin', 'POST', '/api/admin/backups/run', {});
 
     const notification = await request(baseUrl, 'super_admin', 'POST', '/api/admin/notifications', {
-      title: 'Smoke announcement',
+      name: 'Smoke campaign',
+      subject: 'Smoke announcement',
       body: 'Smoke body',
-      channel: 'in_app'
+      channels: ['email', 'in_app'],
+      targetType: 'selected_workspaces',
+      workspaceIds: [ids.workspace],
+      priority: 'critical',
+      smsToEmail: true,
+      emailToInApp: true
     });
     assert.ok(notification.row.id);
+    assert.strictEqual(db.prepare('SELECT COUNT(*) AS count FROM notifications_campaigns').get().count, 1);
+    assert.strictEqual(db.prepare('SELECT COUNT(*) AS count FROM notifications_targets').get().count, 1);
+    const notificationOverview = await request(baseUrl, 'super_admin', 'GET', '/api/admin/notifications');
+    assert.ok(Array.isArray(notificationOverview.rows));
+    assert.ok(Array.isArray(notificationOverview.templates));
+    assert.ok(Array.isArray(notificationOverview.deliveries));
+    assert.ok(Array.isArray(notificationOverview.automations));
+    await request(baseUrl, 'super_admin', 'POST', `/api/admin/notifications/${notification.row.id}/send`, {});
+    assert.strictEqual(db.prepare('SELECT status FROM notifications_campaigns WHERE id = ?').get(notification.row.id).status, 'completed');
+    assert.ok(db.prepare('SELECT COUNT(*) AS count FROM notifications_logs WHERE campaign_id = ?').get(notification.row.id).count >= 1);
+    await request(baseUrl, 'super_admin', 'POST', `/api/admin/notifications/${notification.row.id}/retry`, {});
 
     const exportRequest = await request(baseUrl, 'super_admin', 'POST', `/api/admin/data-governance/export/${ids.workspace}`, {
       reason: 'customer request smoke'

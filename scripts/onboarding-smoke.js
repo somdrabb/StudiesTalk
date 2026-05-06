@@ -116,9 +116,12 @@ function setupSchema(db) {
     );
 
     CREATE TABLE ai_budget_settings (
-      workspace_id TEXT PRIMARY KEY,
-      monthly_cap_eur REAL NOT NULL DEFAULT 0,
-      updated_at TEXT NOT NULL DEFAULT ''
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT,
+      monthly_limit_eur REAL NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT '',
+      UNIQUE (workspace_id)
     );
 
     CREATE TABLE workspace_onboarding (
@@ -590,9 +593,9 @@ async function runServerGateSmoke() {
         ON CONFLICT(workspace_id) DO UPDATE SET settings_json = excluded.settings_json, updated_at = excluded.updated_at
       `).run(workspaceId, JSON.stringify({ timezone: 'Europe/Berlin' }), Date.now());
       seeded.prepare(`
-        INSERT INTO ai_budget_settings (workspace_id, monthly_cap_eur, updated_at)
-        VALUES (?, 30, datetime('now'))
-      `).run(workspaceId);
+        INSERT INTO ai_budget_settings (id, workspace_id, monthly_limit_eur, created_at, updated_at)
+        VALUES (?, ?, 30, datetime('now'), datetime('now'))
+      `).run(`ai_budget_${workspaceId}`, workspaceId);
     } finally {
       seeded.close();
     }
@@ -867,9 +870,9 @@ async function main() {
       VALUES (?, ?)
     `).run(`homework_${runId}`, workspaceId);
     db.prepare(`
-      INSERT INTO ai_budget_settings (workspace_id, monthly_cap_eur)
-      VALUES (?, 25)
-    `).run(workspaceId);
+      INSERT INTO ai_budget_settings (id, workspace_id, monthly_limit_eur, created_at, updated_at)
+      VALUES (?, ?, 25, datetime('now'), datetime('now'))
+    `).run(`ai_budget_${workspaceId}`, workspaceId);
     await billingRepository.updateWorkspaceBillingProfile({
       workspaceId,
       billingEmail: 'billing@school.example.com',
