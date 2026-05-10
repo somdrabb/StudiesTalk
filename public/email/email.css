@@ -2217,6 +2217,27 @@ html[data-theme="dark"] .ses-signature-line{
   flex: 0 0 auto;
 }
 
+#schoolMailShell .ses-signature-preview img,
+.mail-main .ses-signature-preview img,
+#schoolMailShell .ses-signature-email-render img,
+.mail-main .ses-signature-email-render img,
+#schoolMailShell .mail-signature-preview img,
+.mail-main .mail-signature-preview img {
+  width: auto !important;
+  max-width: 96px !important;
+  height: auto !important;
+  max-height: 56px !important;
+  object-fit: contain !important;
+  display: inline-block !important;
+  vertical-align: middle !important;
+}
+
+#schoolMailShell .ses-body.ses-view-sent .ses-signature-preview img,
+.mail-main .ses-body.ses-view-sent .ses-signature-preview img {
+  max-width: 88px !important;
+  max-height: 52px !important;
+}
+
 #sesFooter[hidden]{
   display: none;
 }
@@ -8868,6 +8889,10 @@ html[data-theme="dark"] .mail-main .detail-empty-sub {
   display: none !important;
 }
 
+.ses-body.ses-view-settings > .ses-form > .ses-form-actions {
+  display: flex;
+}
+
 .ses-body.ses-view-sent .ses-field {
   border: 0 !important;
   border-bottom: 1px solid #e5e7eb !important;
@@ -9406,4 +9431,249 @@ html[data-theme="dark"] .mail-main .detail-empty-sub {
   .mail-main .ses-body:is(.ses-view-inbox, .ses-view-trash, .ses-view-spam, .ses-view-important, .ses-view-drafts) .mbx-list {
     min-height: 60dvh !important;
   }
+}
+
+/* Final dark-mode compose pass: keep late Gmail-style compose rules from
+   forcing white editor/buttons inside the dark school mail surface. */
+html[data-theme="dark"] .ses-body.ses-view-sent .mail-compose-heading {
+  border-bottom-color: rgba(71, 85, 105, 0.42) !important;
+  background: rgba(7, 17, 31, 0.92) !important;
+  color: rgba(226, 232, 240, 0.94) !important;
+}
+
+html[data-theme="dark"] .ses-body.ses-view-sent .mail-compose-heading strong,
+html[data-theme="dark"] .mail-compose-title-block strong,
+html[data-theme="dark"] .mail-compose-signature-tools strong {
+  color: rgba(248, 250, 252, 0.96) !important;
+}
+
+html[data-theme="dark"] .ses-body.ses-view-sent .ses-field {
+  border-bottom-color: rgba(71, 85, 105, 0.38) !important;
+  background: transparent !important;
+}
+
+html[data-theme="dark"] .ses-body.ses-view-sent .ses-field label,
+html[data-theme="dark"] .ses-body.ses-view-sent .compose-recipient-label,
+html[data-theme="dark"] .mail-compose-recipient-toggles button,
+html[data-theme="dark"] .mail-compose-signature-tools span {
+  color: rgba(203, 213, 225, 0.78) !important;
+}
+
+html[data-theme="dark"] .mail-compose-recipient-toggles button:hover {
+  color: rgba(248, 250, 252, 0.96) !important;
+}
+
+html[data-theme="dark"] .ses-body.ses-view-sent .compose-recipient-input,
+html[data-theme="dark"] .ses-body.ses-view-sent #sesTestTo,
+html[data-theme="dark"] .ses-body.ses-view-sent #sesCcInput,
+html[data-theme="dark"] .ses-body.ses-view-sent #sesBccInput,
+html[data-theme="dark"] .ses-body.ses-view-sent #sesSubjectPrefix {
+  background: transparent !important;
+  background-color: transparent !important;
+  color: rgba(241, 245, 249, 0.95) !important;
+  -webkit-text-fill-color: rgba(241, 245, 249, 0.95) !important;
+}
+
+html[data-theme="dark"] .ses-body.ses-view-sent .compose-recipient-input::placeholder,
+html[data-theme="dark"] .ses-body.ses-view-sent #sesSubjectPrefix::placeholder {
+  color: rgba(148, 163, 184, 0.78) !important;
+  -webkit-text-fill-color: rgba(148, 163, 184, 0.78) !important;
+}
+
+html[data-theme="dark"] .ses-body.ses-view-sent #sesTestTo:-webkit-autofill,
+html[data-theme="dark"] .ses-body.ses-view-sent #sesTestTo:-webkit-autofill:hover,
+html[data-theme="dark"] .ses-body.ses-view-sent #sesTestTo:-webkit-autofill:focus,
+html[data-theme="dark"] .ses-body.ses-view-sent #sesCcInput:-webkit-autofill,
+html[data-theme="dark"] .ses-body.ses-view-sent #sesCcInput:-webkit-autofill:hover,
+html[data-theme="dark"] .ses-body.ses-view-sent #sesCcInput:-webkit-autofill:focus,
+html[data-theme="dark"] .ses-body.ses-view-sent #sesBccInput:-webkit-autofill,
+html[data-theme="dark"] .ses-body.ses-view-sent #sesBccInput:-webkit-autofill:hover,
+html[data-theme="dark"] .ses-body.ses-view-sent #sesBccInput:-webkit-autofill:focus,
+html[data-theme="dark"] .ses-body.ses-view-sent #sesSubjectPrefix:-webkit-autofill,
+html[data-theme="dark"] .ses-body.ses-view-sent #sesSubjectPrefix:-webkit-autofill:hover,
+html[data-theme="dark"] .ses-body.ses-view-sent #sesSubjectPrefix:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px rgba(7, 17, 31, 0.98) inset !important;
+  box-shadow: 0 0 0 1000px rgba(7, 17, 31, 0.98) inset !important;
+  -webkit-text-fill-color: rgba(241, 245, 249, 0.95) !important;
+}
+
+html[data-theme="dark"] .ses-body.ses-view-sent .compose-recipient-chip {
+  background: rgba(37, 99, 235, 0.22) !important;
+  color: rgba(191, 219, 254, 0.96) !important;
+}
+
+html[data-theme="dark"] .ses-body.ses-view-sent .compose-recipient-chip button {
+  color: rgba(191, 219, 254, 0.96) !important;
+}
+
+html[data-theme="dark"] .ses-body.ses-view-sent .mail-compose-text-toolbar,
+html[data-theme="dark"] .ses-body.ses-view-sent .compose-editor .compose-toolbar {
+  border-color: rgba(71, 85, 105, 0.38) !important;
+  background: rgba(15, 23, 42, 0.74) !important;
+}
+
+html[data-theme="dark"] .ses-body.ses-view-sent .mail-compose-text-toolbar button,
+html[data-theme="dark"] .ses-body.ses-view-sent .compose-editor .compose-toolbar-btn {
+  color: rgba(203, 213, 225, 0.9) !important;
+  background: transparent !important;
+}
+
+html[data-theme="dark"] .ses-body.ses-view-sent .mail-compose-text-toolbar button:hover,
+html[data-theme="dark"] .ses-body.ses-view-sent .mail-compose-text-toolbar button.is-active,
+html[data-theme="dark"] .ses-body.ses-view-sent .compose-editor .compose-toolbar-btn:hover,
+html[data-theme="dark"] .ses-body.ses-view-sent .compose-editor .compose-toolbar-btn.is-active {
+  background: rgba(59, 130, 246, 0.2) !important;
+  color: rgba(191, 219, 254, 0.96) !important;
+}
+
+html[data-theme="dark"] .ses-body.ses-view-sent .compose-editor,
+html[data-theme="dark"] .ses-body.ses-view-sent .compose-rich-body,
+html[data-theme="dark"] .ses-body.ses-view-sent #sesBodyText {
+  border-color: rgba(71, 85, 105, 0.42) !important;
+  background: rgba(2, 6, 23, 0.5) !important;
+  color: rgba(241, 245, 249, 0.95) !important;
+}
+
+html[data-theme="dark"] .ses-body.ses-view-sent .compose-rich-body:focus,
+html[data-theme="dark"] .ses-body.ses-view-sent .compose-editor:focus-within {
+  border-color: rgba(96, 165, 250, 0.54) !important;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.18) !important;
+}
+
+html[data-theme="dark"] .ses-body.ses-view-sent .compose-rich-body.is-empty::before,
+html[data-theme="dark"] .ses-body.ses-view-sent .compose-rich-placeholder,
+html[data-theme="dark"] .ses-body.ses-view-sent #sesBodyText::placeholder {
+  color: rgba(148, 163, 184, 0.78) !important;
+}
+
+html[data-theme="dark"] .ses-body.ses-view-sent .compose-rich-body a {
+  color: #93c5fd !important;
+}
+
+html[data-theme="dark"] .ses-body.ses-view-sent .compose-attachment-chip,
+html[data-theme="dark"] .ses-body.ses-view-sent .mail-compose-signature-preview-toggle,
+html[data-theme="dark"] .ses-body.ses-view-sent .mail-compose-signature-settings,
+html[data-theme="dark"] .ses-body.ses-view-sent .mail-compose-attach,
+html[data-theme="dark"] .ses-body.ses-view-sent .mail-compose-footer-save {
+  border-color: rgba(71, 85, 105, 0.38) !important;
+  background: rgba(15, 23, 42, 0.62) !important;
+  color: rgba(226, 232, 240, 0.94) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .ses-body.ses-view-sent .compose-attachment-icon,
+html[data-theme="dark"] .ses-body.ses-view-sent .compose-attachment-size,
+html[data-theme="dark"] .ses-body.ses-view-sent .compose-attachment-remove,
+html[data-theme="dark"] .ses-body.ses-view-sent .mail-compose-attach {
+  color: rgba(203, 213, 225, 0.82) !important;
+}
+
+html[data-theme="dark"] .ses-body.ses-view-sent .compose-attachment-remove:hover,
+html[data-theme="dark"] .ses-body.ses-view-sent .mail-compose-attach:hover,
+html[data-theme="dark"] .ses-body.ses-view-sent .mail-compose-footer-save:hover,
+html[data-theme="dark"] .ses-body.ses-view-sent .mail-compose-signature-preview-toggle:hover,
+html[data-theme="dark"] .ses-body.ses-view-sent .mail-compose-signature-settings:hover {
+  background: rgba(30, 41, 59, 0.78) !important;
+  color: rgba(248, 250, 252, 0.96) !important;
+}
+
+html[data-theme="dark"] .ses-body.ses-view-sent .mail-compose-footer-send {
+  border-color: rgba(37, 99, 235, 0.7) !important;
+  background: #2563eb !important;
+  color: #fff !important;
+}
+
+html[data-theme="dark"] .compose-suggest-popover {
+  border-color: rgba(71, 85, 105, 0.42) !important;
+  background: rgba(15, 23, 42, 0.98) !important;
+  box-shadow: 0 18px 45px rgba(2, 6, 23, 0.42) !important;
+}
+
+html[data-theme="dark"] .compose-suggest-row {
+  color: rgba(226, 232, 240, 0.94) !important;
+}
+
+html[data-theme="dark"] .compose-suggest-row:hover,
+html[data-theme="dark"] .compose-suggest-row.is-active {
+  background: rgba(59, 130, 246, 0.18) !important;
+}
+
+html[data-theme="dark"] .compose-suggest-avatar {
+  background: rgba(37, 99, 235, 0.24) !important;
+  color: rgba(191, 219, 254, 0.96) !important;
+}
+
+html[data-theme="dark"] .compose-suggest-name {
+  color: rgba(248, 250, 252, 0.96) !important;
+}
+
+html[data-theme="dark"] .compose-suggest-email {
+  color: rgba(203, 213, 225, 0.78) !important;
+}
+
+html[data-theme="dark"] .compose-suggest-role {
+  background: rgba(22, 101, 52, 0.32) !important;
+  color: rgba(187, 247, 208, 0.96) !important;
+}
+
+/* Match the Files channel typography across the School Mail module. */
+#emailPanel,
+#emailPanel :where(
+  .mail-shell,
+  .mail-sidebar,
+  .mail-main,
+  .mailbox,
+  .mbx-topbar,
+  .mbx-toolbar,
+  .mbx-body,
+  .mbx-list,
+  .mbx-row,
+  .mbx-detail-panel,
+  .mail-folder-item,
+  .mail-compose-btn,
+  .mail-filter-chip,
+  .mail-compose-shell,
+  .mail-compose-form,
+  .ses-body,
+  .ses-form,
+  .ses-preview,
+  .ses-template-card,
+  .wn-inbox,
+  button,
+  input,
+  select,
+  textarea
+) {
+  font-family: "Times New Roman", Times, serif !important;
+}
+
+#emailPanel {
+  font-size: 16px;
+  font-weight: 500;
+}
+
+#emailPanel :where(.mail-folder-item, .mbx-row, .mbx-row-sender, .mbx-row-subject, .mail-filter-chip, button, input, select, textarea) {
+  font-size: 16px !important;
+  font-weight: 600 !important;
+}
+
+#emailPanel :where(.mbx-row-preview, .mbx-row-date, .mail-section-title, .mail-sidebar-subtitle) {
+  font-size: 15px !important;
+  font-weight: 500 !important;
+}
+
+#emailPanel :where(i.fa-solid, i.fa-regular) {
+  font-family: "Font Awesome 6 Free" !important;
+}
+
+#emailPanel :where(i.fa-brands) {
+  font-family: "Font Awesome 6 Brands" !important;
+}
+
+#emailPanel :where(i.fa-solid) {
+  font-weight: 900 !important;
+}
+
+#emailPanel :where(i.fa-regular) {
+  font-weight: 400 !important;
 }

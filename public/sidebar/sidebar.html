@@ -1,0 +1,525 @@
+<aside class="sidebar" aria-label="Channels and direct messages">
+  <div class="sidebar-school-label">
+    <span id="schoolNameLabel">School</span>
+  </div>
+
+  <div class="sidebar-scroll">
+    <nav class="sidebar-nav" aria-label="Primary navigation">
+      <button type="button" class="nav-item" id="allUnreadsBtn" data-nav="unreads">
+        <span class="nav-item-icon" aria-hidden="true">
+          <i class="fa-solid fa-inbox"></i>
+        </span>
+        <span class="nav-item-label">All Unreads</span>
+      </button>
+    </nav>
+
+    <section class="sidebar-section" id="starredSection" data-collapsible="true" aria-label="Favorites">
+      <div class="sidebar-section-header" aria-expanded="true" aria-controls="starredList">
+        <span class="section-accent" data-branch-accent="favorites">
+          <i class="fa-solid fa-star" aria-hidden="true"></i>
+          <span>Favorites</span>
+        </span>
+      </div>
+      <div class="sidebar-items" id="starredList" data-dropzone="starred"></div>
+    </section>
+
+    <section class="sidebar-section" id="pinnedSidebarSection" aria-label="Pinned">
+      <button
+        class="sidebar-section-header pinned-toggle"
+        id="pinnedToggleBtn"
+        type="button"
+        aria-expanded="true"
+        aria-controls="pinnedCollapsible"
+      >
+        <span class="sidebar-section-title" id="pinnedSidebarTitle">
+          <i class="fa-solid fa-thumbtack" aria-hidden="true"></i>
+          <span>Pinned</span>
+        </span>
+        <span class="pinned-right">
+          <span class="sidebar-section-count" id="pinnedSidebarCount">0</span>
+        </span>
+      </button>
+
+      <div class="pinned-collapsible" id="pinnedCollapsible">
+        <div class="sidebar-pinned-list" id="pinnedSidebarList"></div>
+      </div>
+    </section>
+
+    <section class="sidebar-section" id="channelList" aria-label="Classes">
+      <div class="sidebar-section-header">
+        <span class="classes-header-label section-accent section-accent-classes" data-branch-accent="classes">
+          <span class="classes-header-icon">
+            <i class="fa-solid fa-school" aria-hidden="true"></i>
+          </span>
+          <span>Classes</span>
+        </span>
+
+        <button type="button" class="icon-btn" id="addChannelBtn" title="Add channel" aria-label="Add channel">
+          <i class="fa-solid fa-plus" aria-hidden="true"></i>
+        </button>
+      </div>
+
+      <div class="sidebar-items" id="channelsContainer"></div>
+    </section>
+
+    <section id="teachersSection" class="sidebar-section" data-collapsible="true" aria-label="Teachers" hidden>
+      <div class="sidebar-section-header" aria-expanded="true" aria-controls="teachersChannelsContainer">
+        <span class="section-accent" data-branch-accent="teachers">
+          <i class="fa-solid fa-chalkboard-user" aria-hidden="true"></i>
+          <span>Teachers</span>
+        </span>
+      </div>
+      <div id="teachersChannelsContainer" class="sidebar-items"></div>
+    </section>
+
+    <section class="sidebar-section" id="conversationClubSection" data-collapsible="true" aria-label="Clubs and practice">
+      <div class="sidebar-section-header" aria-expanded="true" aria-controls="conversationClubContainer">
+        <span class="section-accent section-accent-practice" data-branch-accent="practice">
+          <i class="fa-solid fa-people-group" aria-hidden="true"></i>
+          <span>Clubs &amp; Practice</span>
+        </span>
+
+        <button
+          type="button"
+          class="icon-btn"
+          id="addConversationBtn"
+          title="Add conversation"
+          aria-label="Add conversation"
+        >
+          <i class="fa-solid fa-plus" aria-hidden="true"></i>
+        </button>
+      </div>
+
+      <div class="sidebar-items" id="conversationClubContainer">
+        <div
+          class="sidebar-item branch-row"
+          role="button"
+          tabindex="0"
+          aria-label="Conversation Club"
+          data-channel-name="Conversation Club"
+          data-channel-category="clubs"
+          data-static-channel="1"
+          data-sidebar-static-item="1"
+        >
+          <span class="branch-connector"></span>
+          <span class="sidebar-item-icon"><i class="fa-solid fa-comments" aria-hidden="true"></i></span>
+          <span class="sidebar-item-label">Conversation Club</span>
+          <div class="sidebar-item-meta"></div>
+        </div>
+
+        <div
+          class="sidebar-item branch-row"
+          role="button"
+          tabindex="0"
+          aria-label="Speaking Club"
+          data-channel-name="Speaking Club"
+          data-channel-category="clubs"
+          data-static-channel="1"
+          data-sidebar-static-item="1"
+        >
+          <span class="branch-connector"></span>
+          <span class="sidebar-item-icon"><i class="fa-solid fa-microphone-lines" aria-hidden="true"></i></span>
+          <span class="sidebar-item-label">Speaking Club</span>
+          <div class="sidebar-item-meta"></div>
+        </div>
+
+        <div
+          class="sidebar-item branch-row"
+          role="button"
+          tabindex="0"
+          aria-label="Culture Exchange"
+          data-channel-name="Culture Exchange"
+          data-channel-category="clubs"
+          data-static-channel="1"
+          data-sidebar-static-item="1"
+        >
+          <span class="branch-connector"></span>
+          <span class="sidebar-item-icon"><i class="fa-solid fa-earth-europe" aria-hidden="true"></i></span>
+          <span class="sidebar-item-label">Culture Exchange</span>
+          <div class="sidebar-item-meta"></div>
+        </div>
+      </div>
+
+      <div class="sidebar-items" id="conversationClubChannels"></div>
+    </section>
+
+    <section class="sidebar-section" id="examGroupsSection" data-collapsible="true" aria-label="Test and exam groups">
+      <div class="sidebar-section-header" aria-expanded="true" aria-controls="examGroupsContainer">
+        <span class="section-accent section-accent-tests" data-branch-accent="tests">
+          <i class="fa-solid fa-clipboard-check" aria-hidden="true"></i>
+          <span>Test &amp; Exam</span>
+        </span>
+
+        <button type="button" class="icon-btn" id="addExamGroupBtn" title="Add group" aria-label="Add group">
+          <i class="fa-solid fa-plus" aria-hidden="true"></i>
+        </button>
+      </div>
+
+      <div class="sidebar-items" id="examGroupsContainer">
+        <div
+          class="sidebar-item branch-row"
+          role="button"
+          tabindex="0"
+          aria-label="Mock Tests"
+          data-channel-name="B1 Mock Test"
+          data-channel-category="exams"
+          data-static-channel="1"
+          data-sidebar-static-item="1"
+        >
+          <span class="branch-connector"></span>
+          <span class="sidebar-item-icon"><i class="fa-solid fa-clipboard-check" aria-hidden="true"></i></span>
+          <span class="sidebar-item-label">Mock Tests</span>
+          <div class="sidebar-item-meta"></div>
+        </div>
+
+        <div
+          class="sidebar-item branch-row"
+          role="button"
+          tabindex="0"
+          aria-label="Placement Test"
+          data-channel-name="Placement Test"
+          data-channel-category="exams"
+          data-static-channel="1"
+          data-sidebar-static-item="1"
+        >
+          <span class="branch-connector"></span>
+          <span class="sidebar-item-icon"><i class="fa-solid fa-file-pen" aria-hidden="true"></i></span>
+          <span class="sidebar-item-label">Placement Test</span>
+          <div class="sidebar-item-meta"></div>
+        </div>
+
+        <div
+          class="sidebar-item branch-row"
+          role="button"
+          tabindex="0"
+          aria-label="Final Exams"
+          data-channel-name="Final Exam – March"
+          data-channel-category="exams"
+          data-static-channel="1"
+          data-sidebar-static-item="1"
+        >
+          <span class="branch-connector"></span>
+          <span class="sidebar-item-icon"><i class="fa-solid fa-graduation-cap" aria-hidden="true"></i></span>
+          <span class="sidebar-item-label">Final Exams</span>
+          <div class="sidebar-item-meta"></div>
+        </div>
+      </div>
+
+      <div class="sidebar-items" id="examGroupsChannels"></div>
+    </section>
+
+    <section class="sidebar-section" id="appsSection" aria-label="School tools">
+      <div class="sidebar-section-header">
+        <span class="section-accent" data-branch-accent="tools">
+          <i class="fa-solid fa-screwdriver-wrench" aria-hidden="true"></i>
+          <span>School Tools</span>
+        </span>
+
+        <button type="button" class="icon-btn" id="addAppBtn" title="Add app" aria-label="Add app">
+          <i class="fa-solid fa-plus" aria-hidden="true"></i>
+        </button>
+      </div>
+
+      <div class="sidebar-items" id="appsContainer">
+        <div class="sidebar-group-title" aria-hidden="true">Learning</div>
+
+        <div
+          class="sidebar-item school-tool-item branch-row branch-sub"
+          role="button"
+          tabindex="0"
+          aria-label="Announcements"
+          data-channel-name="Announcements"
+          data-channel-category="tools"
+          data-static-channel="1"
+          data-sidebar-static-item="1"
+        >
+          <span class="branch-connector"></span>
+          <span class="sidebar-item-icon school-tool-icon tool-announcements">
+            <i class="fa-solid fa-bullhorn" aria-hidden="true"></i>
+          </span>
+          <span class="sidebar-item-label">Announcements</span>
+          <div class="sidebar-item-meta"></div>
+        </div>
+
+        <div
+          class="sidebar-item school-tool-item branch-row branch-sub"
+          role="button"
+          tabindex="0"
+          aria-label="Learning Materials"
+          data-channel-name="Learning Materials"
+          data-channel-category="tools"
+          data-static-channel="1"
+          data-sidebar-static-item="1"
+        >
+          <span class="branch-connector"></span>
+          <span class="sidebar-item-icon school-tool-icon tool-materials">
+            <i class="fa-solid fa-folder-open" aria-hidden="true"></i>
+          </span>
+          <span class="sidebar-item-label">Learning Materials</span>
+          <div class="sidebar-item-meta"></div>
+        </div>
+
+        <div
+          class="sidebar-item school-tool-item branch-row branch-sub"
+          role="button"
+          tabindex="0"
+          aria-label="Speaking Practice"
+          data-channel-name="Speaking Practice"
+          data-channel-category="tools"
+          data-static-channel="1"
+          data-sidebar-static-item="1"
+        >
+          <span class="branch-connector"></span>
+          <span class="sidebar-item-icon school-tool-icon tool-speaking">
+            <i class="fa-solid fa-microphone-lines" aria-hidden="true"></i>
+          </span>
+          <span class="sidebar-item-label">Speaking Practice</span>
+          <div class="sidebar-item-meta"></div>
+        </div>
+
+        <div
+          class="sidebar-item school-tool-item branch-row branch-sub"
+          role="button"
+          tabindex="0"
+          aria-label="Wordmeaning"
+          data-channel-name="Wordmeaning"
+          data-channel-category="tools"
+          data-static-channel="1"
+          data-sidebar-static-item="1"
+        >
+          <span class="branch-connector"></span>
+          <span class="sidebar-item-icon school-tool-icon tool-wordmeaning">
+            <i class="fa-solid fa-book-open" aria-hidden="true"></i>
+          </span>
+          <span class="sidebar-item-label">Wordmeaning</span>
+          <div class="sidebar-item-meta"></div>
+        </div>
+
+        <div
+          class="sidebar-item school-tool-item branch-row branch-sub"
+          role="button"
+          tabindex="0"
+          aria-label="Listening Practice"
+          data-channel-name="Listening Practice"
+          data-channel-category="tools"
+          data-static-channel="1"
+          data-sidebar-static-item="1"
+        >
+          <span class="branch-connector"></span>
+          <span class="sidebar-item-icon school-tool-icon tool-listening">
+            <i class="fa-solid fa-headphones" aria-hidden="true"></i>
+          </span>
+          <span class="sidebar-item-label">Listening Practice</span>
+          <div class="sidebar-item-meta"></div>
+        </div>
+
+        <div
+          class="sidebar-item school-tool-item branch-row branch-sub"
+          role="button"
+          tabindex="0"
+          aria-label="Grammar"
+          data-channel-name="Grammar"
+          data-channel-category="tools"
+          data-static-channel="1"
+          data-sidebar-static-item="1"
+        >
+          <span class="branch-connector"></span>
+          <span class="sidebar-item-icon school-tool-icon tool-grammar">
+            <i class="fa-solid fa-spell-check" aria-hidden="true"></i>
+          </span>
+          <span class="sidebar-item-label">Grammar</span>
+          <div class="sidebar-item-meta"></div>
+        </div>
+
+        <div class="sidebar-group-title" aria-hidden="true">Organization</div>
+
+        <div
+          class="sidebar-item school-tool-item branch-row branch-sub"
+          role="button"
+          tabindex="0"
+          aria-label="Exam Registration"
+          data-channel-name="Exam Registration"
+          data-channel-category="tools"
+          data-static-channel="1"
+          data-sidebar-static-item="1"
+        >
+          <span class="branch-connector"></span>
+          <span class="sidebar-item-icon school-tool-icon tool-exam">
+            <i class="fa-solid fa-file-signature" aria-hidden="true"></i>
+          </span>
+          <span class="sidebar-item-label">Exam Registration</span>
+          <div class="sidebar-item-meta"></div>
+        </div>
+
+        <div
+          class="sidebar-item school-tool-item branch-row branch-sub"
+          role="button"
+          tabindex="0"
+          aria-label="Privacy and Rules"
+          data-channel-name="Privacy &amp; Rules"
+          data-channel-category="tools"
+          data-static-channel="1"
+          data-sidebar-static-item="1"
+        >
+          <span class="branch-connector"></span>
+          <span class="sidebar-item-icon school-tool-icon tool-privacy">
+            <i class="fa-solid fa-lock" aria-hidden="true"></i>
+          </span>
+          <span class="sidebar-item-label">Privacy &amp; Rules</span>
+          <div class="sidebar-item-meta"></div>
+        </div>
+      </div>
+
+      <div class="sidebar-items" id="appsChannelsContainer"></div>
+    </section>
+
+    <section class="sidebar-section" id="dmList" aria-label="Private chat">
+      <div class="sidebar-section-header">
+        <span class="section-accent section-accent-dm" data-branch-accent="dm">
+          <i class="fa-solid fa-comment-dots" aria-hidden="true"></i>
+          <span>Private Chat</span>
+        </span>
+
+        <button type="button" class="icon-btn" id="addDmBtn" title="New DM" aria-label="New direct message">
+          <i class="fa-solid fa-plus" aria-hidden="true"></i>
+        </button>
+      </div>
+
+      <div class="sidebar-items" id="dmsContainer"></div>
+    </section>
+
+    <section class="sidebar-section" id="tasksSection" aria-label="Aufgaben">
+      <div class="sidebar-section-header">
+        <span class="section-accent" data-branch-accent="tasks">
+          <i class="fa-solid fa-circle-check" aria-hidden="true"></i>
+          <span>Aufgaben</span>
+        </span>
+      </div>
+
+      <div class="sidebar-items" id="tasksContainer">
+        <div
+          class="sidebar-item branch-row branch-sub"
+          role="button"
+          tabindex="0"
+          aria-label="School Task"
+          data-channel-name="School Task"
+          data-channel-category="tasks"
+          data-static-channel="1"
+          data-sidebar-static-item="1"
+        >
+          <span class="branch-connector"></span>
+          <span class="sidebar-item-icon tool-school-task">
+            <i class="fa-solid fa-list-check" aria-hidden="true"></i>
+          </span>
+          <span class="sidebar-item-label">School Task</span>
+          <div class="sidebar-item-meta"></div>
+        </div>
+
+        <div
+          class="sidebar-item branch-row branch-sub"
+          role="button"
+          tabindex="0"
+          aria-label="Teachers Task"
+          data-channel-name="Teachers Task"
+          data-channel-category="tasks"
+          data-static-channel="1"
+          data-sidebar-static-item="1"
+        >
+          <span class="branch-connector"></span>
+          <span class="sidebar-item-icon tool-teachers-task">
+            <i class="fa-solid fa-chalkboard-user" aria-hidden="true"></i>
+          </span>
+          <span class="sidebar-item-label">Teachers Task</span>
+          <div class="sidebar-item-meta"></div>
+        </div>
+
+        <div
+          class="sidebar-item branch-row branch-sub"
+          role="button"
+          tabindex="0"
+          aria-label="Student Tasks"
+          data-channel-name="Student Tasks"
+          data-channel-category="tasks"
+          data-static-channel="1"
+          data-sidebar-static-item="1"
+        >
+          <span class="branch-connector"></span>
+          <span class="sidebar-item-icon tool-student-task">
+            <i class="fa-solid fa-user-graduate" aria-hidden="true"></i>
+          </span>
+          <span class="sidebar-item-label">Student Tasks</span>
+          <div class="sidebar-item-meta"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="sidebar-section" id="adminToolsSection" data-collapsible="true" aria-label="Administration">
+      <div class="sidebar-section-header" aria-expanded="true" aria-controls="adminToolsContainer">
+        <span class="section-accent" data-branch-accent="administration">
+          <i class="fa-solid fa-user-shield" aria-hidden="true"></i>
+          <span>Administration</span>
+        </span>
+      </div>
+
+      <div class="sidebar-items" id="adminToolsContainer">
+        <div class="admin-group-title" aria-hidden="true">Users</div>
+
+        <div class="sidebar-item admin-subitem branch-row branch-sub" id="openStudentsList" role="button" tabindex="0" aria-label="Students">
+          <span class="branch-connector"></span>
+          <span class="sidebar-item-icon"><i class="fa-solid fa-user-graduate" aria-hidden="true"></i></span>
+          <span class="sidebar-item-label">Students</span>
+          <div class="sidebar-item-meta"></div>
+        </div>
+
+        <div class="sidebar-item admin-subitem branch-row branch-sub" id="openTeachersList" role="button" tabindex="0" aria-label="Teachers">
+          <span class="branch-connector"></span>
+          <span class="sidebar-item-icon"><i class="fa-solid fa-chalkboard-user" aria-hidden="true"></i></span>
+          <span class="sidebar-item-label">Teachers</span>
+          <div class="sidebar-item-meta"></div>
+        </div>
+
+        <div class="admin-group-title" aria-hidden="true">Settings</div>
+
+        <div class="sidebar-item admin-subitem branch-row branch-sub" id="openClassSettingsList" role="button" tabindex="0" aria-label="Class settings">
+          <span class="branch-connector"></span>
+          <span class="sidebar-item-icon"><i class="fa-solid fa-sliders" aria-hidden="true"></i></span>
+          <span class="sidebar-item-label">Class settings</span>
+          <div class="sidebar-item-meta"></div>
+        </div>
+
+        <div
+          class="sidebar-item admin-subitem branch-row branch-sub"
+          id="openPrivacyRules"
+          role="button"
+          tabindex="0"
+          aria-label="Privacy and Rules"
+          data-channel-name="Privacy &amp; Rules"
+          data-channel-category="tools"
+          data-static-channel="1"
+          data-sidebar-static-item="1"
+        >
+          <span class="branch-connector"></span>
+          <span class="sidebar-item-icon"><i class="fa-solid fa-lock" aria-hidden="true"></i></span>
+          <span class="sidebar-item-label">Privacy &amp; Rules</span>
+          <div class="sidebar-item-meta"></div>
+        </div>
+
+        <div class="admin-group-title" aria-hidden="true">Registration</div>
+
+        <div class="sidebar-item admin-subitem branch-row branch-sub" id="openStudentRegistration" role="button" tabindex="0" aria-label="Student Registration">
+          <span class="branch-connector"></span>
+          <span class="sidebar-item-icon"><i class="fa-solid fa-user-plus" aria-hidden="true"></i></span>
+          <span class="sidebar-item-label">Student Registration</span>
+          <div class="sidebar-item-meta"></div>
+        </div>
+
+        <div class="sidebar-item admin-subitem branch-row branch-sub" id="openTeacherRegistration" role="button" tabindex="0" aria-label="Teacher Registration">
+          <span class="branch-connector"></span>
+          <span class="sidebar-item-icon"><i class="fa-solid fa-user-pen" aria-hidden="true"></i></span>
+          <span class="sidebar-item-label">Teacher Registration</span>
+          <div class="sidebar-item-meta"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+</aside>

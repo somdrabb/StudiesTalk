@@ -126,7 +126,7 @@
     
                   <div class="ses-field" hidden>
                     <label for="sesReplyTo">Reply-To</label>
-                    <input id="sesReplyTo" type="Email" placeholder="admin@your-school.de" />
+                    <input id="sesReplyTo" type="email" placeholder="admin@your-school.de" />
                   </div>
                 </div>
     
@@ -134,7 +134,7 @@
                   <label for="sesTestTo">Send Email to</label>
                   <input
                     id="sesTestTo"
-                    type="Email"
+                    type="email"
                     placeholder="your-email@example.com"
                     autocomplete="off"
                   />
@@ -178,6 +178,10 @@
                   </div>
     
                   <textarea id="sesFooter" hidden></textarea>
+                  <input id="sesSignatureHtml" type="hidden" />
+                  <img id="sesLogoPreview" alt="" />
+                  <input id="sesLogoInput" type="file" hidden accept="image/*" />
+                  <button id="sesLogoUploadBtn" type="button" hidden>Upload logo</button>
                 </div>
     
                 <div class="ses-form-actions">

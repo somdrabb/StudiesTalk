@@ -1,5 +1,7 @@
 "use strict";
 
+const BASE_DOCUMENT_TITLE = document.title || "StudiesTalk";
+
 // ===================== "REAL" DATA (from backend) =====================
 let channels = [];
 let dms = [];
@@ -37,6 +39,8 @@ let adminChannelsByWorkspace = {};
 let adminChannelsAll = [];
 let adminSchoolRequests = [];
 let directoryViewRole = null;
+let directorySearchTerm = "";
+let directoryStatusFilter = "all";
 let adminAssignSelectedUserId = null;
 let adminAssignSelectedWorkspaceId = null;
 let adminAssignSelectedChannelId = null;
@@ -67,6 +71,9 @@ let filesQuery = "";
 let filesScopeMode = "all"; // "current" | "all"
 let filesSortMode = "newest"; // newest | oldest | name | size
 let filesRangeMode = "all"; // all | today | 7d | 30d
+let selectedFileIds = new Set();
+let activeFilesMenuId = "";
+let activeFileDrawerId = "";
 let isHomeView = false;
 let policyAccepted = true;
 let policyRequired = false;
@@ -1351,7 +1358,32 @@ async function restoreLastView(lastView = null) {
   try {
     const view = lastView || loadLastView() || {};
     if (view.viewMode === "directory" && view.directoryRole && isSchoolAdmin()) {
+      openAdminRailPanel();
       await showDirectoryList(view.directoryRole);
+      didRestoreView = true;
+      return;
+    }
+    if (view.viewMode === "class-settings" && isSchoolAdmin()) {
+      openAdminRailPanel();
+      showClassSettingsPage();
+      didRestoreView = true;
+      return;
+    }
+    if (view.viewMode === "privacy-rules" && isSchoolAdmin()) {
+      openAdminRailPanel();
+      await openPrivacyRulesChannel();
+      didRestoreView = true;
+      return;
+    }
+    if (view.viewMode === "student-registration" && isSchoolAdmin()) {
+      openAdminRailPanel();
+      openRegistrationModal(studentRegisterModal, studentRegisterError);
+      didRestoreView = true;
+      return;
+    }
+    if (view.viewMode === "teacher-registration" && isSchoolAdmin()) {
+      openAdminRailPanel();
+      openRegistrationModal(teacherRegisterModal, teacherRegisterError);
       didRestoreView = true;
       return;
     }
@@ -2640,7 +2672,15 @@ async function checkPolicyAcceptance() {
 }
 
 async function openPrivacyRulesChannel() {
-  return openPolicyGatePanel();
+  setActiveAdminRailItem("openPrivacyRules");
+  persistLastView({
+    channelId: currentChannelId || null,
+    viewMode: "privacy-rules"
+  });
+  return openPolicyGatePanel({ force: true });
+}
+if (typeof window !== "undefined") {
+  window.openPrivacyRulesChannel = openPrivacyRulesChannel;
 }
 
 function shouldBlockForPolicyGate() {
@@ -2717,8 +2757,9 @@ function renderPolicyGatePanel() {
     return;
   }
   const cards = (policyDocument.summaryCards || [])
-    .map((card) => `
-      <article class="policy-gate-summary-card">
+    .map((card, index) => `
+      <article class="policy-gate-summary-row">
+        <div class="policy-gate-summary-index">${String(index + 1).padStart(2, "0")}</div>
         <div class="policy-gate-summary-icon"><i class="fa-solid fa-shield-check" aria-hidden="true"></i></div>
         <div>
           <h3>${escapeHtmlText(card.title || "")}</h3>
@@ -2728,49 +2769,37 @@ function renderPolicyGatePanel() {
     `)
     .join("");
   const sections = (policyDocument.sections || [])
-    .map((section) => `
+    .map((section, index) => `
       <section class="policy-gate-section" id="policy-gate-${escapeHtmlText(section.id || "")}">
+        <div class="policy-gate-section-index">${String(index + 1).padStart(2, "0")}</div>
         <div class="policy-gate-section-head">
           <h2>${escapeHtmlText(section.title || "")}</h2>
           <p>${escapeHtmlText(section.summary || "")}</p>
         </div>
-        ${(section.paragraphs || []).map((paragraph) => `<p>${escapeHtmlText(paragraph)}</p>`).join("")}
-        ${(section.bullets || []).length ? `<ul>${(section.bullets || []).map((item) => `<li>${escapeHtmlText(item)}</li>`).join("")}</ul>` : ""}
+        <div class="policy-gate-section-copy">
+          ${(section.paragraphs || []).map((paragraph) => `<p>${escapeHtmlText(paragraph)}</p>`).join("")}
+          ${(section.bullets || []).length ? `<ul>${(section.bullets || []).map((item) => `<li>${escapeHtmlText(item)}</li>`).join("")}</ul>` : ""}
+        </div>
       </section>
+    `)
+    .join("");
+  const sectionChips = (policyDocument.sections || [])
+    .map((section) => `
+      <a class="policy-section-chip" href="#policy-gate-${escapeHtmlText(section.id || "")}">
+        ${escapeHtmlText(section.title || "Section")}
+      </a>
     `)
     .join("");
   const acceptedAt = policyGateState?.acceptedAt
     ? `Previously accepted: ${escapeHtmlText(formatPrivacyDate(policyGateState.acceptedAt) || policyGateState.acceptedAt)}`
     : "Review required before workspace entry";
-  policyGateRoot.innerHTML = `
-    <div class="policy-gate-shell-inner">
-      <header class="policy-gate-hero">
-        <div class="policy-gate-hero-copy">
-          <div class="policy-gate-eyebrow">Mandatory workspace policy checkpoint</div>
-          <h1>${escapeHtmlText(policyDocument.schoolName || "School workspace")}</h1>
-          <p class="policy-gate-title">${escapeHtmlText(policyDocument.title || "Privacy, Terms & Rules")}</p>
-          <div class="policy-gate-meta">
-            <span>Version ${escapeHtmlText(policyDocument.version || "—")}</span>
-            <span>Last updated ${escapeHtmlText(policyDocument.lastUpdated || "—")}</span>
-            <span>${escapeHtmlText(acceptedAt)}</span>
-          </div>
-        </div>
-        <aside class="policy-gate-contact-card">
-          <div class="policy-gate-contact-label">School contact</div>
-          <strong>${escapeHtmlText(policyDocument.contact?.supportEmail || "Not yet configured")}</strong>
-          <span>${escapeHtmlText(policyDocument.contact?.phone || "Not yet configured")}</span>
-          <span>${escapeHtmlText(policyDocument.contact?.website || "Not yet configured")}</span>
-          <pre>${escapeHtmlText(policyDocument.contact?.address || "Not yet configured")}</pre>
-        </aside>
-      </header>
-      <section class="policy-gate-summary-grid">${cards}</section>
-      <div class="policy-gate-body">
-        <div class="policy-gate-checkpoint-note">
-          <div class="policy-gate-note-badge">Required before entry</div>
-          <p>You must accept the current workspace privacy, terms, and rules before accessing channels, direct messages, or the main workspace.</p>
-        </div>
-        <div class="policy-gate-sections">${sections}</div>
-      </div>
+  const needsAcceptance = !!(
+    policyGateState?.required &&
+    !policyGateState?.accepted &&
+    !policyGateState?.exempt
+  );
+  const acceptanceFooter = needsAcceptance
+    ? `
       <footer class="policy-gate-footer">
         <div class="policy-gate-footer-copy">
           <label class="policy-gate-ack">
@@ -2783,6 +2812,50 @@ function renderPolicyGatePanel() {
           <button type="button" class="policy-gate-btn policy-gate-btn-primary" id="policyGateAcceptBtn" data-policy-gate-action="accept" disabled>Accept and continue</button>
         </div>
       </footer>
+    `
+    : "";
+  policyGateRoot.innerHTML = `
+    <div class="policy-gate-shell-inner admin-privacy-workspace">
+      <header class="policy-gate-hero admin-directory-toolbar admin-privacy-header">
+        <div class="policy-gate-hero-copy admin-directory-title-block">
+          <div class="admin-directory-title-line">
+            <h1>${escapeHtmlText(policyDocument.title || "Privacy & Rules")}</h1>
+            <span class="admin-directory-badge">Policy</span>
+          </div>
+          <p class="policy-gate-title">${escapeHtmlText(policyDocument.schoolName || "School workspace")}</p>
+          <div class="policy-gate-meta">
+            <span>Version ${escapeHtmlText(policyDocument.version || "—")}</span>
+            <span>Last updated ${escapeHtmlText(policyDocument.lastUpdated || "—")}</span>
+            <span>${escapeHtmlText(acceptedAt)}</span>
+          </div>
+        </div>
+        <div class="privacy-section-chips">${sectionChips}</div>
+      </header>
+      <div class="policy-gate-body admin-privacy-layout">
+        <article class="policy-gate-document-card">
+          <div class="policy-document-kicker">Workspace standards</div>
+          <section class="policy-gate-summary-grid">${cards}</section>
+          <div class="policy-gate-checkpoint-note">
+            <div class="policy-gate-note-badge">Required before entry</div>
+            <p>You must accept the current workspace privacy, terms, and rules before accessing channels, direct messages, or the main workspace.</p>
+          </div>
+          <div class="policy-document-kicker">Policy details</div>
+          <div class="policy-gate-sections">${sections}</div>
+        </article>
+        <aside class="policy-gate-contact-card admin-privacy-summary">
+          <div class="policy-gate-contact-label">Compliance summary</div>
+          <strong>${escapeHtmlText(policyDocument.schoolName || "School workspace")}</strong>
+          <span><i class="fa-solid fa-shield-halved" aria-hidden="true"></i><b>GDPR ready</b></span>
+          <span><i class="fa-solid fa-server" aria-hidden="true"></i><b>EU hosted</b></span>
+          <span><i class="fa-solid fa-school" aria-hidden="true"></i><b>Classroom-only usage</b></span>
+          <span><i class="fa-solid fa-user-check" aria-hidden="true"></i><b>Moderation enabled</b></span>
+          <div class="policy-gate-contact-label">School contact</div>
+          <span>${escapeHtmlText(policyDocument.contact?.supportEmail || "Not yet configured")}</span>
+          <span>${escapeHtmlText(policyDocument.contact?.phone || "Not yet configured")}</span>
+          <span>${escapeHtmlText(policyDocument.contact?.website || "Not yet configured")}</span>
+        </aside>
+      </div>
+      ${acceptanceFooter}
     </div>
   `;
   const readCheckbox = document.getElementById("policyGateReadCheckbox");
@@ -2857,7 +2930,7 @@ async function acceptWorkspacePolicy() {
 
 async function openPolicyGatePanel(options = {}) {
   if (!shouldBlockForPolicyGate() && !options.force) return;
-  const refresh = !!options.refresh;
+  const refresh = !!(options.refresh || options.force);
   showPanel("policyGatePanel");
   renderPolicyGatePanelState({
     title: refresh ? "Refreshing workspace policy…" : "Loading workspace policy…",
@@ -3014,16 +3087,18 @@ function persistSidebarScroll(value) {
 }
 
 function updateAdminButtonState() {
-  const btn = document.querySelector(".app-rail-btn-admin");
+  const adminRailButtons = document.querySelectorAll(
+    ".app-rail-btn-admin, .app-rail-btn-admin-dashboard"
+  );
   const isAdmin = isAdminUser();
   const isSuper = isSuperAdmin();
-  if (btn) {
+  adminRailButtons.forEach((btn) => {
     btn.hidden = !isAdmin;
     btn.style.display = isAdmin ? "grid" : "none";
     btn.disabled = !isAdmin;
     btn.style.pointerEvents = isAdmin ? "auto" : "none";
     btn.classList.toggle("rail-btn-disabled", false);
-  }
+  });
 
   if (addChannelBtn) {
     addChannelBtn.disabled = !isAdmin;
@@ -3058,6 +3133,14 @@ function updateAdminButtonState() {
   }
   if (adminToolsSection) {
     adminToolsSection.hidden = !isAdmin;
+  }
+  if (isAdmin) {
+    mountAdminToolsToRailPanel();
+  } else {
+    const adminPanel = document.getElementById("adminRailPanel");
+    adminPanel?.classList.add("hidden");
+    adminPanel?.setAttribute("aria-hidden", "true");
+    document.body.classList.remove("admin-rail-panel-active");
   }
   const analyticsBtn = document.querySelector(".app-rail-btn-analytics");
   if (analyticsBtn) {
@@ -6978,8 +7061,64 @@ function onIncomingMessage(msg) {
 function setActiveRailButton(btn) {
   document.querySelectorAll(".app-rail-btn").forEach((b) => {
     b.classList.remove("app-rail-btn-active");
+    b.setAttribute("aria-pressed", "false");
   });
-  if (btn) btn.classList.add("app-rail-btn-active");
+  if (btn) {
+    btn.classList.add("app-rail-btn-active");
+    btn.setAttribute("aria-pressed", "true");
+  }
+}
+
+function mountAdminToolsToRailPanel() {
+  const adminSection = document.getElementById("adminToolsSection");
+  const adminPanel = document.getElementById("adminRailPanel");
+  if (!adminSection || !adminPanel) return;
+
+  if (adminSection.parentElement !== adminPanel) {
+    adminPanel.appendChild(adminSection);
+  }
+
+  adminSection.hidden = !isAdminUser();
+  adminSection.classList.remove("hidden");
+
+  if (typeof bindSidebarAdminActions === "function") {
+    bindSidebarAdminActions();
+  }
+}
+
+function closeRailPagePanels() {
+  document.body.classList.remove("admin-rail-panel-active");
+  document.querySelectorAll(".rail-page-panel").forEach((panel) => {
+    panel.classList.add("hidden");
+    panel.setAttribute("aria-hidden", "true");
+  });
+}
+
+function openAdminRailPanel() {
+  if (!isAdminUser()) {
+    showToast("Administration is available to admins only.", "error");
+    openRailSection("messages");
+    return;
+  }
+  mountAdminToolsToRailPanel();
+  document.querySelectorAll(".rail-page-panel").forEach((panel) => {
+    panel.classList.add("hidden");
+    panel.setAttribute("aria-hidden", "true");
+  });
+
+  const panel = document.getElementById("adminRailPanel");
+  const btn = document.getElementById("adminRailBtn");
+  showPanel("chatPanel");
+  setActiveRailButton(btn);
+  closeAllUnreads();
+  closeThread();
+  setChatColumnsVisibility(true);
+  setAppFullScreenMode(false);
+  document.body.classList.add("admin-rail-panel-active");
+  panel?.classList.remove("hidden");
+  panel?.setAttribute("aria-hidden", "false");
+
+  if (typeof hideAdminOverlays === "function") hideAdminOverlays();
 }
 
 
@@ -7934,7 +8073,7 @@ function updateLiveFocusModeButton() {
     btn.setAttribute("title", isLiveRoomFocusMode ? "Exit live mode" : "Enter live mode");
     btn.innerHTML = `${isLiveRoomFocusMode
       ? '<i class="fa-solid fa-table-cells-large"></i> Exit Live Mode'
-      : '<i class="fa-solid fa-sliders"></i> Enter Live Mode'}`;
+      : '<i class="fa-solid fa-arrow-up-right-from-square"></i> Enter Live Mode'}`;
     const icon = btn.querySelector("i");
     if (icon) icon.setAttribute("aria-hidden", "true");
   });
@@ -10026,6 +10165,36 @@ function formatRelativeTime(ts) {
   return diff >= 0 ? `${days}d ago` : `In ${days}d`;
 }
 
+function formatFileTimestampLabel(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "Unknown";
+  if (/^\d+$/.test(raw)) {
+    const numericDate = new Date(Number(raw));
+    if (!Number.isNaN(numericDate.getTime())) {
+      return numericDate.toLocaleString([], {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit"
+      });
+    }
+  }
+  const normalized =
+    /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(raw)
+      ? raw.replace(" ", "T") + (/[zZ]|[+-]\d{2}:?\d{2}$/.test(raw) ? "" : "Z")
+      : raw;
+  const dt = new Date(normalized);
+  if (Number.isNaN(dt.getTime())) return raw;
+  return dt.toLocaleString([], {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
 function getFileCategoryMeta(file) {
   const channelId = String(file.channelId || "");
   const isDm = isDmChannel(channelId);
@@ -10350,37 +10519,173 @@ async function collectAllAttachments() {
   return results;
 }
 
+function normalizeSchoolFileRow(row = {}) {
+  const name = row.filename || row.originalName || row.name || "attachment";
+  const mime = row.mimeType || row.mime || "";
+  const category =
+    row.category === "learningMaterials"
+      ? "materials"
+      : row.category || "materials";
+  const updatedTs = Date.parse(row.updatedAt || row.createdAt || "") || 0;
+  const timestampRaw = row.updatedAt || row.createdAt || "";
+  const url = row.previewUrl || row.downloadUrl || row.url || "";
+  return {
+    fileId: String(row.id || row.fileId || ""),
+    workspaceId: row.workspaceId || currentWorkspaceId || "",
+    url,
+    downloadUrl: row.downloadUrl || url,
+    previewUrl: row.previewUrl || url,
+    canPreview: !!row.canPreview,
+    canDelete: !!row.canDelete,
+    canPin: !!row.canPin,
+    name,
+    mime,
+    type: row.type || fileKind(mime, name),
+    kind: row.type || fileKind(mime, name),
+    category,
+    badgeLabel:
+      category === "homework"
+        ? "Homework"
+        : category === "exams"
+        ? "Exam"
+        : category === "media"
+        ? "Media"
+        : "Material",
+    badgeClass: `badge-${category}`,
+    channelId: row.channelId || row.classId || "",
+    messageId: row.messageId || "",
+    homeworkId: row.homeworkId || "",
+    locationLabel: row.locationLabel || "School library",
+    contextLabel: row.locationLabel || "School library",
+    locationType: row.locationType || "library",
+    author: row.uploadedByName || "School",
+    uploadedByName: row.uploadedByName || "School",
+    visibility: row.visibility || "Students / Teachers / Admin",
+    updatedAt: timestampRaw,
+    timeLabel: formatFileTimestampLabel(timestampRaw),
+    ts: updatedTs,
+    sizeBytes: Number(row.sizeBytes || 0),
+    sizeLabel: row.sizeBytes ? humanSize(row.sizeBytes) : "",
+    iconClass: fileIconByName(name, mime),
+    pinned: !!row.isPinned,
+    desc: ""
+  };
+}
+
+function renderFilePreviewHtml(file) {
+  if (!file) return "";
+  const mime = String(file.mime || "").toLowerCase();
+  const name = String(file.name || "").toLowerCase();
+  const src = file.previewUrl || file.url || file.downloadUrl || "";
+  const fallback = `
+    <div class="files-preview-fallback">
+      <i class="${escapeHtml(file.iconClass || "fa-regular fa-file")}"></i>
+      <strong>Preview unavailable</strong>
+      <span>Open or download this file to view it.</span>
+      ${src ? `<button class="file-btn file-btn-primary" type="button" data-action="open" data-file-id="${escapeHtml(file.fileId || "")}">Open file</button>` : ""}
+    </div>
+  `;
+  if (!src) {
+    return `<div class="files-drawer-preview is-empty">${fallback}</div>`;
+  }
+  if (file.kind === "image") return `<div class="files-drawer-preview"><img src="${escapeHtml(src)}" alt="" onerror="this.closest('.files-drawer-preview').classList.add('is-empty');this.replaceWith(this.closest('.files-drawer-preview').querySelector('template').content.cloneNode(true));"><template>${fallback}</template></div>`;
+  if (file.kind === "video") return `<div class="files-drawer-preview"><video src="${escapeHtml(src)}" controls></video></div>`;
+  if (file.kind === "audio") return `<div class="files-drawer-preview"><audio src="${escapeHtml(src)}" controls></audio></div>`;
+  if (mime.includes("pdf") || name.endsWith(".pdf")) {
+    return `<div class="files-drawer-preview files-drawer-preview-pdf"><iframe src="${escapeHtml(src)}#toolbar=0&navpanes=0" title="${escapeHtml(file.name || "PDF preview")}"></iframe><div class="files-pdf-preview-help"><i class="fa-regular fa-file-pdf"></i><span>If the PDF does not render, open it in a new tab.</span><button class="file-btn file-btn-primary" type="button" data-action="open" data-file-id="${escapeHtml(file.fileId || "")}">Open PDF</button></div></div>`;
+  }
+  return `<div class="files-drawer-preview is-empty">${fallback}</div>`;
+}
+
+function renderFileDetailsDrawerHtml(file, canManageFiles = false) {
+  if (!file) return "";
+  return `
+    <aside class="files-details-drawer" aria-label="File details">
+      <div class="files-drawer-head">
+        <div>
+          <span>File details</span>
+          <strong>${escapeHtml(file.name || "attachment")}</strong>
+        </div>
+        <button class="file-btn file-btn-icon" type="button" data-action="close-drawer" aria-label="Close file details">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      ${renderFilePreviewHtml(file)}
+      <div class="files-drawer-meta">
+        <div><span>Type</span><strong>${escapeHtml(file.mime || file.kind || "File")}</strong></div>
+        <div><span>Category</span><strong>${escapeHtml(file.badgeLabel || "Material")}</strong></div>
+        <div><span>Location</span><strong>${escapeHtml(file.locationLabel || file.contextLabel || "School library")}</strong></div>
+        <div><span>Uploaded by</span><strong>${escapeHtml(file.uploadedByName || file.author || "School")}</strong></div>
+        <div><span>Updated</span><strong>${escapeHtml(file.timeLabel || "Unknown")}</strong></div>
+        <div><span>Size</span><strong>${escapeHtml(file.sizeLabel || "-")}</strong></div>
+        <div><span>Visibility</span><strong>${escapeHtml(file.visibility || "Students / Teachers / Admin")}</strong></div>
+      </div>
+      <div class="files-drawer-actions">
+        ${file.downloadUrl || file.url ? `<button class="file-btn" type="button" data-action="download" data-file-id="${escapeHtml(file.fileId)}">Download</button>` : ""}
+        ${file.canPin || canManageFiles ? `<button class="file-btn" type="button" data-action="pin" data-file-id="${escapeHtml(file.fileId)}">${file.pinned ? "Unpin" : "Pin"}</button>` : ""}
+        ${file.canDelete || canManageFiles ? `<button class="file-btn file-btn-danger" type="button" data-action="delete" data-file-id="${escapeHtml(file.fileId)}">Delete</button>` : ""}
+      </div>
+    </aside>
+  `;
+}
+
+function openFilesDrawerFromCache(fileId) {
+  const file = filesCache.find((item) => item.fileId === fileId);
+  const shell = filesList?.querySelector(".files-center-shell");
+  if (!file || !shell) return false;
+  activeFileDrawerId = fileId;
+  activeFilesMenuId = "";
+  filesList.querySelectorAll(".files-table-row.is-selected").forEach((row) => {
+    row.classList.remove("is-selected");
+    row.setAttribute("aria-selected", "false");
+  });
+  const selectedRow = filesList.querySelector(`.files-table-row[data-file-id="${CSS.escape(fileId)}"]`);
+  selectedRow?.classList.add("is-selected");
+  selectedRow?.setAttribute("aria-selected", "true");
+  shell.classList.add("has-drawer");
+  shell.querySelector(".files-details-drawer")?.remove();
+  shell.insertAdjacentHTML("beforeend", renderFileDetailsDrawerHtml(file, isAdminUser() || isTeacherUser()));
+  return true;
+}
+
+function closeFilesDrawerDom() {
+  activeFileDrawerId = "";
+  const shell = filesList?.querySelector(".files-center-shell");
+  shell?.classList.remove("has-drawer");
+  shell?.querySelector(".files-details-drawer")?.remove();
+  filesList?.querySelectorAll(".files-table-row.is-selected").forEach((row) => {
+    row.classList.remove("is-selected");
+    row.setAttribute("aria-selected", "false");
+  });
+}
+
 async function renderFilesPanel(token = uiNavigationToken) {
   if (!filesList) return;
   if (!isNavigationTokenCurrent(token, "filesPanel")) return;
   updateFilesExtraFilters();
-  filesList.classList.toggle("files-grid-mode", filesCategoryFilter === "materials");
-  if (filesSearchInput) {
-    filesQuery = (filesSearchInput.value || "").trim().toLowerCase();
-  }
-  if (!isAdminUser() && (isStudentUser() || isTeacherUser()) && !currentUserClassesLoaded) {
-    await loadCurrentUserClasses(currentWorkspaceId || "default");
-    if (!isNavigationTokenCurrent(token, "filesPanel")) return;
-  }
+  filesList.classList.remove("files-grid-mode");
 
-  const scopeId = filesScopeMode !== "all" ? (filesScopeChannelId || currentChannelId) : null;
-  if (!filesScopeChannelId && scopeId) {
-    filesScopeChannelId = String(scopeId);
+  if (filesTitle) filesTitle.textContent = "Files";
+  if (filesSubtitle) filesSubtitle.textContent = "";
+  if (filesSearchInput) filesQuery = (filesSearchInput.value || "").trim().toLowerCase();
+  const canUploadFiles = isAdminUser() || isTeacherUser();
+  if (filesRefreshBtn) {
+    let uploadBtn = document.getElementById("filesUploadBtn");
+    if (canUploadFiles && !uploadBtn) {
+      uploadBtn = document.createElement("button");
+      uploadBtn.id = "filesUploadBtn";
+      uploadBtn.type = "button";
+      uploadBtn.className = "files-upload-btn";
+      uploadBtn.setAttribute("aria-label", "Upload file");
+      uploadBtn.innerHTML = '<i class="fa-solid fa-arrow-up-from-bracket"></i><span>Upload file</span>';
+      uploadBtn.addEventListener("click", () => {
+        if (fileInput) fileInput.click();
+      });
+      filesRefreshBtn.parentElement?.insertBefore(uploadBtn, filesRefreshBtn);
+    } else if (!canUploadFiles && uploadBtn) {
+      uploadBtn.remove();
+    }
   }
-  // Header text: show current scope
-  const scopeLabel = scopeId ? channelLabel(scopeId) : "";
-
-  if (filesTitle) {
-    const titles = {
-      homework: "Homework Library",
-      materials: "Learning Materials",
-      media: "Media",
-      exams: "Exam Files",
-      all: "All Files"
-    };
-    filesTitle.textContent = titles[filesCategoryFilter] || "All Files";
-  }
-  if (filesSubtitle) filesSubtitle.textContent = scopeLabel;
   if (filesCategoryTabs && filesCategoryTabs.length) {
     filesCategoryTabs.forEach((btn) => {
       btn.classList.toggle(
@@ -10390,151 +10695,202 @@ async function renderFilesPanel(token = uiNavigationToken) {
     });
   }
 
-  filesList.innerHTML = `<div class="muted" style="padding:10px;">Loading files…</div>`;
+  filesList.innerHTML = `
+    <div class="files-skeleton-table" aria-label="Loading school files">
+      ${Array.from({ length: 8 }).map(() => `
+        <div class="files-skeleton-row">
+          <span></span><b></b><i></i><em></em><strong></strong>
+        </div>
+      `).join("")}
+    </div>
+  `;
 
-  const all = await collectAllAttachments();
-  if (!isNavigationTokenCurrent(token, "filesPanel")) return;
-  let files = all.map((f) => {
-    const meta = getFileCategoryMeta(f);
-    const timeLabel = f.time || (f.ts ? formatRelativeTime(f.ts) : "");
-    const sizeLabel = f.sizeBytes ? humanSize(f.sizeBytes) : "";
-    const descRaw = (f.messageText || "").trim();
-    const desc =
-      descRaw && descRaw.toLowerCase() !== String(f.name || "").toLowerCase()
-        ? descRaw
-        : "";
-    const iconClass = fileIconByName(f.name || "", f.mime || "");
-    const previewUrl = meta.kind === "image" ? f.url : "";
-    const fileId = buildFileId({
-      channelId: f.channelId,
-      messageId: f.messageId,
-      url: f.url,
-      name: f.name
-    });
-    return {
-      ...f,
-      ...meta,
-      timeLabel,
-      sizeLabel,
-      desc,
-      iconClass,
-      previewUrl,
-      fileId
-    };
-  });
+  const canManageFiles = isAdminUser() || isTeacherUser();
+  const registryById = new Map();
+  const mergedById = new Map();
+  const fileLookupBySource = new Map();
+  const getFileSourceKeys = (file) => {
+    const name = String(file?.name || "").trim().toLowerCase();
+    const url = String(file?.url || "").trim();
+    const size = Number(file?.sizeBytes || 0);
+    return [
+      url ? `url:${url}` : "",
+      name && size ? `name-size:${name}:${size}` : "",
+      name ? `name:${name}` : ""
+    ].filter(Boolean);
+  };
+  let schoolFilesPayload = null;
 
-  const currentUserId = String(getCurrentUserId() || "");
-  const classNameSet = new Set();
-  if (!isAdminUser() && (isStudentUser() || isTeacherUser())) {
-    currentUserClassIds.forEach((id) => {
-      const ch = getChannelById(id);
-      if (ch && ch.name) classNameSet.add(String(ch.name).toLowerCase());
-    });
+  try {
+    await loadUserDirectory();
+  } catch (_err) {
+    // Names are optional for this table. Keep loading files if the directory is unavailable.
   }
 
-  if (!isAdminUser() && (isStudentUser() || isTeacherUser())) {
-    files = files.filter((f) => {
-      if (isDmChannel(f.channelId)) return true;
-      const ch = f.channel;
-      if (!ch) return true;
-      if ((ch.workspaceId || "default") !== (currentWorkspaceId || "default")) return false;
-      const cat = f.channelCategory;
-      if (cat === "classes") {
-        return currentUserClassIds.has(String(ch.id));
-      }
-      if (cat === "homework") {
-        if (currentUserClassIds.has(String(ch.id))) return true;
-        const cname = String(ch.name || "").toLowerCase();
-        for (const className of classNameSet) {
-          if (className && cname.includes(className)) return true;
-        }
-        const members = channelMembersCache.get(String(ch.id));
-        if (Array.isArray(members) && members.length) {
-          return members.map(String).includes(currentUserId);
-        }
-        return false;
-      }
-      return true;
-    });
-  }
-
-  // Merge registry state (pinned/deleted)
-  const registryMap = new Map();
   try {
     const qs = new URLSearchParams();
-    qs.set("workspaceId", currentWorkspaceId || "default");
-    if (filesScopeMode !== "all" && scopeId) qs.set("channelId", scopeId);
-    const reg = await fetchJSON(`/api/files/registry?${qs.toString()}`);
-    if (!isNavigationTokenCurrent(token, "filesPanel")) return;
-    (reg?.files || []).forEach((r) => {
-      if (r && r.fileId) registryMap.set(String(r.fileId), r);
-    });
-  } catch (_err) {
-    /* ignore registry failures */
+    qs.set("q", filesQuery || "");
+    qs.set("category", filesCategoryFilter || "all");
+    qs.set("type", filesTypeFilter || "all");
+    qs.set("dateRange", filesRangeMode || "all");
+    qs.set("limit", "200");
+    schoolFilesPayload = await fetchJSON(`/api/school/files?${qs.toString()}`);
+  } catch (err) {
+    console.warn("School files API failed; falling back to registry scan", err);
   }
 
-  if (registryMap.size) {
-    files = files.map((f) => {
-      const r = registryMap.get(String(f.fileId));
-      if (!r) return f;
-      const overrideCategory = mapRegistryPurposeToCategory(r.purpose);
-      const category = overrideCategory || f.category;
-      const badgeLabel =
-        category === "homework"
-          ? "Homework"
-          : category === "exams"
-          ? "Exam"
-          : category === "media"
-          ? "Media"
-          : "Material";
-      return {
-        ...f,
-        category,
-        badgeLabel,
-        badgeClass: `badge-${category}`,
-        pinned: !!r.pinned,
-        deleted: !!r.deleted,
-        replacedFrom: r.replacedFrom || ""
+  if (!schoolFilesPayload) try {
+    const qs = new URLSearchParams();
+    qs.set("workspaceId", currentWorkspaceId || sessionUser?.workspaceId || "default");
+    const registry = await fetchJSON(`/api/files/registry?${qs.toString()}`);
+    (Array.isArray(registry?.files) ? registry.files : []).forEach((row) => {
+      const channelId = String(row.channelId || "");
+      const channel = channelId ? getChannelById(channelId) : null;
+      const file = {
+        url: row.url || "",
+        mime: row.mime || "",
+        name: row.name || "attachment",
+        author: getUserNameByIdFromDirectory(row.uploaderId) || row.uploaderId || "School",
+        time: row.createdAt ? formatFileTimestampLabel(row.createdAt) : "",
+        ts: Date.parse(row.createdAt || row.updatedAt || "") || 0,
+        sizeBytes: Number(row.sizeBytes || 0),
+        createdAt: row.createdAt || "",
+        channelId,
+        channelLabel: channel?.name || (channelId ? channelLabel(channelId) : "School library"),
+        messageId: row.messageId || "",
+        messageText: "",
+        fileId: row.fileId || buildFileId({
+          channelId,
+          messageId: row.messageId || "",
+          url: row.url || "",
+          name: row.name || "attachment"
+        }),
+        pinned: !!row.pinned,
+        deleted: !!row.deleted,
+        registryPurpose: row.purpose || ""
       };
+      registryById.set(file.fileId, row);
+      mergedById.set(file.fileId, file);
+      getFileSourceKeys(file).forEach((key) => {
+        if (!fileLookupBySource.has(key)) fileLookupBySource.set(key, file.fileId);
+      });
     });
+  } catch (err) {
+    console.warn("File registry load failed; falling back to message attachments", err);
   }
 
-  files = files.filter((f) => !f.deleted);
-
-  // 1) Scope filter
-  if (filesScopeMode !== "all" && scopeId) {
-    files = files.filter((f) => String(f.channelId) === String(scopeId));
+  if (!schoolFilesPayload) try {
+    const attachments = await collectAllAttachments();
+    attachments.forEach((file) => {
+      const fileId = buildFileId({
+        channelId: file.channelId,
+        messageId: file.messageId,
+        url: file.url,
+        name: file.name
+      });
+      const matchedFileId =
+        mergedById.has(fileId)
+          ? fileId
+          : getFileSourceKeys(file)
+              .map((key) => fileLookupBySource.get(key))
+              .find(Boolean);
+      if (matchedFileId && mergedById.has(matchedFileId)) {
+        const existing = mergedById.get(matchedFileId);
+        mergedById.set(matchedFileId, {
+          ...existing,
+          url: existing.url || file.url || "",
+          mime: existing.mime || file.mime || "",
+          channelId: existing.channelId || file.channelId || "",
+          channelLabel:
+            existing.channelId || !file.channelLabel
+              ? existing.channelLabel
+              : file.channelLabel,
+          messageId: existing.messageId || file.messageId || "",
+          messageText: existing.messageText || file.messageText || "",
+          author: existing.author && existing.author !== "School" ? existing.author : file.author || existing.author,
+          time: existing.time || file.time || "",
+          ts: existing.ts || file.ts || 0,
+          sizeBytes: existing.sizeBytes || file.sizeBytes || 0
+        });
+      } else {
+        mergedById.set(fileId, { ...file, fileId });
+        getFileSourceKeys(file).forEach((key) => {
+          if (!fileLookupBySource.has(key)) fileLookupBySource.set(key, fileId);
+        });
+      }
+    });
+  } catch (err) {
+    console.warn("Attachment scan failed", err);
   }
 
-  // 2) Category filter
+  let files = schoolFilesPayload
+    ? (Array.isArray(schoolFilesPayload.files) ? schoolFilesPayload.files : []).map(normalizeSchoolFileRow)
+    : Array.from(mergedById.values())
+    .map((file) => {
+      const registry = registryById.get(file.fileId);
+      const meta = getFileCategoryMeta(file);
+      const registryCategory = mapRegistryPurposeToCategory(registry?.purpose || file.registryPurpose || "");
+      const category = registryCategory || meta.category;
+      const channel = file.channelId ? getChannelById(file.channelId) : meta.channel;
+      const timeLabel =
+        file.time ||
+        (file.createdAt ? formatFileTimestampLabel(file.createdAt) : "") ||
+        (file.ts ? formatFileTimestampLabel(file.ts) : "");
+      const sizeLabel = file.sizeBytes ? humanSize(file.sizeBytes) : "";
+      const descRaw = (file.messageText || "").trim();
+      const desc =
+        descRaw && descRaw.toLowerCase() !== String(file.name || "").toLowerCase()
+          ? descRaw
+          : "";
+      return {
+        ...file,
+        ...meta,
+        channel,
+        category,
+        badgeLabel:
+          category === "homework"
+            ? "Homework"
+            : category === "exams"
+            ? "Exam"
+            : category === "media"
+            ? "Media"
+            : "Material",
+        badgeClass: `badge-${category}`,
+        timeLabel,
+        sizeLabel,
+        desc,
+        iconClass: fileIconByName(file.name || "", file.mime || ""),
+        kind: fileKind(file.mime || "", file.name || ""),
+        pinned: !!(registry?.pinned || file.pinned),
+        deleted: !!(registry?.deleted || file.deleted)
+      };
+    })
+    .filter((file) => !file.deleted);
+
   if (filesCategoryFilter !== "all") {
-    files = files.filter((f) => f.category === filesCategoryFilter);
+    files = files.filter((file) => file.category === filesCategoryFilter);
   }
-
-  // 3) Type filter (applies to All or Media view)
-  if (filesTypeFilter !== "all" && (filesCategoryFilter === "all" || filesCategoryFilter === "media")) {
-    files = files.filter((f) => f.kind === filesTypeFilter);
+  if (filesTypeFilter !== "all") {
+    files = files.filter((file) => file.kind === filesTypeFilter);
   }
-
-  // 4) Quick range filter
-  const now = Date.now();
-  const startOfToday = new Date();
-  startOfToday.setHours(0, 0, 0, 0);
-  const todayMs = startOfToday.getTime();
-  let minTs = 0;
-  if (filesRangeMode === "today") minTs = todayMs;
-  if (filesRangeMode === "7d") minTs = now - 7 * 24 * 60 * 60 * 1000;
-  if (filesRangeMode === "30d") minTs = now - 30 * 24 * 60 * 60 * 1000;
-  if (minTs) {
-    files = files.filter((f) => (f.ts || 0) >= minTs);
+  if (filesRangeMode !== "all") {
+    const now = Date.now();
+    const rangeMs =
+      filesRangeMode === "today"
+        ? 86400000
+        : filesRangeMode === "7d"
+        ? 7 * 86400000
+        : filesRangeMode === "30d"
+        ? 30 * 86400000
+        : 0;
+    if (rangeMs) {
+      files = files.filter((file) => file.ts && now - file.ts <= rangeMs);
+    }
   }
-
-  // 6) Search filter
   if (filesQuery) {
-    files = files.filter((f) => matchesQuery(f, filesQuery));
+    files = files.filter((file) => matchesQuery(file, filesQuery));
   }
 
-  // 7) Sorting (pinned always first)
   const sortFn =
     filesSortMode === "oldest"
       ? (a, b) => (a.ts || 0) - (b.ts || 0)
@@ -10544,188 +10900,175 @@ async function renderFilesPanel(token = uiNavigationToken) {
       ? (a, b) => (b.sizeBytes || 0) - (a.sizeBytes || 0)
       : (a, b) => (b.ts || 0) - (a.ts || 0);
   files.sort((a, b) => {
-    const pinDiff = (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0);
-    if (pinDiff) return pinDiff;
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
     return sortFn(a, b);
   });
+  filesCache = files.slice();
+  selectedFileIds = new Set(Array.from(selectedFileIds).filter((id) => filesCache.some((file) => file.fileId === id)));
+  const storageUsedBytes = Number(
+    schoolFilesPayload?.storageUsedBytes ??
+    files.reduce((sum, file) => sum + Number(file.sizeBytes || 0), 0)
+  );
+  if (filesSubtitle) {
+    filesSubtitle.textContent = `Showing ${files.length} ${files.length === 1 ? "file" : "files"} · ${humanSize(storageUsedBytes)} used`;
+  }
+
+  if (!isNavigationTokenCurrent(token, "filesPanel")) return;
 
   if (!files.length) {
     filesList.innerHTML = `
       <div class="files-empty">
         <div class="files-empty-icon"><i class="fa-regular fa-folder-open"></i></div>
-        <div class="files-empty-title">No files yet</div>
-        <div class="files-empty-subtitle">Uploads from your channels will appear here.</div>
+        <div class="files-empty-title">No files found</div>
+        <div class="files-empty-subtitle">${isStudentUser() ? "Ask your teacher for materials." : "Try changing filters or upload new material."}</div>
+        ${isStudentUser() ? "" : `<button class="file-btn file-btn-primary" type="button" data-action="upload-empty">Upload file</button>`}
       </div>
     `;
     return;
   }
 
-  const canManage = isAdminUser() || isTeacherUser();
-  filesCache = files.slice();
+  const renderActions = (file) => {
+    const isHomework = file.category === "homework";
+    const hasLocation = !!file.channelId;
+    const menuOpen = activeFilesMenuId === file.fileId;
+    const extraActions = [
+      isHomework && hasLocation ? `<button type="button" role="menuitem" data-action="open-homework"><i class="fa-solid fa-book-open"></i> Go to Homework</button>` : "",
+      !isHomework && hasLocation ? `<button type="button" role="menuitem" data-action="jump"><i class="fa-solid fa-location-dot"></i> ${file.category === "materials" ? "Open location" : "Go to chat"}</button>` : "",
+      file.canPin || canManageFiles ? `<button type="button" role="menuitem" data-action="pin"><i class="fa-solid fa-thumbtack"></i> ${file.pinned ? "Unpin" : "Pin"}</button>` : "",
+      file.canDelete || canManageFiles ? `<button class="is-danger" type="button" role="menuitem" data-action="delete"><i class="fa-regular fa-trash-can"></i> Delete</button>` : ""
+    ].filter(Boolean);
+    return `
+    <div class="files-table-actions">
+      ${file.canPreview || file.url ? `<button class="file-btn file-btn-primary" type="button" data-action="open" aria-label="${file.canPreview ? "Preview" : "Open"} ${escapeHtml(file.name || "file")}">${file.canPreview ? "Preview" : "Open"}</button>` : ""}
+      ${file.downloadUrl || file.url ? `<button class="file-btn" type="button" data-action="download" aria-label="Download ${escapeHtml(file.name || "file")}">Download</button>` : ""}
+      ${extraActions.length ? `
+      <div class="files-more-wrap">
+        <button class="file-btn file-btn-icon" type="button" data-action="more" aria-label="More actions for ${escapeHtml(file.name || "file")}" aria-expanded="${menuOpen ? "true" : "false"}" aria-haspopup="menu">
+          <i class="fa-solid fa-ellipsis"></i>
+        </button>
+        <div class="files-more-menu ${menuOpen ? "is-open" : ""}" role="menu">
+          ${extraActions.join("")}
+        </div>
+      </div>
+      ` : ""}
+    </div>
+  `;
+  };
 
-  if (filesCategoryFilter === "homework") {
-    const groups = new Map();
-    files.forEach((f) => {
-      const key = f.messageId ? `${String(f.channelId || "")}:${String(f.messageId)}` : String(f.channelId || "");
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(f);
-    });
-
-    filesList.innerHTML = Array.from(groups.entries())
-      .map(([channelId, items]) => {
-        const base = (items[0].contextLabel || "")
-          .split("->")[0]
-          .trim();
-        const messageTitleRaw = (items[0].messageText || "").split("\n")[0].trim();
-        const title = messageTitleRaw || items[0].channelName || (base ? `Homework - ${base}` : "Homework");
-        const classLabel = base || "Class";
-        const listHtml = items
-          .map((f) => {
-            const sizeLabel = f.sizeLabel ? escapeHtml(f.sizeLabel) : "";
-            return `
-              <div class="file-card-compact" data-file-id="${escapeHtml(
-                f.fileId || ""
-              )}" data-url="${escapeHtml(f.url || "")}" data-channel-id="${escapeHtml(
-                f.channelId || ""
-              )}" data-message-id="${escapeHtml(f.messageId || "")}">
-                <span class="file-icon-emoji"><i class="${escapeHtml(f.iconClass)}"></i></span>
-                <span class="file-name">${escapeHtml(f.name || "")}</span>
-                <span class="file-size">${sizeLabel}</span>
-                <button class="file-btn file-btn-ghost" type="button" data-action="open">Open</button>
-                <button class="file-btn file-btn-ghost" type="button" data-action="jump">Go to chat</button>
-              </div>
-            `;
-          })
-          .join("");
-
-        return `
-          <section class="hw-card" data-channel-id="${escapeHtml(channelId.split(":")[0])}">
-            <div class="hw-head">
-              <div>
-                <h3 class="hw-title">${escapeHtml(title)}</h3>
-                <div class="hw-meta">
-                  <span class="hw-pill">Due: Not set</span>
-                  <span class="hw-pill">Class: ${escapeHtml(classLabel)}</span>
-                  <span class="hw-pill hw-pill-open">Open</span>
-                </div>
-              </div>
-              <button class="file-btn file-btn-primary" type="button" data-action="open-homework">Open homework</button>
-            </div>
-            <div class="hw-files">
-              <div class="hw-files-title">Attachments</div>
-              ${listHtml || `<div class="muted">No attachments yet.</div>`}
-            </div>
-          </section>
-        `;
+  const renderLocationCell = (location) => {
+    const parts = String(location || "School library")
+      .split(/\s*->\s*/g)
+      .map((part) => part.trim())
+      .filter(Boolean);
+    if (parts.length < 2) return escapeHtml(location || "School library");
+    return parts
+      .map((part, index) => {
+        const label = `<span>${escapeHtml(part)}</span>`;
+        if (index === parts.length - 1) return label;
+        return `${label}<i class="fa-solid fa-arrow-right-long files-location-arrow" aria-hidden="true"></i>`;
       })
       .join("");
-    return;
-  }
+  };
 
-  filesList.innerHTML = files
-    .map((f) => {
-      const preview = f.previewUrl
-        ? `<div class="file-preview"><img src="${escapeHtml(f.previewUrl)}" alt=""></div>`
-        : "";
-      const badge = `<span class="badge ${escapeHtml(f.badgeClass)}">${escapeHtml(
-        f.badgeLabel
-      )}</span>`;
-      const pinnedBadge = f.pinned
-        ? `<span class="badge badge-pinned">Pinned</span>`
-        : "";
-      const context = escapeHtml(f.contextLabel || "Channel");
-      const author = escapeHtml(f.author || "Unknown");
-      const timeLabel = escapeHtml(f.timeLabel || "");
-      const sizeLabel = f.sizeLabel ? escapeHtml(f.sizeLabel) : "";
-      const desc = f.desc ? `<div class="file-desc">${escapeHtml(f.desc)}</div>` : "";
-      const adminActions = canManage
-        ? `
-          <div class="file-actions-admin">
-            <button class="file-btn file-btn-ghost" type="button" data-action="pin">${f.pinned ? "Unpin" : "Pin"}</button>
-            <button class="file-btn file-btn-ghost" type="button" data-action="replace">Replace</button>
-            <button class="file-btn file-btn-danger" type="button" data-action="delete">Delete</button>
-          </div>
-        `
-        : "";
-
+  const rows = files
+    .map((file) => {
+      const typeLabel = file.kind === "file"
+        ? String(file.mime || file.name?.split(".").pop() || "File").split("/").pop().toUpperCase()
+        : file.kind.charAt(0).toUpperCase() + file.kind.slice(1);
+      let location = file.contextLabel || file.channelLabel || "School library";
+      if (!file.channelId && location === "School library" && file.badgeLabel) {
+        location = `School library -> ${file.badgeLabel}`;
+      }
+      const isPdf = String(file.mime || "").toLowerCase().includes("pdf") || String(file.name || "").toLowerCase().endsWith(".pdf");
+      const iconTone = isPdf ? "pdf" : file.kind;
       return `
-        <article class="file-card file-card-v2" data-file-id="${escapeHtml(
-          f.fileId || ""
-        )}" data-kind="${escapeHtml(f.kind)}" data-channel-id="${escapeHtml(
-          f.channelId || ""
-        )}" data-message-id="${escapeHtml(f.messageId || "")}" data-url="${escapeHtml(
-          f.url || ""
-        )}">
-          <div class="file-card-left">
-            <div class="file-icon file-icon-${escapeHtml(f.kind)}" aria-hidden="true">
-              <i class="${escapeHtml(f.iconClass)}"></i>
+        <tr class="files-table-row ${file.pinned ? "is-pinned" : ""} ${activeFileDrawerId === file.fileId ? "is-selected" : ""}"
+            data-file-id="${escapeHtml(file.fileId || "")}"
+            data-url="${escapeHtml(file.url || "")}"
+            data-channel-id="${escapeHtml(file.channelId || "")}"
+            data-message-id="${escapeHtml(file.messageId || "")}"
+            tabindex="0"
+            aria-selected="${activeFileDrawerId === file.fileId ? "true" : "false"}">
+          <td class="files-col-select">
+            <input class="files-row-check" type="checkbox" data-action="select-file" ${selectedFileIds.has(file.fileId) ? "checked" : ""} aria-label="Select ${escapeHtml(file.name || "file")}">
+          </td>
+          <td class="files-col-file">
+            <div class="files-table-file">
+              <span class="files-table-icon file-icon-${escapeHtml(iconTone)}"><i class="${escapeHtml(file.iconClass)}"></i></span>
+              <span class="files-table-copy">
+                <strong class="files-table-name" title="${escapeHtml(file.name || "attachment")}">${escapeHtml(file.name || "attachment")}</strong>
+                ${file.desc ? `<span class="files-table-desc">${escapeHtml(file.desc)}</span>` : ""}
+              </span>
             </div>
-          </div>
-          <div class="file-card-main">
-            <div class="file-top">
-              <h3 class="file-title" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</h3>
-              <div class="file-badges">${badge}${pinnedBadge}</div>
-            </div>
-            <div class="file-meta file-meta-row">
-              <span class="file-meta-item"><i class="fa-solid fa-location-dot"></i> <b>${context}</b></span>
-              <span class="file-meta-dot">•</span>
-              <span class="file-meta-item"><i class="fa-solid fa-user"></i> ${author}</span>
-              <span class="file-meta-dot">•</span>
-              <span class="file-meta-item"><i class="fa-regular fa-clock"></i> ${timeLabel || "Just now"}</span>
-              ${sizeLabel ? `<span class="file-meta-dot">•</span><span class="file-meta-item"><i class="fa-solid fa-file"></i> ${sizeLabel}</span>` : ""}
-            </div>
-            ${desc}
-            <div class="file-actions file-actions-v2">
-              <button class="file-btn file-btn-primary" type="button" data-action="open">Open</button>
-              <button class="file-btn" type="button" data-action="download">Download</button>
-              <button class="file-btn" type="button" data-action="jump">Go to chat</button>
-              ${adminActions}
-            </div>
-          </div>
-          <div class="file-card-right">
-            ${preview}
-          </div>
-        </article>
+          </td>
+          <td class="files-col-type"><span class="files-type-chip">${escapeHtml(typeLabel || "File")}</span></td>
+          <td class="files-col-category"><span class="badge ${escapeHtml(file.badgeClass || "badge-materials")}">${escapeHtml(file.badgeLabel || "Material")}</span></td>
+          <td class="files-table-muted files-col-location">${renderLocationCell(location)}</td>
+          <td class="files-table-muted files-col-uploader">${escapeHtml(file.author || "School")}</td>
+          <td class="files-table-muted files-col-updated">${escapeHtml(file.timeLabel || "Unknown")}</td>
+          <td class="files-table-muted files-col-size">${escapeHtml(file.sizeLabel || "-")}</td>
+          <td class="files-col-actions">${renderActions(file)}</td>
+        </tr>
       `;
     })
     .join("");
+  const activeDrawerFile = files.find((file) => file.fileId === activeFileDrawerId) || null;
+  const drawerHtml = activeDrawerFile ? renderFileDetailsDrawerHtml(activeDrawerFile, canManageFiles) : "";
+
+  filesList.innerHTML = `
+    <div class="files-center-shell ${activeDrawerFile ? "has-drawer" : ""}">
+      <div class="files-table-region">
+    ${selectedFileIds.size ? `
+      <div class="files-bulk-bar">
+        <strong>${selectedFileIds.size} selected</strong>
+        <button class="file-btn" type="button" data-action="bulk-download">Download</button>
+        ${canManageFiles ? `<button class="file-btn" type="button" data-action="bulk-pin">Pin</button>` : ""}
+        ${canManageFiles ? `<button class="file-btn" type="button" data-action="bulk-move">Move category/location</button>` : ""}
+        ${canManageFiles ? `<button class="file-btn file-btn-danger" type="button" data-action="bulk-delete">Delete</button>` : ""}
+        <button class="file-btn file-btn-ghost" type="button" data-action="bulk-clear">Clear selection</button>
+      </div>
+    ` : ""}
+    <div class="files-table-wrap">
+      <table class="files-table">
+        <colgroup>
+          <col class="files-col-select" />
+          <col class="files-col-file" />
+          <col class="files-col-type" />
+          <col class="files-col-category" />
+          <col class="files-col-location" />
+          <col class="files-col-uploader" />
+          <col class="files-col-updated" />
+          <col class="files-col-size" />
+          <col class="files-col-actions" />
+        </colgroup>
+        <thead>
+          <tr>
+            <th class="files-col-select">
+              <input class="files-row-check" type="checkbox" data-action="select-all-files" ${files.length && selectedFileIds.size === files.length ? "checked" : ""} aria-label="Select all files">
+            </th>
+            <th class="files-col-file">File</th>
+            <th class="files-col-type">Type</th>
+            <th class="files-col-category">Category</th>
+            <th class="files-col-location">Location</th>
+            <th class="files-col-uploader">Uploaded by</th>
+            <th class="files-col-updated">Updated</th>
+            <th class="files-col-size">Size</th>
+            <th class="files-col-actions">Actions</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+      </div>
+      ${drawerHtml}
+    </div>
+  `;
 }
 
-async function renderNotificationsPanel(token = uiNavigationToken) {
+async function renderNotificationsPanel(token = uiNavigationToken, activeFilter = "all") {
   const panel = document.getElementById("notificationsPanel");
   if (!panel) return;
   if (!isNavigationTokenCurrent(token, "notificationsPanel")) return;
-
-  const NOTIF_STORAGE_KEY = "worknest_notifs_v1";
-  const NOTIF_READ_AT_KEY = "worknest_notifs_read_at";
-
-  const getNotifReadAt = () => {
-    try {
-      const raw = localStorage.getItem(NOTIF_READ_AT_KEY);
-      const val = raw ? Number(raw) : 0;
-      return Number.isFinite(val) ? val : 0;
-    } catch (_err) {
-      return 0;
-    }
-  };
-
-  const setNotifReadAt = (ts) => {
-    try {
-      localStorage.setItem(NOTIF_READ_AT_KEY, String(ts || Date.now()));
-    } catch (_err) {
-      /* ignore */
-    }
-  };
-
-  const loadStoredNotifs = () => {
-    try {
-      const raw = localStorage.getItem(NOTIF_STORAGE_KEY);
-      const list = raw ? JSON.parse(raw) : [];
-      return Array.isArray(list) ? list : [];
-    } catch (_err) {
-      return [];
-    }
-  };
 
   const formatRelative = (ts) => {
     if (!ts) return "Just now";
@@ -10740,217 +11083,396 @@ async function renderNotificationsPanel(token = uiNavigationToken) {
     return diff >= 0 ? `${days}d ago` : `In ${days}d`;
   };
 
-  const getNotifMeta = ({ title = "", context = "", type = "" }) => {
-    const hay = `${title} ${context}`.toLowerCase();
-    let kind = String(type || "").toLowerCase();
-    if (!kind || kind === "calendar") {
-      if (hay.includes("homework")) kind = "homework";
-      else if (hay.includes("exam") || hay.includes("test")) kind = "exam";
-      else if (hay.includes("announcement")) kind = "announcement";
-      else if (hay.includes("mention") || hay.includes("@")) kind = "mention";
-      else if (hay.includes("report") || hay.includes("alert")) kind = "alert";
-      else if (hay.includes("message") || hay.includes("reply")) kind = "message";
-      else if (String(type || "").toLowerCase() === "calendar") kind = "calendar";
-      else kind = "system";
+  const getNotifMeta = ({ title = "", body = "", context = "", type = "", entityType = "", metadata = {} }) => {
+    const explicitType = String(type || "").toLowerCase();
+    const explicitEntity = String(entityType || "").toLowerCase();
+    const metadataSource = String(metadata.source || metadata.module || metadata.locationType || metadata.entityType || "").toLowerCase();
+    const hay = `${title} ${body} ${context} ${explicitType} ${explicitEntity} ${metadataSource}`.toLowerCase();
+    let kind = explicitType;
+
+    if (["live", "live_class", "live-class", "meeting", "session", "video"].includes(kind)
+      || hay.includes("live class")
+      || hay.includes("live session")
+      || hay.includes("host a meeting")
+      || hay.includes("meeting")) {
+      kind = "live";
+    } else if (["calendar", "planner", "schedule"].includes(kind)
+      || ["calendar", "planner", "schedule"].includes(explicitEntity)
+      || hay.includes("calendar")
+      || hay.includes("planner")
+      || hay.includes("schedule")) {
+      kind = "calendar";
+    } else if (["homework", "assignment"].includes(kind)
+      || ["homework", "assignment"].includes(explicitEntity)
+      || hay.includes("homework")
+      || hay.includes("assignment")) {
+      kind = "homework";
+    } else if (["exam", "exams", "test"].includes(kind)
+      || ["exam", "test"].includes(explicitEntity)
+      || hay.includes("exam")
+      || hay.includes("test")) {
+      kind = "exam";
+    } else if (["attendance"].includes(kind) || hay.includes("attendance") || hay.includes("absent")) {
+      kind = "attendance";
+    } else if (["class", "classes", "classroom"].includes(kind)
+      || ["class", "classroom"].includes(explicitEntity)
+      || hay.includes("class")) {
+      kind = "class";
+    } else if (["teacher", "teachers"].includes(kind) || hay.includes("teacher")) {
+      kind = "teacher";
+    } else if (["material", "materials", "file", "files"].includes(kind)
+      || hay.includes("learning material")
+      || hay.includes("file")) {
+      kind = "material";
+    } else if (hay.includes("speaking") || hay.includes("feedback")) {
+      kind = "speaking";
+    } else if (hay.includes("club")) {
+      kind = "club";
+    } else if (hay.includes("announcement")) {
+      kind = "announcement";
+    } else if (["mention", "mentions"].includes(kind) || hay.includes("mention") || hay.includes("@")) {
+      kind = "mention";
+    } else if (["mail", "email"].includes(kind) || hay.includes("mail") || hay.includes("email")) {
+      kind = "mail";
+    } else if (hay.includes("report") || hay.includes("alert")) {
+      kind = "alert";
+    } else if (["message", "chat"].includes(kind) || hay.includes("message") || hay.includes("reply") || hay.includes("chat")) {
+      kind = "message";
+    } else {
+      kind = "system";
     }
 
     const meta = {
-      homework: { icon: "fa-solid fa-book-open", label: "Homework", priority: "high" },
-      exam: { icon: "fa-solid fa-clipboard-list", label: "Exam", priority: "high" },
-      announcement: { icon: "fa-solid fa-bullhorn", label: "Announcement", priority: "medium" },
-      mention: { icon: "fa-solid fa-at", label: "Mention", priority: "high" },
-      message: { icon: "fa-solid fa-message", label: "Message", priority: "medium" },
-      alert: { icon: "fa-solid fa-triangle-exclamation", label: "Alert", priority: "high" },
-      calendar: { icon: "fa-solid fa-calendar-days", label: "Schedule", priority: "medium" },
-      system: { icon: "fa-solid fa-gear", label: "System", priority: "low" }
+      homework: { icon: "fa-solid fa-book-open-reader", label: "Homework", priority: "homework" },
+      exam: { icon: "fa-solid fa-file-pen", label: "Exam", priority: "exam" },
+      attendance: { icon: "fa-solid fa-user-check", label: "Attendance", priority: "urgent" },
+      teacher: { icon: "fa-solid fa-chalkboard-user", label: "Teacher", priority: "mention" },
+      speaking: { icon: "fa-solid fa-microphone-lines", label: "Speaking feedback", priority: "speaking" },
+      club: { icon: "fa-solid fa-people-group", label: "Club activity", priority: "system" },
+      class: { icon: "fa-solid fa-school", label: "Class update", priority: "mention" },
+      live: { icon: "fa-solid fa-video", label: "Live class", priority: "mention" },
+      material: { icon: "fa-solid fa-folder-open", label: "Learning material", priority: "system" },
+      announcement: { icon: "fa-solid fa-bullhorn", label: "Announcement", priority: "mention" },
+      mention: { icon: "fa-solid fa-at", label: "Mention", priority: "mention" },
+      mail: { icon: "fa-solid fa-envelope", label: "Mail", priority: "mention" },
+      message: { icon: "fa-solid fa-comments", label: "Message", priority: "mention" },
+      alert: { icon: "fa-solid fa-triangle-exclamation", label: "Alert", priority: "urgent" },
+      calendar: { icon: "fa-solid fa-calendar-days", label: "Calendar", priority: "system" },
+      system: { icon: "fa-solid fa-gear", label: "System", priority: "system" }
     };
     return meta[kind] ? { ...meta[kind], kind } : { ...meta.system, kind: "system" };
   };
 
+  const getPriorityLabel = (priority) => {
+    const labels = {
+      urgent: "Urgent",
+      exam: "Exam",
+      mention: "Mention",
+      homework: "Homework",
+      speaking: "Feedback",
+      system: "Info"
+    };
+    return labels[priority] || "Update";
+  };
+
+  const getNotificationGroup = (ts) => {
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const todayMs = startOfToday.getTime();
+    const yesterdayMs = todayMs - 86400000;
+    if (ts >= todayMs) return "Today";
+    if (ts >= yesterdayMs) return "Yesterday";
+    return "Earlier this week";
+  };
+
+  const countBy = (items, predicate) => items.filter(predicate).length;
+
+  const renderInsightRow = (icon, label, value, tone = "system") => `
+    <div class="notif-insight-row notif-tone-${escapeHtml(tone)}">
+      <span class="notif-insight-icon"><i class="${escapeHtml(icon)}"></i></span>
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(String(value))}</strong>
+    </div>
+  `;
+
+  const normalizedFilter = String(activeFilter || "all").trim().toLowerCase() || "all";
+  let payload = { notifications: [], counts: {}, insights: {} };
+  let loadError = "";
   try {
-    if (typeof initCalendarIfNeeded === "function") initCalendarIfNeeded();
-    const today = ymd(new Date());
-    const to = addDays(today, 7);
-    await fetchCalendarEvents(today, to);
+    payload = await fetchJSON(`/api/notifications?filter=${encodeURIComponent(normalizedFilter)}&limit=50`);
     if (!isNavigationTokenCurrent(token, "notificationsPanel")) return;
-  } catch (_err) {
-    /* ignore */
+  } catch (err) {
+    loadError = normalizeErrorText(err);
+    console.warn("Notifications load failed", err);
   }
 
-  const now = Date.now();
-  const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
-  const in7 = now + 7 * 24 * 60 * 60 * 1000;
+  const mapPriorityTone = (type, priority) => {
+    const normalizedType = String(type || "").toLowerCase();
+    const normalizedPriority = String(priority || "").toLowerCase();
+    if (normalizedPriority === "high") return "urgent";
+    if (normalizedType === "exam") return "exam";
+    if (normalizedType === "homework") return "homework";
+    if (normalizedType === "attendance") return "urgent";
+    if (normalizedType === "mention" || normalizedType === "class" || normalizedType === "teacher") return "mention";
+    if (normalizedType === "speaking") return "speaking";
+    return "system";
+  };
 
-  const stored = loadStoredNotifs()
-    .filter((n) => n && n.ts && n.ts >= weekAgo)
+  const notifications = (Array.isArray(payload.notifications) ? payload.notifications : [])
     .map((n) => {
-      const channel = n.channelId ? getChannelById(n.channelId) : null;
-      const context = channel ? channel.name : "System";
-      const title = String(n.title || "Notification");
-      const meta = getNotifMeta({ title, context });
-      const author = n.author ? `by ${n.author}` : "";
-      let body = title;
-      if (title.toLowerCase().includes("pin")) {
-        body = `Pinned message ${author}`.trim();
-      }
-      if (title.toLowerCase().includes("unpin")) {
-        body = `Unpinned message ${author}`.trim();
-      }
-      return {
-        id: n.id || `notif-${n.ts}`,
-        title: meta.label,
+      const metadata = n && typeof n.metadata === "object" && n.metadata ? n.metadata : {};
+      const context = metadata.context || metadata.channelName || metadata.location || n.entityType || "Workspace";
+      const meta = getNotifMeta({
+        title: n.title || "",
+        body: n.message || "",
         context,
-        body,
-        ts: n.ts,
-        createdAt: n.ts,
-        kind: meta.kind,
-        priority: meta.priority,
-        icon: meta.icon,
-        channelId: n.channelId || "",
-        messageId: n.messageId || "",
-        actionLabel: "Open"
-      };
-    });
-
-  const upcoming = (calEventsCache || [])
-    .map((e) => {
-      const t = e.startTime ? new Date(`${e.date}T${e.startTime}:00`).getTime() : 0;
-      return { ...e, _t: t };
-    })
-    .filter((e) => e._t && e._t >= now && e._t <= in7 && !e.done)
-    .sort((a, b) => a._t - b._t)
-    .map((e) => {
-      const meta = getNotifMeta({ title: e.title || "", context: "Schedule", type: "calendar" });
-      const timeLabel = `${e.date || ""}${e.startTime ? " " + e.startTime : ""}`.trim();
+        type: n.type || "system",
+        entityType: n.entityType || n.entity_type || "",
+        metadata
+      });
+      const ts = Date.parse(n.createdAt || n.created_at || "") || Date.now();
       return {
-        id: `cal-${e.id || e.date}-${e.startTime || ""}`,
-        title: e.title || "Upcoming event",
-        context: "Schedule",
-        body: timeLabel || "Upcoming schedule reminder",
-        ts: e._t,
-        createdAt: null,
+        id: String(n.id || ""),
+        title: n.title || meta.label,
+        context,
+        body: n.message || "",
+        ts,
+        createdAt: ts,
+        isRead: !!n.isRead,
         kind: meta.kind,
-        priority: meta.priority,
+        priority: mapPriorityTone(n.type, n.priority),
         icon: meta.icon,
-        actionLabel: e.meetLink ? "Join" : "Open",
-        link: e.meetLink || ""
+        channelId: metadata.channelId || metadata.channel_id || "",
+        messageId: metadata.messageId || metadata.message_id || "",
+        actionUrl: n.actionUrl || n.action_url || "",
+        actionLabel: metadata.actionLabel || (n.actionUrl ? "Open" : "View"),
+        secondaryActionLabel: metadata.secondaryActionLabel || ""
       };
-    });
+    })
+    .filter((n) => n.id)
+    .sort((a, b) => b.ts - a.ts);
 
-  const notifications = [...upcoming, ...stored].sort((a, b) => b.ts - a.ts);
-  const readAt = getNotifReadAt();
-  const unreadCount = notifications.filter((n) => n.createdAt && n.createdAt > readAt).length;
-  if (notificationBadge) {
-    notificationBadge.textContent = unreadCount > 99 ? "99+" : String(unreadCount);
-    updateNotificationBadgeVisibility();
-  }
+  const counts = {
+    all: Number(payload.counts?.all || 0),
+    unread: Number(payload.counts?.unread || 0),
+    mentions: Number(payload.counts?.mentions || 0),
+    homework: Number(payload.counts?.homework || 0),
+    exams: Number(payload.counts?.exams || 0),
+    classes: Number(payload.counts?.classes || 0),
+    teachers: Number(payload.counts?.teachers || 0),
+    system: Number(payload.counts?.system || 0)
+  };
+  const insights = {
+    upcomingExams: Number(payload.insights?.upcomingExams || 0),
+    pendingHomework: Number(payload.insights?.pendingHomework || 0),
+    unreadMentions: Number(payload.insights?.unreadMentions || 0),
+    attendanceAlerts: Number(payload.insights?.attendanceAlerts || 0)
+  };
+  const unreadCount = counts.unread;
+  updateNotificationBadge(unreadCount);
+
+  const grouped = notifications.reduce((acc, n) => {
+    const key = getNotificationGroup(n.ts || Date.now());
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(n);
+    return acc;
+  }, {});
+
+  const renderCard = (n) => {
+    const isUnread = !n.isRead;
+    const canOpen = true;
+    const secondary = n.secondaryActionLabel
+      ? `<button class="notif-action-btn notif-action-ghost notif-action-icon" type="button" data-id="${escapeHtml(n.id)}" aria-label="${escapeHtml(n.secondaryActionLabel)}" title="${escapeHtml(n.secondaryActionLabel)}"><i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i></button>`
+      : "";
+    const openBtn = canOpen
+      ? `<button class="notif-action-btn notif-action-primary notif-action-icon" type="button" data-id="${escapeHtml(n.id)}" aria-label="${escapeHtml(n.actionLabel || "Open")}" title="${escapeHtml(n.actionLabel || "Open")}"><i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i></button>`
+      : "";
+    return `
+      <article class="notif-card ${isUnread ? "is-unread" : ""} notif-tone-${escapeHtml(n.priority)}" data-type="${escapeHtml(n.kind)}" data-id="${escapeHtml(n.id)}">
+        <div class="notif-unread-dot" aria-hidden="true"></div>
+        <div class="notif-icon notif-${escapeHtml(n.kind)}">
+          <i class="${escapeHtml(n.icon)}"></i>
+        </div>
+        <div class="notif-content">
+          <div class="notif-top">
+            <div>
+              <div class="notif-title">${escapeHtml(n.title)}</div>
+              <div class="notif-body">${escapeHtml(n.body)}</div>
+            </div>
+          </div>
+          <div class="notif-meta-row">
+            <span class="notif-context">${escapeHtml(n.context || "Workspace")}</span>
+            <span aria-hidden="true">•</span>
+            <span class="notif-time">${escapeHtml(formatRelative(n.ts))}</span>
+            <span class="notif-pill is-${escapeHtml(n.priority)}">${escapeHtml(getPriorityLabel(n.priority))}</span>
+            <span class="notif-actions">${openBtn}${secondary}</span>
+          </div>
+        </div>
+      </article>
+    `;
+  };
 
   const listHtml = notifications.length
-    ? notifications
-        .map((n) => {
-          const isUnread = n.createdAt && n.createdAt > readAt;
-          const priorityLabel =
-            n.priority === "high" ? "Action" : n.priority === "medium" ? "Update" : "Info";
-          const openBtn = n.channelId || n.link
-            ? `<button class="notif-open-btn" type="button" data-id="${escapeHtml(n.id)}">${escapeHtml(
-                n.actionLabel || "Open"
-              )}</button>`
-            : "";
-          return `
-            <div class="notif-card ${isUnread ? "is-unread" : ""}" data-type="${escapeHtml(
-              n.kind
-            )}" data-id="${escapeHtml(n.id)}">
-              <div class="notif-icon notif-${escapeHtml(n.kind)}">
-                <i class="${escapeHtml(n.icon)}"></i>
-              </div>
-              <div class="notif-content">
-                <div class="notif-top">
-                  <div class="notif-title">${escapeHtml(n.title)}</div>
-                  <span class="notif-pill is-${escapeHtml(n.priority)}">${escapeHtml(
-                    priorityLabel
-                  )}</span>
-                </div>
-                <div class="notif-context">${escapeHtml(n.context)}</div>
-                <div class="notif-body">${escapeHtml(n.body)}</div>
-                <div class="notif-footer">
-                  <span class="notif-time">${escapeHtml(formatRelative(n.ts))}</span>
-                  ${openBtn}
-                </div>
-              </div>
-            </div>
-          `;
-        })
+    ? ["Today", "Yesterday", "Earlier this week"]
+        .filter((label) => grouped[label]?.length)
+        .map(
+          (label) => `
+            <section class="notif-group" data-group="${escapeHtml(label)}">
+              <div class="notif-group-label">${escapeHtml(label)}</div>
+              ${grouped[label].map(renderCard).join("")}
+            </section>
+          `
+        )
         .join("")
-    : `
-      <div class="notif-empty">
-        <div class="notif-empty-icon"><i class="fa-regular fa-bell"></i></div>
-        <div class="notif-empty-title">You are all caught up</div>
-        <div class="notif-empty-subtitle">
-          Homework, messages, and updates will appear here when needed.
+    : loadError
+      ? `
+      <div class="notif-empty-state">
+        <div class="notif-empty">
+          <div class="notif-empty-icon"><i class="fa-solid fa-triangle-exclamation"></i></div>
+          <div class="notif-empty-title">Notifications unavailable</div>
+          <div class="notif-empty-subtitle">${escapeHtml(loadError)}</div>
+          <button class="notif-empty-action" type="button" id="notifRetry">Try again</button>
+        </div>
+      </div>
+    `
+      : `
+      <div class="notif-empty-state">
+        <div class="notif-empty">
+          <div class="notif-empty-icon"><i class="fa-regular fa-bell"></i></div>
+          <div class="notif-empty-title">You're all caught up</div>
+          <div class="notif-empty-subtitle">No unread notifications right now.</div>
+          <button class="notif-empty-action" type="button" id="notifGoClasses">Go to classes</button>
         </div>
       </div>
     `;
 
+  const liveBadgeClass = unreadCount > 0 ? " is-live" : "";
+  const activityStatus = unreadCount > 0 ? `${unreadCount} new updates` : "Updated just now";
+
+  const skeletonHtml = `
+    <div class="notif-skeleton" aria-hidden="true">
+      <span></span>
+      <div>
+        <b></b>
+        <i></i>
+      </div>
+    </div>
+  `;
+
+  const feedContentHtml = `
+    <div class="notif-feed-surface">
+      <div class="notif-feed-status">
+        <span class="notif-live-dot"></span>
+        <span>${escapeHtml(activityStatus)}</span>
+      </div>
+      ${listHtml}
+      <div class="notif-loading-preview">${skeletonHtml}${skeletonHtml}</div>
+    </div>
+  `;
+
+  const insightsHtml = `
+    ${renderInsightRow("fa-solid fa-clipboard-list", "Upcoming exams", insights.upcomingExams, "exam")}
+    ${renderInsightRow("fa-solid fa-book-open", "Pending homework", insights.pendingHomework, "homework")}
+    ${renderInsightRow("fa-solid fa-at", "Unread mentions", insights.unreadMentions, "mention")}
+    ${renderInsightRow("fa-solid fa-user-check", "Attendance alerts", insights.attendanceAlerts, "urgent")}
+  `;
+
   panel.innerHTML = `
     <div class="notifications-panel">
       <div class="notif-header">
-        <div>
-          <h1>Notifications</h1>
-          <p class="notif-subtitle">Last 7 days · Your action center</p>
+        <div class="notif-header-main">
+          <div>
+            <h1>Notifications</h1>
+          </div>
+          <div class="notif-header-actions">
+            <span class="notif-unread-badge${liveBadgeClass}">${escapeHtml(String(unreadCount))} unread</span>
+            <button class="notif-mark-btn" type="button" id="notifMarkAll" ${notifications.length ? "" : "disabled"}>Mark all as read</button>
+            <button class="notif-settings-btn" type="button" title="Notification settings" aria-label="Notification settings">
+              <i class="fa-solid fa-sliders"></i>
+            </button>
+          </div>
         </div>
-        <button class="notif-mark-btn" type="button" id="notifMarkAll" ${
-          notifications.length ? "" : "disabled"
-        }>Mark all as read</button>
+        <div class="notif-toolbar">
+          <div class="notif-filters" id="notifFilters">
+            <button class="notif-filter ${normalizedFilter === "all" ? "is-active" : ""}" type="button" data-filter="all">All</button>
+            <button class="notif-filter ${normalizedFilter === "mentions" ? "is-active" : ""}" type="button" data-filter="mentions">Mentions</button>
+            <button class="notif-filter ${normalizedFilter === "homework" ? "is-active" : ""}" type="button" data-filter="homework">Homework</button>
+            <button class="notif-filter ${normalizedFilter === "exams" ? "is-active" : ""}" type="button" data-filter="exams">Exams</button>
+            <button class="notif-filter ${normalizedFilter === "classes" ? "is-active" : ""}" type="button" data-filter="classes">Classes</button>
+            <button class="notif-filter ${normalizedFilter === "teachers" ? "is-active" : ""}" type="button" data-filter="teachers">Teachers</button>
+            <button class="notif-filter ${normalizedFilter === "system" ? "is-active" : ""}" type="button" data-filter="system">System</button>
+          </div>
+        </div>
       </div>
 
-      <div class="notif-toolbar">
-        <div class="notif-filters" id="notifFilters">
-          <button class="notif-filter is-active" type="button" data-filter="all">All</button>
-          <button class="notif-filter" type="button" data-filter="mention">Mentions</button>
-          <button class="notif-filter" type="button" data-filter="homework">Homework</button>
-          <button class="notif-filter" type="button" data-filter="exam">Exams</button>
-          <button class="notif-filter" type="button" data-filter="system">System</button>
-        </div>
-      </div>
-
-      <div class="notif-list" id="notifList">
-        ${listHtml}
+      <div class="notif-layout">
+        <main class="notif-feed" id="notifList">
+          ${feedContentHtml}
+        </main>
+        <aside class="notif-insights" aria-label="Notification insights">
+          <div class="notif-insights-card">
+            <div class="notif-insights-head">
+              <span>Insights</span>
+              <strong>${escapeHtml(String(counts.all))}</strong>
+            </div>
+            ${insightsHtml}
+          </div>
+          <div class="notif-quick-card">
+            <div class="notif-insights-head">
+              <span>Quick actions</span>
+            </div>
+            <button type="button" class="notif-quick-btn" data-quick="classes"><i class="fa-solid fa-school"></i> Open classes</button>
+            <button type="button" class="notif-quick-btn" data-quick="calendar"><i class="fa-solid fa-calendar-days"></i> Check planner</button>
+            <button type="button" class="notif-quick-btn" data-quick="homework"><i class="fa-solid fa-book-open"></i> Review homework</button>
+            <div class="notif-sync-text"><span class="notif-live-dot"></span> Last synced just now</div>
+          </div>
+        </aside>
       </div>
     </div>
   `;
 
   const markBtn = panel.querySelector("#notifMarkAll");
   if (markBtn) {
-    markBtn.addEventListener("click", () => {
-      setNotifReadAt(Date.now());
-      renderNotificationsPanel(token);
+    markBtn.addEventListener("click", async () => {
+      markBtn.disabled = true;
+      try {
+        await fetchJSON("/api/notifications/read-all", { method: "PATCH" });
+        updateNotificationBadge(0);
+      } catch (err) {
+        console.warn("Mark all notifications read failed", err);
+      }
+      await renderNotificationsPanel(token, normalizedFilter);
+      refreshNotificationBadge();
     });
   }
 
   const filters = panel.querySelectorAll(".notif-filter");
-  const listEl = panel.querySelector("#notifList");
   filters.forEach((btn) => {
     btn.addEventListener("click", () => {
-      filters.forEach((b) => b.classList.remove("is-active"));
-      btn.classList.add("is-active");
       const filter = btn.getAttribute("data-filter") || "all";
-      listEl?.querySelectorAll(".notif-card").forEach((card) => {
-        const type = card.getAttribute("data-type") || "";
-        const show = filter === "all" || type === filter;
-        card.style.display = show ? "" : "none";
-      });
+      renderNotificationsPanel(token, filter);
     });
   });
 
   const byId = new Map(notifications.map((n) => [String(n.id), n]));
-  panel.querySelectorAll(".notif-open-btn").forEach((btn) => {
+  panel.querySelectorAll(".notif-action-btn").forEach((btn) => {
     btn.addEventListener("click", async (e) => {
       e.stopPropagation();
       const id = btn.getAttribute("data-id") || "";
       const notif = byId.get(id);
       if (!notif) return;
-      if (notif.link) {
-        window.open(notif.link, "_blank", "noopener");
+      try {
+        await fetchJSON(`/api/notifications/${encodeURIComponent(id)}/read`, { method: "PATCH" });
+        refreshNotificationBadge();
+      } catch (err) {
+        console.warn("Mark notification read failed", err);
+      }
+      if (notif.actionUrl) {
+        if (/^https?:\/\//i.test(notif.actionUrl)) {
+          window.open(notif.actionUrl, "_blank", "noopener");
+        } else {
+          window.location.href = notif.actionUrl;
+        }
         return;
       }
       if (notif.channelId) {
@@ -10959,6 +11481,33 @@ async function renderNotificationsPanel(token = uiNavigationToken) {
         if (notif.messageId) {
           scrollToMessageInChat(notif.messageId);
         }
+        return;
+      }
+      renderNotificationsPanel(token, normalizedFilter);
+    });
+  });
+
+  panel.querySelectorAll(".notif-card").forEach((card) => {
+    card.addEventListener("click", () => {
+      card.querySelector(".notif-action-primary")?.click();
+    });
+  });
+
+  panel.querySelector("#notifGoClasses")?.addEventListener("click", () => {
+    showPanel("chatPanel");
+  });
+  panel.querySelector("#notifRetry")?.addEventListener("click", () => {
+    renderNotificationsPanel(token, normalizedFilter);
+  });
+  panel.querySelectorAll(".notif-quick-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const quick = btn.getAttribute("data-quick");
+      if (quick === "calendar") {
+        openCalendarPanel();
+      } else if (quick === "homework") {
+        openFilesPanel();
+      } else {
+        showPanel("chatPanel");
       }
     });
   });
@@ -11711,14 +12260,20 @@ function initRailAndComposerListeners() {
 
     const savedRail = localStorage.getItem(LAST_RAIL_VIEW_KEY) || "messages";
     const selectRail =
-      savedRail === "admin" && !isAdminUser() ? "messages" : savedRail;
+      (savedRail === "admin" || savedRail === "administration") && !isAdminUser()
+        ? "messages"
+        : savedRail;
     const initialBtn =
       document.querySelector(`.app-rail-btn[data-rail-id="${selectRail}"]`) || railButtons[0];
     if (initialBtn) {
       document
         .querySelectorAll(".app-rail-btn")
-        .forEach((b) => b.classList.remove("app-rail-btn-active"));
+        .forEach((b) => {
+          b.classList.remove("app-rail-btn-active");
+          b.setAttribute("aria-pressed", "false");
+        });
       initialBtn.classList.add("app-rail-btn-active");
+      initialBtn.setAttribute("aria-pressed", "true");
       if (sessionUser || ACCESS_TOKEN) {
         openRailSection(initialBtn.dataset.railId || "messages");
       }
@@ -11742,6 +12297,7 @@ async function openRailSection(id) {
   if (
     targetId !== "profile" &&
     targetId !== "admin" &&
+    targetId !== "administration" &&
     await shouldShowWorkspaceOnboarding()
   ) {
     onboardingRedirectMessage = "Complete the guided setup before navigating to the rest of the workspace.";
@@ -11754,16 +12310,21 @@ async function openRailSection(id) {
   }
   const activeBtn = document.querySelector(`.app-rail-btn[data-rail-id="${targetId}"]`);
   setActiveRailButton(activeBtn);
+  if (targetId !== "administration") {
+    closeRailPagePanels();
+  }
   closeAllUnreads();
   closeThread();
-  const isChat = targetId === "messages";
-  setChatColumnsVisibility(isChat);
-  setAppFullScreenMode(!isChat);
-  if (targetId !== "admin" && superAdminLanding) {
+  const usesSideColumn = targetId === "messages" || targetId === "administration";
+  setChatColumnsVisibility(usesSideColumn);
+  setAppFullScreenMode(!usesSideColumn);
+  if (targetId !== "admin" && targetId !== "administration" && superAdminLanding) {
     setSuperAdminLanding(false);
   }
   const savedTargetId =
-    targetId === "admin" && !isAdminUser() ? "messages" : targetId;
+    (targetId === "admin" || targetId === "administration") && !isAdminUser()
+      ? "messages"
+      : targetId;
   if (LAST_RAIL_VIEW_KEY) {
     try {
       localStorage.setItem(LAST_RAIL_VIEW_KEY, savedTargetId);
@@ -11788,13 +12349,16 @@ async function openRailSection(id) {
       openCalendarPanel();
       break;
     case "email":
-      void openEmailPanel();
+      await openEmailPanel();
       break;
     case "ai":
       openAiAssistant();
       break;
     case "admin":
-      void openAdminProfilePanel();
+      await openAdminProfilePanel();
+      break;
+    case "administration":
+      openAdminRailPanel();
       break;
     case "analytics":
       if (!isAdminUser()) return;
@@ -11807,6 +12371,18 @@ async function openRailSection(id) {
     default:
       showHomeView();
   }
+}
+
+async function restoreSavedRailView(savedRailView, options = {}) {
+  const targetId = String(savedRailView || "messages");
+  if (!targetId || targetId === "messages" || targetId === "profile") return false;
+  const adminOnlyViews = new Set(["admin", "administration", "analytics"]);
+  if (adminOnlyViews.has(targetId) && !isAdminUser()) return false;
+  if (options.didRestoreView && targetId === "administration") return true;
+  const btn = document.querySelector(`.app-rail-btn[data-rail-id="${targetId}"]`);
+  if (!btn) return false;
+  await openRailSection(targetId);
+  return true;
 }
 
 function setChatColumnsVisibility(visible) {
@@ -11846,6 +12422,7 @@ function getAudienceLabel(audience) {
 
 function setLiveScope(scope) {
   if (!scope) return;
+  liveScope = scope;
   liveTabs.forEach((tab) => {
     const target = tab.dataset.liveScope || "";
     tab.classList.toggle("is-active", target === scope);
@@ -12134,6 +12711,7 @@ function getUserNameByIdFromDirectory(userId) {
 
 function updateLivePanelRoleLayout() {
   const isStudentView = canCurrentUserHostStudentLiveMeeting();
+  ensureLiveHeaderLaunchButton();
   livePanel?.classList.toggle("live-panel-student-view", isStudentView);
   liveHubView?.classList.toggle("live-panel-student-view", isStudentView);
   const liveWorkspaceIcon = document.querySelector("#liveHubView .live-workspace-card-icon i");
@@ -12180,9 +12758,24 @@ function updateLivePanelRoleLayout() {
   }
   if (liveHostBtn) liveHostBtn.hidden = isStudentView || !canCurrentUserManageLive();
   if (liveCreateBtn) liveCreateBtn.hidden = isStudentView || !canCurrentUserManageLive();
+  if (liveHeaderLaunchBtn) liveHeaderLaunchBtn.hidden = isStudentView || !canCurrentUserManageLive();
   if (liveRecordingsSection) {
     liveRecordingsSection.classList.toggle("hidden", !isStudentView);
   }
+}
+
+function ensureLiveHeaderLaunchButton() {
+  if (liveHeaderLaunchBtn) return liveHeaderLaunchBtn;
+  const actions = document.querySelector("#liveHubView .live-header-actions");
+  if (!actions || !liveHostBtn) return null;
+  liveHeaderLaunchBtn = document.createElement("button");
+  liveHeaderLaunchBtn.type = "button";
+  liveHeaderLaunchBtn.id = "liveHeaderLaunchBtn";
+  liveHeaderLaunchBtn.className = "btn live-action-btn live-action-launch live-launch-btn live-header-launch-btn";
+  liveHeaderLaunchBtn.addEventListener("click", launchLiveNow);
+  actions.insertBefore(liveHeaderLaunchBtn, liveCreateBtn || null);
+  updateLaunchButtonLabel();
+  return liveHeaderLaunchBtn;
 }
 
 async function loadLiveSharedRecordings() {
@@ -12445,6 +13038,73 @@ function filterLiveSessions() {
     });
 }
 
+function getCurrentLiveSessions(list = []) {
+  return (Array.isArray(list) ? list : []).filter((session) => {
+    const status = getLiveSessionDisplayState(session).status;
+    return status === "scheduled" || status === "live";
+  });
+}
+
+function getPastLiveSessions(limit = 6) {
+  return liveSessions
+    .filter((session) => {
+      const status = getLiveSessionDisplayState(session).status;
+      return status === "ended" || status === "canceled";
+    })
+    .sort((a, b) => {
+      const aEnd = parseLiveSessionDateTimeValue(a, "end_time") || parseLiveSessionDateTimeValue(a, "start_time") || new Date(0);
+      const bEnd = parseLiveSessionDateTimeValue(b, "end_time") || parseLiveSessionDateTimeValue(b, "start_time") || new Date(0);
+      return bEnd.getTime() - aEnd.getTime();
+    })
+    .slice(0, limit);
+}
+
+function formatLiveSessionHistoryDate(session) {
+  const startAt = parseLiveSessionDateTimeValue(session, "start_time");
+  if (!startAt) return session?.date || "Previous session";
+  return startAt.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric"
+  });
+}
+
+function renderLiveHistoryList() {
+  const history = getPastLiveSessions(6);
+  if (!history.length) return "";
+  const rows = history.map((session) => {
+    const state = getLiveSessionDisplayState(session);
+    const channelName = session.channel_name || getChannelById(session.channel_id)?.name || getAudienceLabel(session.audience) || "Workspace";
+    const time = [session.start_time, session.end_time].filter(Boolean).join(" - ");
+    return `
+      <article class="live-history-row">
+        <div class="live-history-icon" aria-hidden="true">
+          <i class="fa-solid ${state.status === "canceled" ? "fa-calendar-xmark" : "fa-clock-rotate-left"}"></i>
+        </div>
+        <div class="live-history-main">
+          <h4>${escapeHtml(session.title || "Previous live session")}</h4>
+          <p>${escapeHtml(channelName)} · ${escapeHtml(formatLiveSessionHistoryDate(session))}${time ? ` · ${escapeHtml(time)}` : ""}</p>
+        </div>
+        <span class="live-history-status live-history-status-${escapeHtml(state.status)}">${escapeHtml(LIVE_STATUS_LABELS[state.status] || state.status || "Ended")}</span>
+      </article>
+    `;
+  }).join("");
+  return `
+    <section class="live-history-panel" aria-label="Previous meetings">
+      <div class="live-history-head">
+        <div>
+          <p class="live-panel-kicker">Meeting history</p>
+          <h3 class="live-panel-title">Recent previous meetings</h3>
+        </div>
+        <span>${history.length} shown</span>
+      </div>
+      <div class="live-history-list">
+        ${rows}
+      </div>
+    </section>
+  `;
+}
+
 async function loadLiveSessions(scope = liveScope, token = uiNavigationToken) {
   if (!livePanel) return;
   if (!isNavigationTokenCurrent(token, "livePanel")) return;
@@ -12469,40 +13129,27 @@ async function loadLiveSessions(scope = liveScope, token = uiNavigationToken) {
 
 function renderLiveSchedule() {
   if (!liveSessionsList) return;
-  const list = filterLiveSessions(liveScope);
+  const scopedList = filterLiveSessions(liveScope);
+  const list = liveScope === "past" ? scopedList : getCurrentLiveSessions(scopedList);
+  liveHubView?.classList.toggle("live-hub-empty", !list.length);
+  updateLaunchButtonLabel();
   if (!list.length) {
     const isStudentView = canCurrentUserHostStudentLiveMeeting();
-    liveSessionsList.innerHTML = isStudentView
-      ? `
-        <div class="live-empty-state">
-          <div class="live-empty-state-icon" aria-hidden="true">
-            <i class="fa-solid fa-video"></i>
+    liveSessionsList.innerHTML = `
+      <div class="live-empty-stack">
+        <div class="live-premium-empty">
+          <div class="live-premium-empty-icon" aria-hidden="true">
+            <i class="fa-solid fa-video-slash"></i>
           </div>
-          <p class="live-empty-state-title">No class sessions yet</p>
-          <p class="live-empty-state-copy">Your teacher has not shared a live class for this view yet.</p>
-        </div>
-      `
-      : `
-        <div class="live-empty-state">
-          <div class="live-empty-state-icon" aria-hidden="true">
-            <i class="fa-solid fa-video"></i>
+          <div>
+            <p class="live-premium-empty-kicker">No live activity</p>
+            <h3>${isStudentView ? "No class sessions yet" : "No sessions scheduled right now"}</h3>
+            <p>${isStudentView ? "Your teacher has not shared a live class for this view yet." : "There are no live, created, or scheduled sessions at the moment. Use the header actions to launch or create one when you are ready."}</p>
           </div>
-          <p class="live-empty-state-title">No sessions scheduled</p>
-          <p class="live-empty-state-copy">Start a class instantly or create a scheduled session.</p>
-
-          <button id="launchLiveNowBtn" class="btn btn-primary live-launch-btn" type="button">
-            <i class="fa-solid fa-bolt"></i>
-            Launch Live Now
-          </button>
         </div>
-      `;
-    if (!isStudentView) {
-      const launchBtn = liveSessionsList.querySelector("#launchLiveNowBtn");
-      if (launchBtn) {
-        launchBtn.addEventListener("click", launchLiveNow);
-        updateLaunchButtonLabel();
-      }
-    }
+        ${renderLiveHistoryList()}
+      </div>
+    `;
     return;
   }
   liveSessionsList.innerHTML = "";
@@ -12691,11 +13338,9 @@ async function launchLiveNow() {
 }
 
 function updateLaunchButtonLabel() {
-  const btn = document.getElementById("launchLiveNowBtn");
+  const btn = liveHeaderLaunchBtn || document.getElementById("liveHeaderLaunchBtn") || document.getElementById("launchLiveNowBtn");
   if (!btn) return;
-  const inChannel = currentChannelId && String(currentChannelId).trim();
-  const label = inChannel ? "Launch Live in This Class" : "Launch Workspace Live";
-  btn.innerHTML = `<i class="fa-solid fa-bolt"></i> ${label}`;
+  btn.innerHTML = '<i class="fa-solid fa-rocket"></i> Launch Live session';
 }
 
 function renderLiveRecents() {
@@ -14291,12 +14936,10 @@ function attachLiveEvents() {
     });
   }
   if (openClassSettingsListBtn) {
-  openClassSettingsListBtn.addEventListener("click", () => {
-    hideAdminOverlays();
-    collapseClassSettingsView();
-  renderClassSettingsList(classSettingsSearch?.value || "").catch((err) => console.error(err));
-    showClassSettingsPage();
-  });
+    openClassSettingsListBtn.dataset.sidebarAdminBound = "1";
+    openClassSettingsListBtn.addEventListener("click", () => {
+      openClassSettingsAdminPage();
+    });
   }
 
   if (classSettingsSearch) {
@@ -14304,11 +14947,21 @@ function attachLiveEvents() {
     renderClassSettingsList(e.target.value).catch((err) => console.error(err));
     });
   }
+  document.getElementById("classSettingsCreateBtn")?.addEventListener("click", () => {
+    handleAddChannel("classes");
+  });
   window.addEventListener("resize", () => {
     renderLiveWhiteboard();
   });
   if (classSettingsList) {
     classSettingsList.addEventListener("click", async (event) => {
+      const assignBtn = event.target.closest(".class-card-add-teacher");
+      if (assignBtn) {
+        event.preventDefault();
+        const channelId = assignBtn.dataset.channelId || assignBtn.closest(".class-settings-card")?.dataset?.channelId;
+        if (channelId) await openClassSettingsAssignModal(channelId);
+        return;
+      }
       const editBtn = event.target.closest(".class-settings-edit");
       if (editBtn) {
         const card = editBtn.closest(".class-settings-card");
@@ -14354,7 +15007,13 @@ function attachLiveEvents() {
 
 function showClassSettingsPage() {
   if (!classSettingsPage) return;
+  setActiveAdminRailItem("openClassSettingsList");
+  persistLastView({
+    channelId: currentChannelId || null,
+    viewMode: "class-settings"
+  });
   classSettingsPreviousChannelId = currentChannelId;
+  showPanel("chatPanel");
   classSettingsPage.classList.remove("hidden");
   classSettingsPage.setAttribute("aria-hidden", "false");
   if (messagesContainer) messagesContainer.classList.add("hidden");
@@ -14366,6 +15025,17 @@ function showClassSettingsPage() {
   releaseClassSettingsTrap = trapFocus(classSettingsPage);
   document.body.classList.add("no-school-scroll");
   chatHeader?.classList.add("hidden");
+}
+
+function openClassSettingsAdminPage() {
+  if (!isSchoolAdmin()) {
+    showToast("Only school admins can manage class settings");
+    return;
+  }
+  hideAdminOverlays();
+  setActiveAdminRailItem("openClassSettingsList");
+  renderClassSettingsList(classSettingsSearch?.value || "").catch((err) => console.error(err));
+  showClassSettingsPage();
 }
 
 function collapseClassSettingsView() {
@@ -14400,19 +15070,70 @@ function hideClassSettingsPage() {
 async function renderClassSettingsList(filter = "") {
   if (!classSettingsList) return;
   const query = String(filter || "").trim().toLowerCase();
-  const classChannels = (channels || [])
-    .filter((ch) => normalizeChannelCategory(ch.category) === "classes")
+  const allClassChannels = (channels || [])
+    .filter((ch) => normalizeChannelCategory(ch.category) === "classes");
+  const classChannels = allClassChannels
     .filter((ch) => {
       if (!query) return true;
       const haystack = `${ch.name || ""} ${ch.topic || ""} ${ch.id || ""}`.toLowerCase();
       return haystack.includes(query);
     })
     .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  await Promise.all(allClassChannels.map((ch) => ensureClassMeta(ch.id)));
+  const getMeta = (ch) => classMetaCache.get(ch.id) || {};
+  const isDeactivatedClass = (ch) => {
+    const meta = getMeta(ch);
+    return !!(meta.end_date && new Date(meta.end_date).getTime() < Date.now());
+  };
+  const totalClasses = allClassChannels.length;
+  const privateClasses = allClassChannels.filter((ch) => {
+    const meta = getMeta(ch);
+    return String(meta.status || (ch.is_public === false ? "private" : "public")).toLowerCase() === "private";
+  }).length;
+  const deactivatedClasses = allClassChannels.filter(isDeactivatedClass).length;
+  const activeClasses = Math.max(0, totalClasses - deactivatedClasses);
+  const statsRoot = document.getElementById("classSettingsStats");
+  if (statsRoot) {
+    statsRoot.innerHTML = `
+      <article class="admin-directory-stat admin-directory-stat-blue">
+        <span class="admin-directory-stat-icon"><i class="fa-solid fa-layer-group" aria-hidden="true"></i></span>
+        <span class="admin-directory-stat-value">${escapeHtml(String(totalClasses))}</span>
+        <span class="admin-directory-stat-label">Total classes</span>
+      </article>
+      <article class="admin-directory-stat admin-directory-stat-green">
+        <span class="admin-directory-stat-icon"><i class="fa-solid fa-circle-check" aria-hidden="true"></i></span>
+        <span class="admin-directory-stat-value">${escapeHtml(String(activeClasses))}</span>
+        <span class="admin-directory-stat-label">Active classes</span>
+      </article>
+      <article class="admin-directory-stat admin-directory-stat-purple">
+        <span class="admin-directory-stat-icon"><i class="fa-solid fa-lock" aria-hidden="true"></i></span>
+        <span class="admin-directory-stat-value">${escapeHtml(String(privateClasses))}</span>
+        <span class="admin-directory-stat-label">Private classes</span>
+      </article>
+      <article class="admin-directory-stat admin-directory-stat-amber">
+        <span class="admin-directory-stat-icon"><i class="fa-solid fa-circle-pause" aria-hidden="true"></i></span>
+        <span class="admin-directory-stat-value">${escapeHtml(String(deactivatedClasses))}</span>
+        <span class="admin-directory-stat-label">Deactivated classes</span>
+      </article>
+    `;
+  }
   if (!classChannels.length) {
-    classSettingsList.innerHTML = `<div class="helper-text">No class channels yet.</div>`;
+    classSettingsList.innerHTML = `
+      <div class="admin-directory-empty">
+        <span class="admin-directory-empty-icon"><i class="fa-solid fa-chalkboard" aria-hidden="true"></i></span>
+        <strong>No classes found</strong>
+        <p>${query ? "Try another search term." : "Create the first class to start organizing students and teachers."}</p>
+        <button class="admin-directory-add-btn" type="button" data-class-settings-create-empty>
+          <i class="fa-solid fa-plus" aria-hidden="true"></i>
+          <span>Create class</span>
+        </button>
+      </div>
+    `;
+    classSettingsList.querySelector("[data-class-settings-create-empty]")?.addEventListener("click", () => {
+      handleAddChannel("classes");
+    });
     return;
   }
-  await Promise.all(classChannels.map((ch) => ensureClassMeta(ch.id)));
   classSettingsList.innerHTML = classChannels
     .map((ch) => {
       const meta = classMetaCache.get(ch.id) || {};
@@ -14420,6 +15141,8 @@ async function renderClassSettingsList(filter = "") {
       const privacy = (meta.status || (ch.is_public === false ? "private" : "public")).toLowerCase();
       const capacityDisplay = meta.capacity > 0 ? String(meta.capacity) : "Unlimited";
       const teachers = String(meta.teacher_names || "").trim();
+      const teacherCount = teachers ? teachers.split(",").map((item) => item.trim()).filter(Boolean).length : 0;
+      const studentCount = Number(meta.total_students ?? 0);
       const teacherLabel = teachers
         ? `<div class="class-card-teachers">
             <span>Teacher:</span>
@@ -14434,8 +15157,11 @@ async function renderClassSettingsList(filter = "") {
               ${teacherLabel}
             </div>
             <div class="class-card-header-actions">
-              <span class="class-tag ${privacy} visibility-badge${isDeactivated ? " deactivated" : ""}">
-                ${isDeactivated ? "Deactivated" : privacy.charAt(0).toUpperCase() + privacy.slice(1)}
+              <span class="class-tag ${privacy} visibility-badge">
+                ${privacy.charAt(0).toUpperCase() + privacy.slice(1)}
+              </span>
+              <span class="class-tag ${isDeactivated ? "deactivated" : "active"}">
+                ${isDeactivated ? "Deactivated" : "Active"}
               </span>
               <button class="class-card-add-teacher" data-channel-id="${escapeHtml(ch.id)}" type="button" title="Add teacher">
                 <i class="fa-solid fa-user-plus"></i>
@@ -14445,8 +15171,15 @@ async function renderClassSettingsList(filter = "") {
               </button>
             </div>
           </div>
+          <div class="class-card-metrics">
+            <span><strong>${escapeHtml(String(studentCount))}</strong> Students</span>
+            <span><strong>${escapeHtml(String(teacherCount))}</strong> Teachers</span>
+            <span><strong>${escapeHtml(capacityDisplay)}</strong> Capacity</span>
+          </div>
           <div class="class-card-actions">
             <button class="ses-btn ses-btn-primary class-settings-open" type="button">Open</button>
+            <button class="ses-btn ses-btn-ghost class-settings-edit" data-id="${escapeHtml(ch.id)}" type="button">Edit</button>
+            <button class="ses-btn ses-btn-ghost class-card-add-teacher" data-channel-id="${escapeHtml(ch.id)}" type="button">Assign</button>
           </div>
           <div class="class-settings-details hidden" data-channel-id="${escapeHtml(ch.id)}">
             <div class="class-settings-row">
@@ -14504,6 +15237,24 @@ async function renderClassSettingsList(filter = "") {
     });
   });
   document.addEventListener("click", handleClassSettingsOutsideClick);
+}
+
+async function openClassSettingsAssignModal(channelId) {
+  if (!channelAssignModal || !channelId) return;
+  if (!(isAdminUser() || isTeacherUser())) {
+    showToast("Only teachers or admins can add members");
+    return;
+  }
+  const ch = getChannelById(channelId);
+  if (!ch) return;
+  await loadUserDirectory();
+  await fetchChannelMembers(ch.id);
+  if (channelAssignTitle) channelAssignTitle.textContent = `Assign members to ${ch.name}`;
+  channelAssignModal.dataset.channelId = ch.id;
+  channelAssignSelection = new Set();
+  if (channelAssignSearch) channelAssignSearch.value = "";
+  renderChannelAssignList("");
+  channelAssignModal.classList.remove("hidden");
 }
 
 function handleClassSettingsOutsideClick(event) {
@@ -14718,6 +15469,14 @@ function updateCardVisibilityBadge(card, status) {
 function hideAdminOverlays() {
   hideSchoolSettingsCard();
   collapseClassSettingsView();
+  if (activeRegistrationModal) {
+    closeRegistrationModal(
+      activeRegistrationModal,
+      activeRegistrationModal === studentRegisterModal ? studentRegisterError : teacherRegisterError
+    );
+  } else {
+    setRegistrationPageVisible(false);
+  }
 }
 
 
@@ -16782,12 +17541,14 @@ async function loadChannelsForWorkspace(workspaceId) {
     if (!isSuper) {
       if (currentWorkspaceId && resolvedWorkspaceId && currentWorkspaceId !== resolvedWorkspaceId) {
         clearWorkspaceSpecificCaches(currentWorkspaceId);
+        resetNotificationBadge();
       }
       currentWorkspaceId = resolvedWorkspaceId;
       if (typeof window !== "undefined") {
         window.currentWorkspaceId = resolvedWorkspaceId;
         window.selectedWorkspaceId = resolvedWorkspaceId;
       }
+      refreshNotificationBadge();
     }
     const fetchedChannels = await fetchJSON(`/api/channels${wsParam}`, { headers });
     channels = Array.isArray(fetchedChannels)
@@ -16962,6 +17723,7 @@ const liveHubView = document.getElementById("liveHubView");
 const liveRoomView = document.getElementById("liveRoomView");
 const liveHostBtn = document.getElementById("liveHostBtn");
 const liveCreateBtn = document.getElementById("liveCreateBtn");
+let liveHeaderLaunchBtn = null;
 const livePanelSubtitle = document.getElementById("livePanelSubtitle");
 const liveSessionsHeading = document.getElementById("liveSessionsHeading");
 const liveWorkspaceTitle = document.getElementById("liveWorkspaceTitle");
@@ -17070,6 +17832,7 @@ const classSchoolDetailPostal = document.getElementById("classSchoolDetailPostal
 const classSchoolDetailCountry = document.getElementById("classSchoolDetailCountry");
 const openClassSettingsBtn = document.getElementById("openClassSettings");
 const classSettingsPage = document.getElementById("classSettingsPage");
+const adminRegistrationPage = document.getElementById("adminRegistrationPage");
 const classSettingsList = document.getElementById("classSettingsList");
 const classSettingsClose = document.getElementById("classSettingsClose");
 const classSettingsSearch = document.getElementById("classSettingsSearch");
@@ -17094,6 +17857,9 @@ let schoolSettingsPreviousChannelId = null;
 let releaseSchoolSettingsTrap = null;
 let classSettingsPreviousChannelId = null;
 let releaseClassSettingsTrap = null;
+let registrationPreviousChannelId = null;
+let activeRegistrationModal = null;
+let registrationViewSnapshot = null;
 let classSettingsHeaderBackup = null;
 let classSettingsActiveCard = null;
 let classSettingsDeleteTarget = null;
@@ -18318,6 +19084,7 @@ async function showDirectoryList(role, options = {}) {
   channelSearchTerm = "";
 
   const label = role === "teacher" ? "Teachers" : "Students";
+  setActiveAdminRailItem(role === "teacher" ? "openTeachersList" : "openStudentsList");
   if (headerChannelName) headerChannelName.textContent = label;
   if (headerChannelTopic) headerChannelTopic.textContent = `Registered ${label.toLowerCase()}`;
   if (headerChannelPrivacy) {
@@ -18385,21 +19152,141 @@ function appendDetailItem(container, label, value) {
   container.appendChild(item);
 }
 
+function getDirectoryDisplayName(user = {}) {
+  return (user.name || `${user.firstName || ""} ${user.lastName || ""}`).trim() || "User";
+}
+
+function filterDirectoryUsers(list = []) {
+  const query = String(directorySearchTerm || "").trim().toLowerCase();
+  return (Array.isArray(list) ? list : []).filter((user) => {
+    const active = isEnrollmentActive(user.courseStart, user.courseEnd);
+    if (directoryStatusFilter === "active" && !active) return false;
+    if (directoryStatusFilter === "inactive" && active) return false;
+    if (!query) return true;
+    const haystack = [
+      getDirectoryDisplayName(user),
+      user.email,
+      user.username,
+      user.courseLevel,
+      getClassesForUser(user.id || user.userId || user.email || "")
+        .map((item) => item.channelName || item.channelId || "")
+        .join(" ")
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(query);
+  });
+}
+
+function buildDirectoryMetricCard(icon, value, label, tone = "blue") {
+  const card = document.createElement("article");
+  card.className = `admin-directory-stat admin-directory-stat-${tone}`;
+  card.innerHTML = `
+    <span class="admin-directory-stat-icon"><i class="fa-solid ${icon}" aria-hidden="true"></i></span>
+    <span class="admin-directory-stat-value">${escapeHtml(String(value ?? 0))}</span>
+    <span class="admin-directory-stat-label">${escapeHtml(label)}</span>
+  `;
+  return card;
+}
+
+function setActiveAdminRailItem(itemId) {
+  document.querySelectorAll("#adminRailPanel .admin-subitem").forEach((item) => {
+    const active = item.id === itemId;
+    item.classList.toggle("sidebar-item-active", active);
+    item.setAttribute("aria-selected", active ? "true" : "false");
+  });
+}
+
 function renderDirectoryRows(list, role = "") {
   if (!messagesContainer) return;
   messagesContainer.innerHTML = "";
-  const wrapper = document.createElement("div");
-  wrapper.className = "employees-list";
   const listRole = String(role || "").toLowerCase();
+  const isStudentDirectory = listRole === "student";
+  const isTeacherDirectory = listRole === "teacher";
+  const allUsers = Array.isArray(userDirectoryCache) ? userDirectoryCache : [];
+  const roleList = Array.isArray(list) ? list : [];
+  const visibleList = filterDirectoryUsers(roleList);
+  const totalStudents = allUsers.filter((u) => String(u.role || "").toLowerCase() === "student").length;
+  const totalTeachers = allUsers.filter((u) => String(u.role || "").toLowerCase() === "teacher").length;
+  const activeCount = roleList.filter((u) => isEnrollmentActive(u.courseStart, u.courseEnd)).length;
+  const inactiveCount = Math.max(0, roleList.length - activeCount);
+  const classesCount = (channels || []).filter((ch) => normalizeChannelCategory(ch.category) === "classes").length;
+  const titleLabel = isTeacherDirectory ? "Teachers" : "Students";
+  const registrationRole = isTeacherDirectory ? "teacher" : "student";
 
-  if (!Array.isArray(list) || !list.length) {
-    renderUiState(messagesContainer, {
-      message: "No users found."
-    });
-    return;
+  const shell = document.createElement("section");
+  shell.className = `admin-directory-workspace admin-directory-${listRole || "users"}`;
+
+  const toolbar = document.createElement("div");
+  toolbar.className = "admin-directory-toolbar";
+  toolbar.innerHTML = `
+    <div class="admin-directory-title-block">
+      <div class="admin-directory-title-line">
+        <h2>${escapeHtml(titleLabel)}</h2>
+        <span class="admin-directory-badge">Directory</span>
+      </div>
+      <p>Manage enrolled ${isTeacherDirectory ? "teachers" : "students"} and permissions</p>
+    </div>
+    <div class="admin-directory-controls">
+      <label class="admin-directory-search">
+        <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+        <input type="search" placeholder="Search ${escapeHtml(titleLabel.toLowerCase())}..." value="${escapeHtml(directorySearchTerm)}" aria-label="Search ${escapeHtml(titleLabel.toLowerCase())}">
+      </label>
+      <select class="admin-directory-filter" aria-label="Filter by status">
+        <option value="all"${directoryStatusFilter === "all" ? " selected" : ""}>Status: All</option>
+        <option value="active"${directoryStatusFilter === "active" ? " selected" : ""}>Active</option>
+        <option value="inactive"${directoryStatusFilter === "inactive" ? " selected" : ""}>Inactive</option>
+      </select>
+      <button class="admin-directory-add-btn" type="button">
+        <i class="fa-solid fa-plus" aria-hidden="true"></i>
+        <span>Add ${isTeacherDirectory ? "Teacher" : "Student"}</span>
+      </button>
+    </div>
+  `;
+  shell.appendChild(toolbar);
+
+  const stats = document.createElement("div");
+  stats.className = "admin-directory-stats";
+  stats.appendChild(buildDirectoryMetricCard("fa-users", roleList.length, `Total ${titleLabel}`, "blue"));
+  stats.appendChild(buildDirectoryMetricCard("fa-circle-check", activeCount, `Active ${titleLabel}`, "green"));
+  stats.appendChild(buildDirectoryMetricCard("fa-circle-pause", inactiveCount, `Inactive ${titleLabel}`, "amber"));
+  stats.appendChild(buildDirectoryMetricCard("fa-chalkboard-user", totalTeachers, "Teachers", "purple"));
+  stats.appendChild(buildDirectoryMetricCard("fa-layer-group", classesCount, "Classes", "teal"));
+  shell.appendChild(stats);
+
+  const panel = document.createElement("div");
+  panel.className = "admin-directory-list-panel";
+  const panelHead = document.createElement("div");
+  panelHead.className = "admin-directory-list-head";
+  panelHead.innerHTML = `
+    <div>
+      <span class="admin-directory-kicker">${escapeHtml(titleLabel)} list</span>
+      <strong>${escapeHtml(String(visibleList.length))} ${visibleList.length === 1 ? "record" : "records"}</strong>
+    </div>
+    <span class="admin-directory-sync"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i> Workspace scoped</span>
+  `;
+  panel.appendChild(panelHead);
+
+  const wrapper = document.createElement("div");
+  wrapper.className = "employees-list admin-directory-list";
+
+  if (!roleList.length || !visibleList.length) {
+    const empty = document.createElement("div");
+    empty.className = "admin-directory-empty";
+    empty.innerHTML = `
+      <span class="admin-directory-empty-icon"><i class="fa-solid fa-user-graduate" aria-hidden="true"></i></span>
+      <strong>${roleList.length ? "No matching users found" : `No ${titleLabel.toLowerCase()} yet`}</strong>
+      <p>${roleList.length ? "Try changing the search or status filter." : `Create the first ${isTeacherDirectory ? "teacher" : "student"} profile for this school.`}</p>
+      <button class="admin-directory-add-btn" type="button">
+        <i class="fa-solid fa-plus" aria-hidden="true"></i>
+        <span>Add ${isTeacherDirectory ? "Teacher" : "Student"}</span>
+      </button>
+    `;
+    wrapper.appendChild(empty);
   }
 
-  list.forEach((u) => {
+  visibleList.forEach((u) => {
     const row = document.createElement("div");
     row.className = "employee-row";
     let detailRow = null;
@@ -18419,26 +19306,25 @@ function renderDirectoryRows(list, role = "") {
     avatar.className = "employee-avatar";
     applyAvatarToNode(
       avatar,
-      generateInitials(u.name || `${u.firstName || ""} ${u.lastName || ""}`),
+      generateInitials(getDirectoryDisplayName(u)),
       u.avatarUrl,
-      u.name || "",
+      getDirectoryDisplayName(u),
       userRole
     );
 
     if (isDirectoryCard) {
       const nameEl = document.createElement("div");
       nameEl.className = "employee-name";
-      nameEl.textContent =
-        (u.name || `${u.firstName || ""} ${u.lastName || ""}`).trim() || "User";
+      nameEl.textContent = getDirectoryDisplayName(u);
 
       const nameCol = document.createElement("div");
       nameCol.className = "student-name-col";
       nameCol.appendChild(nameEl);
-
-      const emailCol = document.createElement("div");
-      emailCol.className = "student-email-col";
-      emailCol.textContent = u.email || "—";
-      emailCol.title = u.email || "";
+      const emailEl = document.createElement("div");
+      emailEl.className = "student-email-col";
+      emailEl.textContent = u.email || "—";
+      emailEl.title = u.email || "";
+      nameCol.appendChild(emailEl);
 
       const statusCol = document.createElement("div");
       statusCol.className = "student-status-col";
@@ -18525,15 +19411,29 @@ function renderDirectoryRows(list, role = "") {
         startDirectDmWithUser({ ...u, id: userId });
       });
 
+      const moreBtn = document.createElement("button");
+      moreBtn.type = "button";
+      moreBtn.className = "student-more-btn";
+      moreBtn.innerHTML = '<i class="fa-solid fa-ellipsis" aria-hidden="true"></i>';
+      moreBtn.setAttribute("aria-label", "More actions");
+      moreBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        showToast("More actions menu coming soon.");
+      });
+
+      const actions = document.createElement("div");
+      actions.className = "student-card-actions";
+      actions.appendChild(dmBtn);
+      actions.appendChild(editBtn);
+      actions.appendChild(addBtn);
+      actions.appendChild(moreBtn);
+
       row.appendChild(avatar);
       row.appendChild(nameCol);
-      row.appendChild(emailCol);
       row.appendChild(statusCol);
       row.appendChild(activeBadge);
       row.appendChild(classesWrap);
-      row.appendChild(editBtn);
-      row.appendChild(addBtn);
-      row.appendChild(dmBtn);
+      row.appendChild(actions);
 
       detailRow = document.createElement("div");
       detailRow.className = "directory-detail-row";
@@ -18607,7 +19507,37 @@ function renderDirectoryRows(list, role = "") {
     }
   });
 
-  messagesContainer.appendChild(wrapper);
+  panel.appendChild(wrapper);
+  shell.appendChild(panel);
+  messagesContainer.appendChild(shell);
+
+  shell.querySelectorAll(".admin-directory-add-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+      const modal = registrationRole === "teacher" ? teacherRegisterModal : studentRegisterModal;
+      const error = registrationRole === "teacher" ? teacherRegisterError : studentRegisterError;
+      openRegistrationModal(modal, error, registrationRole);
+    });
+  });
+  const searchInput = shell.querySelector(".admin-directory-search input");
+  if (searchInput) {
+    searchInput.addEventListener("input", (event) => {
+      directorySearchTerm = event.target.value || "";
+      renderDirectoryRows(roleList, listRole);
+      const nextInput = messagesContainer.querySelector(".admin-directory-search input");
+      if (nextInput) {
+        nextInput.focus({ preventScroll: true });
+        const pos = nextInput.value.length;
+        nextInput.setSelectionRange(pos, pos);
+      }
+    });
+  }
+  const statusSelect = shell.querySelector(".admin-directory-filter");
+  if (statusSelect) {
+    statusSelect.addEventListener("change", (event) => {
+      directoryStatusFilter = event.target.value || "all";
+      renderDirectoryRows(roleList, listRole);
+    });
+  }
 }
 
 function exitDirectoryView() {
@@ -18835,10 +19765,54 @@ function getUnreadCount(channelId) {
 }
 
 function updateNotificationBadgeVisibility() {
-  if (!notificationBadge) return;
-  const txt = (notificationBadge.textContent || "").trim();
-  const show = txt && txt !== "0";
-  notificationBadge.style.display = show ? "inline-flex" : "none";
+  const count = Number.parseInt(String(notificationBadge?.dataset.count || notificationBadge?.textContent || "0"), 10) || 0;
+  updateNotificationBadge(count);
+}
+
+function updateDocumentNotificationTitle(count) {
+  const value = Math.max(0, Number(count) || 0);
+  document.title = value > 0 ? `(${value > 99 ? "99+" : value}) ${BASE_DOCUMENT_TITLE}` : BASE_DOCUMENT_TITLE;
+}
+
+function updateNotificationsHeaderCount(count) {
+  const value = Math.max(0, Number(count) || 0);
+  document.querySelectorAll(".notif-unread-badge").forEach((badge) => {
+    badge.textContent = `${value > 99 ? "99+" : value} unread`;
+    badge.classList.toggle("is-live", value > 0);
+  });
+}
+
+function updateNotificationBadge(count) {
+  const value = Math.max(0, Number(count) || 0);
+  const badge = document.querySelector("[data-notification-badge]") || notificationBadge;
+  if (!badge) {
+    updateDocumentNotificationTitle(value);
+    return;
+  }
+  badge.dataset.count = String(value);
+  badge.textContent = value > 99 ? "99+" : String(value);
+  badge.hidden = value <= 0;
+  badge.classList.toggle("hidden", value <= 0);
+  badge.style.display = value > 0 ? "inline-flex" : "none";
+  updateNotificationsHeaderCount(value);
+  updateDocumentNotificationTitle(value);
+}
+
+function resetNotificationBadge() {
+  updateNotificationBadge(0);
+}
+
+async function refreshNotificationBadge() {
+  try {
+    const data = await fetchJSON("/api/notifications/unread-count");
+    const count = Number(data?.unreadCount || 0);
+    updateNotificationBadge(count);
+    return count;
+  } catch (err) {
+    console.warn("Notification unread count refresh failed", err);
+    resetNotificationBadge();
+    return 0;
+  }
 }
 
 function updateMessageBadgeVisibility() {
@@ -22589,6 +23563,12 @@ async function renderChannels() {
   syncStaticChannelItems();
   attachStaticChannelMoreButtons();
   updateStaticChannelMoreVisibility();
+  if (typeof bindUserHiddenSchoolTools === "function") {
+    bindUserHiddenSchoolTools();
+  }
+  if (typeof hideScheduleSchoolTool === "function") {
+    hideScheduleSchoolTool();
+  }
   bindStaticChannelClicks();
   setupSidebarKeyboardNav();
   updatePrivacyRulesNavVisibility();
@@ -23011,48 +23991,6 @@ function renderWorkspaces() {
   });
 }
 
-function setupSidebarKeyboardNav() {
-  const items = Array.from(document.querySelectorAll('.sidebar-item[role="button"]')).filter(
-    (el) => el.offsetParent !== null
-  );
-  if (!items.length) return;
-
-  let activeIndex = items.findIndex((el) => el.classList.contains("sidebar-item-active"));
-  if (activeIndex < 0) activeIndex = 0;
-
-  items.forEach((el, i) => {
-    el.tabIndex = i === activeIndex ? 0 : -1;
-    if (el.dataset.kbdBound === "1") return;
-    el.dataset.kbdBound = "1";
-    el.addEventListener("keydown", (e) => {
-      const idx = items.indexOf(el);
-      if (idx === -1) return;
-      const focusAt = (nextIdx) => {
-        const clamped = Math.max(0, Math.min(items.length - 1, nextIdx));
-        items.forEach((n) => (n.tabIndex = -1));
-        items[clamped].tabIndex = 0;
-        items[clamped].focus();
-      };
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        focusAt(idx + 1);
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        focusAt(idx - 1);
-      } else if (e.key === "Home") {
-        e.preventDefault();
-        focusAt(0);
-      } else if (e.key === "End") {
-        e.preventDefault();
-        focusAt(items.length - 1);
-      } else if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        el.click();
-      }
-    });
-  });
-}
-
 async function handleAddWorkspace() {
   if (!isSuperAdmin()) {
     showToast("Only super admins can create workspaces");
@@ -23115,7 +24053,6 @@ async function handleWorkspaceSelect(wsId) {
   }
   selectChannel(currentChannelId);
 }
-
 
 function renderChannelHeader(channelId) {
   const ch = getChannelById(channelId);
@@ -23258,7 +24195,12 @@ function renderChannelHeader(channelId) {
   const isClassesScopedHeader = isClassesScopedHeaderChannel(ch);
   const canManageClassesHeader = canManageClassesHeaderControls(ch);
   const showRoleTabs =
-    !isPrivacy && !isTeacherTaskChannel && !isStudentTaskChannel && !isWordmeaning && !isAnnouncementsChannel && !isSpeakingPracticeChannel;
+    !isPrivacy &&
+    !isTeacherTaskChannel &&
+    !isStudentTaskChannel &&
+    !isWordmeaning &&
+    !isAnnouncementsChannel &&
+    !isSpeakingPracticeChannel;
   setChannelRoleTabsVisible(showRoleTabs);
   if (channelRoleTabs) {
     channelRoleTabs.classList.toggle("hidden", !showRoleTabs);
@@ -28548,101 +29490,6 @@ const pinnedSidebarCount = document.getElementById("pinnedSidebarCount");
 const pinnedToggleBtn = document.getElementById("pinnedToggleBtn");
 const pinnedSidebarList = document.getElementById("pinnedSidebarList");
 
-const PINNED_COLLAPSE_KEY = "worknest_pinned_sidebar_collapsed_v2";
-const SIDEBAR_SECTION_COLLAPSE_KEY = "worknest_sidebar_section_collapsed_v1";
-let sidebarSectionCollapseState = {};
-
-function setPinnedCollapsed(collapsed) {
-  const section = document.getElementById("pinnedSidebarSection");
-  if (!section) return;
-  section.classList.toggle("is-collapsed", !!collapsed);
-  localStorage.setItem(PINNED_COLLAPSE_KEY, collapsed ? "1" : "0");
-}
-
-function initPinnedCollapse() {
-  const btn = document.getElementById("pinnedToggleBtn");
-  if (!btn) return;
-
-  const saved = localStorage.getItem(PINNED_COLLAPSE_KEY) === "1";
-  setPinnedCollapsed(saved);
-
-  btn.addEventListener("click", () => {
-    const section = document.getElementById("pinnedSidebarSection");
-    const nowCollapsed = !section?.classList.contains("is-collapsed");
-    setPinnedCollapsed(nowCollapsed);
-  });
-}
-
-function loadSidebarSectionCollapseState() {
-  try {
-    const raw = localStorage.getItem(SIDEBAR_SECTION_COLLAPSE_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch (err) {
-    console.warn("Could not load sidebar collapse state", err);
-    return {};
-  }
-}
-
-function saveSidebarSectionCollapseState(state) {
-  try {
-    localStorage.setItem(SIDEBAR_SECTION_COLLAPSE_KEY, JSON.stringify(state));
-  } catch (err) {
-    console.warn("Could not save sidebar collapse state", err);
-  }
-}
-
-function setSidebarSectionCollapsed(sectionId, collapsed) {
-  if (!sectionId) return;
-  const section = document.getElementById(sectionId);
-  if (!section) return;
-  section.classList.toggle("is-collapsed", !!collapsed);
-  const header = section.querySelector(".sidebar-section-header");
-  if (header) header.setAttribute("aria-expanded", collapsed ? "false" : "true");
-  sidebarSectionCollapseState[sectionId] = !!collapsed;
-  saveSidebarSectionCollapseState(sidebarSectionCollapseState);
-  setupSidebarKeyboardNav();
-}
-
-function initSidebarSectionCollapsibles() {
-  sidebarSectionCollapseState = loadSidebarSectionCollapseState();
-  document.querySelectorAll(".sidebar-section[data-collapsible='true']").forEach((section) => {
-    const header = section.querySelector(".sidebar-section-header");
-    const sectionId = section.id;
-    if (!header || !sectionId) return;
-
-    const list = section.querySelector(".sidebar-items");
-    if (list?.id) header.setAttribute("aria-controls", list.id);
-    header.setAttribute("role", "button");
-    header.setAttribute("tabindex", "0");
-
-    if (sidebarSectionCollapseState[sectionId]) {
-      section.classList.add("is-collapsed");
-    }
-    header.setAttribute("aria-expanded", section.classList.contains("is-collapsed") ? "false" : "true");
-
-    if (header.dataset.collapseBound === "1") return;
-
-    const toggle = () => {
-      const nextCollapsed = !section.classList.contains("is-collapsed");
-      setSidebarSectionCollapsed(sectionId, nextCollapsed);
-    };
-
-    header.addEventListener("click", (e) => {
-      if (e.target.closest("button")) return;
-      toggle();
-    });
-
-    header.addEventListener("keydown", (e) => {
-      if (e.key !== "Enter" && e.key !== " ") return;
-      if (e.target.closest("button")) return;
-      e.preventDefault();
-      toggle();
-    });
-
-    header.dataset.collapseBound = "1";
-  });
-}
-
 function openPinnedDrawer() {
   if (!pinnedDrawer) return;
   pinnedDrawer.hidden = false;
@@ -30905,40 +31752,13 @@ if (schoolLogoInput) {
     e.target.value = "";
   });
 }
-if (openStudentsList) {
-  openStudentsList.addEventListener("click", () => {
-    hideAdminOverlays();
-    showDirectoryList("student", { keepEmailHeader: true });
-  });
+if (typeof bindSidebarAdminActions === "function") {
+  bindSidebarAdminActions();
 }
-if (openTeachersList) {
-  openTeachersList.addEventListener("click", () => {
-    hideAdminOverlays();
-    showDirectoryList("teacher", { keepEmailHeader: true });
-  });
+if (typeof window !== "undefined") {
+  window.openClassSettingsAdminPage = openClassSettingsAdminPage;
 }
-if (openPrivacyRules) {
-  openPrivacyRules.addEventListener("click", () => {
-    hideAdminOverlays();
-    if (openPrivacyRules.dataset.channelName) {
-      openStaticChannel(openPrivacyRules);
-    } else {
-      openStaticChannel({
-        dataset: { channelName: "Privacy & Rules", channelCategory: "tools" }
-      });
-    }
-  });
-}
-if (openStudentRegistration) {
-  openStudentRegistration.addEventListener("click", () =>
-    openRegistrationModal(studentRegisterModal, studentRegisterError, "student")
-  );
-}
-if (openTeacherRegistration) {
-  openTeacherRegistration.addEventListener("click", () =>
-    openRegistrationModal(teacherRegisterModal, teacherRegisterError, "teacher")
-  );
-}
+mountAdminToolsToRailPanel();
 if (studentRegisterSubmit) {
   studentRegisterSubmit.addEventListener("click", () =>
     submitRegistration({
@@ -31211,14 +32031,14 @@ if (teacherRegisterClose) {
 }
 if (studentRegisterModal) {
   studentRegisterModal.addEventListener("click", (e) => {
-    if (e.target === studentRegisterModal) {
+    if (e.target === studentRegisterModal && !studentRegisterModal.classList.contains("admin-registration-inline")) {
       closeRegistrationModal(studentRegisterModal, studentRegisterError);
     }
   });
 }
 if (teacherRegisterModal) {
   teacherRegisterModal.addEventListener("click", (e) => {
-    if (e.target === teacherRegisterModal) {
+    if (e.target === teacherRegisterModal && !teacherRegisterModal.classList.contains("admin-registration-inline")) {
       closeRegistrationModal(teacherRegisterModal, teacherRegisterError);
     }
   });
@@ -31415,7 +32235,8 @@ if (loginOverlay && !sessionUser) {
 }
 
 // set initial badge visibility
-updateNotificationBadgeVisibility();
+resetNotificationBadge();
+refreshNotificationBadge();
 updateMessageBadgeVisibility();
 initRailDrag();
 
@@ -31465,8 +32286,8 @@ if (adminDock && !adminDock.dataset.a11yBound) {
   });
 }
 
-if (allUnreadsBtn) {
-  allUnreadsBtn.addEventListener("click", openAllUnreads);
+if (typeof bindSidebarPrimaryActions === "function") {
+  bindSidebarPrimaryActions();
 }
 if (closeAllUnreadsBtn) {
   closeAllUnreadsBtn.addEventListener("click", closeAllUnreads);
@@ -31496,15 +32317,8 @@ if (messagesContainer) {
   });
 }
 
-if (sidebarScroll) {
-  sidebarScroll.addEventListener(
-    "scroll",
-    () => {
-      if (isRestoringView) return;
-      persistSidebarScroll(sidebarScroll.scrollTop);
-    },
-    { passive: true }
-  );
+if (typeof bindSidebarScrollPersistence === "function") {
+  bindSidebarScrollPersistence();
 }
 
 if (typeof window !== "undefined") {
@@ -31888,33 +32702,107 @@ function updateFilesRangeButtonsState() {
 
 function updateFilesExtraFilters() {
   if (!filesExtraFilters) return;
-  const showTypeRow = filesCategoryFilter !== "all";
-  filesExtraFilters.classList.toggle("hidden", !showTypeRow);
+  const showTypeRow = true;
+  filesExtraFilters.classList.toggle("hidden", false);
   if (filesTypeRow) {
-    filesTypeRow.classList.toggle("hidden", !showTypeRow);
+    filesTypeRow.classList.toggle("hidden", false);
   }
-  const showRangeRow = showTypeRow && filesTypeFilter !== "all";
   if (filesRangeRow) {
-    filesRangeRow.classList.toggle("hidden", !showRangeRow);
+    filesRangeRow.classList.toggle("hidden", false);
   }
   updateFilesTypeButtonsState();
   updateFilesRangeButtonsState();
 }
 
 if (filesList) {
+  filesList.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    if (e.target.closest("[data-action], button, input, a, select, textarea")) return;
+    const row = e.target.closest(".files-table-row");
+    if (!row) return;
+    e.preventDefault();
+    openFilesDrawerFromCache(row.getAttribute("data-file-id") || "");
+  });
+
   filesList.addEventListener("click", async (e) => {
     const btn = e.target.closest("[data-action]");
+    const row = e.target.closest(".files-table-row");
+    if (!btn && row) {
+      openFilesDrawerFromCache(row.getAttribute("data-file-id") || "");
+      return;
+    }
     if (!btn) return;
     const action = btn.getAttribute("data-action");
-    const card = btn.closest(".file-card, .file-card-compact, .hw-card");
-    if (!card) return;
-    const url = card.getAttribute("data-url") || "";
+    if (action === "close-drawer") {
+      closeFilesDrawerDom();
+      return;
+    }
+    if (action === "select-all-files") {
+      const checked = !!btn.checked;
+      selectedFileIds = checked ? new Set(filesCache.map((file) => file.fileId).filter(Boolean)) : new Set();
+      renderFilesPanel();
+      return;
+    }
+    if (action === "bulk-clear") {
+      selectedFileIds = new Set();
+      renderFilesPanel();
+      return;
+    }
+    if (action === "bulk-download") {
+      filesCache.filter((file) => selectedFileIds.has(file.fileId)).forEach((file) => {
+        const href = file.downloadUrl || file.url || "";
+        if (!href) return;
+        const a = document.createElement("a");
+        a.href = href;
+        a.download = "";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      });
+      return;
+    }
+    if (action === "bulk-pin") {
+      if (!isAdminUser() && !isTeacherUser()) return;
+      const selected = filesCache.filter((file) => selectedFileIds.has(file.fileId) && file.fileId);
+      await Promise.all(selected.map((file) => pinFile(file.fileId, true).catch(() => null)));
+      await renderFilesPanel();
+      return;
+    }
+    if (action === "bulk-move") {
+      if (!isAdminUser() && !isTeacherUser()) return;
+      showToast("Move category/location is coming soon.");
+      return;
+    }
+    if (action === "bulk-delete") {
+      if (!isAdminUser() && !isTeacherUser()) return;
+      const ok = await openConfirmModal({
+        title: "Delete selected files?",
+        message: `Remove ${selectedFileIds.size} selected file(s) from the Files library?`,
+        confirmText: "Delete",
+        cancelText: "Cancel",
+        danger: true
+      });
+      if (!ok) return;
+      const selected = filesCache.filter((file) => selectedFileIds.has(file.fileId) && file.fileId);
+      await Promise.all(selected.map((file) => deleteFile(file.fileId).catch(() => null)));
+      selectedFileIds = new Set();
+      await renderFilesPanel();
+      return;
+    }
+    const card = btn.closest(".file-card, .file-card-compact, .files-table-row, .hw-card");
+    if (action === "upload-empty") {
+      if (fileInput) fileInput.click();
+      return;
+    }
+    const buttonFileId = btn.getAttribute("data-file-id") || "";
+    if (!card && !buttonFileId) return;
+    const url = card?.getAttribute("data-url") || "";
     const channelId =
-      card.getAttribute("data-channel-id") ||
-      card.closest(".hw-card")?.getAttribute("data-channel-id") ||
+      card?.getAttribute("data-channel-id") ||
+      card?.closest(".hw-card")?.getAttribute("data-channel-id") ||
       "";
-    const messageId = card.getAttribute("data-message-id") || "";
-    const fileId = card.getAttribute("data-file-id") || "";
+    const messageId = card?.getAttribute("data-message-id") || "";
+    const fileId = buttonFileId || card.getAttribute("data-file-id") || "";
     const canManage = isAdminUser() || isTeacherUser();
     const fileRef =
       filesCache.find((f) => f.fileId === fileId) ||
@@ -31931,6 +32819,19 @@ if (filesList) {
         messageId
       };
 
+    if (action === "select-file") {
+      if (btn.checked) selectedFileIds.add(fileId);
+      else selectedFileIds.delete(fileId);
+      activeFilesMenuId = "";
+      renderFilesPanel();
+      return;
+    }
+    if (action === "more") {
+      activeFilesMenuId = activeFilesMenuId === fileId ? "" : fileId;
+      renderFilesPanel();
+      return;
+    }
+
     if (action === "open-homework") {
       if (!channelId) return;
       showPanel("chatPanel");
@@ -31938,14 +32839,16 @@ if (filesList) {
       return;
     }
     if (action === "open") {
-      if (url) window.open(url, "_blank", "noopener");
+      const href = fileRef.previewUrl || fileRef.url || fileRef.downloadUrl || url;
+      if (href) window.open(href, "_blank", "noopener");
       logFileEvent("view", fileRef);
       return;
     }
     if (action === "download") {
-      if (!url) return;
+      const href = fileRef.downloadUrl || fileRef.url || url;
+      if (!href) return;
       const a = document.createElement("a");
-      a.href = url;
+      a.href = href;
       a.download = "";
       document.body.appendChild(a);
       a.click();
@@ -32434,20 +33337,8 @@ if (threadVoiceRecordBtn) {
   threadVoiceRecordBtn.addEventListener("touchcancel", cancel);
 }
 
-if (addChannelBtn) {
-  addChannelBtn.addEventListener("click", () => handleAddChannel("classes"));
-}
-if (addConversationBtn) {
-  addConversationBtn.addEventListener("click", () => handleAddChannel("clubs"));
-}
-if (addExamGroupBtn) {
-  addExamGroupBtn.addEventListener("click", () => handleAddChannel("exams"));
-}
-if (addAppBtn) {
-  addAppBtn.addEventListener("click", () => handleAddChannel("tools"));
-}
-if (addDmBtn) {
-  addDmBtn.addEventListener("click", openDmCreateModal);
+if (typeof bindSidebarPrimaryActions === "function") {
+  bindSidebarPrimaryActions();
 }
 if (workspaceAddBtn) {
   workspaceAddBtn.addEventListener("click", handleAddWorkspace);
@@ -32589,6 +33480,36 @@ function getRegistrationWorkspaceId() {
   return currentWorkspaceId || null;
 }
 
+function setRegistrationPageVisible(visible) {
+  if (!adminRegistrationPage) return;
+  if (visible && !registrationViewSnapshot) {
+    registrationViewSnapshot = {
+      messagesHidden: !!messagesContainer?.classList.contains("hidden"),
+      composerHidden: !!composer?.classList.contains("hidden"),
+      typingHidden: !!typingIndicator?.classList.contains("hidden"),
+      newMsgsHidden: !!newMsgsBtn?.classList.contains("hidden"),
+      chatHeaderHidden: !!chatHeader?.classList.contains("hidden")
+    };
+  }
+  adminRegistrationPage.classList.toggle("hidden", !visible);
+  adminRegistrationPage.setAttribute("aria-hidden", visible ? "false" : "true");
+  if (visible) {
+    if (messagesContainer) messagesContainer.classList.add("hidden");
+    if (composer) composer.classList.add("hidden");
+    if (typingIndicator) typingIndicator.classList.add("hidden");
+    if (newMsgsBtn) newMsgsBtn.classList.add("hidden");
+    chatHeader?.classList.add("hidden");
+    return;
+  }
+  const snapshot = registrationViewSnapshot;
+  if (messagesContainer) messagesContainer.classList.toggle("hidden", !!snapshot?.messagesHidden);
+  if (composer) composer.classList.toggle("hidden", !!snapshot?.composerHidden);
+  if (typingIndicator) typingIndicator.classList.toggle("hidden", !!snapshot?.typingHidden);
+  if (newMsgsBtn) newMsgsBtn.classList.toggle("hidden", !!snapshot?.newMsgsHidden);
+  chatHeader?.classList.toggle("hidden", !!snapshot?.chatHeaderHidden);
+  registrationViewSnapshot = null;
+}
+
 function openRegistrationModal(modalEl, errorEl) {
   if (!modalEl) return;
   if (!isSchoolAdmin()) {
@@ -32601,19 +33522,47 @@ function openRegistrationModal(modalEl, errorEl) {
     return;
   }
   hideSchoolSettingsCard();
+  collapseClassSettingsView();
   showPanel("chatPanel");
+  registrationPreviousChannelId = currentChannelId;
+  if (modalEl === studentRegisterModal) {
+    setActiveAdminRailItem("openStudentRegistration");
+    persistLastView({
+      channelId: currentChannelId || null,
+      viewMode: "student-registration"
+    });
+  } else if (modalEl === teacherRegisterModal) {
+    setActiveAdminRailItem("openTeacherRegistration");
+    persistLastView({
+      channelId: currentChannelId || null,
+      viewMode: "teacher-registration"
+    });
+  }
+  if (adminRegistrationPage && modalEl.parentElement !== adminRegistrationPage) {
+    adminRegistrationPage.appendChild(modalEl);
+  }
+  if (activeRegistrationModal && activeRegistrationModal !== modalEl) {
+    activeRegistrationModal.classList.add("hidden");
+    activeRegistrationModal.style.display = "none";
+  }
+  activeRegistrationModal = modalEl;
   refreshRegistrationClassOptions().catch((err) => console.error("Registration options failed", err));
   if (errorEl) errorEl.style.display = "none";
   clearRegistrationInlineErrors();
+  setRegistrationPageVisible(true);
+  modalEl.classList.add("admin-registration-inline");
   modalEl.classList.remove("hidden");
-  modalEl.style.display = "flex";
+  modalEl.style.display = "block";
 }
 
 function closeRegistrationModal(modalEl, errorEl) {
   if (!modalEl) return;
   modalEl.classList.add("hidden");
   modalEl.style.display = "none";
+  modalEl.classList.remove("admin-registration-inline");
   if (errorEl) errorEl.style.display = "none";
+  if (activeRegistrationModal === modalEl) activeRegistrationModal = null;
+  setRegistrationPageVisible(false);
   clearRegistrationInlineErrors();
 }
 
@@ -33672,14 +34621,17 @@ async function init() {
     renderPinnedSidebar();
     setupDensityToggle();
     refreshMessageBadge();
+    const shouldRestoreSavedRail =
+      !onboardingRequired &&
+      !policyBlocked &&
+      !deepLinkTarget &&
+      !landOnHomeworkAfterLogin;
     if (onboardingRequired) {
       await openOnboardingPanel({ autoOpen: true });
     } else if (policyBlocked) {
       await openPolicyGatePanel({ refresh: true, force: true });
-    } else if (savedRailView === "email") {
-      await openEmailPanel();
-    } else if (savedRailView === "analytics") {
-      openAnalyticsPanel();
+    } else if (shouldRestoreSavedRail) {
+      await restoreSavedRailView(savedRailView, { didRestoreView });
     }
   } finally {
     hidePageLoader();

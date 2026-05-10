@@ -176,6 +176,16 @@ function ensureSchoolMailShell() {
       const view = button.dataset.mailView;
       schoolMailActiveShortcut = shortcut;
       setSesSettingsView(view);
+      if (view === "history") {
+        loadSesEmailLogs?.().catch((error) => {
+          console.warn("Failed to load email history", error);
+        });
+      } else if (view === "format") {
+        wireSesTemplateEditorUIOnce?.();
+        sesTplLoadList?.().catch((error) => {
+          console.warn("Failed to load email templates", error);
+        });
+      }
       if (button.dataset.mailFilterShortcut) {
         window.setSchoolMailFilter?.(button.dataset.mailFilterShortcut);
       } else if (["inbox", "trash", "spam", "important", "drafts"].includes(view)) {
@@ -372,6 +382,9 @@ async function ensureEmailHtmlLoaded() {
       bindSchoolEmailDomRefs();
       wireSchoolEmailSettingsControls();
       wireSchoolEmailProfilePreviewBindings();
+      if (typeof initGmailishInbox === "function") {
+        initGmailishInbox();
+      }
       return true;
     })().catch((err) => {
       emailPartialLoadPromise = null;
@@ -1431,7 +1444,7 @@ function sesTplUpdatePreview() {
 
   preview.innerHTML = `
     <div style="font-weight:800;margin-bottom:8px;">${escapeHtml(render(subject))}</div>
-    <div>${render(bodyHtml)}</div>
+    <div>${sanitizeComposeHtml(render(bodyHtml))}</div>
   `;
 }
 
@@ -1862,6 +1875,9 @@ function mountSchoolEmailUiToEmailPanel() {
   ensureSchoolMailShell();
   ensureComposeRecipientChips();
   ensureComposeRichEditor();
+  if (typeof initGmailishInbox === "function") {
+    initGmailishInbox();
+  }
   document.body.classList.remove("no-school-scroll");
   setSchoolEmailHeaderMode(false);
   setEmailHeaderChromeVisible(true);
@@ -2253,8 +2269,10 @@ async function loadEmailSettings() {
     sesRegistrationDetails.value = (sesWorkspaceProfileCache?.registrationDetails || "");
   }
 
-// --- Always start test UI empty on open/refresh ---
-clearSesTestFields({ clearBody: true });
+  const isComposeMode = !!document.querySelector(".ses-body")?.classList.contains("ses-view-sent");
+  if (!isComposeMode && !sesCurrentDraftId) {
+    clearSesTestFields({ clearBody: true });
+  }
 await updateSesBodyChrome().catch(() => {});
 await loadSesEmailLogs().catch((err) => {
   console.warn("Failed to load email history", err);
@@ -4465,6 +4483,7 @@ window.openSchoolMailDraft = openEmailDraftInCompose;
 
 // ===== Gmail-ish Inbox (vanilla) =====
 function initGmailishInbox() {
+    if (window.__schoolMailGmailishInboxReady) return true;
     const emailPanelEl = document.getElementById("emailPanel");
     const listEl = document.getElementById("inboxList");
     const countEl = document.getElementById("mbxCount");
@@ -4518,6 +4537,8 @@ function initGmailishInbox() {
     const detailReplyHideBtn = document.getElementById("detailReplyHideBtn");
     const detailReplyActions = document.getElementById("detailReplyActions");
     const detailReplies = document.getElementById("detailReplies");
+    if (!emailPanelEl || !listEl || !countEl || !mailboxEl) return false;
+    window.__schoolMailGmailishInboxReady = true;
 
     function ensureMailDetailLayout() {
       if (!detailPanel) return;

@@ -44,6 +44,7 @@ const { createCostControlService } = require('./server/services/costControl.serv
 const { createPlatformControlService } = require('./server/services/platformControl.service');
 const { createPlatformOwnerControlService } = require('./server/services/platformOwnerControl.service');
 const { createNotificationControlService } = require('./server/services/notificationControl.service');
+const { createNotificationService } = require('./server/services/notification.service');
 const { createObservabilityService } = require('./server/services/observability.service');
 const { createSupportAuditService } = require('./server/services/supportAudit.service');
 const { createRequestContextMiddleware } = require('./server/middleware/requestContext.middleware');
@@ -375,7 +376,9 @@ app.use(
     crossOriginEmbedderPolicy: false,
     crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
     crossOriginResourcePolicy: { policy: 'same-site' },
-    frameguard: { action: 'deny' },
+    // Same-origin framing is required for the Files drawer to preview PDFs served
+    // by this app. Cross-origin embedding remains blocked by SAMEORIGIN.
+    frameguard: { action: 'sameorigin' },
     referrerPolicy: { policy: 'strict-origin-when-cross-origin' }
   })
 );
@@ -981,6 +984,7 @@ function isPromiseLike(value) {
     observability: observabilityService
   });
   const supportAuditService = createSupportAuditService({ db });
+  const notificationService = createNotificationService({ db });
   const notificationControlService = createNotificationControlService({
     db,
     emailSender: sendPlatformEmail,
@@ -1007,6 +1011,9 @@ function isPromiseLike(value) {
   });
   notificationControlService.ensureSchema().catch((err) => {
     console.warn('[Notification Control] schema ensure failed:', err?.message || String(err));
+  });
+  notificationService.ensureSchema().catch((err) => {
+    console.warn('[Notifications] schema ensure failed:', err?.message || String(err));
   });
   const fileStorageService = createFileStorageService({
     adapter: fileStorageAdapter,
@@ -3597,6 +3604,39 @@ function getAuthWorkspaceId(req) {
   return val != null ? String(val) : null;
 }
 
+function getRequestWorkspaceId(req) {
+  if (req.supportSession && req.supportTargetUser && String(req.method || '').toUpperCase() === 'GET') {
+    const supportWorkspaceId = req.supportTargetUser.workspaceId || req.supportTargetUser.workspace_id || req.supportSession.workspace_id || null;
+    return supportWorkspaceId != null ? String(supportWorkspaceId).trim() : '';
+  }
+
+  const authWorkspaceId =
+    req.user?.workspaceId ||
+    req.user?.workspace_id ||
+    req.auth?.workspaceId ||
+    req.auth?.workspace_id ||
+    req.session?.workspaceId ||
+    req.session?.workspace_id ||
+    '';
+  if (String(authWorkspaceId || '').trim()) {
+    return String(authWorkspaceId).trim();
+  }
+
+  const userId = getAuthUserId(req);
+  if (!userId) return '';
+  try {
+    const row = db.prepare(`
+      SELECT workspace_id AS workspaceId
+      FROM users
+      WHERE id = ?
+      LIMIT 1
+    `).get(userId);
+    return String(row?.workspaceId || '').trim();
+  } catch (_err) {
+    return '';
+  }
+}
+
 function getAuthUserId(req) {
   if (req.supportSession && req.supportTargetUser && String(req.method || '').toUpperCase() === 'GET') {
     const supportVal = req.supportTargetUser.id || req.supportTargetUser.sub || req.supportSession.target_user_id || null;
@@ -6167,6 +6207,208 @@ app.get('/api/workspace/support-access-log', authRequired, (req, res) => {
   return res.json(supportAuditService.getWorkspaceSupportAccessLog(workspaceId, { days: 30, limit: 300 }));
 });
 
+function getNotificationRequestContext(req, res) {
+  const user = req.auth || getAuthedUser(req);
+  const workspaceId = getRequestWorkspaceId(req);
+  const userId = getAuthUserId(req);
+  const role = normalizeRoleName(user?.role || req.auth?.role || 'student');
+  if (!user || !workspaceId || !userId) {
+    res.status(401).json({ error: 'Invalid notification session' });
+    return null;
+  }
+  return { user, workspaceId, userId, role };
+}
+
+async function createWorkspaceNotificationSafe(payload = {}) {
+  try {
+    if (!payload.workspaceId || !payload.title) return null;
+    return await notificationService.createNotification(payload);
+  } catch (err) {
+    console.warn('[Notifications] create skipped:', err?.message || String(err));
+    return null;
+  }
+}
+
+function extractMentionTokens(text = '') {
+  const tokens = new Set();
+  const source = String(text || '').replace(/<[^>]+>/g, ' ');
+  const re = /(^|\s)@([a-zA-Z0-9._-]{2,64})\b/g;
+  let match;
+  while ((match = re.exec(source))) {
+    tokens.add(String(match[2] || '').toLowerCase());
+  }
+  return tokens;
+}
+
+async function createMentionNotificationsFromText({
+  workspaceId,
+  actorUserId,
+  text,
+  channelId,
+  messageId,
+  channelName
+} = {}) {
+  const tokens = extractMentionTokens(text);
+  if (!tokens.size || !workspaceId || !messageId) return;
+  const rows = db.prepare(`
+    SELECT id, username, name, email
+    FROM users
+    WHERE workspace_id = ?
+      AND id != ?
+      AND status != 'deleted'
+  `).all(String(workspaceId), String(actorUserId || ''));
+  const matched = new Set();
+  for (const row of rows) {
+    const candidates = [
+      row.username,
+      row.email ? String(row.email).split('@')[0] : '',
+      ...(String(row.name || '').split(/\s+/))
+    ].map((value) => String(value || '').trim().toLowerCase()).filter(Boolean);
+    if (!candidates.some((candidate) => tokens.has(candidate))) continue;
+    if (matched.has(row.id)) continue;
+    matched.add(row.id);
+    await createWorkspaceNotificationSafe({
+      workspaceId,
+      recipientUserId: row.id,
+      actorUserId,
+      type: 'mention',
+      title: 'You were mentioned',
+      message: channelName ? `Mentioned in ${channelName}` : 'Mentioned in a message',
+      entityType: 'message',
+      entityId: messageId,
+      priority: 'normal',
+      metadata: {
+        channelId,
+        messageId,
+        context: channelName || 'Message',
+        actionLabel: 'View'
+      }
+    });
+  }
+}
+
+app.get('/api/notifications', authRequired, async (req, res) => {
+  const ctx = getNotificationRequestContext(req, res);
+  if (!ctx) return;
+  try {
+    const filter = String(req.query.filter || 'all').trim().toLowerCase() || 'all';
+    const unreadOnly = String(req.query.unreadOnly || '').toLowerCase() === 'true';
+    const limit = req.query.limit;
+    const cursor = String(req.query.cursor || '').trim() || null;
+    const [notifications, counts, insights] = await Promise.all([
+      notificationService.listNotifications({
+        workspaceId: ctx.workspaceId,
+        userId: ctx.userId,
+        role: ctx.role,
+        filter,
+        unreadOnly,
+        limit,
+        cursor
+      }),
+      notificationService.getNotificationCounts({
+        workspaceId: ctx.workspaceId,
+        userId: ctx.userId,
+        role: ctx.role
+      }),
+      notificationService.getNotificationInsights({
+        workspaceId: ctx.workspaceId,
+        userId: ctx.userId,
+        role: ctx.role
+      })
+    ]);
+    return res.json({ notifications, counts, insights });
+  } catch (err) {
+    console.error('[Notifications] list failed:', err?.message || err);
+    return res.status(500).json({ error: 'Failed to load notifications' });
+  }
+});
+
+app.get('/api/notifications/unread-count', authRequired, async (req, res) => {
+  const ctx = getNotificationRequestContext(req, res);
+  if (!ctx) return;
+  try {
+    const unreadCount = await notificationService.getUnreadCount({
+      workspaceId: ctx.workspaceId,
+      userId: ctx.userId,
+      role: ctx.role
+    });
+    return res.json({ unreadCount });
+  } catch (err) {
+    console.error('[Notifications] unread count failed:', err?.message || err);
+    return res.status(500).json({ error: 'Failed to load unread notification count' });
+  }
+});
+
+app.get('/api/notifications/:id', authRequired, async (req, res) => {
+  const ctx = getNotificationRequestContext(req, res);
+  if (!ctx) return;
+  try {
+    const notification = await notificationService.getNotification({
+      workspaceId: ctx.workspaceId,
+      userId: ctx.userId,
+      role: ctx.role,
+      notificationId: req.params.id
+    });
+    if (!notification) return res.status(404).json({ error: 'Notification not found' });
+    return res.json({ notification });
+  } catch (err) {
+    console.error('[Notifications] detail failed:', err?.message || err);
+    return res.status(500).json({ error: 'Failed to load notification' });
+  }
+});
+
+app.patch('/api/notifications/:id/read', authRequired, async (req, res) => {
+  const ctx = getNotificationRequestContext(req, res);
+  if (!ctx) return;
+  try {
+    const notification = await notificationService.markNotificationRead({
+      workspaceId: ctx.workspaceId,
+      userId: ctx.userId,
+      role: ctx.role,
+      notificationId: req.params.id
+    });
+    if (!notification) return res.status(404).json({ error: 'Notification not found' });
+    return res.json({ ok: true, notification });
+  } catch (err) {
+    console.error('[Notifications] mark read failed:', err?.message || err);
+    return res.status(500).json({ error: 'Failed to mark notification read' });
+  }
+});
+
+app.patch('/api/notifications/read-all', authRequired, async (req, res) => {
+  const ctx = getNotificationRequestContext(req, res);
+  if (!ctx) return;
+  try {
+    const result = await notificationService.markAllNotificationsRead({
+      workspaceId: ctx.workspaceId,
+      userId: ctx.userId,
+      role: ctx.role
+    });
+    return res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('[Notifications] mark all read failed:', err?.message || err);
+    return res.status(500).json({ error: 'Failed to mark notifications read' });
+  }
+});
+
+app.delete('/api/notifications/:id', authRequired, async (req, res) => {
+  const ctx = getNotificationRequestContext(req, res);
+  if (!ctx) return;
+  try {
+    const result = await notificationService.archiveNotification({
+      workspaceId: ctx.workspaceId,
+      userId: ctx.userId,
+      role: ctx.role,
+      notificationId: req.params.id
+    });
+    if (!result.found) return res.status(404).json({ error: 'Notification not found' });
+    return res.json({ ok: true, archived: result.archived });
+  } catch (err) {
+    console.error('[Notifications] delete failed:', err?.message || err);
+    return res.status(500).json({ error: 'Failed to delete notification' });
+  }
+});
+
 const BILLING_ENFORCEMENT_ALLOW_PREFIXES = [
   '/api/auth',
   '/api/billing',
@@ -6752,13 +6994,40 @@ function workspaceIdFromRequest(req) {
 
 function getUserById(userId) {
   if (!userId) return null;
-  const row = db.prepare('SELECT id, workspace_id, role FROM users WHERE id = ? LIMIT 1').get(userId);
+  const row = db.prepare(`
+    SELECT id, workspace_id, role, name, first_name, last_name, username, email
+    FROM users
+    WHERE id = ?
+    LIMIT 1
+  `).get(userId);
   if (!row) return null;
   return {
     id: row.id,
     workspaceId: row.workspace_id,
-    role: normalizeRoleName(row.role || '')
+    role: normalizeRoleName(row.role || ''),
+    name: row.name || '',
+    firstName: row.first_name || '',
+    lastName: row.last_name || '',
+    username: row.username || '',
+    email: row.email || ''
   };
+}
+
+function formatUserRoleLabel(role = '') {
+  const normalized = normalizeRoleName(role || '');
+  if (normalized === 'school_admin') return 'Admin';
+  if (normalized === 'super_admin') return 'Admin';
+  if (normalized === 'admin') return 'Admin';
+  if (normalized === 'teacher' || normalized === 'instructor') return 'Teacher';
+  if (normalized === 'student' || normalized === 'member') return 'Student';
+  return normalized ? normalized.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : 'School';
+}
+
+function getUserDisplayLabel(userId) {
+  const user = getUserById(userId);
+  if (!user) return 'School';
+  const fullName = `${user.firstName || ''} ${user.lastName || ''}`.trim();
+  return user.name || fullName || user.username || user.email || formatUserRoleLabel(user.role);
 }
 
 function getRequesterWorkspaceId(req) {
@@ -11343,6 +11612,39 @@ app.post("/api/calendar/events", authRequired, (req, res) => {
       requesterContext: requester
     })
   };
+  const calendarNotificationType = /exam|test|prüfung/i.test(titleTrimmed) ? 'exam' : 'class';
+  if (targetType === 'school') {
+    void createWorkspaceNotificationSafe({
+      workspaceId,
+      actorUserId: requesterId,
+      type: calendarNotificationType,
+      title: calendarNotificationType === 'exam' ? 'Exam scheduled' : 'Class schedule updated',
+      message: titleTrimmed,
+      entityType: 'calendar_event',
+      entityId: id,
+      priority: calendarNotificationType === 'exam' ? 'high' : 'normal',
+      metadata: {
+        context: 'Calendar',
+        actionLabel: 'Open planner'
+      }
+    });
+  } else if (targetType === 'user' && targetId) {
+    void createWorkspaceNotificationSafe({
+      workspaceId,
+      recipientUserId: targetId,
+      actorUserId: requesterId,
+      type: calendarNotificationType,
+      title: calendarNotificationType === 'exam' ? 'Exam scheduled' : 'Class schedule updated',
+      message: titleTrimmed,
+      entityType: 'calendar_event',
+      entityId: id,
+      priority: calendarNotificationType === 'exam' ? 'high' : 'normal',
+      metadata: {
+        context: 'Calendar',
+        actionLabel: 'Open planner'
+      }
+    });
+  }
   broadcastEvent("calendar_event_created", payload);
   res.status(201).json(payload);
 });
@@ -11426,6 +11728,34 @@ app.patch("/api/calendar/events/:id", authRequired, (req, res) => {
     workspaceId: requester.workspaceId,
     meta: { eventId: id }
   });
+  const dateChanged =
+    patch.date !== undefined ||
+    patch.startTime !== undefined ||
+    patch.endTime !== undefined ||
+    patch.allDay !== undefined;
+  if (dateChanged) {
+    const calendarNotificationType = /exam|test|prüfung/i.test(mapped.title || '') ? 'exam' : 'class';
+    const accessForNotification = resolveCalendarEventAccess(ev, targetRow);
+    const recipientUserId = accessForNotification.targetType === 'user' ? accessForNotification.targetId : null;
+    const isWorkspaceVisible = accessForNotification.targetType === 'school';
+    if (recipientUserId || isWorkspaceVisible) {
+      void createWorkspaceNotificationSafe({
+        workspaceId: requester.workspaceId,
+        recipientUserId,
+        actorUserId: requester.requesterId,
+        type: calendarNotificationType,
+        title: calendarNotificationType === 'exam' ? 'Exam date changed' : 'Class schedule changed',
+        message: mapped.title || 'Calendar event updated',
+        entityType: 'calendar_event',
+        entityId: id,
+        priority: calendarNotificationType === 'exam' ? 'high' : 'normal',
+        metadata: {
+          context: 'Calendar',
+          actionLabel: 'Open planner'
+        }
+      });
+    }
+  }
   broadcastEvent("calendar_event_updated", { event: mapped });
   res.json({ event: mapped });
 });
@@ -12818,6 +13148,46 @@ function canAccessManagedUploadRecord(user, record) {
   return getUserChannelIds(user.userId, user.workspaceId).includes(recordChannelId);
 }
 
+function schoolFileTypeFromMime(mime = '', name = '') {
+  const m = String(mime || '').toLowerCase();
+  const n = String(name || '').toLowerCase();
+  if (m.startsWith('audio/')) return 'audio';
+  if (m.startsWith('video/')) return 'video';
+  if (m.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg)$/i.test(n)) return 'image';
+  return 'file';
+}
+
+function schoolFileCategoryFromRow(row = {}) {
+  const purpose = String(row.purpose || '').trim().toLowerCase();
+  if (purpose === 'homework') return 'homework';
+  if (purpose === 'exam') return 'exams';
+  if (purpose === 'material') return 'learningMaterials';
+  if (purpose === 'media') return 'media';
+  const channelCategory = String(row.channelCategory || '').trim().toLowerCase();
+  const channelName = String(row.channelName || '').trim().toLowerCase();
+  const type = schoolFileTypeFromMime(row.mime, row.name);
+  if (channelCategory === 'homework' || channelName.includes('homework')) return 'homework';
+  if (channelCategory === 'exams' || channelName.includes('exam') || channelName.includes('test')) return 'exams';
+  if (type !== 'file') return 'media';
+  return 'learningMaterials';
+}
+
+function schoolFileLocationLabel(row = {}) {
+  const category = schoolFileCategoryFromRow(row);
+  const channelName = String(row.channelName || '').trim();
+  if (channelName) {
+    if (category === 'homework') {
+      const base = channelName.replace(/homework/i, '').replace(/[-–]+$/g, '').trim();
+      return base ? `${base} -> Homework` : 'Homework';
+    }
+    return channelName;
+  }
+  if (category === 'homework') return 'School library -> Homework';
+  if (category === 'exams') return 'School library -> Exams';
+  if (category === 'media') return 'School library -> Media';
+  return 'School library -> Learning Materials';
+}
+
 function logForbiddenFileAccess(req, details = {}) {
   const user = getEffectiveRequestUser(req);
   void logSecurityEvent({
@@ -13827,6 +14197,177 @@ app.post('/api/file-stats/increment', authRequired, async (req, res) => {
   });
 });
 
+/* ---------- School files center ---------- */
+app.get('/api/school/files', authRequired, (req, res) => {
+  const requester = getEffectiveRequestUser(req);
+  if (!requester.userId) return res.status(401).json({ error: 'Not authenticated' });
+  if (requester.superAdmin) {
+    void logTenantIsolationEvent(req, {
+      workspaceId: requester.workspaceId || null,
+      targetType: 'file',
+      targetId: 'school-files',
+      reason: 'super_admin_private_content_denied',
+      type: 'security.super_admin_private_content_denied'
+    });
+    return tenantForbidden(res);
+  }
+
+  const workspaceId = requester.workspaceId || 'default';
+  const q = String(req.query.q || '').trim().toLowerCase();
+  const categoryFilter = String(req.query.category || 'all').trim();
+  const typeFilter = String(req.query.type || 'all').trim();
+  const dateRange = String(req.query.dateRange || 'all').trim();
+  const classId = String(req.query.classId || '').trim();
+  const location = String(req.query.location || '').trim();
+  const page = Math.max(1, Number.parseInt(String(req.query.page || '1'), 10) || 1);
+  const limit = Math.max(1, Math.min(200, Number.parseInt(String(req.query.limit || '100'), 10) || 100));
+
+  const where = ['fr.workspace_id = ?', 'fr.deleted = 0'];
+  const params = [workspaceId];
+  if (classId) {
+    where.push('fr.channel_id = ?');
+    params.push(classId);
+  }
+  if (location) {
+    where.push('(fr.channel_id = ? OR lower(c.name) LIKE ?)');
+    params.push(location, `%${location.toLowerCase()}%`);
+  }
+  if (q) {
+    where.push(`(
+      lower(fr.file_name) LIKE ?
+      OR lower(COALESCE(c.name, '')) LIKE ?
+      OR lower(COALESCE(fr.mime, '')) LIKE ?
+      OR lower(COALESCE(fr.purpose, '')) LIKE ?
+    )`);
+    params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
+  }
+  if (!['admin', 'school_admin'].includes(requester.role)) {
+    if (isTeacherLikeRole(requester.role)) {
+      // teachers stay scoped to their authenticated workspace
+    } else {
+      const channelIds = getUserChannelIds(requester.userId, workspaceId);
+      where.push(`(
+        fr.uploader_id = ?
+        OR fr.channel_id IS NULL
+        OR fr.channel_id = ''
+        OR fr.channel_id IN (${channelIds.length ? channelIds.map(() => '?').join(',') : "''"})
+      )`);
+      params.push(requester.userId, ...channelIds);
+    }
+  }
+
+  const rows = db.prepare(`
+    SELECT fr.file_id AS fileId,
+           fr.workspace_id AS workspaceId,
+           fr.channel_id AS channelId,
+           fr.message_id AS messageId,
+           fr.uploader_id AS uploaderId,
+           fr.purpose,
+           fr.file_name AS name,
+           fr.mime,
+           fr.size_bytes AS sizeBytes,
+           fr.url,
+           fr.pinned,
+           fr.deleted,
+           fr.created_at AS createdAt,
+           fr.updated_at AS updatedAt,
+           c.name AS channelName,
+           c.category AS channelCategory
+    FROM files_registry fr
+    LEFT JOIN channels c
+      ON c.id = fr.channel_id
+     AND c.workspace_id = fr.workspace_id
+    WHERE ${where.join(' AND ')}
+    ORDER BY fr.pinned DESC, fr.created_at DESC
+    LIMIT 5000
+  `).all(...params);
+
+  let mapped = rows.map((row) => {
+    const type = schoolFileTypeFromMime(row.mime, row.name);
+    const category = schoolFileCategoryFromRow(row);
+    const mime = String(row.mime || '');
+    const name = String(row.name || 'attachment');
+    const previewable =
+      type === 'image' ||
+      type === 'audio' ||
+      type === 'video' ||
+      mime.toLowerCase().includes('pdf') ||
+      /\.pdf$/i.test(name);
+    const canManage = ['admin', 'school_admin'].includes(requester.role) || isTeacherLikeRole(requester.role);
+    return {
+      id: row.fileId,
+      workspaceId: row.workspaceId,
+      filename: name,
+      originalName: name,
+      mimeType: mime,
+      type,
+      category,
+      locationLabel: schoolFileLocationLabel(row),
+      locationType: row.channelId ? 'channel' : 'library',
+      channelId: row.channelId || '',
+      classId: row.channelCategory === 'classes' ? row.channelId || '' : '',
+      homeworkId: category === 'homework' ? row.channelId || '' : '',
+      messageId: row.messageId || '',
+      uploadedByName: getUserDisplayLabel(row.uploaderId),
+      // files_registry.updated_at is also used for management changes such as pinning.
+      // The Files table should show the real file timestamp, so prefer created_at.
+      updatedAt: row.createdAt || row.updatedAt || '',
+      modifiedAt: row.updatedAt || '',
+      createdAt: row.createdAt || '',
+      sizeBytes: Number(row.sizeBytes || 0),
+      visibility: row.channelId ? 'Class-specific' : 'Students / Teachers / Admin',
+      previewUrl: previewable ? row.url || '' : '',
+      downloadUrl: row.url || '',
+      canPreview: previewable && !!row.url,
+      canDelete: canManage,
+      canPin: canManage,
+      isPinned: !!row.pinned
+    };
+  });
+
+  if (categoryFilter && categoryFilter !== 'all') {
+    const normalizedCategory =
+      categoryFilter === 'materials' ? 'learningMaterials' : categoryFilter;
+    mapped = mapped.filter((file) => file.category === normalizedCategory);
+  }
+  if (typeFilter && typeFilter !== 'all') {
+    mapped = mapped.filter((file) => file.type === typeFilter);
+  }
+  if (dateRange && dateRange !== 'all') {
+    const now = Date.now();
+    const rangeMs =
+      dateRange === 'today' ? 86400000 :
+      dateRange === '7d' ? 7 * 86400000 :
+      dateRange === '30d' ? 30 * 86400000 :
+      0;
+    if (rangeMs) {
+      mapped = mapped.filter((file) => {
+        const ts = Date.parse(file.updatedAt || file.createdAt || '') || 0;
+        return ts && now - ts <= rangeMs;
+      });
+    }
+  }
+
+  const counts = mapped.reduce((acc, file) => {
+    acc.all += 1;
+    if (file.category === 'homework') acc.homework += 1;
+    if (file.category === 'learningMaterials') acc.learningMaterials += 1;
+    if (file.category === 'media') acc.media += 1;
+    if (file.category === 'exams') acc.exams += 1;
+    if (file.type === 'audio') acc.audio += 1;
+    if (file.type === 'video') acc.video += 1;
+    if (file.type === 'image') acc.image += 1;
+    if (file.type === 'file') acc.files += 1;
+    return acc;
+  }, { all: 0, homework: 0, learningMaterials: 0, media: 0, exams: 0, audio: 0, video: 0, image: 0, files: 0 });
+
+  const total = mapped.length;
+  const storageUsedBytes = mapped.reduce((sum, file) => sum + Number(file.sizeBytes || 0), 0);
+  const start = (page - 1) * limit;
+  const files = mapped.slice(start, start + limit);
+  res.json({ files, total, storageUsedBytes, counts });
+});
+
 /* ---------- Files registry ---------- */
 app.get('/api/files/registry', authRequired, (req, res) => {
   const requester = getEffectiveRequestUser(req);
@@ -13843,8 +14384,8 @@ app.get('/api/files/registry', authRequired, (req, res) => {
     });
     return tenantForbidden(res);
   }
-  const requestedWorkspaceId = String(req.query.workspaceId || '').trim();
-  const ws = requester.workspaceId || requestedWorkspaceId || 'default';
+  const ws = requester.workspaceId || '';
+  if (!ws) return res.status(401).json({ error: 'Not authenticated' });
   const channelId = String(req.query.channelId || '');
   const includeDeleted = String(req.query.includeDeleted || '0') === '1';
 
@@ -17129,6 +17670,25 @@ app.post('/api/classes/:channelId/attendance/save', express.json(), async (req, 
       }
     }
 
+    for (const stu of absentees) {
+      await createWorkspaceNotificationSafe({
+        workspaceId,
+        recipientUserId: stu.user_id,
+        actorUserId: user.id,
+        type: 'attendance',
+        title: 'Attendance alert',
+        message: `Marked absent for ${className} on ${sessionDate}`,
+        entityType: 'attendance_session',
+        entityId: session.id,
+        priority: 'high',
+        metadata: {
+          channelId,
+          context: className,
+          actionLabel: 'View'
+        }
+      });
+    }
+
     res.json({
       ok: true,
       session_id: session.id,
@@ -17515,6 +18075,25 @@ app.post('/api/classes/:channelId/attendance/records/:studentId', express.json()
     userAgent: req.headers['user-agent'] || null,
     payload: { channelId, sessionId: session.id, status }
   });
+
+  if (status === 'absent') {
+    await createWorkspaceNotificationSafe({
+      workspaceId,
+      recipientUserId: studentId,
+      actorUserId: user.id,
+      type: 'attendance',
+      title: 'Attendance alert',
+      message: `Marked absent for ${chk.channel?.name || 'Class'} on ${sessionDate}`,
+      entityType: 'attendance_session',
+      entityId: session.id,
+      priority: 'high',
+      metadata: {
+        channelId,
+        context: chk.channel?.name || 'Class',
+        actionLabel: 'View'
+      }
+    });
+  }
 
   res.json({ ok: true, sessionId: session.id, status });
 });
@@ -21620,6 +22199,22 @@ app.post('/api/homework/channels/:channelId/items', authRequired, express.json()
     });
 
     const created = (await listHomeworkBoardForChannel(ctx.homeworkChannel, ctx.user)).find((item) => String(item.id) === itemId);
+    await createWorkspaceNotificationSafe({
+      workspaceId: ctx.homeworkChannel.workspaceId,
+      recipientRole: 'student',
+      actorUserId: ctx.user.id || ctx.user.sub || null,
+      type: 'homework',
+      title: 'Homework assigned',
+      message: title,
+      entityType: 'homework',
+      entityId: itemId,
+      priority: dueDate ? 'high' : 'normal',
+      metadata: {
+        channelId: ctx.homeworkChannel.id,
+        context: ctx.classChannel?.name || ctx.homeworkChannel.name || 'Homework',
+        actionLabel: 'View'
+      }
+    });
     res.status(201).json({ item: created || { id: itemId } });
   } catch (err) {
     console.error('[Homework] Create item failed', err);
@@ -21803,6 +22398,24 @@ app.post('/api/homework/items/:itemId/submissions', authRequired, express.json()
 
     await syncHomeworkCompletion(itemId, studentId, status);
     const boardItem = (await listHomeworkBoardForChannel(ctx.homeworkChannel, ctx.user)).find((row) => String(row.id) === itemId);
+    if (HOMEWORK_SUBMISSION_ACTIVE_STATUSES.has(status)) {
+      await createWorkspaceNotificationSafe({
+        workspaceId: ctx.homeworkChannel.workspaceId,
+        recipientRole: 'teacher',
+        actorUserId: studentId,
+        type: 'homework',
+        title: 'Homework submitted',
+        message: `${ctx.user.name || ctx.user.email || 'A student'} submitted "${item.title}"`,
+        entityType: 'homework_submission',
+        entityId: submissionId,
+        priority: isLate ? 'high' : 'normal',
+        metadata: {
+          channelId: ctx.homeworkChannel.id,
+          context: ctx.classChannel?.name || ctx.homeworkChannel.name || 'Homework',
+          actionLabel: 'Review'
+        }
+      });
+    }
     res.json({
       submission: boardItem?.mySubmission || null,
       item: boardItem || null
@@ -21844,6 +22457,22 @@ app.post('/api/homework/submissions/:submissionId/review', authRequired, express
 
     await syncHomeworkCompletion(submission.homeworkItemId, submission.studentId, nextStatus);
     const teacherViewItem = (await listHomeworkBoardForChannel(ctx.homeworkChannel, ctx.user)).find((row) => String(row.id) === String(submission.homeworkItemId));
+    await createWorkspaceNotificationSafe({
+      workspaceId: ctx.homeworkChannel.workspaceId,
+      recipientUserId: submission.studentId,
+      actorUserId: ctx.user.id || ctx.user.sub || null,
+      type: 'homework',
+      title: 'Homework reviewed',
+      message: feedbackText || 'Your teacher reviewed your homework.',
+      entityType: 'homework_submission',
+      entityId: submissionId,
+      priority: 'normal',
+      metadata: {
+        channelId: ctx.homeworkChannel.id,
+        context: ctx.classChannel?.name || ctx.homeworkChannel.name || 'Homework',
+        actionLabel: 'View feedback'
+      }
+    });
     res.json({
       submission: teacherViewItem?.submissions?.find((row) => String(row.id) === submissionId) || null,
       item: teacherViewItem || null
@@ -22935,6 +23564,14 @@ app.post('/api/channels/:channelId/messages', async (req, res) => {
   });
 
   broadcastEvent('channel_message_created', { channelId, message });
+  await createMentionNotificationsFromText({
+    workspaceId,
+    actorUserId: uploaderId,
+    text: cleanPlain || finalText,
+    channelId,
+    messageId: id,
+    channelName: channel.name || 'Channel'
+  });
 
   res.status(201).json(message);
 });
